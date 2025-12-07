@@ -738,43 +738,54 @@ export class SimpleAgent {
     
     try {
       // Fetch candles pour le symbol
-      const candles = await this.fetchCandles();
-      if (candles.length < 60) {
+      const allCandles = await this.fetchCandles();
+      if (allCandles.length < 61) {
         // Only log this warning once every 10 ticks to reduce spam
         if (this.tickCount % 10 === 1) {
-          logger.info(`⚠️ [${shortSymbol}] Not enough candles (${candles.length}/60)`);
+          logger.info(`⚠️ [${shortSymbol}] Not enough candles (${allCandles.length}/61)`);
         }
         return;
       }
       
-      // Store last price for frontend
-      const currentPrice = candles[candles.length - 1].close;
+      // ═══════════════════════════════════════════════════════════════════════════
+      // V5.11: SYNC WITH BACKTEST - Use only CLOSED candles
+      // WebSocket returns the CURRENT candle (in-progress) as the last element
+      // We must EXCLUDE it and only use closed candles for signal detection
+      // This ensures live trading matches backtest behavior exactly
+      // ═══════════════════════════════════════════════════════════════════════════
+      
+      // Remove the last candle (in-progress) - keep only closed candles
+      const candles = allCandles.slice(0, -1);
+      
+      // Store last price for frontend (use in-progress candle for display)
+      const currentPrice = allCandles[allCandles.length - 1].close;
       this.lastPrice = currentPrice;
       
-      // ═══════════════════════════════════════════════════════════════════════════
-      // V5.11: SYNC WITH BACKTEST - Only check signals on NEW CLOSED candles
-      // This prevents entering on noise/wicks that wouldn't trigger in backtest
-      // The last candle in the array is the CLOSED one (not the in-progress one)
-      // ═══════════════════════════════════════════════════════════════════════════
-      const lastCandleTs = candles[candles.length - 1].timestamp;
+      // The last CLOSED candle timestamp (for sync check)
+      const lastClosedCandleTs = candles[candles.length - 1].timestamp;
       
-      // Check if this is the same candle we already processed
-      if (lastCandleTs === this.lastProcessedCandleTs) {
+      // Check if this is the same closed candle we already processed
+      if (lastClosedCandleTs === this.lastProcessedCandleTs) {
         // Same candle, skip signal check (but still update features for display)
         this.lastRejectReason = 'waiting_new_candle';
         return;
       }
       
-      // New candle! Mark it as processed
+      // New closed candle! Mark it as processed
       const isFirstCheck = this.lastProcessedCandleTs === 0;
-      this.lastProcessedCandleTs = lastCandleTs;
+      this.lastProcessedCandleTs = lastClosedCandleTs;
       
+      // Log the closed candle info
+      const closedCandle = candles[candles.length - 1];
       if (!isFirstCheck) {
-        logger.info(`🕯️ [${shortSymbol}] New 15m candle closed | $${currentPrice.toFixed(2)} | Checking signal...`);
+        const candleColor = closedCandle.close > closedCandle.open ? '🟢' : '🔴';
+        const candleChange = ((closedCandle.close - closedCandle.open) / closedCandle.open * 100).toFixed(2);
+        logger.info(`🕯️ [${shortSymbol}] New 15m candle CLOSED ${candleColor} | $${closedCandle.close.toFixed(2)} (${candleChange}%) | Checking signal...`);
       }
       
-      // Fetch BTC candles pour corrélation
-      const btcCandles = await this.fetchBtcCandles();
+      // Fetch BTC candles pour corrélation (also use only closed candles)
+      const allBtcCandles = await this.fetchBtcCandles();
+      const btcCandles = allBtcCandles.length > 1 ? allBtcCandles.slice(0, -1) : allBtcCandles;
       
       // Check signal (returns side: 'long' or 'short')
       const signal = checkMomentumSignal(symbol, candles, btcCandles);
