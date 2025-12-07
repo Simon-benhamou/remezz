@@ -831,6 +831,9 @@ export class SimpleAgent {
               ? `Low vol (${f.volRatio.toFixed(1)}x) + price near BB (${bbDistance.toFixed(2)}%)`
               : `Vol ${f.volRatio.toFixed(1)}x, BB dist ${bbDistance.toFixed(2)}%`,
           };
+          
+          // 📢 Broadcast updated market conditions to dashboard
+          this.config.onMarketConditions?.(this.lastMarketConditions);
         }
       }
       
