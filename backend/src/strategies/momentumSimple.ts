@@ -247,6 +247,7 @@ export interface Position {
   highWaterMark?: number;  // Highest price since entry (for long)
   lowWaterMark?: number;   // Lowest price since entry (for short)
   trailingActive?: boolean;
+  maxPnlPct?: number;      // V5.11: Track max PnL reached (for exit analysis)
 }
 
 export interface SignalResult {
@@ -940,16 +941,26 @@ export function shouldExitPosition(
  * Call this every tick to track high/low
  */
 export function updatePositionWaterMarks(position: Position, currentPrice: number): Position {
+  // Calculate current PnL %
+  const currentPnlPct = position.side === 'long'
+    ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
+    : ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
+  
+  // Track max PnL reached (for exit analysis)
+  const newMaxPnlPct = position.maxPnlPct !== undefined
+    ? Math.max(position.maxPnlPct, currentPnlPct)
+    : currentPnlPct;
+  
   if (position.side === 'long') {
     const newHigh = position.highWaterMark 
       ? Math.max(position.highWaterMark, currentPrice)
       : currentPrice;
-    return { ...position, highWaterMark: newHigh };
+    return { ...position, highWaterMark: newHigh, maxPnlPct: newMaxPnlPct };
   } else {
     const newLow = position.lowWaterMark 
       ? Math.min(position.lowWaterMark, currentPrice)
       : currentPrice;
-    return { ...position, lowWaterMark: newLow };
+    return { ...position, lowWaterMark: newLow, maxPnlPct: newMaxPnlPct };
   }
 }
 

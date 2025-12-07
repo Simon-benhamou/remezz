@@ -255,6 +255,9 @@ model Fill {
   symbol         String?
   strategyFamily String?
   strategyId     String?
+  exitReason     String?       // TRAIL, SL, TIME, SIGNAL, MANUAL
+  entryTs        DateTime?     // When position was opened (for duration calc)
+  maxPnlPct      Float?        // High water mark PnL reached
   order          Order         @relation(fields: [orderId], references: [id])
   session        AgentSession? @relation(fields: [sessionId], references: [id])
 

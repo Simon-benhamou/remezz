@@ -129,6 +129,11 @@ router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) =
       feesUsd: trade.feesUsd,
       status: 'filled',
       orderCount: trade.orderCount,
+      // V5.11: New fields for detailed trade analysis
+      notionalUsd: notional,
+      exitReason: trade.exitReason,
+      durationMinutes: trade.durationMinutes,
+      maxPnlPct: trade.maxPnlPct,
     };
   });
 

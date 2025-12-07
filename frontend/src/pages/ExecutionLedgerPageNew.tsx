@@ -24,6 +24,13 @@ type TradeRow = {
   sessionMode?: string;
   sessionId?: string;
   outcome?: Outcome;
+  // V5.11: New fields for detailed trade analysis
+  roePct?: number | null;
+  notionalUsd?: number | null;
+  exitReason?: string | null;
+  durationMinutes?: number | null;
+  maxPnlPct?: number | null;
+  feesUsd?: number | null;
 };
 
 function formatUsd(v?: number | null, digits = 2) {
@@ -129,7 +136,7 @@ export default function ExecutionLedgerPageNew() {
   const exportCsv = () => {
     if (!trades.length) return;
     
-    const headers = ['Date', 'Session', 'Symbol', 'Side', 'Quantity', 'Entry', 'Exit', 'PnL_USD', 'Leverage', 'Outcome', 'Mode'];
+    const headers = ['Date', 'Session', 'Symbol', 'Side', 'Quantity', 'Entry', 'Exit', 'PnL_USD', 'ROE_Pct', 'Notional_USD', 'Leverage', 'Duration_Min', 'Exit_Reason', 'Max_PnL_Pct', 'Fees_USD', 'Outcome', 'Mode'];
     const rows = trades.map(trade => [
       dayjs(trade.createdAt).format('YYYY-MM-DD HH:mm:ss'),
       trade.sessionSymbol ?? '',
@@ -139,7 +146,13 @@ export default function ExecutionLedgerPageNew() {
       trade.entryPrice?.toFixed(4) ?? '',
       trade.exitPrice?.toFixed(4) ?? '',
       trade.realizedPnlUsd?.toFixed(2) ?? '',
+      trade.roePct?.toFixed(2) ?? '',
+      trade.notionalUsd?.toFixed(2) ?? '',
       trade.leverage?.toFixed(2) ?? '',
+      trade.durationMinutes ?? '',
+      trade.exitReason ?? '',
+      trade.maxPnlPct?.toFixed(2) ?? '',
+      trade.feesUsd?.toFixed(2) ?? '',
       trade.outcome ?? '',
       trade.sessionMode?.toUpperCase() ?? '',
     ].join(','));
@@ -239,7 +252,7 @@ export default function ExecutionLedgerPageNew() {
       title: 'P&L (USD)',
       dataIndex: 'realizedPnlUsd',
       key: 'realizedPnlUsd',
-      width: 140,
+      width: 120,
       align: 'right',
       render: (val: number) => (
         <span style={{ 
@@ -252,19 +265,108 @@ export default function ExecutionLedgerPageNew() {
       sorter: (a, b) => (a.realizedPnlUsd ?? 0) - (b.realizedPnlUsd ?? 0),
     },
     {
+      title: 'ROE %',
+      dataIndex: 'roePct',
+      key: 'roePct',
+      width: 90,
+      align: 'right',
+      render: (val: number) => (
+        <span style={{ 
+          color: (val ?? 0) >= 0 ? '#16a34a' : '#dc2626',
+          fontWeight: 500,
+        }}>
+          {val != null ? `${val >= 0 ? '+' : ''}${val.toFixed(1)}%` : '-'}
+        </span>
+      ),
+      sorter: (a, b) => (a.roePct ?? 0) - (b.roePct ?? 0),
+    },
+    {
+      title: 'Notional',
+      dataIndex: 'notionalUsd',
+      key: 'notionalUsd',
+      width: 110,
+      align: 'right',
+      render: (val: number) => val != null ? `$${val.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '-',
+      sorter: (a, b) => (a.notionalUsd ?? 0) - (b.notionalUsd ?? 0),
+    },
+    {
       title: 'Leverage',
       dataIndex: 'leverage',
       key: 'leverage',
-      width: 110,
+      width: 80,
       align: 'right',
-      render: (val: number) => val ? `${val.toFixed(2)}x` : '-',
+      render: (val: number) => val ? `${val.toFixed(1)}x` : '-',
       sorter: (a, b) => (a.leverage ?? 0) - (b.leverage ?? 0),
+    },
+    {
+      title: 'Duration',
+      dataIndex: 'durationMinutes',
+      key: 'durationMinutes',
+      width: 90,
+      align: 'right',
+      render: (val: number) => {
+        if (val == null) return '-';
+        if (val < 60) return `${val}m`;
+        if (val < 1440) return `${(val / 60).toFixed(1)}h`;
+        return `${(val / 1440).toFixed(1)}d`;
+      },
+      sorter: (a, b) => (a.durationMinutes ?? 0) - (b.durationMinutes ?? 0),
+    },
+    {
+      title: 'Exit',
+      dataIndex: 'exitReason',
+      key: 'exitReason',
+      width: 80,
+      render: (val: string) => {
+        if (!val) return '-';
+        const colorMap: Record<string, string> = {
+          'TRAIL': 'green',
+          'SL': 'red',
+          'TIME': 'orange',
+          'SIGNAL': 'blue',
+          'MANUAL': 'purple',
+        };
+        return <Tag color={colorMap[val] || 'default'}>{val}</Tag>;
+      },
+      filters: [
+        { text: 'Trail', value: 'TRAIL' },
+        { text: 'Stop Loss', value: 'SL' },
+        { text: 'Time', value: 'TIME' },
+        { text: 'Signal', value: 'SIGNAL' },
+      ],
+      onFilter: (value, record) => record.exitReason === value,
+    },
+    {
+      title: 'Max PnL',
+      dataIndex: 'maxPnlPct',
+      key: 'maxPnlPct',
+      width: 85,
+      align: 'right',
+      render: (val: number, record: TradeRow) => {
+        if (val == null) return '-';
+        const missed = val - (record.roePct ?? 0);
+        return (
+          <span title={missed > 1 ? `Missed: +${missed.toFixed(1)}%` : undefined}>
+            {val >= 0 ? '+' : ''}{val.toFixed(1)}%
+          </span>
+        );
+      },
+      sorter: (a, b) => (a.maxPnlPct ?? 0) - (b.maxPnlPct ?? 0),
+    },
+    {
+      title: 'Fees',
+      dataIndex: 'feesUsd',
+      key: 'feesUsd',
+      width: 80,
+      align: 'right',
+      render: (val: number) => val != null ? `-$${val.toFixed(2)}` : '-',
+      sorter: (a, b) => (a.feesUsd ?? 0) - (b.feesUsd ?? 0),
     },
     {
       title: 'Outcome',
       dataIndex: 'outcome',
       key: 'outcome',
-      width: 120,
+      width: 100,
       filters: [
         { text: 'Win', value: 'win' },
         { text: 'Loss', value: 'loss' },
@@ -415,7 +517,7 @@ export default function ExecutionLedgerPageNew() {
             pageSizeOptions: ['25', '50', '100', '200'],
             showTotal: (total) => `Total ${total} trades`,
           }}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1600 }}
           size="middle"
         />
       </Card>

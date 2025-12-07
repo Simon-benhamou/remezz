@@ -21,6 +21,10 @@ type FillRecord = {
   leverage: number | null;
   symbol: string;
   sessionId: string | null;
+  // V5.11: New fields for detailed trade analysis
+  exitReason: string | null;
+  entryTs: Date | null;
+  maxPnlPct: number | null;
 };
 
 type TradeSummary = {
@@ -40,6 +44,10 @@ type TradeSummary = {
   leverage: number | null;
   roePct: number | null;
   orderCount: number;
+  // V5.11: New fields for detailed trade analysis
+  exitReason: string | null;
+  durationMinutes: number | null;
+  maxPnlPct: number | null;
 };
 
 const SCALE = 100_000_000n;
@@ -81,6 +89,9 @@ type TradeState = {
   orderIds: Set<string>;
   entryOrderIds: Set<string>;
   exitOrderIds: Set<string>;
+  // V5.11: New fields
+  exitReason: string | null;
+  maxPnlPct: number | null;
 };
 
 function createTrade(side: 1 | -1, fill: FillRecord): TradeState {
@@ -96,11 +107,14 @@ function createTrade(side: 1 | -1, fill: FillRecord): TradeState {
     fees: 0n,
     leverageSum: 0n,
     leverageCount: 0n,
-    entryTs: fill.ts,
+    entryTs: fill.entryTs ?? fill.ts,  // Use entryTs from fill if available
     exitTs: fill.ts,
     orderIds: new Set([fill.orderId]),
     entryOrderIds: new Set(),
     exitOrderIds: new Set(),
+    // V5.11: New fields
+    exitReason: null,
+    maxPnlPct: null,
   };
 }
 
@@ -168,6 +182,19 @@ export function aggregateFillsToLedgerTrades(fills: FillRecord[]): AggregatedTra
         trade.realizedPnl += realizedShare;
         trade.exitTs = fill.ts;
         trade.exitOrderIds.add(fill.orderId);
+        
+        // V5.11: Capture exit metadata from the fill
+        if (fill.exitReason) {
+          trade.exitReason = fill.exitReason;
+        }
+        if (fill.maxPnlPct != null) {
+          trade.maxPnlPct = trade.maxPnlPct != null 
+            ? Math.max(trade.maxPnlPct, fill.maxPnlPct) 
+            : fill.maxPnlPct;
+        }
+        if (fill.entryTs) {
+          trade.entryTs = fill.entryTs;
+        }
 
         remainingQty -= portion;
         remainingFees -= feeShare;
@@ -213,6 +240,10 @@ function finalizeTrade(state: TradeState): AggregatedTrade[] {
     || Array.from(state.entryOrderIds).pop()
     || `${state.sessionId ?? 'session'}-${state.exitTs.getTime()}-${sideMultiplier}`;
 
+  // V5.11: Calculate duration in minutes
+  const durationMs = state.exitTs.getTime() - state.entryTs.getTime();
+  const durationMinutes = durationMs > 0 ? Math.round(durationMs / 60000) : null;
+
   return [
     {
       id,
@@ -233,6 +264,10 @@ function finalizeTrade(state: TradeState): AggregatedTrade[] {
       orderCount: state.orderIds.size,
       entryOrderIds: Array.from(state.entryOrderIds),
       exitOrderIds: Array.from(state.exitOrderIds),
+      // V5.11: New fields for detailed trade analysis
+      exitReason: state.exitReason,
+      durationMinutes,
+      maxPnlPct: state.maxPnlPct,
     },
   ];
 }
@@ -298,6 +333,10 @@ export async function listAggregatedTrades(opts: TradeAggregationOptions): Promi
     leverage: fill.order?.leverage ?? null,
     symbol: fill.order?.symbol ?? '',
     sessionId: fill.order?.sessionId ?? fill.sessionId ?? null,
+    // V5.11: New fields for detailed trade analysis
+    exitReason: (fill as any).exitReason ?? null,
+    entryTs: (fill as any).entryTs ?? null,
+    maxPnlPct: (fill as any).maxPnlPct != null ? Number((fill as any).maxPnlPct) : null,
   }));
 
   const aggregated = aggregateFillsToLedgerTrades(mapped);

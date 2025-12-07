@@ -2216,6 +2216,10 @@ export class SimpleAgent {
           strategyUsed: 'momentum_simple',
           strategyFamily: 'momentum',
           ts: new Date(),
+          // V5.11: Add exit metadata for detailed trade analysis
+          exitReason: reason.toUpperCase(),  // TRAIL, SL, TIME, SIGNAL, MANUAL
+          entryTs: new Date(position.entryTime),  // For duration calculation
+          maxPnlPct: position.maxPnlPct ?? null,  // High water mark reached
         },
       });
       
