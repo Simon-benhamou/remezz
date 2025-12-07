@@ -42,9 +42,13 @@ function extractSymbol(message: string): string | undefined {
 
 function extractKind(message: string): LogEntry['kind'] {
   // Order matters: more specific checks first
+  
+  // V5.11: Candle closed messages are informational (signal check), not entry/exit
+  if (message.includes('candle CLOSED') || message.includes('Checking signal')) return 'signal';
+  
   if (message.includes('Tick #') || message.includes('🔄')) return 'tick';
-  if (message.includes('OPENING') || message.includes('OPENED') || message.includes('🚀') || message.includes('🟢')) return 'entry';
-  if (message.includes('CLOSING') || message.includes('CLOSED') || message.includes('EXIT') || message.includes('🔴') || message.includes('🚪')) return 'exit';
+  if (message.includes('OPENING') || message.includes('OPENED') || message.includes('🚀')) return 'entry';
+  if (message.includes('CLOSING') || message.includes('EXIT') || message.includes('🚪')) return 'exit';
   if (message.includes('Market:') || message.includes('📊') || message.includes('favorable_')) return 'market';
   // "No signal" is informational, not an error - check before error detection
   if (message.includes('No signal') || message.includes('SIGNAL') || message.includes('Signal check') || message.includes('🔍')) return 'signal';
