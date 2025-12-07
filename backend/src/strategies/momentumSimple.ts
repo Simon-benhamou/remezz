@@ -1,11 +1,18 @@
 /**
- * 🎯 STRATÉGIE V5.9 - LONG + SHORT avec FILTRES OPTIMISÉS
+ * 🎯 STRATÉGIE V5.10 - LONG + SHORT avec FILTRES OPTIMISÉS
  * 
  * Backtestée sur 24 mois (Dec 2023 - Dec 2025) avec frais 0.08%:
- * - Equity: +1320% (vs +44% V5.7 baseline)
- * - Trades: 1007 (~40/mois, ~1.3/jour)
- * - Win Rate: 66.2%
- * - Sharpe: ~0.65
+ * - Equity: +1372% (vs +1320% V5.9)
+ * - Trades: 990 (~40/mois, ~1.3/jour)
+ * - Win Rate: 66.5%
+ * - Sharpe: ~0.68
+ * 
+ * ═════════════════════════════════════════════════════════════
+ * V5.10 FILTRE (NOUVEAU):
+ * ═════════════════════════════════════════════════════════════
+ * LONG: Skip if RSI > 75 AND BTC ROC 4h < 0
+ *   → Filtre les longs en surachat avec BTC momentum négatif
+ *   → Évite 17 trades perdants, +52% PnL
  * 
  * ═════════════════════════════════════════════════════════════
  * V5.9 FILTRES:
@@ -14,7 +21,7 @@
  *   → Filtre les shorts en zone oversold extrême (sauf panic selling)
  *   → Filtre 848 trades perdants, +368% sur SHORT
  * 
- * LONG: Skip if volRatio < 3.0 (NOUVEAU V5.9)
+ * LONG: Skip if volRatio < 3.0
  *   → Filtre les longs avec volume insuffisant
  *   → Filtre 440 trades, +89% sur LONG
  * 
@@ -23,8 +30,9 @@
  * ═════════════════════════════════════════════════════════════
  * - Bollinger Band breakout (close > upper band)
  * - ROC 10 périodes > 2.5%
- * - Volume > 3x moyenne (V5.9: était 2x)
+ * - Volume > 2x moyenne
  * - ConsecUp <= 3
+ * - RSI <= 75 OR BTC ROC 4h >= 0 (V5.10)
  * 
  * ═════════════════════════════════════════════════════════════
  * SHORT ENTRY (BTC < SMA200 = Bear Market):
@@ -594,6 +602,12 @@ export function checkMomentumSignal(
     stochRsiConfig.STOCH_SMOOTH
   );
   
+  // V5.10: RSI + BTC ROC 4h filter for LONG
+  const rsi = calcRSI(closes, 14);
+  const btcRoc4h = btcCloses.length >= 17 
+    ? ((btcCloses[btcCloses.length - 1] - btcCloses[btcCloses.length - 17]) / btcCloses[btcCloses.length - 17]) * 100 
+    : 0;
+  
   const features = {
     volRatio,
     isBullish,
@@ -610,6 +624,8 @@ export function checkMomentumSignal(
     bbUpper: bb.upper,
     bbLower: bb.lower,
     stochRsi: stochRsi ?? undefined,  // V5.8
+    rsi: rsi ?? undefined,  // V5.10
+    btcRoc4h,  // V5.10
   };
   
   // ========== DAY FILTER ==========
@@ -625,9 +641,20 @@ export function checkMomentumSignal(
   // (StochRSI filter removed from here - now in bear regime section below)
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // V5.9 BULL REGIME → LONG ONLY (Volume > 3x filter)
+  // V5.10 BULL REGIME → LONG ONLY (RSI + BTC ROC filter)
+  // Backtest: +52% PnL en évitant 17 mauvais trades (RSI>75 + BTC momentum négatif)
   // ═══════════════════════════════════════════════════════════════════════════
   if (btcInBullRegime) {
+    // V5.10: Skip LONG si RSI > 75 ET BTC a un momentum négatif (ROC 4h < 0)
+    // Ces trades ont un PnL net négatif de -52% → on les évite
+    if (rsi !== null && rsi > 75 && btcRoc4h < 0) {
+      return { 
+        valid: false, 
+        reason: `v5.10_long_filter(rsi=${rsi.toFixed(1)}>75, btcRoc4h=${btcRoc4h.toFixed(2)}%<0)`, 
+        features 
+      };
+    }
+    
     // LONG conditions V5.3 (strict)
     const breakoutOk = close > bb.upper;
     const rocOk = roc10 >= MomentumConfig.ENTRY_LONG.ROC_MIN;

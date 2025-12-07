@@ -1,6 +1,6 @@
 /**
  * 🔬 Backtest Service - Detailed Trade-by-Trade Backtest Engine
- * 
+ *
  * Returns individual trades with full details for analysis
  */
 
@@ -109,38 +109,38 @@ const CONFIG = {
   LONG: {
     BB_PERIOD: 20,
     BB_STD: 2,
-    ROC_MIN: 2.5,           // V5.3: 2.5% (strict)
-    VOL_MULTIPLIER: 2.0,    // V5.8: 2x (standard)
-    MAX_CONSEC_UP: 3,       // V5.3: max 3 bougies vertes
+    ROC_MIN: 2.5, // V5.3: 2.5% (strict)
+    VOL_MULTIPLIER: 2.0, // V5.8: 2x (standard)
+    MAX_CONSEC_UP: 3, // V5.3: max 3 bougies vertes
   },
   SHORT: {
-    ROC_DROP_MIN: -1.5,     // V5.4: ROC5 < -1.5%
-    VOL_SPIKE: 2.0,         // V5.4: 2x volume
+    ROC_DROP_MIN: -1.5, // V5.4: ROC5 < -1.5%
+    VOL_SPIKE: 2.0, // V5.4: 2x volume
     PRICE_BELOW_MA20: true,
     PRICE_BELOW_BB_LOWER: true, // V5.4: BB breakdown
-    MAX_CONSEC_DOWN: 4,     // V5.8.1: 4 (was 5)
+    MAX_CONSEC_DOWN: 4, // V5.8.1: 4 (was 5)
   },
   EXIT: {
     // V5.7: DYNAMIC ATR-BASED STOP LOSS
     // Backtested: +370% PnL vs fixed 1.5%, -20% stop hunts
-    STOP_LOSS_TYPE: 'atr' as const,  // 'fixed' | 'atr'
-    STOP_LOSS_FIXED: 1.5,            // Fallback si ATR non dispo
-    STOP_LOSS_ATR_MULT: 2.0,         // ATR × 2.0 (optimal)
-    STOP_LOSS_MIN: 0.8,              // Min 0.8%
-    STOP_LOSS_MAX: 3.0,              // Max 3.0%
-    
+    STOP_LOSS_TYPE: 'atr' as const, // 'fixed' | 'atr'
+    STOP_LOSS_FIXED: 1.5, // Fallback si ATR non dispo
+    STOP_LOSS_ATR_MULT: 2.0, // ATR × 2.0 (optimal)
+    STOP_LOSS_MIN: 0.8, // Min 0.8%
+    STOP_LOSS_MAX: 3.0, // Max 3.0%
+
     TAKE_PROFIT: 3.0,
     TRAILING_ACTIVATION: 1.0,
     TRAILING_DISTANCE: 0.4,
-    MAX_HOLD_BARS: 192,              // 48h
+    MAX_HOLD_BARS: 192, // 48h
   },
-  POSITION_SIZE_PCT: 0.4,            // 40% du capital disponible
-  DEFAULT_LEVERAGE: 4.5,             // V5.7: 4.5x uniforme
+  POSITION_SIZE_PCT: 0.4, // 40% du capital disponible
+  DEFAULT_LEVERAGE: 4.5, // V5.7: 4.5x uniforme
   COSTS: {
-    TRADING_FEE_PCT: 0.04,           // Binance taker fee
-    SLIPPAGE_PCT: 0.05,              // Realistic slippage
-    FUNDING_RATE_PCT: 0.01,          // 8h funding
-    FUNDING_INTERVAL_BARS: 32,       // 32 × 15min = 8h
+    TRADING_FEE_PCT: 0.04, // Binance taker fee
+    SLIPPAGE_PCT: 0.05, // Realistic slippage
+    FUNDING_RATE_PCT: 0.01, // 8h funding
+    FUNDING_INTERVAL_BARS: 32, // 32 × 15min = 8h
   },
   LIQUIDITY_CAPS: {
     'BTC/USDT:USDT': 500_000,
@@ -194,21 +194,17 @@ function calcVolRatio(volumes: number[]): number {
 // V5.7: ATR calculation for dynamic stop loss
 function calcATR(candles: Candle[], period = 14): number | null {
   if (candles.length < period + 1) return null;
-  
+
   let atrSum = 0;
   for (let i = candles.length - period; i < candles.length; i++) {
     const high = candles[i].high;
     const low = candles[i].low;
     const prevClose = candles[i - 1]?.close || high;
-    
-    const tr = Math.max(
-      high - low,
-      Math.abs(high - prevClose),
-      Math.abs(low - prevClose)
-    );
+
+    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
     atrSum += tr;
   }
-  
+
   return atrSum / period;
 }
 
@@ -217,22 +213,19 @@ function calcDynamicStopLoss(candles: Candle[]): { slPct: number; atrPct: number
   if (CONFIG.EXIT.STOP_LOSS_TYPE !== 'atr') {
     return { slPct: CONFIG.EXIT.STOP_LOSS_FIXED, atrPct: null };
   }
-  
+
   const atr = calcATR(candles, 14);
   if (!atr || candles.length === 0) {
     return { slPct: CONFIG.EXIT.STOP_LOSS_FIXED, atrPct: null };
   }
-  
+
   const currentPrice = candles[candles.length - 1].close;
   const atrPct = (atr / currentPrice) * 100;
-  
+
   // SL = ATR × multiplier, clamped between min and max
   const rawSlPct = atrPct * CONFIG.EXIT.STOP_LOSS_ATR_MULT;
-  const slPct = Math.min(
-    CONFIG.EXIT.STOP_LOSS_MAX,
-    Math.max(CONFIG.EXIT.STOP_LOSS_MIN, rawSlPct)
-  );
-  
+  const slPct = Math.min(CONFIG.EXIT.STOP_LOSS_MAX, Math.max(CONFIG.EXIT.STOP_LOSS_MIN, rawSlPct));
+
   return { slPct, atrPct };
 }
 
@@ -257,34 +250,34 @@ function countConsecDown(candles: any[]): number {
 // V5.8: RSI calculation
 function calcRSI(closes: number[], period = 14): number | null {
   if (closes.length < period + 1) return null;
-  
+
   let gains = 0;
   let losses = 0;
-  
+
   for (let i = closes.length - period; i < closes.length; i++) {
     const change = closes[i] - closes[i - 1];
     if (change > 0) gains += change;
     else losses += Math.abs(change);
   }
-  
+
   const avgGain = gains / period;
   const avgLoss = losses / period;
-  
+
   if (avgLoss === 0) return 100;
   const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+  return 100 - 100 / (1 + rs);
 }
 
 // V5.8: Stochastic RSI calculation
 function calcStochRSI(
-  closes: number[], 
-  rsiPeriod = 14, 
-  stochPeriod = 14, 
-  smooth = 3
+  closes: number[],
+  rsiPeriod = 14,
+  stochPeriod = 14,
+  smooth = 3,
 ): number | null {
   const minLength = rsiPeriod + stochPeriod + smooth;
   if (closes.length < minLength) return null;
-  
+
   // Calculate RSI series
   const rsiValues: number[] = [];
   for (let i = rsiPeriod + 1; i <= closes.length; i++) {
@@ -292,9 +285,9 @@ function calcStochRSI(
     const rsi = calcRSI(slice, rsiPeriod);
     if (rsi !== null) rsiValues.push(rsi);
   }
-  
+
   if (rsiValues.length < stochPeriod) return null;
-  
+
   // Calculate StochRSI for recent values
   const stochRsiRaw: number[] = [];
   for (let i = stochPeriod; i <= rsiValues.length; i++) {
@@ -302,16 +295,16 @@ function calcStochRSI(
     const rsiHigh = Math.max(...rsiSlice);
     const rsiLow = Math.min(...rsiSlice);
     const currentRsi = rsiSlice[rsiSlice.length - 1];
-    
+
     if (rsiHigh === rsiLow) {
       stochRsiRaw.push(50);
     } else {
       stochRsiRaw.push(((currentRsi - rsiLow) / (rsiHigh - rsiLow)) * 100);
     }
   }
-  
+
   if (stochRsiRaw.length < smooth) return null;
-  
+
   // Smooth the StochRSI (%K line)
   const smoothSlice = stochRsiRaw.slice(-smooth);
   return smoothSlice.reduce((a, b) => a + b, 0) / smooth;
@@ -336,16 +329,16 @@ async function fetchCandles(symbol: string, startDate: Date, endDate: Date): Pro
   const allCandles: Candle[] = [];
   let since = startDate.getTime();
   const until = endDate.getTime();
-  
+
   // Fetch 200 extra candles before startDate for indicators
   const extraBars = 200 * 15 * 60 * 1000; // 200 bars × 15min
   since -= extraBars;
-  
+
   while (since < until) {
     try {
       const ohlcv = await exchange.fetchOHLCV(symbol, '15m', since, 1000);
       if (!ohlcv || ohlcv.length === 0) break;
-      
+
       for (const c of ohlcv) {
         allCandles.push({
           timestamp: c[0] as number,
@@ -356,15 +349,15 @@ async function fetchCandles(symbol: string, startDate: Date, endDate: Date): Pro
           volume: c[5] as number,
         });
       }
-      
-      since = ohlcv[ohlcv.length - 1][0] as number + 1;
-      await new Promise(r => setTimeout(r, 100)); // Rate limit
+
+      since = (ohlcv[ohlcv.length - 1][0] as number) + 1;
+      await new Promise((r) => setTimeout(r, 100)); // Rate limit
     } catch (e) {
       console.error(`Error fetching ${symbol}:`, e);
       break;
     }
   }
-  
+
   return allCandles;
 }
 
@@ -378,36 +371,52 @@ interface Signal {
   reason?: string;
 }
 
-function checkSignal(candles: Candle[], isBull: boolean): Signal {
+function checkSignal(candles: Candle[], isBull: boolean, btcRoc4h?: number): Signal {
   if (candles.length < 50) return { valid: false, reason: 'insufficient_data' };
-  
-  const closes = candles.map(c => c.close);
-  const volumes = candles.map(c => c.volume);
+
+  const closes = candles.map((c) => c.close);
+  const volumes = candles.map((c) => c.volume);
   const current = candles[candles.length - 1];
   const isBullish = current.close > current.open;
   const isBearish = current.close < current.open;
-  
+
   const bb = calcBB(closes, CONFIG.LONG.BB_PERIOD, CONFIG.LONG.BB_STD);
   const ma20 = calcSMA(closes, 20);
   const volRatio = calcVolRatio(volumes);
   const roc10 = calcROC(closes, 10);
   const roc5 = calcROC(closes, 5);
-  
+
   // V5.9: StochRSI calculated here, applied to SHORT only below
-  const stochRsi = CONFIG.STOCHRSI_FILTER.ENABLED ? calcStochRSI(
-    closes,
-    CONFIG.STOCHRSI_FILTER.RSI_PERIOD,
-    CONFIG.STOCHRSI_FILTER.STOCH_PERIOD,
-    CONFIG.STOCHRSI_FILTER.STOCH_SMOOTH
-  ) : null;
-  
+  const stochRsi = CONFIG.STOCHRSI_FILTER.ENABLED
+    ? calcStochRSI(
+        closes,
+        CONFIG.STOCHRSI_FILTER.RSI_PERIOD,
+        CONFIG.STOCHRSI_FILTER.STOCH_PERIOD,
+        CONFIG.STOCHRSI_FILTER.STOCH_SMOOTH,
+      )
+    : null;
+
+  // V5.10: RSI for LONG filter
+  const rsi = calcRSI(closes, 14);
+
   if (isBull) {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // V5.10: LONG FILTER - Skip if RSI > 75 AND BTC ROC 4h < 0
+    // Backtest: +52% PnL en évitant 17 mauvais trades
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (rsi !== null && btcRoc4h !== undefined && rsi > 75 && btcRoc4h < 0) {
+      return {
+        valid: false,
+        reason: `v5.10_long_filter(rsi=${rsi.toFixed(1)}>75, btcRoc4h=${btcRoc4h.toFixed(2)}%<0)`,
+      };
+    }
+
     // LONG conditions
     const breakoutOk = current.close > bb.upper;
     const rocOk = roc10 >= CONFIG.LONG.ROC_MIN;
     const volOk = volRatio >= CONFIG.LONG.VOL_MULTIPLIER;
     const consecOk = countConsecUp(candles) <= CONFIG.LONG.MAX_CONSEC_UP;
-    
+
     if (isBullish && breakoutOk && rocOk && volOk && consecOk) {
       return { valid: true, side: 'long', reason: 'bull_breakout' };
     }
@@ -417,21 +426,28 @@ function checkSignal(candles: Candle[], isBull: boolean): Signal {
     // V5.9: StochRSI FILTER - SHORT ONLY
     // Skip SHORT if StochRSI < 15 AND volRatio < 4.0 (low quality signal)
     // ═══════════════════════════════════════════════════════════════════════════
-    if (stochRsi !== null && stochRsi < CONFIG.STOCHRSI_FILTER.MIN_STOCHRSI && volRatio < CONFIG.STOCHRSI_FILTER.VOLUME_EXCEPTION_MULTIPLIER) {
-      return { valid: false, reason: `v5.9_stochrsi_filter(${stochRsi.toFixed(1)}<15, vol=${volRatio.toFixed(1)}x<4)` };
+    if (
+      stochRsi !== null &&
+      stochRsi < CONFIG.STOCHRSI_FILTER.MIN_STOCHRSI &&
+      volRatio < CONFIG.STOCHRSI_FILTER.VOLUME_EXCEPTION_MULTIPLIER
+    ) {
+      return {
+        valid: false,
+        reason: `v5.9_stochrsi_filter(${stochRsi.toFixed(1)}<15, vol=${volRatio.toFixed(1)}x<4)`,
+      };
     }
-    
+
     const dropOk = roc5 <= CONFIG.SHORT.ROC_DROP_MIN;
     const volOk = volRatio >= CONFIG.SHORT.VOL_SPIKE;
     const belowMa20 = current.close < ma20;
     const belowBB = current.close < bb.lower;
     const consecOk = countConsecDown(candles) <= CONFIG.SHORT.MAX_CONSEC_DOWN;
-    
+
     if (isBearish && dropOk && volOk && belowMa20 && belowBB && consecOk) {
       return { valid: true, side: 'short', reason: 'bear_breakdown' };
     }
   }
-  
+
   return { valid: false, reason: 'no_signal' };
 }
 
@@ -445,27 +461,28 @@ function calculatePnl(
   side: 'long' | 'short',
   marginUsd: number,
   leverage: number,
-  holdBars: number
+  holdBars: number,
 ): { grossPnlPct: number; netPnlPct: number; netPnlUsd: number; feesUsd: number } {
-  const pricePct = side === 'long'
-    ? ((exitPrice - entryPrice) / entryPrice) * 100
-    : ((entryPrice - exitPrice) / entryPrice) * 100;
-  
+  const pricePct =
+    side === 'long'
+      ? ((exitPrice - entryPrice) / entryPrice) * 100
+      : ((entryPrice - exitPrice) / entryPrice) * 100;
+
   const grossPnlPct = pricePct * leverage;
-  
+
   // Costs
   const tradingFees = CONFIG.COSTS.TRADING_FEE_PCT * 2; // Entry + Exit
   const slippage = CONFIG.COSTS.SLIPPAGE_PCT * 2;
   const fundingPeriods = Math.floor(holdBars / CONFIG.COSTS.FUNDING_INTERVAL_BARS);
   const funding = fundingPeriods * CONFIG.COSTS.FUNDING_RATE_PCT;
-  
+
   const totalCostsPct = (tradingFees + slippage + funding) * leverage;
   const netPnlPct = grossPnlPct - totalCostsPct;
-  
+
   const notionalUsd = marginUsd * leverage;
   const feesUsd = (totalCostsPct / 100) * marginUsd;
   const netPnlUsd = (netPnlPct / 100) * marginUsd;
-  
+
   return { grossPnlPct, netPnlPct, netPnlUsd, feesUsd };
 }
 
@@ -475,21 +492,21 @@ function calculatePnl(
 
 export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
   const { startDate, endDate, initialCapital, symbols, leverage } = params;
-  
+
   console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
-  
+
   // Fetch BTC for regime detection
   const btcCandles = await fetchCandles('BTC/USDT:USDT', startDate, endDate);
-  const btcCloses = btcCandles.map(c => c.close);
+  const btcCloses = btcCandles.map((c) => c.close);
   console.log(`[Backtest] BTC: ${btcCandles.length} candles`);
-  
+
   // Fetch all symbol data
   const allData: Record<string, Candle[]> = {};
   for (const symbol of symbols) {
     allData[symbol] = await fetchCandles(symbol, startDate, endDate);
     console.log(`[Backtest] ${symbol}: ${allData[symbol].length} candles`);
   }
-  
+
   // Initialize state
   let capital = initialCapital;
   let capitalInUse = 0;
@@ -499,57 +516,66 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   const equityCurve: { date: string; equity: number }[] = [];
   const drawdownCurve: { date: string; drawdown: number }[] = [];
   let tradeId = 0;
-  
+
   const positions: Record<string, any> = {};
   const cooldowns: Record<string, number> = {};
-  symbols.forEach(s => { positions[s] = null; cooldowns[s] = 0; });
-  
+  symbols.forEach((s) => {
+    positions[s] = null;
+    cooldowns[s] = 0;
+  });
+
   // Find start index (after 200 candles for indicators)
   const startTimestamp = startDate.getTime();
-  let startIdx = btcCandles.findIndex(c => c.timestamp >= startTimestamp);
+  let startIdx = btcCandles.findIndex((c) => c.timestamp >= startTimestamp);
   if (startIdx < 200) startIdx = 200;
-  
+
   console.log(`[Backtest] Starting simulation at index ${startIdx}...`);
-  
+
   // Main loop
   for (let btcIdx = startIdx; btcIdx < btcCandles.length; btcIdx++) {
     const btcCandle = btcCandles[btcIdx];
-    
+
     // Skip if before start date
     if (btcCandle.timestamp < startTimestamp) continue;
     // Stop if after end date
     if (btcCandle.timestamp > endDate.getTime()) break;
-    
+
     const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
     const btcPrice = btcCloses[btcIdx - 1];
     const isBullRegime = btcPrice > btcSma200;
-    
+
+    // V5.10: Calculate BTC ROC 4h (16 x 15min candles) for LONG filter
+    const btcRoc4h =
+      btcIdx >= 17
+        ? ((btcCloses[btcIdx - 1] - btcCloses[btcIdx - 17]) / btcCloses[btcIdx - 17]) * 100
+        : 0;
+
     const day = new Date(btcCandle.timestamp).toISOString().slice(0, 10);
-    
+
     // Track equity
     const totalEquity = capital + capitalInUse;
     if (equityCurve.length === 0 || equityCurve[equityCurve.length - 1].date !== day) {
       equityCurve.push({ date: day, equity: totalEquity });
-      
+
       // Track drawdown
       if (totalEquity > peakCapital) peakCapital = totalEquity;
       const drawdownPct = ((peakCapital - totalEquity) / peakCapital) * 100;
       if (drawdownPct > maxDrawdown) maxDrawdown = drawdownPct;
       drawdownCurve.push({ date: day, drawdown: drawdownPct });
     }
-    
+
     // Process each symbol
     for (const symbol of symbols) {
       const candles = allData[symbol];
-      const idx = candles.findIndex(c => c.timestamp >= btcCandle.timestamp);
+      const idx = candles.findIndex((c) => c.timestamp >= btcCandle.timestamp);
       if (idx < 50) continue;
-      
+
       const windowCandles = candles.slice(Math.max(0, idx - 200), idx + 1);
       const current = candles[idx];
-      
+
       // Decrement cooldown
       if (cooldowns[symbol] > 0) cooldowns[symbol]--;
-      
+
       // ═══════════════════════════════════════════════════════════════════
       // MANAGE EXISTING POSITION
       // ═══════════════════════════════════════════════════════════════════
@@ -558,16 +584,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const holdBars = idx - pos.entryIdx;
         let exitReason: string | null = null;
         let exitPrice = current.close;
-        
+
         // V5.7: Use dynamic SL stored in position
         const slPct = pos.slPct || CONFIG.EXIT.STOP_LOSS_FIXED;
-        
+
         if (pos.side === 'long') {
           // Calculate PnL based on CLOSE price (matching backtest-local-analysis.mjs)
           const pnlPct = ((current.close - pos.entryPrice) / pos.entryPrice) * 100;
           pos.hwm = Math.max(pos.hwm || pos.entryPrice, current.high);
           const hwmPct = ((pos.hwm - pos.entryPrice) / pos.entryPrice) * 100;
-          
+
           // V5.8: Check TRAILING FIRST (protects gains before SL is hit)
           if (hwmPct >= CONFIG.EXIT.TRAILING_ACTIVATION) {
             const trailStop = pos.hwm * (1 - CONFIG.EXIT.TRAILING_DISTANCE / 100);
@@ -576,7 +602,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
               exitPrice = trailStop;
             }
           }
-          
+
           // Then check SL (only if trailing didn't trigger)
           if (!exitReason && pnlPct <= -slPct) {
             exitReason = 'SL';
@@ -593,7 +619,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           const pnlPct = ((pos.entryPrice - current.close) / pos.entryPrice) * 100;
           pos.lwm = Math.min(pos.lwm || pos.entryPrice, current.low);
           const lwmPct = ((pos.entryPrice - pos.lwm) / pos.entryPrice) * 100;
-          
+
           // V5.8: Check TRAILING FIRST (protects gains before SL is hit)
           if (lwmPct >= CONFIG.EXIT.TRAILING_ACTIVATION) {
             const trailStop = pos.lwm * (1 + CONFIG.EXIT.TRAILING_DISTANCE / 100);
@@ -602,7 +628,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
               exitPrice = trailStop;
             }
           }
-          
+
           // Then check SL (only if trailing didn't trigger)
           if (!exitReason && pnlPct <= -slPct) {
             exitReason = 'SL';
@@ -614,16 +640,23 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             exitReason = 'TIME';
           }
         }
-        
+
         // Execute exit
         if (exitReason) {
-          const pnl = calculatePnl(pos.entryPrice, exitPrice, pos.side, pos.marginUsd, pos.leverage, holdBars);
+          const pnl = calculatePnl(
+            pos.entryPrice,
+            exitPrice,
+            pos.side,
+            pos.marginUsd,
+            pos.leverage,
+            holdBars,
+          );
           capital += pnl.netPnlUsd + pos.marginUsd; // Return margin + PnL
           capitalInUse -= pos.marginUsd;
-          
+
           const month = new Date(btcCandle.timestamp).toISOString().slice(0, 7);
           const exitDay = new Date(btcCandle.timestamp).toISOString().slice(0, 10);
-          
+
           trades.push({
             id: `trade_${++tradeId}`,
             symbol,
@@ -649,28 +682,29 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             wasCapped: pos.wasCapped,
             slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
           });
-          
+
           positions[symbol] = null;
           cooldowns[symbol] = 8; // 2h cooldown
         }
       }
-      
+
       // ═══════════════════════════════════════════════════════════════════
       // CHECK FOR NEW ENTRY
       // ═══════════════════════════════════════════════════════════════════
       if (!positions[symbol] && cooldowns[symbol] <= 0) {
         const availableCapital = capital - capitalInUse;
         if (availableCapital < 100) continue;
-        
-        const signal = checkSignal(windowCandles, isBullRegime);
+
+        // V5.10: Pass btcRoc4h to checkSignal for LONG filter
+        const signal = checkSignal(windowCandles, isBullRegime, btcRoc4h);
         if (!signal.valid || !signal.side) continue;
-        
+
         // V5.7: Calculate dynamic stop loss based on ATR
         const { slPct, atrPct } = calcDynamicStopLoss(windowCandles);
-        
+
         // V5.7: Use default leverage from config
         const posLeverage = leverage || CONFIG.DEFAULT_LEVERAGE;
-        
+
         // Calculate position size
         const targetMargin = availableCapital * CONFIG.POSITION_SIZE_PCT;
         const targetNotional = targetMargin * posLeverage;
@@ -679,11 +713,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const notionalUsd = Math.min(targetNotional, maxNotional);
         const marginUsd = notionalUsd / posLeverage;
         const qty = notionalUsd / current.close;
-        
+
         // Block margin
         capitalInUse += marginUsd;
         capital -= marginUsd;
-        
+
         positions[symbol] = {
           side: signal.side,
           entryPrice: current.close,
@@ -704,7 +738,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       }
     }
   }
-  
+
   // Close any remaining positions at market
   for (const symbol of symbols) {
     if (positions[symbol]) {
@@ -712,10 +746,17 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       const candles = allData[symbol];
       const lastCandle = candles[candles.length - 1];
       const holdBars = candles.length - pos.entryIdx;
-      
-      const pnl = calculatePnl(pos.entryPrice, lastCandle.close, pos.side, pos.marginUsd, pos.leverage, holdBars);
+
+      const pnl = calculatePnl(
+        pos.entryPrice,
+        lastCandle.close,
+        pos.side,
+        pos.marginUsd,
+        pos.leverage,
+        holdBars,
+      );
       capital += pnl.netPnlUsd + pos.marginUsd;
-      
+
       trades.push({
         id: `trade_${++tradeId}`,
         symbol,
@@ -743,26 +784,27 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       });
     }
   }
-  
+
   // Calculate monthly stats
   const monthlyMap = new Map<string, BacktestTrade[]>();
-  trades.forEach(t => {
+  trades.forEach((t) => {
     if (!monthlyMap.has(t.month)) monthlyMap.set(t.month, []);
     monthlyMap.get(t.month)!.push(t);
   });
-  
+
   const monthlyStats: MonthlyStats[] = [];
   let prevCapital = initialCapital;
-  
+
   for (const [month, monthTrades] of [...monthlyMap.entries()].sort()) {
-    const wins = monthTrades.filter(t => t.netPnlUsd > 0).length;
-    const losses = monthTrades.filter(t => t.netPnlUsd <= 0).length;
+    const wins = monthTrades.filter((t) => t.netPnlUsd > 0).length;
+    const losses = monthTrades.filter((t) => t.netPnlUsd <= 0).length;
     const pnlUsd = monthTrades.reduce((sum, t) => sum + t.netPnlUsd, 0);
-    const longTrades = monthTrades.filter(t => t.side === 'long').length;
-    const shortTrades = monthTrades.filter(t => t.side === 'short').length;
-    
-    const capitalEnd = monthTrades.length > 0 ? monthTrades[monthTrades.length - 1].capitalAfter : prevCapital;
-    
+    const longTrades = monthTrades.filter((t) => t.side === 'long').length;
+    const shortTrades = monthTrades.filter((t) => t.side === 'short').length;
+
+    const capitalEnd =
+      monthTrades.length > 0 ? monthTrades[monthTrades.length - 1].capitalAfter : prevCapital;
+
     monthlyStats.push({
       month,
       trades: monthTrades.length,
@@ -774,35 +816,42 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       longTrades,
       shortTrades,
       avgTradeUsd: monthTrades.length > 0 ? pnlUsd / monthTrades.length : 0,
-      maxWinUsd: monthTrades.length > 0 ? Math.max(...monthTrades.map(t => t.netPnlUsd)) : 0,
-      maxLossUsd: monthTrades.length > 0 ? Math.min(...monthTrades.map(t => t.netPnlUsd)) : 0,
+      maxWinUsd: monthTrades.length > 0 ? Math.max(...monthTrades.map((t) => t.netPnlUsd)) : 0,
+      maxLossUsd: monthTrades.length > 0 ? Math.min(...monthTrades.map((t) => t.netPnlUsd)) : 0,
       capitalStart: prevCapital,
       capitalEnd,
     });
-    
+
     prevCapital = capitalEnd;
   }
-  
+
   // Calculate summary
-  const wins = trades.filter(t => t.netPnlUsd > 0);
-  const losses = trades.filter(t => t.netPnlUsd <= 0);
+  const wins = trades.filter((t) => t.netPnlUsd > 0);
+  const losses = trades.filter((t) => t.netPnlUsd <= 0);
   const totalPnlUsd = trades.reduce((sum, t) => sum + t.netPnlUsd, 0);
   const totalFeesUsd = trades.reduce((sum, t) => sum + t.feesUsd, 0);
   const grossWins = wins.reduce((sum, t) => sum + t.netPnlUsd, 0);
   const grossLosses = Math.abs(losses.reduce((sum, t) => sum + t.netPnlUsd, 0));
-  
+
   // Calculate Sharpe Ratio (simplified)
-  const dailyReturns = equityCurve.map((e, i) => {
-    if (i === 0) return 0;
-    return ((e.equity - equityCurve[i - 1].equity) / equityCurve[i - 1].equity) * 100;
-  }).slice(1);
-  
-  const avgReturn = dailyReturns.length > 0 ? dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length : 0;
-  const stdReturn = dailyReturns.length > 1
-    ? Math.sqrt(dailyReturns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / dailyReturns.length)
-    : 1;
+  const dailyReturns = equityCurve
+    .map((e, i) => {
+      if (i === 0) return 0;
+      return ((e.equity - equityCurve[i - 1].equity) / equityCurve[i - 1].equity) * 100;
+    })
+    .slice(1);
+
+  const avgReturn =
+    dailyReturns.length > 0 ? dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length : 0;
+  const stdReturn =
+    dailyReturns.length > 1
+      ? Math.sqrt(
+          dailyReturns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) /
+            dailyReturns.length,
+        )
+      : 1;
   const sharpeRatio = stdReturn > 0 ? (avgReturn / stdReturn) * Math.sqrt(365) : 0;
-  
+
   const result: BacktestResult = {
     params,
     summary: {
@@ -819,9 +868,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       profitFactor: grossLosses > 0 ? grossWins / grossLosses : grossWins > 0 ? Infinity : 0,
       sharpeRatio,
       finalCapital: capital,
-      longTrades: trades.filter(t => t.side === 'long').length,
-      shortTrades: trades.filter(t => t.side === 'short').length,
-      avgHoldMinutes: trades.length > 0 ? trades.reduce((sum, t) => sum + t.holdMinutes, 0) / trades.length : 0,
+      longTrades: trades.filter((t) => t.side === 'long').length,
+      shortTrades: trades.filter((t) => t.side === 'short').length,
+      avgHoldMinutes:
+        trades.length > 0 ? trades.reduce((sum, t) => sum + t.holdMinutes, 0) / trades.length : 0,
       totalFeesUsd,
     },
     trades,
@@ -829,8 +879,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     equityCurve,
     drawdownCurve,
   };
-  
-  console.log(`[Backtest] Completed: ${trades.length} trades, ${wins.length} wins, ROI: ${result.summary.totalPnlPct.toFixed(1)}%`);
-  
+
+  console.log(
+    `[Backtest] Completed: ${trades.length} trades, ${wins.length} wins, ROI: ${result.summary.totalPnlPct.toFixed(1)}%`,
+  );
+
   return result;
 }
