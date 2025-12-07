@@ -530,6 +530,10 @@ export class SimpleAgent {
   // Track trailing stop activation (to notify only once)
   private trailingNotified: boolean = false;
   
+  // V5.11: Track last processed candle timestamp to sync with backtest
+  // Only check entry signals when a NEW 15m candle closes (not on every tick)
+  private lastProcessedCandleTs: number = 0;
+  
   // Cache pour éviter trop d'appels API (per-symbol only, BTC is global)
   private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
   private readonly CACHE_TTL_MS = 120_000; // 2 minutes (increased to reduce API calls)
@@ -746,6 +750,28 @@ export class SimpleAgent {
       // Store last price for frontend
       const currentPrice = candles[candles.length - 1].close;
       this.lastPrice = currentPrice;
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // V5.11: SYNC WITH BACKTEST - Only check signals on NEW CLOSED candles
+      // This prevents entering on noise/wicks that wouldn't trigger in backtest
+      // The last candle in the array is the CLOSED one (not the in-progress one)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const lastCandleTs = candles[candles.length - 1].timestamp;
+      
+      // Check if this is the same candle we already processed
+      if (lastCandleTs === this.lastProcessedCandleTs) {
+        // Same candle, skip signal check (but still update features for display)
+        this.lastRejectReason = 'waiting_new_candle';
+        return;
+      }
+      
+      // New candle! Mark it as processed
+      const isFirstCheck = this.lastProcessedCandleTs === 0;
+      this.lastProcessedCandleTs = lastCandleTs;
+      
+      if (!isFirstCheck) {
+        logger.info(`🕯️ [${shortSymbol}] New 15m candle closed | $${currentPrice.toFixed(2)} | Checking signal...`);
+      }
       
       // Fetch BTC candles pour corrélation
       const btcCandles = await this.fetchBtcCandles();
