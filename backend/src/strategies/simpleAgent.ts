@@ -1029,8 +1029,11 @@ export class SimpleAgent {
       const statusAfterCommit = this.config.capitalPool.getStatus();
       logger.info(`💰 [${symbol}] Capital after PAPER entry: total=$${statusAfterCommit.totalUsd.toFixed(2)} | inPositions=$${statusAfterCommit.inPositionsUsd.toFixed(2)} | available=$${statusAfterCommit.availableUsd.toFixed(2)}`);
       
-      // Save to DB
-      await this.savePositionToDb(position, 'paper_entry');
+      // Calculate entry fee: 0.04% taker on entry notional
+      const paperEntryFee = sizing.notionalUsd * 0.0004;
+      
+      // Save to DB with calculated fee
+      await this.savePositionToDb(position, 'paper_entry', paperEntryFee);
       
       logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=${slPct.toFixed(2)}% ($${position.stopLoss?.toFixed(4)})`);
       
@@ -1134,8 +1137,12 @@ export class SimpleAgent {
         const statusAfterCommit = this.config.capitalPool.getStatus();
         logger.info(`💰 [${symbol}] Capital after LIVE entry: total=$${statusAfterCommit.totalUsd.toFixed(2)} | inPositions=$${statusAfterCommit.inPositionsUsd.toFixed(2)} | available=$${statusAfterCommit.availableUsd.toFixed(2)}`);
         
-        // Save to DB
-        await this.savePositionToDb(position, 'live_entry');
+        // Extract entry fee from CCXT order, fallback to 0.04% calculation
+        const liveEntryNotional = filledQty * filledPrice;
+        const liveEntryFee = order.fee?.cost ?? (liveEntryNotional * 0.0004);
+        
+        // Save to DB with fee
+        await this.savePositionToDb(position, 'live_entry', liveEntryFee);
         
         // Set initial stop loss on exchange
         await this.setStopLossOnExchange(position);
@@ -1345,8 +1352,12 @@ export class SimpleAgent {
       // Release MARGIN (not notional) with PnL
       this.config.capitalPool.release(this.config.sessionId, marginToRelease, pnlUsd);
       
-      await this.saveExitToDb(position, currentPrice, reason, pnlPct, pnlUsd);
-      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | notional=$${notionalUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)}`);
+      // Calculate paper fee: 0.04% taker on exit notional
+      const exitNotionalUsd = position.qty * currentPrice;
+      const paperFeeUsd = exitNotionalUsd * 0.0004;
+      
+      await this.saveExitToDb(position, currentPrice, reason, pnlPct, pnlUsd, undefined, paperFeeUsd);
+      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | notional=$${notionalUsd.toFixed(2)} | fee=$${paperFeeUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)}`);
       
       // 📢 Send notification for paper exit
       notifyTradeExit({
@@ -1402,10 +1413,14 @@ export class SimpleAgent {
         const newStatus = this.config.capitalPool.getStatus();
         logger.info(`💰 [${symbol}] Capital after close: total=$${newStatus.totalUsd.toFixed(2)} | available=$${newStatus.availableUsd.toFixed(2)} | inPositions=$${newStatus.inPositionsUsd.toFixed(2)}`);
         
-        // Pass the real exchange orderId for proper tracking
-        await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd, order.id);
+        // Extract fee from CCXT order response, fallback to 0.04% calculation
+        const exitNotionalUsd = position.qty * exitPrice;
+        const liveFeeUsd = order.fee?.cost ?? (exitNotionalUsd * 0.0004);
         
-        logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | margin released=$${marginToRelease.toFixed(2)} | orderId=${order.id}`)
+        // Pass the real exchange orderId and fee for proper tracking
+        await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd, order.id, liveFeeUsd);
+        
+        logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | fee=$${liveFeeUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)} | orderId=${order.id}`)
         
         // 📢 Send notification for live exit
         notifyTradeExit({
@@ -2058,10 +2073,14 @@ export class SimpleAgent {
         // Release MARGIN (not notional)
         this.config.capitalPool.release(this.config.sessionId, marginToRelease, pnlUsd);
         
-        // Save exit to DB with exchange orderId if available
-        await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd, exchangeOrderId);
+        // Calculate fee for synced exit (no order response available, use 0.04%)
+        const syncExitNotionalUsd = this.position.qty * exitPrice;
+        const syncFeeUsd = syncExitNotionalUsd * 0.0004;
         
-        logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%, margin released: $${marginToRelease.toFixed(2)}`);
+        // Save exit to DB with exchange orderId and calculated fee
+        await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd, exchangeOrderId, syncFeeUsd);
+        
+        logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%, fee: $${syncFeeUsd.toFixed(2)}, margin released: $${marginToRelease.toFixed(2)}`);
         
         // V5.10: Cancel any remaining orders (trailing stop, backup SL) to avoid orphans
         await this.cancelStopLossOnExchange();
@@ -2094,8 +2113,11 @@ export class SimpleAgent {
           // Commit MARGIN (not notional) for this position
           this.config.capitalPool.commit(this.config.sessionId, estimatedMargin);
           
-          // Save to DB
-          await this.savePositionToDb(this.position, 'synced_from_exchange');
+          // Calculate entry fee for synced position (no order available, use 0.04%)
+          const syncEntryFee = notionalUsd * 0.0004;
+          
+          // Save to DB with calculated fee
+          await this.savePositionToDb(this.position, 'synced_from_exchange', syncEntryFee);
           
           logger.info(`✅ [${symbol}] Position synced from exchange: ${exchangeSide} @ $${entryPrice}`);
         }
@@ -2112,13 +2134,17 @@ export class SimpleAgent {
     }
   }
   
-  private async savePositionToDb(position: Position, action: string): Promise<void> {
+  private async savePositionToDb(position: Position, action: string, entryFeeUsd?: number): Promise<void> {
     try {
       // First create an order for the entry (BUY for long, SELL for short)
       const isLive = this.config.mode === 'live';
       // For live mode, use the orderId from exchange if available, otherwise generate one
       const clientOrderId = position.orderId || `${isLive ? 'live' : 'paper'}_entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const entrySide = position.side === 'long' ? 'buy' : 'sell';
+      
+      // Calculate entry fee if not provided (0.04% taker on notional)
+      const entryNotionalUsd = position.qty * position.entryPrice;
+      const calculatedFee = entryFeeUsd ?? (entryNotionalUsd * 0.0004);
       
       const order = await this.config.prisma.order.create({
         data: {
@@ -2146,13 +2172,14 @@ export class SimpleAgent {
           qty: position.qty,
           side: entrySide,
           realizedPnl: 0, // No PnL on entry
+          fee: calculatedFee,  // Store entry fee for accurate cost tracking
           strategyUsed: 'momentum_simple',
           strategyFamily: 'momentum',
           ts: new Date(position.entryTime),
         },
       });
       
-      logger.info(`💾 [${this.config.symbol}] Entry order logged: ${entrySide.toUpperCase()} @ $${position.entryPrice.toFixed(4)}`);
+      logger.info(`💾 [${this.config.symbol}] Entry order logged: ${entrySide.toUpperCase()} @ $${position.entryPrice.toFixed(4)}, fee: $${calculatedFee.toFixed(2)}`);
       
       // Then create the position record
       await this.config.prisma.position.create({
@@ -2178,13 +2205,18 @@ export class SimpleAgent {
     reason: string,
     pnlPct: number,
     pnlUsd: number,
-    exchangeOrderId?: string  // Optional: real orderId from exchange (for live mode)
+    exchangeOrderId?: string,  // Optional: real orderId from exchange (for live mode)
+    feeUsd?: number  // Optional: actual fee from exchange or calculated
   ): Promise<void> {
     try {
       // Exit side is opposite of position side (SELL to close LONG, BUY to close SHORT)
       const exitSide = position.side === 'long' ? 'sell' : 'buy';
       const isLive = this.config.mode === 'live';
       const clientOrderId = exchangeOrderId || `${isLive ? 'live' : 'paper'}_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      
+      // Calculate fee if not provided (0.04% taker fee on notional)
+      const notionalUsd = position.qty * exitPrice;
+      const calculatedFee = feeUsd ?? (notionalUsd * 0.0004); // 0.04% taker
       
       const order = await this.config.prisma.order.create({
         data: {
@@ -2213,6 +2245,7 @@ export class SimpleAgent {
           qty: position.qty,
           side: exitSide,
           realizedPnl: pnlUsd,
+          fee: calculatedFee,  // Store fee for accurate PnL tracking
           strategyUsed: 'momentum_simple',
           strategyFamily: 'momentum',
           ts: new Date(),
@@ -2234,7 +2267,7 @@ export class SimpleAgent {
       // Update SessionKpi with new performance metrics
       await this.updateSessionKpi(pnlUsd, pnlPct);
       
-      logger.info(`💾 [${this.config.symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)`);
+      logger.info(`💾 [${this.config.symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%), Fee: $${calculatedFee.toFixed(2)}`);
       
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Failed to save exit to DB:`, error);
