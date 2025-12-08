@@ -1224,9 +1224,23 @@ app.get("/api/agent/overview", async (req, res) => {
         select: { realizedPnlUsd: true }
       });
       totalPnlUsd = allPaperKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+      
+      // Subtract fees from paper PnL for accurate net display
+      const paperFees = await prisma.fill.aggregate({
+        where: { session: { userId, mode: 'paper' } },
+        _sum: { fee: true }
+      });
+      totalPnlUsd -= (paperFees._sum.fee || 0);
     } else {
       // For live mode or combined, sum from enriched sessions
       totalPnlUsd = enrichedSessions.reduce((sum, s) => sum + (s.pnlUsd || 0), 0);
+      
+      // Subtract fees from live PnL for accurate net display
+      const liveFees = await prisma.fill.aggregate({
+        where: { session: { userId, mode: 'live' } },
+        _sum: { fee: true }
+      });
+      totalPnlUsd -= (liveFees._sum.fee || 0);
     }
     
     // Add unrealized PnL from running agents
