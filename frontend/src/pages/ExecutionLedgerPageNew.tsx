@@ -183,13 +183,14 @@ export default function ExecutionLedgerPageNew() {
         {/* Table Header */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '130px 110px 120px 70px 90px 90px 90px 100px 80px 100px 80px 100px 80px 80px 80px',
+          gridTemplateColumns: '100px 60px 80px 100px 60px 75px 75px 75px 80px 65px 70px 60px 130px 65px 60px 55px',
           padding: '12px 16px',
           borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
           background: 'rgba(15, 23, 42, 0.8)',
+          gap: 8,
         }}>
-          {['Date', 'Session', 'Symbol', 'Side', 'Quantity', 'Entry', 'Exit', 'P&L (USD)', 'ROE %', 'Notional', 'Leverage', 'Duration', 'Exit Type', 'Max P&L', 'Fees', 'Outcome'].map((h, i) => (
-            <span key={i} style={{ ...headerStyle, textAlign: i >= 4 ? 'right' : 'left' }}>{h}</span>
+          {['Date', 'Outcome', 'Session', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'P&L', 'ROE %', 'Notional', 'Lev', 'Duration', 'Exit Type', 'Max P&L', 'Fees'].map((h, i) => (
+            <span key={i} style={{ ...headerStyle, textAlign: i >= 5 ? 'right' : 'left' }}>{h}</span>
           ))}
         </div>
 
@@ -207,96 +208,97 @@ export default function ExecutionLedgerPageNew() {
               key={trade.id}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '130px 110px 120px 70px 90px 90px 90px 100px 80px 100px 80px 100px 80px 80px 80px',
-                padding: '14px 16px',
+                gridTemplateColumns: '100px 60px 80px 100px 60px 75px 75px 75px 80px 65px 70px 60px 130px 65px 60px 55px',
+                padding: '12px 16px',
                 borderBottom: '1px solid rgba(148, 163, 184, 0.05)',
                 alignItems: 'center',
                 transition: 'background 0.15s',
+                gap: 8,
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(148, 163, 184, 0.03)')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             >
               {/* Date */}
               <div>
-                <div style={{ color: '#f8fafc', fontSize: 13 }}>{dayjs(trade.createdAt).format('YYYY-MM-DD')}</div>
-                <div style={{ color: '#64748b', fontSize: 11 }}>{dayjs(trade.createdAt).format('HH:mm:ss')}</div>
+                <div style={{ color: '#f8fafc', fontSize: 12 }}>{dayjs(trade.createdAt).format('YYYY-MM-DD')}</div>
+                <div style={{ color: '#64748b', fontSize: 10 }}>{dayjs(trade.createdAt).format('HH:mm:ss')}</div>
               </div>
 
-              {/* Session */}
-              <div>
-                <div style={{ color: '#f8fafc', fontSize: 13 }}>{trade.sessionSymbol?.replace('/USDT:USDT', '')}</div>
-                <Tag style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, border: 'none', background: trade.sessionMode === 'live' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(59, 130, 246, 0.1)', color: trade.sessionMode === 'live' ? '#f87171' : '#60a5fa' }}>
-                  {trade.sessionMode?.toUpperCase()}
-                </Tag>
-              </div>
-
-              {/* Symbol */}
-              <Text style={{ color: '#f8fafc', fontSize: 13 }}>{trade.symbol}</Text>
-
-              {/* Side */}
-              <Tag style={{ borderRadius: 4, border: 'none', background: trade.positionSide === 'long' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)', color: trade.positionSide === 'long' ? '#4ade80' : '#f87171', fontSize: 11, fontWeight: 600 }}>
-                {trade.positionSide?.toUpperCase()}
-              </Tag>
-
-              {/* Quantity */}
-              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{trade.qty?.toFixed(4)}</Text>
-
-              {/* Entry */}
-              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{trade.entryPrice?.toFixed(4)}</Text>
-
-              {/* Exit */}
-              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{trade.exitPrice?.toFixed(4)}</Text>
-
-              {/* P&L */}
-              <Text style={{ color: pnl >= 0 ? '#4ade80' : '#f87171', fontSize: 14, fontWeight: 600, textAlign: 'right', display: 'block' }}>
-                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-              </Text>
-
-              {/* ROE */}
-              <Text style={{ color: roe >= 0 ? '#4ade80' : '#f87171', fontSize: 13, fontWeight: 500, textAlign: 'right', display: 'block' }}>
-                {roe >= 0 ? '+' : ''}{roe.toFixed(1)}%
-              </Text>
-
-              {/* Notional */}
-              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>
-                ${(trade.notionalUsd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              </Text>
-
-              {/* Leverage */}
-              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{trade.leverage?.toFixed(1)}x</Text>
-
-              {/* Duration */}
-              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{formatDuration(trade.durationMinutes)}</Text>
-
-              {/* Exit Type */}
-              {trade.exitReason ? (
-                <Tag style={{
-                  borderRadius: 4, border: 'none', fontSize: 10, marginLeft: 'auto',
-                  background: trade.exitReason === 'PROFIT_TARGET' ? 'rgba(34, 197, 94, 0.1)' : trade.exitReason === 'STOP_LOSS' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(148, 163, 184, 0.1)',
-                  color: trade.exitReason === 'PROFIT_TARGET' ? '#4ade80' : trade.exitReason === 'STOP_LOSS' ? '#f87171' : '#94a3b8',
-                }}>
-                  {trade.exitReason.replace('_', ' ')}
-                </Tag>
-              ) : <Text style={{ color: '#64748b', fontSize: 12 }}>-</Text>}
-
-              {/* Max P&L */}
-              <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'right', display: 'block' }}>
-                {trade.maxPnlPct != null ? `+${trade.maxPnlPct.toFixed(1)}%` : '-'}
-              </Text>
-
-              {/* Fees */}
-              <Text style={{ color: '#f97316', fontSize: 12, textAlign: 'right', display: 'block' }}>
-                {trade.feesUsd != null ? `-$${trade.feesUsd.toFixed(2)}` : '-'}
-              </Text>
-
-              {/* Outcome */}
+              {/* Outcome - moved to 2nd column */}
               <Tag style={{
-                borderRadius: 4, border: 'none', marginLeft: 'auto', fontSize: 10, fontWeight: 600,
+                borderRadius: 4, border: 'none', fontSize: 10, fontWeight: 600, padding: '2px 6px',
                 background: trade.outcome === 'win' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
                 color: trade.outcome === 'win' ? '#4ade80' : '#f87171',
               }}>
                 {trade.outcome?.toUpperCase()}
               </Tag>
+
+              {/* Session */}
+              <div>
+                <div style={{ color: '#f8fafc', fontSize: 12 }}>{trade.sessionSymbol?.replace('/USDT:USDT', '')}</div>
+                <Tag style={{ fontSize: 8, padding: '0 3px', borderRadius: 3, border: 'none', background: trade.sessionMode === 'live' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(59, 130, 246, 0.1)', color: trade.sessionMode === 'live' ? '#f87171' : '#60a5fa' }}>
+                  {trade.sessionMode?.toUpperCase()}
+                </Tag>
+              </div>
+
+              {/* Symbol */}
+              <Text style={{ color: '#f8fafc', fontSize: 12 }}>{trade.symbol}</Text>
+
+              {/* Side */}
+              <Tag style={{ borderRadius: 4, border: 'none', background: trade.positionSide === 'long' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)', color: trade.positionSide === 'long' ? '#4ade80' : '#f87171', fontSize: 10, fontWeight: 600, padding: '2px 6px' }}>
+                {trade.positionSide?.toUpperCase()}
+              </Tag>
+
+              {/* Quantity */}
+              <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'right', display: 'block' }}>{trade.qty?.toFixed(4)}</Text>
+
+              {/* Entry */}
+              <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'right', display: 'block' }}>{trade.entryPrice?.toFixed(4)}</Text>
+
+              {/* Exit */}
+              <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'right', display: 'block' }}>{trade.exitPrice?.toFixed(4)}</Text>
+
+              {/* P&L */}
+              <Text style={{ color: pnl >= 0 ? '#4ade80' : '#f87171', fontSize: 13, fontWeight: 600, textAlign: 'right', display: 'block' }}>
+                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+              </Text>
+
+              {/* ROE */}
+              <Text style={{ color: roe >= 0 ? '#4ade80' : '#f87171', fontSize: 12, fontWeight: 500, textAlign: 'right', display: 'block' }}>
+                {roe >= 0 ? '+' : ''}{roe.toFixed(1)}%
+              </Text>
+
+              {/* Notional */}
+              <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'right', display: 'block' }}>
+                ${(trade.notionalUsd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </Text>
+
+              {/* Leverage */}
+              <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'right', display: 'block' }}>{trade.leverage?.toFixed(1)}x</Text>
+
+              {/* Duration + Exit Type combined */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Text style={{ color: '#94a3b8', fontSize: 11 }}>{formatDuration(trade.durationMinutes)}</Text>
+                {trade.exitReason && (
+                  <Tag style={{
+                    borderRadius: 4, border: 'none', fontSize: 9, padding: '1px 4px',
+                    background: trade.exitReason.includes('PROFIT') || trade.exitReason === 'TRAILING' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                    color: trade.exitReason.includes('PROFIT') || trade.exitReason === 'TRAILING' ? '#4ade80' : '#f87171',
+                  }}>
+                    {trade.exitReason.replace(/_/g, ' ')}
+                  </Tag>
+                )}
+              </div>
+
+              {/* Max P&L */}
+              <Text style={{ color: '#94a3b8', fontSize: 11, textAlign: 'right', display: 'block' }}>
+                {trade.maxPnlPct != null ? `+${trade.maxPnlPct.toFixed(1)}%` : '-'}
+              </Text>
+
+              {/* Fees */}
+              <Text style={{ color: '#f97316', fontSize: 11, textAlign: 'right', display: 'block' }}>
+                {trade.feesUsd != null ? `-$${trade.feesUsd.toFixed(2)}` : '-'}
+              </Text>
             </div>
           );
         })}
