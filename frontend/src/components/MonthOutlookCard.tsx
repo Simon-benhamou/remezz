@@ -3,7 +3,15 @@
  * Displays macro analysis comparing current month to historical patterns
  */
 import { useEffect, useState } from 'react';
-import { TrendingUp, TrendingDown, Minus, Calendar, Target, BarChart3 } from 'lucide-react';
+import { Card, Row, Col, Statistic, Tag, Tooltip, Spin, Space } from 'antd';
+import { 
+  CalendarOutlined, 
+  RiseOutlined, 
+  FallOutlined, 
+  MinusOutlined,
+  BarChartOutlined,
+  InfoCircleOutlined 
+} from '@ant-design/icons';
 import { api } from '../api';
 
 type MonthOutlookData = Awaited<ReturnType<typeof api.getMonthOutlook>>;
@@ -18,6 +26,7 @@ export function MonthOutlookCard() {
       try {
         const data = await api.getMonthOutlook();
         setOutlook(data);
+        setError(null);
       } catch (err) {
         setError('Unable to load month outlook');
       } finally {
@@ -33,15 +42,16 @@ export function MonthOutlookCard() {
 
   if (loading) {
     return (
-      <div className="bg-[#1a1f2e] rounded-xl p-4 border border-gray-800 animate-pulse">
-        <div className="h-6 bg-gray-700 rounded w-1/3 mb-4"></div>
-        <div className="h-20 bg-gray-700 rounded"></div>
-      </div>
+      <Card size="small" style={{ background: '#141414', borderColor: '#303030' }}>
+        <div style={{ textAlign: 'center', padding: '20px' }}>
+          <Spin size="small" />
+        </div>
+      </Card>
     );
   }
 
   if (error || !outlook) {
-    return null; // Don't show anything if no data
+    return null;
   }
 
   const { currentMonth, prediction, similarMonths, historicalBest, historicalWorst } = outlook;
@@ -53,133 +63,168 @@ export function MonthOutlookCard() {
 
   const outlookConfig = {
     BULLISH: {
-      icon: TrendingUp,
-      color: 'text-green-400',
-      bgColor: 'bg-green-500/10',
-      borderColor: 'border-green-500/30',
-      label: 'Bullish',
+      icon: <RiseOutlined />,
+      color: '#52c41a',
+      tagColor: 'success',
+      label: 'BULLISH',
     },
     BEARISH: {
-      icon: TrendingDown,
-      color: 'text-red-400',
-      bgColor: 'bg-red-500/10',
-      borderColor: 'border-red-500/30',
-      label: 'Bearish',
+      icon: <FallOutlined />,
+      color: '#ff4d4f',
+      tagColor: 'error',
+      label: 'BEARISH',
     },
     NEUTRAL: {
-      icon: Minus,
-      color: 'text-yellow-400',
-      bgColor: 'bg-yellow-500/10',
-      borderColor: 'border-yellow-500/30',
-      label: 'Neutral',
+      icon: <MinusOutlined />,
+      color: '#faad14',
+      tagColor: 'warning',
+      label: 'NEUTRAL',
     },
   };
 
   const config = outlookConfig[prediction.outlook];
-  const OutlookIcon = config.icon;
+
+  // Helper to format year from yearMonth (2024-09 -> '24)
+  const formatYear = (yearMonth: string) => yearMonth.slice(2, 4);
 
   return (
-    <div className={`bg-[#1a1f2e] rounded-xl p-4 border ${config.borderColor}`}>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-gray-400" />
-          <span className="text-sm font-medium text-gray-300">
-            {currentMonth.monthName} Outlook
-          </span>
-          <span className="text-xs text-gray-500">(Day {outlook.dayOfMonth})</span>
+    <Card
+      size="small"
+      style={{ background: '#141414', borderColor: '#303030' }}
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Space>
+            <CalendarOutlined style={{ color: '#888' }} />
+            <span style={{ color: '#fff', fontWeight: 500 }}>
+              {currentMonth.monthName} Outlook
+            </span>
+            <span style={{ color: '#666', fontSize: 12 }}>(Day {outlook.dayOfMonth})</span>
+          </Space>
+          <Tag color={config.tagColor} icon={config.icon}>
+            {config.label} {prediction.confidence.toFixed(0)}%
+          </Tag>
         </div>
-        <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full ${config.bgColor}`}>
-          <OutlookIcon className={`w-3.5 h-3.5 ${config.color}`} />
-          <span className={`text-xs font-medium ${config.color}`}>
-            {config.label}
-          </span>
-          <span className="text-xs text-gray-500">
-            {prediction.confidence.toFixed(0)}%
-          </span>
-        </div>
-      </div>
-
+      }
+    >
       {/* Current Month Stats */}
-      <div className="grid grid-cols-4 gap-3 mb-4">
-        <div className="text-center">
-          <div className="text-lg font-bold text-white">{currentMonth.trades}</div>
-          <div className="text-xs text-gray-500">Trades</div>
-        </div>
-        <div className="text-center">
-          <div className="text-lg font-bold text-white">{currentMonth.winRate.toFixed(0)}%</div>
-          <div className="text-xs text-gray-500">Win Rate</div>
-        </div>
-        <div className="text-center">
-          <div className={`text-lg font-bold ${currentMonth.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            ${currentMonth.totalPnl.toFixed(0)}
-          </div>
-          <div className="text-xs text-gray-500">PnL</div>
-        </div>
-        <div className="text-center">
-          <div className="text-lg font-bold text-white">{(currentMonth.slRatio * 100).toFixed(0)}%</div>
-          <div className="text-xs text-gray-500">SL Rate</div>
-        </div>
-      </div>
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}>
+          <Statistic
+            title="Trades"
+            value={currentMonth.trades}
+            valueStyle={{ fontSize: 18, color: '#fff' }}
+          />
+        </Col>
+        <Col span={6}>
+          <Statistic
+            title="Win Rate"
+            value={currentMonth.winRate}
+            precision={0}
+            suffix="%"
+            valueStyle={{ fontSize: 18, color: '#fff' }}
+          />
+        </Col>
+        <Col span={6}>
+          <Statistic
+            title="PnL"
+            value={currentMonth.totalPnl}
+            precision={0}
+            prefix="$"
+            valueStyle={{ 
+              fontSize: 18, 
+              color: currentMonth.totalPnl >= 0 ? '#52c41a' : '#ff4d4f' 
+            }}
+          />
+        </Col>
+        <Col span={6}>
+          <Statistic
+            title="SL Rate"
+            value={currentMonth.slRatio * 100}
+            precision={0}
+            suffix="%"
+            valueStyle={{ fontSize: 18, color: '#fff' }}
+          />
+        </Col>
+      </Row>
 
       {/* Similar Months */}
-      <div className="mb-4">
-        <div className="text-xs text-gray-500 mb-2 flex items-center gap-1">
-          <BarChart3 className="w-3 h-3" />
-          Similar historical months:
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ color: '#888', fontSize: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <BarChartOutlined />
+          Similar historical periods (first {outlook.dayOfMonth} days):
+          <Tooltip title="Compares current month's first days to same period in past months to predict outcome">
+            <InfoCircleOutlined style={{ cursor: 'help' }} />
+          </Tooltip>
         </div>
-        <div className="flex flex-wrap gap-1.5">
+        <Space wrap>
           {similarMonths.slice(0, 3).map((sim, idx) => {
             const outcomeColor = sim.finalOutcome === 'POSITIVE' 
-              ? 'bg-green-500/20 text-green-400 border-green-500/30'
+              ? 'success'
               : sim.finalOutcome === 'NEGATIVE'
-              ? 'bg-red-500/20 text-red-400 border-red-500/30'
-              : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
+              ? 'error'
+              : 'warning';
+            
+            const year = formatYear(sim.month.yearMonth);
+            const pnlSign = sim.month.totalPnl >= 0 ? '+' : '';
             
             return (
-              <div
+              <Tooltip
                 key={idx}
-                className={`px-2 py-1 rounded border text-xs ${outcomeColor}`}
-                title={`${sim.month.monthName} ${sim.month.yearMonth.split('-')[0]}: ${sim.similarity.toFixed(0)}% similar, ended $${sim.month.totalPnl.toFixed(0)}`}
+                title={
+                  <div>
+                    <div><strong>{sim.month.monthName} {sim.month.yearMonth.split('-')[0]}</strong></div>
+                    <div>Similarity: {sim.similarity.toFixed(0)}%</div>
+                    <div>Full month: {pnlSign}${sim.month.totalPnl.toFixed(0)} ({sim.month.winRate.toFixed(0)}% WR)</div>
+                  </div>
+                }
               >
-                {sim.month.monthName} '{sim.month.yearMonth.slice(2, 4)}
-                <span className="opacity-60 ml-1">{sim.similarity.toFixed(0)}%</span>
-              </div>
+                <Tag 
+                  color={outcomeColor}
+                  style={{ cursor: 'help' }}
+                >
+                  {sim.month.monthName} '{year} → {pnlSign}${sim.month.totalPnl.toFixed(0)}
+                </Tag>
+              </Tooltip>
             );
           })}
-        </div>
+        </Space>
       </div>
 
-      {/* Prediction Reasoning */}
-      <div className="text-xs text-gray-400 mb-3 italic">
-        "{prediction.reasoning}"
-      </div>
-
-      {/* Expected Outcome */}
-      <div className="flex items-center justify-between pt-3 border-t border-gray-700/50">
-        <div className="flex items-center gap-1">
-          <Target className="w-3 h-3 text-gray-500" />
-          <span className="text-xs text-gray-500">Expected:</span>
+      {/* Prediction */}
+      <div style={{ 
+        background: '#1a1a1a', 
+        padding: '8px 12px', 
+        borderRadius: 6, 
+        marginBottom: 12,
+        borderLeft: `3px solid ${config.color}`
+      }}>
+        <div style={{ color: '#888', fontSize: 11, marginBottom: 4 }}>PREDICTION</div>
+        <div style={{ color: '#ccc', fontSize: 12, fontStyle: 'italic' }}>
+          "{prediction.reasoning}"
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs">
-            <span className="text-gray-500">WR:</span>{' '}
-            <span className="text-white">{prediction.expectedWinRate.toFixed(0)}%</span>
+        <div style={{ marginTop: 8, display: 'flex', gap: 16 }}>
+          <span style={{ fontSize: 12 }}>
+            <span style={{ color: '#666' }}>Expected WR:</span>{' '}
+            <span style={{ color: '#fff' }}>{prediction.expectedWinRate.toFixed(0)}%</span>
           </span>
-          <span className="text-xs">
-            <span className="text-gray-500">PnL:</span>{' '}
-            <span className={prediction.expectedPnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+          <span style={{ fontSize: 12 }}>
+            <span style={{ color: '#666' }}>Expected PnL:</span>{' '}
+            <span style={{ color: prediction.expectedPnl >= 0 ? '#52c41a' : '#ff4d4f' }}>
               ${prediction.expectedPnl.toFixed(0)}
             </span>
           </span>
         </div>
       </div>
 
-      {/* Historical Context - mini */}
-      <div className="flex items-center justify-between mt-2 text-xs text-gray-600">
-        <span>Best: {historicalBest.monthName} '{historicalBest.yearMonth.slice(2,4)} (+${historicalBest.totalPnl.toFixed(0)})</span>
-        <span>Worst: {historicalWorst.monthName} '{historicalWorst.yearMonth.slice(2,4)} (${historicalWorst.totalPnl.toFixed(0)})</span>
+      {/* Historical Context */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#555' }}>
+        <span>
+          📈 Best: {historicalBest.monthName} '{formatYear(historicalBest.yearMonth)} (+${historicalBest.totalPnl.toFixed(0)})
+        </span>
+        <span>
+          📉 Worst: {historicalWorst.monthName} '{formatYear(historicalWorst.yearMonth)} (${historicalWorst.totalPnl.toFixed(0)})
+        </span>
       </div>
-    </div>
+    </Card>
   );
 }
