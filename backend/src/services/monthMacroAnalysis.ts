@@ -11,6 +11,79 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Types
+interface Candle {
+  timestamp: number | string;
+  openTime?: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+interface Trade {
+  symbol: string;
+  side: 'long' | 'short';
+  entryTime: Date;
+  exitTime: Date;
+  entryPrice: number;
+  exitPrice: number;
+  pnlPct: number;
+  pnlUsd: number;
+  exitReason: 'SL' | 'TRAIL';
+  leverage: number;
+  month: number;
+  year: number;
+  day: number;
+}
+
+interface Position {
+  side: 'long' | 'short';
+  entryPrice: number;
+  entryTime: Date;
+  qty: number;
+  stopLoss: number;
+  highWaterMark: number;
+  trailingActive: boolean;
+  trailingStop: number;
+}
+
+export interface MonthMetrics {
+  yearMonth: string;
+  monthName: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnl: number;
+  avgPnl: number;
+  slCount: number;
+  trailCount: number;
+  slRatio: number;
+}
+
+export interface SimilarMonth {
+  month: MonthMetrics;
+  similarity: number;
+  finalOutcome: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
+}
+
+export interface MonthOutlook {
+  currentMonth: MonthMetrics;
+  dayOfMonth: number;
+  similarMonths: SimilarMonth[];
+  prediction: {
+    outlook: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+    confidence: number;
+    expectedWinRate: number;
+    expectedPnl: number;
+    reasoning: string;
+  };
+  historicalBest: MonthMetrics;
+  historicalWorst: MonthMetrics;
+}
+
 // V5.11 Strategy Config
 const CONFIG = {
   RSI_PERIOD: 14,
@@ -35,14 +108,14 @@ const CONFIG = {
     'DOGE/USDT:USDT': 4,
     'XRP/USDT:USDT': 4,
     'ATOM/USDT:USDT': 4,
-  }
+  } as Record<string, number>
 };
 
 const SYMBOLS = Object.keys(CONFIG.LEVERAGE);
 
 // Technical indicators
-function calculateRSI(closes, period = 14) {
-  const rsi = new Array(closes.length).fill(null);
+function calculateRSI(closes: number[], period = 14): number[] {
+  const rsi: number[] = new Array(closes.length).fill(0);
   if (closes.length < period + 1) return rsi;
   
   let gains = 0, losses = 0;
@@ -67,8 +140,8 @@ function calculateRSI(closes, period = 14) {
   return rsi;
 }
 
-function calculateEMA(data, period) {
-  const ema = new Array(data.length).fill(null);
+function calculateEMA(data: number[], period: number): number[] {
+  const ema: number[] = new Array(data.length).fill(0);
   if (data.length < period) return ema;
   
   let sum = 0;
@@ -82,38 +155,19 @@ function calculateEMA(data, period) {
   return ema;
 }
 
-function calculateMACD(closes) {
+function calculateMACD(closes: number[]): { macd: number[]; signal: number[]; histogram: number[] } {
   const emaFast = calculateEMA(closes, CONFIG.MACD_FAST);
   const emaSlow = calculateEMA(closes, CONFIG.MACD_SLOW);
   
-  const macdLine = closes.map((_, i) => 
-    emaFast[i] !== null && emaSlow[i] !== null ? emaFast[i] - emaSlow[i] : null
-  );
+  const macdLine = closes.map((_, i) => emaFast[i] - emaSlow[i]);
+  const signalLine = calculateEMA(macdLine, CONFIG.MACD_SIGNAL);
+  const histogram = macdLine.map((m, i) => m - signalLine[i]);
   
-  const validMacd = macdLine.filter(v => v !== null);
-  const signalLine = calculateEMA(validMacd, CONFIG.MACD_SIGNAL);
-  
-  const result = { macd: [], signal: [], histogram: [] };
-  let sigIdx = 0;
-  
-  for (let i = 0; i < closes.length; i++) {
-    if (macdLine[i] !== null) {
-      result.macd.push(macdLine[i]);
-      const sig = signalLine[sigIdx] ?? null;
-      result.signal.push(sig);
-      result.histogram.push(sig !== null ? macdLine[i] - sig : null);
-      sigIdx++;
-    } else {
-      result.macd.push(null);
-      result.signal.push(null);
-      result.histogram.push(null);
-    }
-  }
-  return result;
+  return { macd: macdLine, signal: signalLine, histogram };
 }
 
-function calculateATR(candles, period = 14) {
-  const atr = new Array(candles.length).fill(null);
+function calculateATR(candles: Candle[], period = 14): number[] {
+  const atr: number[] = new Array(candles.length).fill(0);
   if (candles.length < period + 1) return atr;
   
   const tr = candles.map((c, i) => {
@@ -132,22 +186,20 @@ function calculateATR(candles, period = 14) {
   return atr;
 }
 
-function runBacktest(candles, symbol) {
+function runBacktest(candles: Candle[], symbol: string): Trade[] {
   const closes = candles.map(c => c.close);
   const rsi = calculateRSI(closes, CONFIG.RSI_PERIOD);
   const macd = calculateMACD(closes);
   const atr = calculateATR(candles, CONFIG.ATR_PERIOD);
   
-  const trades = [];
-  let position = null;
+  const trades: Trade[] = [];
+  let position: Position | null = null;
   const leverage = CONFIG.LEVERAGE[symbol] || 4;
   
   for (let i = 50; i < candles.length; i++) {
     const candle = candles[i];
     const price = candle.close;
     const ts = new Date(candle.timestamp);
-    
-    if (rsi[i] === null || macd.histogram[i] === null || atr[i] === null) continue;
     
     // Check exits first
     if (position) {
@@ -166,8 +218,8 @@ function runBacktest(candles, symbol) {
         }
       }
       
-      let exitPrice = null;
-      let exitReason = null;
+      let exitPrice: number | null = null;
+      let exitReason: 'SL' | 'TRAIL' | null = null;
       
       if (position.side === 'long' && lowPrice <= position.stopLoss) {
         exitPrice = position.stopLoss;
@@ -177,7 +229,7 @@ function runBacktest(candles, symbol) {
         exitReason = 'TRAIL';
       }
       
-      if (exitPrice) {
+      if (exitPrice && exitReason) {
         const pnlPct = ((exitPrice - position.entryPrice) / position.entryPrice) * 100;
         const notional = position.qty * position.entryPrice;
         const fees = notional * CONFIG.FEE_PCT / 100 * 2;
@@ -209,10 +261,10 @@ function runBacktest(candles, symbol) {
       const prevHist = macd.histogram[i - 1];
       const currHist = macd.histogram[i];
       
-      const rsiCrossUp = prevRsi !== null && prevRsi < CONFIG.RSI_OVERSOLD && currRsi >= CONFIG.RSI_OVERSOLD;
-      const macdCrossUp = prevHist !== null && prevHist < 0 && currHist >= 0;
+      const rsiCrossUp = prevRsi < CONFIG.RSI_OVERSOLD && currRsi >= CONFIG.RSI_OVERSOLD;
+      const macdCrossUp = prevHist < 0 && currHist >= 0;
       
-      if (rsiCrossUp && macdCrossUp) {
+      if (rsiCrossUp && macdCrossUp && atr[i] > 0) {
         const slPctRaw = (atr[i] / price) * 100 * CONFIG.SL_ATR_MULT;
         const slPct = Math.max(CONFIG.SL_MIN_PCT, Math.min(CONFIG.SL_MAX_PCT, slPctRaw));
         
@@ -233,8 +285,8 @@ function runBacktest(candles, symbol) {
   return trades;
 }
 
-function loadAllTrades() {
-  const allTrades = [];
+function loadAllTrades(): Trade[] {
+  const allTrades: Trade[] = [];
   // Go up from dist/services to backend/data
   const dataDir = path.join(__dirname, '..', '..', 'data');
   
@@ -251,7 +303,7 @@ function loadAllTrades() {
     
     const rawCandles = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
     
-    let candles;
+    let candles: Candle[];
     if (filename.includes('15m')) {
       candles = [];
       for (let i = 0; i < rawCandles.length; i += 4) {
@@ -260,14 +312,14 @@ function loadAllTrades() {
         candles.push({
           timestamp: chunk[0].openTime || chunk[0].timestamp,
           open: chunk[0].open,
-          high: Math.max(...chunk.map(c => c.high)),
-          low: Math.min(...chunk.map(c => c.low)),
+          high: Math.max(...chunk.map((c: Candle) => c.high)),
+          low: Math.min(...chunk.map((c: Candle) => c.low)),
           close: chunk[3].close,
-          volume: chunk.reduce((s, c) => s + c.volume, 0),
+          volume: chunk.reduce((s: number, c: Candle) => s + c.volume, 0),
         });
       }
     } else {
-      candles = rawCandles.map(c => ({
+      candles = rawCandles.map((c: Candle) => ({
         timestamp: c.timestamp || c.openTime,
         open: c.open,
         high: c.high,
@@ -284,15 +336,15 @@ function loadAllTrades() {
   return allTrades;
 }
 
-function getMonthMetrics(trades, upToDay) {
-  const monthlyMap = new Map();
+function getMonthMetrics(trades: Trade[], upToDay?: number): MonthMetrics[] {
+  const monthlyMap = new Map<string, Trade[]>();
   
   for (const trade of trades) {
     if (upToDay && trade.day > upToDay) continue;
     
     const key = `${trade.year}-${String(trade.month).padStart(2, '0')}`;
     if (!monthlyMap.has(key)) monthlyMap.set(key, []);
-    monthlyMap.get(key).push(trade);
+    monthlyMap.get(key)!.push(trade);
   }
   
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -323,7 +375,7 @@ function getMonthMetrics(trades, upToDay) {
     .sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
 }
 
-function calculateSimilarity(current, historical) {
+function calculateSimilarity(current: MonthMetrics, historical: MonthMetrics): number {
   const weights = {
     winRate: 0.35,
     avgPnl: 0.25,
@@ -346,7 +398,7 @@ function calculateSimilarity(current, historical) {
   return Math.max(0, Math.min(100, similarity * 100));
 }
 
-export function analyzeMonthOutlook() {
+export function analyzeMonthOutlook(): MonthOutlook | null {
   const allTrades = loadAllTrades();
   if (allTrades.length === 0) return null;
   
@@ -369,7 +421,7 @@ export function analyzeMonthOutlook() {
   const trailCount = currentMonthTrades.filter(t => t.exitReason === 'TRAIL').length;
   const totalPnl = currentMonthTrades.reduce((s, t) => s + t.pnlUsd, 0);
   
-  const currentMetrics = {
+  const currentMetrics: MonthMetrics = {
     yearMonth: currentMonthKey,
     monthName: monthNames[currentMonth - 1],
     trades: currentMonthTrades.length,
@@ -387,8 +439,8 @@ export function analyzeMonthOutlook() {
   const allMonthlyFull = getMonthMetrics(allTrades);
   const allMonthlyPartial = getMonthMetrics(allTrades, dayOfMonth);
   
-  const historicalPartialMetrics = [];
-  const fullMonthMetrics = [];
+  const historicalPartialMetrics: MonthMetrics[] = [];
+  const fullMonthMetrics: MonthMetrics[] = [];
   
   for (const partial of allMonthlyPartial) {
     if (partial.yearMonth === currentMonthKey) continue;
@@ -402,11 +454,12 @@ export function analyzeMonthOutlook() {
   }
   
   // Find similar months
-  const similarMonths = historicalPartialMetrics
+  const similarMonthsWithPartial = historicalPartialMetrics
     .map((partial, idx) => {
       const full = fullMonthMetrics[idx];
       const similarity = calculateSimilarity(currentMetrics, partial);
-      const finalOutcome = full.totalPnl > 10 ? 'POSITIVE' : full.totalPnl < -10 ? 'NEGATIVE' : 'NEUTRAL';
+      const finalOutcome: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL' = 
+        full.totalPnl > 10 ? 'POSITIVE' : full.totalPnl < -10 ? 'NEGATIVE' : 'NEUTRAL';
       
       return {
         month: full,
@@ -419,7 +472,7 @@ export function analyzeMonthOutlook() {
     .slice(0, 5);
   
   // Calculate prediction
-  const topSimilar = similarMonths.slice(0, 3);
+  const topSimilar = similarMonthsWithPartial.slice(0, 3);
   const positiveCount = topSimilar.filter(m => m.finalOutcome === 'POSITIVE').length;
   const negativeCount = topSimilar.filter(m => m.finalOutcome === 'NEGATIVE').length;
   
@@ -427,9 +480,9 @@ export function analyzeMonthOutlook() {
   const weightedWinRate = topSimilar.reduce((s, m) => s + m.month.winRate * m.similarity, 0) / totalSimilarity;
   const weightedPnl = topSimilar.reduce((s, m) => s + m.month.totalPnl * m.similarity, 0) / totalSimilarity;
   
-  let outlook;
-  let confidence;
-  let reasoning;
+  let outlook: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  let confidence: number;
+  let reasoning: string;
   
   if (positiveCount >= 2 && weightedPnl > 0) {
     outlook = 'BULLISH';
@@ -447,14 +500,19 @@ export function analyzeMonthOutlook() {
   
   const sortedByPnl = [...allMonthlyFull].sort((a, b) => b.totalPnl - a.totalPnl);
   
+  // Handle edge case where we might not have enough months
+  if (sortedByPnl.length === 0) return null;
+  
+  const similarMonths: SimilarMonth[] = similarMonthsWithPartial.map(m => ({
+    month: m.month,
+    similarity: m.similarity,
+    finalOutcome: m.finalOutcome,
+  }));
+  
   return {
     currentMonth: currentMetrics,
     dayOfMonth,
-    similarMonths: similarMonths.map(m => ({
-      month: m.month,
-      similarity: m.similarity,
-      finalOutcome: m.finalOutcome,
-    })),
+    similarMonths,
     prediction: {
       outlook,
       confidence,

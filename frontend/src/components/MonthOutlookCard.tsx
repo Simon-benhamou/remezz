@@ -4,56 +4,19 @@
  */
 import { useEffect, useState } from 'react';
 import { TrendingUp, TrendingDown, Minus, Calendar, Target, BarChart3 } from 'lucide-react';
+import { api } from '../api';
 
-interface MonthMetrics {
-  yearMonth: string;
-  monthName: string;
-  trades: number;
-  wins: number;
-  losses: number;
-  winRate: number;
-  totalPnl: number;
-  avgPnl: number;
-  slCount: number;
-  trailCount: number;
-  slRatio: number;
-}
-
-interface SimilarMonth {
-  month: MonthMetrics;
-  similarity: number;
-  finalOutcome: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
-}
-
-interface MonthOutlook {
-  currentMonth: MonthMetrics;
-  dayOfMonth: number;
-  similarMonths: SimilarMonth[];
-  prediction: {
-    outlook: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-    confidence: number;
-    expectedWinRate: number;
-    expectedPnl: number;
-    reasoning: string;
-  };
-  historicalBest: MonthMetrics;
-  historicalWorst: MonthMetrics;
-}
+type MonthOutlookData = Awaited<ReturnType<typeof api.getMonthOutlook>>;
 
 export function MonthOutlookCard() {
-  const [outlook, setOutlook] = useState<MonthOutlook | null>(null);
+  const [outlook, setOutlook] = useState<MonthOutlookData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchOutlook = async () => {
       try {
-        const token = localStorage.getItem('auth_token');
-        const res = await fetch('/api/month-outlook', {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!res.ok) throw new Error('Failed to fetch');
-        const data = await res.json();
+        const data = await api.getMonthOutlook();
         setOutlook(data);
       } catch (err) {
         setError('Unable to load month outlook');

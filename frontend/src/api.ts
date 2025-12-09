@@ -245,6 +245,45 @@ export const api = {
       reason: string;
       tradingRecommended: boolean;
     },
+  // Month macro analysis - compares current month to historical patterns
+  getMonthOutlook: async () =>
+    (await client.get('/api/month-outlook')).data as {
+      currentMonth: {
+        yearMonth: string;
+        monthName: string;
+        trades: number;
+        wins: number;
+        losses: number;
+        winRate: number;
+        totalPnl: number;
+        avgPnl: number;
+        slCount: number;
+        trailCount: number;
+        slRatio: number;
+      };
+      dayOfMonth: number;
+      similarMonths: Array<{
+        month: {
+          yearMonth: string;
+          monthName: string;
+          trades: number;
+          winRate: number;
+          totalPnl: number;
+          slRatio: number;
+        };
+        similarity: number;
+        finalOutcome: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
+      }>;
+      prediction: {
+        outlook: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+        confidence: number;
+        expectedWinRate: number;
+        expectedPnl: number;
+        reasoning: string;
+      };
+      historicalBest: { yearMonth: string; monthName: string; totalPnl: number };
+      historicalWorst: { yearMonth: string; monthName: string; totalPnl: number };
+    },
   // Agent start/stop with new 4-agent system
   startAgents: async (mode: 'paper' | 'live', capitalUsd: number) =>
     (await client.post('/api/agent/start', { mode, capitalUsd })).data,
