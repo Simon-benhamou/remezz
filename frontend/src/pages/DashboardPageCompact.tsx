@@ -5,6 +5,7 @@ import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import RecentTradesTable from '../components/RecentTradesTable';
 import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
+import { MonthOutlookCard } from '../components/MonthOutlookCard';
 import { 
   RobotOutlined, 
   DollarOutlined, 
@@ -349,6 +350,12 @@ export default function DashboardPageCompact(){
           </div>
         </Card>
       )}
+      
+      {/* Month Macro Analysis */}
+      <div style={{ marginBottom: 16 }}>
+        <MonthOutlookCard />
+      </div>
+      
       <Row gutter={[12, 12]}>
         <Col xs={24}>
           <Card 

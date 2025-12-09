@@ -394,6 +394,26 @@ app.get("/api/market-conditions", async (req, res) => {
   }
 });
 
+// V5.11: Month Macro Analysis - predict month outcome based on historical patterns
+app.get("/api/month-outlook", async (req, res) => {
+  try {
+    const { analyzeMonthOutlook } = await import('./services/monthMacroAnalysis.js');
+    const outlook = analyzeMonthOutlook();
+    
+    if (!outlook) {
+      return res.json({
+        error: 'No historical data available',
+        outlook: null,
+      });
+    }
+    
+    res.json(outlook);
+  } catch (error) {
+    logger.error("Failed to get month outlook", error);
+    res.status(500).json({ error: "Failed to get month outlook" });
+  }
+});
+
 // V5.5: Liquidity-aware position sizing info
 app.get("/api/liquidity-info", async (req, res) => {
   try {
