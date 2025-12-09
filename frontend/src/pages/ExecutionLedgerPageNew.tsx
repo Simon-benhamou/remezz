@@ -1,7 +1,6 @@
 import React from 'react';
-import { Card, Table, Space, Button, Statistic, Typography, theme, Row, Col, message, Tag, Input } from 'antd';
+import { Button, Typography, message, Tag, Input, Spin } from 'antd';
 import { ReloadOutlined, DownloadOutlined, SearchOutlined } from '../icons';
-import type { ColumnsType } from 'antd/es/table/interface';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
@@ -24,7 +23,6 @@ type TradeRow = {
   sessionMode?: string;
   sessionId?: string;
   outcome?: Outcome;
-  // V5.11: New fields for detailed trade analysis
   roePct?: number | null;
   notionalUsd?: number | null;
   exitReason?: string | null;
@@ -33,21 +31,17 @@ type TradeRow = {
   feesUsd?: number | null;
 };
 
-function formatUsd(v?: number | null, digits = 2) {
-  if (v == null || Number.isNaN(Number(v))) return '-';
-  return `$${Number(v).toFixed(digits)}`;
-}
-
-function resolvePerformanceSignal(row: TradeRow): number {
-  const realized = Number(row.realizedPnlUsd ?? 0);
-  if (!Number.isFinite(realized)) return 0;
-  return realized;
-}
-
 function asOutcome(row: TradeRow): Outcome {
-  const signal = resolvePerformanceSignal(row);
-  if (Math.abs(signal) < 1e-8) return 'breakeven';
-  return signal > 0 ? 'win' : 'loss';
+  const pnl = Number(row.realizedPnlUsd ?? 0);
+  if (Math.abs(pnl) < 0.01) return 'breakeven';
+  return pnl > 0 ? 'win' : 'loss';
+}
+
+function formatDuration(minutes?: number | null): string {
+  if (minutes == null) return '-';
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1440) return `${(minutes / 60).toFixed(1)}h`;
+  return `${(minutes / 1440).toFixed(1)}d`;
 }
 
 export default function ExecutionLedgerPageNew() {
@@ -55,472 +49,262 @@ export default function ExecutionLedgerPageNew() {
   const [loading, setLoading] = React.useState(false);
   const [searchText, setSearchText] = React.useState('');
   const { mode } = useMode();
-  const { token } = theme.useToken();
 
-  // Calculate summary metrics
   const summary = React.useMemo(() => {
     if (!trades.length) return null;
-    
-    let wins = 0;
-    let losses = 0;
-    let totalPnl = 0;
-    let totalFees = 0;
-
+    let wins = 0, losses = 0, totalPnl = 0, totalFees = 0;
     trades.forEach(trade => {
       const pnl = Number(trade.realizedPnlUsd ?? 0);
       totalPnl += pnl;
-      
-      // Estimate fees as 0.1% of notional value
       const notional = (trade.entryPrice ?? 0) * trade.qty;
       totalFees += notional * 0.001;
-
       const outcome = asOutcome(trade);
       if (outcome === 'win') wins++;
       else if (outcome === 'loss') losses++;
     });
-
-    const winRate = trades.length ? (wins / trades.length) * 100 : 0;
-    const netPnl = totalPnl - totalFees;
-    
-    return {
-      total: trades.length,
-      wins,
-      losses,
-      winRate,
-      totalPnl,
-      totalFees,
-      netPnl,
-    };
+    return { total: trades.length, wins, losses, winRate: trades.length ? (wins / trades.length) * 100 : 0, totalPnl, totalFees, netPnl: totalPnl - totalFees };
   }, [trades]);
 
   const loadTrades = React.useCallback(async () => {
     setLoading(true);
     try {
-      // Load all trades across all sessions
       const sessionsList = await api.listSessions(mode);
-      
       const allTrades: TradeRow[] = [];
-      
-      // Load trades from all active and recent sessions
       for (const session of sessionsList.slice(0, 20)) {
         try {
           const res = await api.getTrades(session.id, { limit: 100 });
           const sessionTrades = Array.isArray(res) ? res : (res?.trades || []);
-          const decorated = sessionTrades.map((trade: any) => ({
-            ...trade,
-            sessionId: session.id,
-            sessionSymbol: session.symbol,
-            sessionMode: session.mode,
-            outcome: asOutcome(trade),
-          }));
-          allTrades.push(...decorated);
-        } catch (err) {
-          console.error(`Failed to load trades for session ${session.id}:`, err);
-        }
+          allTrades.push(...sessionTrades.map((t: any) => ({ ...t, sessionId: session.id, sessionSymbol: session.symbol, sessionMode: session.mode, outcome: asOutcome(t) })));
+        } catch {}
       }
-      
-      // Sort by date descending
       allTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      
       setTrades(allTrades);
     } catch (e: any) {
-      message.error(String(e?.response?.data?.error || e?.message || 'Failed to load trades'));
+      message.error(e?.message || 'Failed to load trades');
     }
     setLoading(false);
   }, [mode]);
 
-  React.useEffect(() => {
-    void loadTrades();
-  }, [loadTrades]);
+  React.useEffect(() => { void loadTrades(); }, [loadTrades]);
 
   const exportCsv = () => {
     if (!trades.length) return;
-    
-    const headers = ['Date', 'Session', 'Symbol', 'Side', 'Quantity', 'Entry', 'Exit', 'PnL_USD', 'ROE_Pct', 'Notional_USD', 'Leverage', 'Duration_Min', 'Exit_Reason', 'Max_PnL_Pct', 'Fees_USD', 'Outcome', 'Mode'];
-    const rows = trades.map(trade => [
-      dayjs(trade.createdAt).format('YYYY-MM-DD HH:mm:ss'),
-      trade.sessionSymbol ?? '',
-      trade.symbol,
-      trade.positionSide,
-      trade.qty?.toFixed(4) ?? '',
-      trade.entryPrice?.toFixed(4) ?? '',
-      trade.exitPrice?.toFixed(4) ?? '',
-      trade.realizedPnlUsd?.toFixed(2) ?? '',
-      trade.roePct?.toFixed(2) ?? '',
-      trade.notionalUsd?.toFixed(2) ?? '',
-      trade.leverage?.toFixed(2) ?? '',
-      trade.durationMinutes ?? '',
-      trade.exitReason ?? '',
-      trade.maxPnlPct?.toFixed(2) ?? '',
-      trade.feesUsd?.toFixed(2) ?? '',
-      trade.outcome ?? '',
-      trade.sessionMode?.toUpperCase() ?? '',
+    const headers = ['Date', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'PnL', 'ROE%', 'Notional', 'Leverage', 'Duration', 'Exit Type', 'MaxPnL%', 'Fees', 'Outcome'];
+    const rows = trades.map(t => [
+      dayjs(t.createdAt).format('YYYY-MM-DD HH:mm'),
+      t.symbol,
+      t.positionSide,
+      t.qty?.toFixed(4),
+      t.entryPrice?.toFixed(4),
+      t.exitPrice?.toFixed(4),
+      t.realizedPnlUsd?.toFixed(2),
+      t.roePct?.toFixed(2),
+      t.notionalUsd?.toFixed(0),
+      t.leverage?.toFixed(1),
+      formatDuration(t.durationMinutes),
+      t.exitReason || '',
+      t.maxPnlPct?.toFixed(2),
+      t.feesUsd?.toFixed(2),
+      t.outcome,
     ].join(','));
-    
-    const csv = [headers.join(','), ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
+    const blob = new Blob([[headers.join(','), ...rows].join('\n')], { type: 'text/csv' });
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `trades_export_${dayjs().format('YYYYMMDD_HHmmss')}.csv`;
+    a.href = URL.createObjectURL(blob);
+    a.download = `trades_${dayjs().format('YYYYMMDD')}.csv`;
     a.click();
-    URL.revokeObjectURL(url);
   };
 
-  const columns: ColumnsType<TradeRow> = [
-    {
-      title: 'Date',
-      dataIndex: 'createdAt',
-      key: 'createdAt',
-      width: 180,
-      render: (val: string) => dayjs(val).format('YYYY-MM-DD HH:mm:ss'),
-      sorter: (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-      defaultSortOrder: 'descend',
-    },
-    {
-      title: 'Session',
-      dataIndex: 'sessionSymbol',
-      key: 'sessionSymbol',
-      width: 120,
-      filters: Array.from(new Set(trades.map(t => t.sessionSymbol))).filter(Boolean).map(sym => ({
-        text: sym!,
-        value: sym!,
-      })),
-      onFilter: (value, record) => record.sessionSymbol === value,
-      render: (val: string, record) => (
-        <div>
-          <div style={{ fontWeight: 600 }}>{val}</div>
-          <Text type="secondary" style={{ fontSize: 11 }}>{record.sessionMode?.toUpperCase()}</Text>
-        </div>
-      ),
-    },
-    {
-      title: 'Symbol',
-      dataIndex: 'symbol',
-      key: 'symbol',
-      width: 110,
-      filters: Array.from(new Set(trades.map(t => t.symbol))).map(sym => ({
-        text: sym,
-        value: sym,
-      })),
-      onFilter: (value, record) => record.symbol === value,
-    },
-    {
-      title: 'Side',
-      dataIndex: 'positionSide',
-      key: 'positionSide',
-      width: 100,
-      filters: [
-        { text: 'LONG', value: 'long' },
-        { text: 'SHORT', value: 'short' },
-      ],
-      onFilter: (value, record) => record.positionSide?.toLowerCase() === value,
-      render: (val: string) => (
-        <Tag color={val?.toLowerCase() === 'long' ? 'green' : 'red'}>
-          {val?.toUpperCase()}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Quantity',
-      dataIndex: 'qty',
-      key: 'qty',
-      width: 120,
-      align: 'right',
-      render: (val: number) => val?.toFixed(4) ?? '-',
-      sorter: (a, b) => (a.qty ?? 0) - (b.qty ?? 0),
-    },
-    {
-      title: 'Entry',
-      dataIndex: 'entryPrice',
-      key: 'entryPrice',
-      width: 120,
-      align: 'right',
-      render: (val: number) => val?.toFixed(4) ?? '-',
-      sorter: (a, b) => (a.entryPrice ?? 0) - (b.entryPrice ?? 0),
-    },
-    {
-      title: 'Exit',
-      dataIndex: 'exitPrice',
-      key: 'exitPrice',
-      width: 120,
-      align: 'right',
-      render: (val: number) => val?.toFixed(4) ?? '-',
-      sorter: (a, b) => (a.exitPrice ?? 0) - (b.exitPrice ?? 0),
-    },
-    {
-      title: 'P&L (USD)',
-      dataIndex: 'realizedPnlUsd',
-      key: 'realizedPnlUsd',
-      width: 120,
-      align: 'right',
-      render: (val: number) => (
-        <span style={{ 
-          color: (val ?? 0) >= 0 ? '#16a34a' : '#dc2626',
-          fontWeight: 600,
-        }}>
-          {formatUsd(val)}
-        </span>
-      ),
-      sorter: (a, b) => (a.realizedPnlUsd ?? 0) - (b.realizedPnlUsd ?? 0),
-    },
-    {
-      title: 'ROE %',
-      dataIndex: 'roePct',
-      key: 'roePct',
-      width: 90,
-      align: 'right',
-      render: (val: number) => (
-        <span style={{ 
-          color: (val ?? 0) >= 0 ? '#16a34a' : '#dc2626',
-          fontWeight: 500,
-        }}>
-          {val != null ? `${val >= 0 ? '+' : ''}${val.toFixed(1)}%` : '-'}
-        </span>
-      ),
-      sorter: (a, b) => (a.roePct ?? 0) - (b.roePct ?? 0),
-    },
-    {
-      title: 'Notional',
-      dataIndex: 'notionalUsd',
-      key: 'notionalUsd',
-      width: 110,
-      align: 'right',
-      render: (val: number) => val != null ? `$${val.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '-',
-      sorter: (a, b) => (a.notionalUsd ?? 0) - (b.notionalUsd ?? 0),
-    },
-    {
-      title: 'Leverage',
-      dataIndex: 'leverage',
-      key: 'leverage',
-      width: 80,
-      align: 'right',
-      render: (val: number) => val ? `${val.toFixed(1)}x` : '-',
-      sorter: (a, b) => (a.leverage ?? 0) - (b.leverage ?? 0),
-    },
-    {
-      title: 'Duration',
-      dataIndex: 'durationMinutes',
-      key: 'durationMinutes',
-      width: 90,
-      align: 'right',
-      render: (val: number) => {
-        if (val == null) return '-';
-        if (val < 60) return `${val}m`;
-        if (val < 1440) return `${(val / 60).toFixed(1)}h`;
-        return `${(val / 1440).toFixed(1)}d`;
-      },
-      sorter: (a, b) => (a.durationMinutes ?? 0) - (b.durationMinutes ?? 0),
-    },
-    {
-      title: 'Exit',
-      dataIndex: 'exitReason',
-      key: 'exitReason',
-      width: 80,
-      render: (val: string) => {
-        if (!val) return '-';
-        const colorMap: Record<string, string> = {
-          'TRAIL': 'green',
-          'SL': 'red',
-          'TIME': 'orange',
-          'SIGNAL': 'blue',
-          'MANUAL': 'purple',
-        };
-        return <Tag color={colorMap[val] || 'default'}>{val}</Tag>;
-      },
-      filters: [
-        { text: 'Trail', value: 'TRAIL' },
-        { text: 'Stop Loss', value: 'SL' },
-        { text: 'Time', value: 'TIME' },
-        { text: 'Signal', value: 'SIGNAL' },
-      ],
-      onFilter: (value, record) => record.exitReason === value,
-    },
-    {
-      title: 'Max PnL',
-      dataIndex: 'maxPnlPct',
-      key: 'maxPnlPct',
-      width: 85,
-      align: 'right',
-      render: (val: number, record: TradeRow) => {
-        if (val == null) return '-';
-        const missed = val - (record.roePct ?? 0);
-        return (
-          <span title={missed > 1 ? `Missed: +${missed.toFixed(1)}%` : undefined}>
-            {val >= 0 ? '+' : ''}{val.toFixed(1)}%
-          </span>
-        );
-      },
-      sorter: (a, b) => (a.maxPnlPct ?? 0) - (b.maxPnlPct ?? 0),
-    },
-    {
-      title: 'Fees',
-      dataIndex: 'feesUsd',
-      key: 'feesUsd',
-      width: 80,
-      align: 'right',
-      render: (val: number) => val != null ? `-$${val.toFixed(2)}` : '-',
-      sorter: (a, b) => (a.feesUsd ?? 0) - (b.feesUsd ?? 0),
-    },
-    {
-      title: 'Outcome',
-      dataIndex: 'outcome',
-      key: 'outcome',
-      width: 100,
-      filters: [
-        { text: 'Win', value: 'win' },
-        { text: 'Loss', value: 'loss' },
-        { text: 'Breakeven', value: 'breakeven' },
-      ],
-      onFilter: (value, record) => record.outcome === value,
-      render: (val: Outcome) => {
-        const colorMap = { win: 'green', loss: 'red', breakeven: 'blue' };
-        return <Tag color={colorMap[val]}>{val?.toUpperCase()}</Tag>;
-      },
-    },
-  ];
-
-  const filteredData = React.useMemo(() => {
+  const filteredTrades = React.useMemo(() => {
     if (!searchText) return trades;
-    const search = searchText.toLowerCase();
-    return trades.filter(trade => 
-      trade.symbol?.toLowerCase().includes(search) ||
-      trade.sessionSymbol?.toLowerCase().includes(search) ||
-      trade.positionSide?.toLowerCase().includes(search)
-    );
+    const s = searchText.toLowerCase();
+    return trades.filter(t => t.symbol?.toLowerCase().includes(s) || t.sessionSymbol?.toLowerCase().includes(s));
   }, [trades, searchText]);
 
-  const isDark = token.colorBgBase.toLowerCase() === '#0f172a' || token.colorBgBase.toLowerCase() === '#000000';
+  const cardStyle: React.CSSProperties = { background: 'rgba(15, 23, 42, 0.6)', borderRadius: 12, border: '1px solid rgba(148, 163, 184, 0.1)', padding: '16px 20px' };
+  const headerStyle: React.CSSProperties = { color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 };
 
   return (
-    <Space direction='vertical' size='large' style={{ width: '100%', padding: '24px' }}>
-      <Card
-        style={{
-          borderRadius: 16,
-          border: `1px solid ${token.colorBorderSecondary}`,
-          background: isDark ? 'rgba(15, 23, 42, 0.6)' : token.colorBgContainer,
-        }}
-        bodyStyle={{ padding: '24px' }}
-      >
-        <Space direction='vertical' size={16} style={{ width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
-            <Title level={3} style={{ margin: 0 }}>
-              📊 Execution Ledger
-            </Title>
-            <Space>
-              <Input
-                placeholder="Search..."
-                prefix={<SearchOutlined />}
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                style={{ width: 200 }}
-                allowClear
-              />
-              <Button
-                icon={<ReloadOutlined />}
-                onClick={() => void loadTrades()}
-                loading={loading}
-              >
-                Refresh
-              </Button>
-              <Button
-                icon={<DownloadOutlined />}
-                onClick={exportCsv}
-                disabled={!trades.length}
-              >
-                Export CSV
-              </Button>
-            </Space>
+    <div style={{ padding: '0 24px 24px', maxWidth: 1600, margin: '0 auto' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <Title level={3} style={{ margin: 0, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 20 }}>📊</span> Execution Ledger
+        </Title>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <Input
+            placeholder="Search..."
+            prefix={<SearchOutlined style={{ color: '#64748b' }} />}
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            style={{ width: 200, background: 'rgba(15, 23, 42, 0.8)', borderColor: 'rgba(148, 163, 184, 0.2)' }}
+            allowClear
+          />
+          <Button icon={<ReloadOutlined />} onClick={loadTrades} loading={loading}>Refresh</Button>
+          <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!trades.length} type="primary">Export CSV</Button>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      {summary && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 16, marginBottom: 24 }}>
+          <div style={cardStyle}>
+            <div style={headerStyle}>Total Trades</div>
+            <div style={{ color: '#f8fafc', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.total}</div>
           </div>
+          <div style={cardStyle}>
+            <div style={headerStyle}>Win / Losses</div>
+            <div style={{ color: '#f8fafc', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.wins} / {summary.losses}</div>
+          </div>
+          <div style={cardStyle}>
+            <div style={headerStyle}>Win Rate</div>
+            <div style={{ color: '#38bdf8', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.winRate.toFixed(1)}%</div>
+          </div>
+          <div style={cardStyle}>
+            <div style={headerStyle}>Total P&L</div>
+            <div style={{ color: summary.totalPnl >= 0 ? '#4ade80' : '#f87171', fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+              {summary.totalPnl >= 0 ? '+' : '-'}${Math.abs(summary.totalPnl).toFixed(2)}
+            </div>
+          </div>
+          <div style={cardStyle}>
+            <div style={headerStyle}>Total Fees</div>
+            <div style={{ color: '#f97316', fontSize: 24, fontWeight: 700, marginTop: 4 }}>-${summary.totalFees.toFixed(2)}</div>
+          </div>
+          <div style={cardStyle}>
+            <div style={headerStyle}>Net P&L</div>
+            <div style={{ color: summary.netPnl >= 0 ? '#4ade80' : '#f87171', fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+              {summary.netPnl >= 0 ? '+' : '-'}${Math.abs(summary.netPnl).toFixed(2)}
+            </div>
+          </div>
+        </div>
+      )}
 
-          {summary && (
-            <Row gutter={[24, 16]}>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic
-                  title={<Text style={{ fontSize: 12, color: token.colorTextSecondary }}>Total Trades</Text>}
-                  value={summary.total}
-                  valueStyle={{ fontSize: 24, fontWeight: 600, color: token.colorText }}
-                />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic
-                  title={<Text style={{ fontSize: 12, color: token.colorTextSecondary }}>Wins / Losses</Text>}
-                  value={`${summary.wins} / ${summary.losses}`}
-                  valueStyle={{ fontSize: 24, fontWeight: 600, color: token.colorText }}
-                />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic
-                  title={<Text style={{ fontSize: 12, color: token.colorTextSecondary }}>Win Rate</Text>}
-                  value={summary.winRate}
-                  precision={1}
-                  suffix='%'
-                  valueStyle={{ fontSize: 24, fontWeight: 600, color: '#0ea5e9' }}
-                />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic
-                  title={<Text style={{ fontSize: 12, color: token.colorTextSecondary }}>Total P&L</Text>}
-                  value={Math.abs(summary.totalPnl)}
-                  precision={2}
-                  prefix={summary.totalPnl >= 0 ? '+$' : '-$'}
-                  valueStyle={{ 
-                    fontSize: 24, 
-                    fontWeight: 600, 
-                    color: summary.totalPnl >= 0 ? '#16a34a' : '#dc2626' 
-                  }}
-                />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic
-                  title={<Text style={{ fontSize: 12, color: token.colorTextSecondary }}>Total Fees</Text>}
-                  value={summary.totalFees}
-                  precision={2}
-                  prefix='-$'
-                  valueStyle={{ fontSize: 24, fontWeight: 600, color: '#f97316' }}
-                />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic
-                  title={<Text style={{ fontSize: 12, color: token.colorTextSecondary }}>Net P&L</Text>}
-                  value={Math.abs(summary.netPnl)}
-                  precision={2}
-                  prefix={summary.netPnl >= 0 ? '+$' : '-$'}
-                  valueStyle={{ 
-                    fontSize: 24, 
-                    fontWeight: 600, 
-                    color: summary.netPnl >= 0 ? '#16a34a' : '#dc2626' 
-                  }}
-                />
-              </Col>
-            </Row>
-          )}
-        </Space>
-      </Card>
+      {/* Table */}
+      <div style={{ background: 'rgba(15, 23, 42, 0.6)', borderRadius: 16, border: '1px solid rgba(148, 163, 184, 0.1)', overflow: 'hidden' }}>
+        {/* Table Header */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '130px 110px 120px 70px 90px 90px 90px 100px 80px 100px 80px 100px 80px 80px 80px',
+          padding: '12px 16px',
+          borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
+          background: 'rgba(15, 23, 42, 0.8)',
+        }}>
+          {['Date', 'Session', 'Symbol', 'Side', 'Quantity', 'Entry', 'Exit', 'P&L (USD)', 'ROE %', 'Notional', 'Leverage', 'Duration', 'Exit Type', 'Max P&L', 'Fees', 'Outcome'].map((h, i) => (
+            <span key={i} style={{ ...headerStyle, textAlign: i >= 4 ? 'right' : 'left' }}>{h}</span>
+          ))}
+        </div>
 
-      <Card
-        style={{
-          borderRadius: 16,
-          border: `1px solid ${token.colorBorderSecondary}`,
-          background: isDark ? 'rgba(15, 23, 42, 0.6)' : token.colorBgContainer,
-        }}
-        bodyStyle={{ padding: 0 }}
-      >
-        <Table
-          columns={columns}
-          dataSource={filteredData}
-          rowKey="id"
-          loading={loading}
-          pagination={{
-            pageSize: 50,
-            showSizeChanger: true,
-            pageSizeOptions: ['25', '50', '100', '200'],
-            showTotal: (total) => `Total ${total} trades`,
-          }}
-          scroll={{ x: 1600 }}
-          size="middle"
-        />
-      </Card>
-    </Space>
+        {/* Loading */}
+        {loading && !trades.length && (
+          <div style={{ padding: 48, textAlign: 'center' }}><Spin size="large" /></div>
+        )}
+
+        {/* Rows */}
+        {filteredTrades.map((trade) => {
+          const pnl = Number(trade.realizedPnlUsd ?? 0);
+          const roe = Number(trade.roePct ?? 0);
+          return (
+            <div
+              key={trade.id}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '130px 110px 120px 70px 90px 90px 90px 100px 80px 100px 80px 100px 80px 80px 80px',
+                padding: '14px 16px',
+                borderBottom: '1px solid rgba(148, 163, 184, 0.05)',
+                alignItems: 'center',
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(148, 163, 184, 0.03)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              {/* Date */}
+              <div>
+                <div style={{ color: '#f8fafc', fontSize: 13 }}>{dayjs(trade.createdAt).format('YYYY-MM-DD')}</div>
+                <div style={{ color: '#64748b', fontSize: 11 }}>{dayjs(trade.createdAt).format('HH:mm:ss')}</div>
+              </div>
+
+              {/* Session */}
+              <div>
+                <div style={{ color: '#f8fafc', fontSize: 13 }}>{trade.sessionSymbol?.replace('/USDT:USDT', '')}</div>
+                <Tag style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, border: 'none', background: trade.sessionMode === 'live' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(59, 130, 246, 0.1)', color: trade.sessionMode === 'live' ? '#f87171' : '#60a5fa' }}>
+                  {trade.sessionMode?.toUpperCase()}
+                </Tag>
+              </div>
+
+              {/* Symbol */}
+              <Text style={{ color: '#f8fafc', fontSize: 13 }}>{trade.symbol}</Text>
+
+              {/* Side */}
+              <Tag style={{ borderRadius: 4, border: 'none', background: trade.positionSide === 'long' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)', color: trade.positionSide === 'long' ? '#4ade80' : '#f87171', fontSize: 11, fontWeight: 600 }}>
+                {trade.positionSide?.toUpperCase()}
+              </Tag>
+
+              {/* Quantity */}
+              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{trade.qty?.toFixed(4)}</Text>
+
+              {/* Entry */}
+              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{trade.entryPrice?.toFixed(4)}</Text>
+
+              {/* Exit */}
+              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{trade.exitPrice?.toFixed(4)}</Text>
+
+              {/* P&L */}
+              <Text style={{ color: pnl >= 0 ? '#4ade80' : '#f87171', fontSize: 14, fontWeight: 600, textAlign: 'right', display: 'block' }}>
+                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+              </Text>
+
+              {/* ROE */}
+              <Text style={{ color: roe >= 0 ? '#4ade80' : '#f87171', fontSize: 13, fontWeight: 500, textAlign: 'right', display: 'block' }}>
+                {roe >= 0 ? '+' : ''}{roe.toFixed(1)}%
+              </Text>
+
+              {/* Notional */}
+              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>
+                ${(trade.notionalUsd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </Text>
+
+              {/* Leverage */}
+              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{trade.leverage?.toFixed(1)}x</Text>
+
+              {/* Duration */}
+              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', display: 'block' }}>{formatDuration(trade.durationMinutes)}</Text>
+
+              {/* Exit Type */}
+              {trade.exitReason ? (
+                <Tag style={{
+                  borderRadius: 4, border: 'none', fontSize: 10, marginLeft: 'auto',
+                  background: trade.exitReason === 'PROFIT_TARGET' ? 'rgba(34, 197, 94, 0.1)' : trade.exitReason === 'STOP_LOSS' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(148, 163, 184, 0.1)',
+                  color: trade.exitReason === 'PROFIT_TARGET' ? '#4ade80' : trade.exitReason === 'STOP_LOSS' ? '#f87171' : '#94a3b8',
+                }}>
+                  {trade.exitReason.replace('_', ' ')}
+                </Tag>
+              ) : <Text style={{ color: '#64748b', fontSize: 12 }}>-</Text>}
+
+              {/* Max P&L */}
+              <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'right', display: 'block' }}>
+                {trade.maxPnlPct != null ? `+${trade.maxPnlPct.toFixed(1)}%` : '-'}
+              </Text>
+
+              {/* Fees */}
+              <Text style={{ color: '#f97316', fontSize: 12, textAlign: 'right', display: 'block' }}>
+                {trade.feesUsd != null ? `-$${trade.feesUsd.toFixed(2)}` : '-'}
+              </Text>
+
+              {/* Outcome */}
+              <Tag style={{
+                borderRadius: 4, border: 'none', marginLeft: 'auto', fontSize: 10, fontWeight: 600,
+                background: trade.outcome === 'win' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                color: trade.outcome === 'win' ? '#4ade80' : '#f87171',
+              }}>
+                {trade.outcome?.toUpperCase()}
+              </Tag>
+            </div>
+          );
+        })}
+
+        {!loading && filteredTrades.length === 0 && (
+          <div style={{ padding: 48, textAlign: 'center', color: '#64748b' }}>No trades found</div>
+        )}
+      </div>
+    </div>
   );
 }
