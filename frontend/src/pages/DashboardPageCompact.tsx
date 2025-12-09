@@ -49,6 +49,7 @@ type Trade = {
   entryPrice?: number | null;
   exitPrice?: number | null;
   realizedPnlUsd?: number;
+  feesUsd?: number;
   roePct?: number | null;
   estLev?: number | null;
 };
@@ -94,15 +95,16 @@ export default function DashboardPageCompact() {
     });
   }, [trades]);
 
-  // Stats
+  // Stats - use ov.todayPnlUsd from backend (already includes fees) for accuracy
   const stats = React.useMemo(() => {
-    const totalPnl = trades.reduce((sum, t) => sum + (t.realizedPnlUsd || 0), 0);
+    const totalPnl = trades.reduce((sum, t) => sum + (t.realizedPnlUsd || 0) - (t.feesUsd || 0), 0);
     
     // Today's PnL - filter trades from today (midnight local time)
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayTrades = trades.filter(t => new Date(t.createdAt) >= todayStart);
-    const todayPnl = todayTrades.reduce((sum, t) => sum + (t.realizedPnlUsd || 0), 0);
+    // Calculate net PnL (after fees) for today
+    const todayPnl = todayTrades.reduce((sum, t) => sum + (t.realizedPnlUsd || 0) - (t.feesUsd || 0), 0);
     const todayWins = todayTrades.filter(t => (t.realizedPnlUsd || 0) > 0).length;
     const todayLosses = todayTrades.filter(t => (t.realizedPnlUsd || 0) < 0).length;
     const todayWinRate = (todayWins + todayLosses) > 0 ? (todayWins / (todayWins + todayLosses)) * 100 : 0;
