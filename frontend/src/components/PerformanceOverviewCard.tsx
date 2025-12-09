@@ -3,11 +3,17 @@ import { Card, Col, Divider, Progress, Row, Space, Statistic, Tag, Tooltip, Typo
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ComposedChart,
   ResponsiveContainer,
   Tooltip as RechartsTooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import { TrendingUp, TrendingDown, Flame, Trophy } from 'lucide-react';
 
 const { Text } = Typography;
 
@@ -20,6 +26,7 @@ type Trade = {
   roePct?: number | null;
   estLev?: number | null;
   qty?: number | null;
+  exitReason?: string;
 };
 
 type Props = {
@@ -34,6 +41,14 @@ type ChartPoint = {
   time: string;
   label: string;
   pnl: number;
+  tradePnl: number;
+};
+
+type DailyData = {
+  date: string;
+  pnl: number;
+  trades: number;
+  wins: number;
 };
 
 function formatUsd(value?: number | null, digits = 2) {
@@ -60,11 +75,13 @@ function buildChart(trades: Trade[]): ChartPoint[] {
   });
   const points: ChartPoint[] = [];
   for (const trade of sorted) {
-    cumulative += Number(trade.realizedPnlUsd || 0);
+    const tradePnl = Number(trade.realizedPnlUsd || 0);
+    cumulative += tradePnl;
     points.push({
       time: trade.createdAt,
       label: intl.format(new Date(trade.createdAt)),
       pnl: Number(cumulative.toFixed(2)),
+      tradePnl: Number(tradePnl.toFixed(2)),
     });
   }
   if (points.length > 0) {
@@ -73,9 +90,40 @@ function buildChart(trades: Trade[]): ChartPoint[] {
       time: new Date(firstDate.getTime() - 5 * 60 * 1000).toISOString(),
       label: intl.format(firstDate),
       pnl: 0,
+      tradePnl: 0,
     });
   }
   return points;
+}
+
+function buildDailyData(trades: Trade[]): DailyData[] {
+  if (!Array.isArray(trades) || trades.length === 0) return [];
+  
+  const dailyMap = new Map<string, { pnl: number; trades: number; wins: number }>();
+  
+  for (const trade of trades) {
+    const date = new Date(trade.createdAt).toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const existing = dailyMap.get(date) || { pnl: 0, trades: 0, wins: 0 };
+    const pnl = Number(trade.realizedPnlUsd || 0);
+    existing.pnl += pnl;
+    existing.trades += 1;
+    if (pnl > 0) existing.wins += 1;
+    dailyMap.set(date, existing);
+  }
+  
+  const result: DailyData[] = [];
+  const intl = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric' });
+  
+  dailyMap.forEach((data, date) => {
+    result.push({
+      date: intl.format(new Date(date)),
+      pnl: Number(data.pnl.toFixed(2)),
+      trades: data.trades,
+      wins: data.wins,
+    });
+  });
+  
+  return result.sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function aggregateStats(trades: Trade[]) {
@@ -90,8 +138,19 @@ function aggregateStats(trades: Trade[]) {
       longs: 0,
       shorts: 0,
       sample: 0,
+      bestTrade: null as Trade | null,
+      worstTrade: null as Trade | null,
+      avgWin: 0,
+      avgLoss: 0,
+      profitFactor: 0,
+      currentStreak: 0,
+      maxStreak: 0,
+      slCount: 0,
+      tpCount: 0,
+      trailCount: 0,
     };
   }
+  
   let totalPnl = 0;
   let wins = 0;
   let losses = 0;
@@ -101,13 +160,39 @@ function aggregateStats(trades: Trade[]) {
   let levCount = 0;
   let longs = 0;
   let shorts = 0;
+  let totalWinAmount = 0;
+  let totalLossAmount = 0;
+  let slCount = 0;
+  let tpCount = 0;
+  let trailCount = 0;
+  let bestTrade: Trade | null = null;
+  let worstTrade: Trade | null = null;
+  
+  // For streak calculation
+  const sortedTrades = [...trades].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  
+  let currentStreak = 0;
+  let maxStreak = 0;
+  let tempStreak = 0;
+  let lastWasWin: boolean | null = null;
+  
   for (const trade of trades) {
     const pnl = Number(trade.realizedPnlUsd || 0);
     totalPnl += pnl;
-    if (pnl > 0) wins += 1;
-    else if (pnl < 0) losses += 1;
+    
+    if (pnl > 0) {
+      wins += 1;
+      totalWinAmount += pnl;
+    } else if (pnl < 0) {
+      losses += 1;
+      totalLossAmount += Math.abs(pnl);
+    }
+    
     if (trade.positionSide === 'long') longs += 1;
     else if (trade.positionSide === 'short') shorts += 1;
+    
     if (trade.roePct != null) {
       roeSum += Number(trade.roePct);
       roeCount += 1;
@@ -116,8 +201,51 @@ function aggregateStats(trades: Trade[]) {
       levSum += Number(trade.estLev);
       levCount += 1;
     }
+    
+    // Track exit reasons
+    const reason = trade.exitReason?.toLowerCase() || '';
+    if (reason.includes('sl') || reason.includes('stop')) slCount++;
+    else if (reason.includes('tp') || reason.includes('take')) tpCount++;
+    else if (reason.includes('trail')) trailCount++;
+    
+    // Best/worst trades
+    if (!bestTrade || pnl > (bestTrade.realizedPnlUsd || 0)) bestTrade = trade;
+    if (!worstTrade || pnl < (worstTrade.realizedPnlUsd || 0)) worstTrade = trade;
   }
+  
+  // Calculate streaks
+  for (const trade of sortedTrades) {
+    const isWin = (trade.realizedPnlUsd || 0) > 0;
+    if (lastWasWin === null) {
+      lastWasWin = isWin;
+      tempStreak = 1;
+    } else if (isWin === lastWasWin) {
+      tempStreak++;
+    } else {
+      maxStreak = Math.max(maxStreak, tempStreak);
+      tempStreak = 1;
+      lastWasWin = isWin;
+    }
+  }
+  maxStreak = Math.max(maxStreak, tempStreak);
+  
+  // Current streak from most recent
+  currentStreak = 0;
+  if (sortedTrades.length > 0) {
+    const firstIsWin = (sortedTrades[0].realizedPnlUsd || 0) > 0;
+    for (const trade of sortedTrades) {
+      const isWin = (trade.realizedPnlUsd || 0) > 0;
+      if (isWin === firstIsWin) currentStreak++;
+      else break;
+    }
+    if (!firstIsWin) currentStreak = -currentStreak;
+  }
+  
   const total = wins + losses;
+  const avgWin = wins > 0 ? totalWinAmount / wins : 0;
+  const avgLoss = losses > 0 ? totalLossAmount / losses : 0;
+  const profitFactor = totalLossAmount > 0 ? totalWinAmount / totalLossAmount : totalWinAmount > 0 ? Infinity : 0;
+  
   return {
     totalPnl,
     winRate: total > 0 ? (wins / total) * 100 : 0,
@@ -128,6 +256,16 @@ function aggregateStats(trades: Trade[]) {
     longs,
     shorts,
     sample: trades.length,
+    bestTrade,
+    worstTrade,
+    avgWin,
+    avgLoss,
+    profitFactor,
+    currentStreak,
+    maxStreak,
+    slCount,
+    tpCount,
+    trailCount,
   };
 }
 
@@ -159,6 +297,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
   tagLabel,
 }) => {
   const chartPoints = React.useMemo(() => buildChart(trades), [trades]);
+  const dailyData = React.useMemo(() => buildDailyData(trades), [trades]);
   const stats = React.useMemo(() => aggregateStats(trades), [trades]);
   const gradientId = React.useId();
   const sortedTrades = React.useMemo(
@@ -179,27 +318,69 @@ const PerformanceOverviewCard: React.FC<Props> = ({
   const statCardBorder = isDarkTheme ? 'rgba(56, 189, 248, 0.25)' : token.colorBorderSecondary;
   const subtleSurface = isDarkTheme ? 'rgba(30, 41, 59, 0.8)' : token.colorFillQuaternary;
 
-  const headerTitle = title ?? 'Performance & utilisation';
+  const headerTitle = title ?? 'Performance Overview';
   const headerTag = tagLabel ?? 'Realtime';
 
   return (
     <Card
       loading={loading}
       style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: cardBg }}
-      bodyStyle={{ padding: 24 }}
+      styles={{ body: { padding: 24 } }}
       title={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: subtitle ? 'flex-start' : 'center', color: isDarkTheme ? '#f8fafc' : token.colorText }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span>{headerTitle}</span>
+            <span style={{ fontSize: 16, fontWeight: 600 }}>{headerTitle}</span>
             {subtitle && <span style={{ color: mutedText, fontSize: 12 }}>{subtitle}</span>}
           </div>
           <Tag color='geekblue'>{headerTag}</Tag>
         </div>
       }
     >
+      {/* Main Stats Row */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        <Col xs={12} sm={6}>
+          <div style={{ padding: 16, borderRadius: 12, background: statCardBg, border: `1px solid ${statCardBorder}` }}>
+            <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Realized PnL</Text>
+            <div style={{ fontSize: 24, fontWeight: 700, color: stats.totalPnl >= 0 ? '#34d399' : '#f87171', marginTop: 4 }}>
+              {stats.totalPnl >= 0 ? '+' : ''}{formatUsd(stats.totalPnl)}
+            </div>
+          </div>
+        </Col>
+        <Col xs={12} sm={6}>
+          <div style={{ padding: 16, borderRadius: 12, background: statCardBg, border: `1px solid ${statCardBorder}` }}>
+            <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Win Rate</Text>
+            <div style={{ fontSize: 24, fontWeight: 700, color: stats.winRate >= 50 ? '#34d399' : '#fbbf24', marginTop: 4 }}>
+              {formatPercent(stats.winRate)}
+            </div>
+            <Text style={{ color: mutedText, fontSize: 11 }}>{stats.wins}W / {stats.losses}L</Text>
+          </div>
+        </Col>
+        <Col xs={12} sm={6}>
+          <div style={{ padding: 16, borderRadius: 12, background: statCardBg, border: `1px solid ${statCardBorder}` }}>
+            <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Profit Factor</Text>
+            <div style={{ fontSize: 24, fontWeight: 700, color: stats.profitFactor >= 1.5 ? '#34d399' : stats.profitFactor >= 1 ? '#fbbf24' : '#f87171', marginTop: 4 }}>
+              {stats.profitFactor === Infinity ? '∞' : stats.profitFactor.toFixed(2)}
+            </div>
+          </div>
+        </Col>
+        <Col xs={12} sm={6}>
+          <div style={{ padding: 16, borderRadius: 12, background: statCardBg, border: `1px solid ${statCardBorder}` }}>
+            <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Streak</Text>
+            <div style={{ fontSize: 24, fontWeight: 700, color: stats.currentStreak >= 0 ? '#34d399' : '#f87171', marginTop: 4 }}>
+              {stats.currentStreak >= 0 ? '+' : ''}{stats.currentStreak}
+            </div>
+            <Text style={{ color: mutedText, fontSize: 11 }}>Max: {stats.maxStreak}</Text>
+          </div>
+        </Col>
+      </Row>
+
       <Row gutter={[24, 24]}>
-        <Col xs={24} md={14}>
-          <div style={{ height: 260 }}>
+        {/* Cumulative PnL Chart */}
+        <Col xs={24} lg={14}>
+          <Text style={{ color: mutedText, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 12 }}>
+            Cumulative PnL
+          </Text>
+          <div style={{ height: 280 }}>
             {chartPoints.length === 0 ? (
               <div
                 style={{
@@ -217,20 +398,21 @@ const PerformanceOverviewCard: React.FC<Props> = ({
               </div>
             ) : (
               <ResponsiveContainer width='100%' height='100%'>
-                <AreaChart data={chartPoints}>
+                <ComposedChart data={chartPoints}>
                   <defs>
                     <linearGradient id={`pnlGradient-${gradientId}`} x1='0' y1='0' x2='0' y2='1'>
                       <stop offset='5%' stopColor={areaFillFrom} stopOpacity={1} />
                       <stop offset='95%' stopColor={areaFillTo} stopOpacity={0.2} />
                     </linearGradient>
                   </defs>
-                  <XAxis dataKey='label' tick={{ fill: mutedText, fontSize: 12 }} interval='preserveStartEnd' minTickGap={32} />
-                  <YAxis tick={{ fill: mutedText, fontSize: 12 }} width={80} tickFormatter={(value) => `$${value}`}/>
+                  <CartesianGrid strokeDasharray='3 3' stroke={isDarkTheme ? 'rgba(148, 163, 184, 0.1)' : '#e5e7eb'} />
+                  <XAxis dataKey='label' tick={{ fill: mutedText, fontSize: 11 }} interval='preserveStartEnd' minTickGap={40} />
+                  <YAxis tick={{ fill: mutedText, fontSize: 11 }} width={70} tickFormatter={(value) => `$${value}`}/>
                   <RechartsTooltip
                     cursor={{ stroke: accentColor, strokeDasharray: '4 4' }}
                     content={({ label, payload }) => {
                       if (!payload || payload.length === 0) return null;
-                      const point = payload[0];
+                      const point = payload[0]?.payload;
                       return (
                         <div
                           style={{
@@ -241,120 +423,233 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                             color: isDarkTheme ? '#e2e8f0' : token.colorText,
                           }}
                         >
-                          <div style={{ fontWeight: 600 }}>{label}</div>
-                          <div style={{ opacity: 0.8 }}>Cumulative PnL: ${point.value?.toFixed?.(2)}</div>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                          <div>Cumulative: <span style={{ color: point?.pnl >= 0 ? '#34d399' : '#f87171', fontWeight: 600 }}>${point?.pnl?.toFixed?.(2)}</span></div>
+                          {point?.tradePnl !== 0 && (
+                            <div style={{ opacity: 0.8, fontSize: 12 }}>
+                              Trade: <span style={{ color: point?.tradePnl >= 0 ? '#34d399' : '#f87171' }}>{point?.tradePnl >= 0 ? '+' : ''}${point?.tradePnl?.toFixed?.(2)}</span>
+                            </div>
+                          )}
                         </div>
                       );
                     }}
                   />
-                  <Area type='monotone' dataKey='pnl' stroke={accentColor} strokeWidth={2.6} fill={`url(#pnlGradient-${gradientId})`} />
-                </AreaChart>
+                  <Area type='monotone' dataKey='pnl' stroke={accentColor} strokeWidth={2.5} fill={`url(#pnlGradient-${gradientId})`} />
+                </ComposedChart>
               </ResponsiveContainer>
             )}
           </div>
         </Col>
-        <Col xs={24} md={10}>
-          <Space direction='vertical' size={18} style={{ width: '100%' }}>
-            <Row gutter={[12, 12]}>
+
+        {/* Daily Performance Bar Chart */}
+        <Col xs={24} lg={10}>
+          <Text style={{ color: mutedText, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 12 }}>
+            Daily Performance
+          </Text>
+          <div style={{ height: 280 }}>
+            {dailyData.length === 0 ? (
+              <div
+                style={{
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: mutedText,
+                  gap: 8,
+                }}
+              >
+                <div style={{ fontSize: 14, opacity: 0.7 }}>No daily data</div>
+              </div>
+            ) : (
+              <ResponsiveContainer width='100%' height='100%'>
+                <BarChart data={dailyData}>
+                  <CartesianGrid strokeDasharray='3 3' stroke={isDarkTheme ? 'rgba(148, 163, 184, 0.1)' : '#e5e7eb'} />
+                  <XAxis dataKey='date' tick={{ fill: mutedText, fontSize: 10 }} />
+                  <YAxis tick={{ fill: mutedText, fontSize: 10 }} width={60} tickFormatter={(value) => `$${value}`} />
+                  <RechartsTooltip
+                    content={({ label, payload }) => {
+                      if (!payload || payload.length === 0) return null;
+                      const data = payload[0]?.payload;
+                      return (
+                        <div style={{
+                          background: cardBg,
+                          padding: '10px 14px',
+                          borderRadius: 10,
+                          border: `1px solid ${borderColor}`,
+                          color: isDarkTheme ? '#e2e8f0' : token.colorText,
+                        }}>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                          <div>PnL: <span style={{ color: data?.pnl >= 0 ? '#34d399' : '#f87171', fontWeight: 600 }}>${data?.pnl?.toFixed(2)}</span></div>
+                          <div style={{ fontSize: 11, opacity: 0.8 }}>{data?.trades} trades ({data?.wins}W)</div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Bar dataKey='pnl' radius={[4, 4, 0, 0]}>
+                    {dailyData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.pnl >= 0 ? '#34d399' : '#f87171'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </Col>
+      </Row>
+
+      <Divider style={{ margin: '20px 0' }} />
+
+      {/* Additional Stats */}
+      <Row gutter={[16, 16]}>
+        {/* Win/Loss Distribution */}
+        <Col xs={24} sm={8}>
+          <div style={{ padding: 16, borderRadius: 12, background: subtleSurface, border: `1px solid ${borderColor}` }}>
+            <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 12 }}>
+              Win/Loss Distribution
+            </Text>
+            <Progress
+              percent={stats.wins + stats.losses > 0 ? (stats.wins / (stats.wins + stats.losses)) * 100 : 0}
+              showInfo={false}
+              strokeColor='#34d399'
+              trailColor='#f87171'
+              style={{ marginBottom: 8 }}
+            />
+            <Row>
               <Col span={12}>
-                <Statistic
-                  title={<Tooltip title='Total realized PnL across the last recorded trades'>Realized PnL</Tooltip>}
-                  value={formatUsd(stats.totalPnl)}
-                  valueStyle={{ color: stats.totalPnl >= 0 ? token.colorSuccess : token.colorError }}
-                />
+                <Text style={{ color: '#34d399', fontSize: 13, fontWeight: 600 }}>{stats.wins} wins</Text>
+                <div style={{ color: mutedText, fontSize: 11 }}>Avg: {formatUsd(stats.avgWin)}</div>
               </Col>
-              <Col span={12}>
-                <Statistic
-                  title={<Tooltip title='Win rate computed from the recent trade sample'>Win rate</Tooltip>}
-                  value={formatPercent(stats.winRate)}
-                  valueStyle={{ color: stats.winRate >= 50 ? accentColor : token.colorWarning }}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic
-                  title={<Tooltip title='Average return on equity per trade'>Avg ROE / trade</Tooltip>}
-                  value={formatPercent(stats.avgRoe)}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic
-                  title={<Tooltip title='Average leverage inferred from notional usage'>Avg leverage</Tooltip>}
-                  value={Number(stats.avgLev || 0).toFixed(2)}
-                />
+              <Col span={12} style={{ textAlign: 'right' }}>
+                <Text style={{ color: '#f87171', fontSize: 13, fontWeight: 600 }}>{stats.losses} losses</Text>
+                <div style={{ color: mutedText, fontSize: 11 }}>Avg: -{formatUsd(stats.avgLoss)}</div>
               </Col>
             </Row>
-            <div
-              style={{
-                padding: 14,
-                borderRadius: 12,
-                border: `1px solid ${statCardBorder}`,
-                background: statCardBg,
-              }}
-            >
-              <Text style={{ color: isDarkTheme ? '#e2e8f0' : token.colorText, fontWeight: 600 }}>PnL distribution</Text>
-              <Progress
-                percent={stats.wins + stats.losses > 0 ? (stats.wins / (stats.wins + stats.losses)) * 100 : 0}
-                showInfo={false}
-                strokeColor={{ from: accentColor, to: accentColor }}
-                style={{ marginTop: 12 }}
-              />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: mutedText }}>
-                <span>{stats.wins} winning trades</span>
-                <span>{stats.losses} losing trades</span>
-              </div>
+          </div>
+        </Col>
+
+        {/* Direction Split */}
+        <Col xs={24} sm={8}>
+          <div style={{ padding: 16, borderRadius: 12, background: subtleSurface, border: `1px solid ${borderColor}` }}>
+            <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 12 }}>
+              Direction Split
+            </Text>
+            <Row gutter={16}>
+              <Col span={12}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <TrendingUp size={16} color="#34d399" />
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: isDarkTheme ? '#f8fafc' : token.colorText }}>{stats.longs}</div>
+                    <div style={{ color: mutedText, fontSize: 11 }}>Longs</div>
+                  </div>
+                </div>
+              </Col>
+              <Col span={12}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <TrendingDown size={16} color="#f87171" />
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: isDarkTheme ? '#f8fafc' : token.colorText }}>{stats.shorts}</div>
+                    <div style={{ color: mutedText, fontSize: 11 }}>Shorts</div>
+                  </div>
+                </div>
+              </Col>
+            </Row>
+            <div style={{ marginTop: 12 }}>
+              <Text style={{ color: mutedText, fontSize: 11 }}>
+                Avg ROE: {formatPercent(stats.avgRoe)} • Avg Leverage: {stats.avgLev.toFixed(1)}×
+              </Text>
             </div>
-            <Divider style={{ margin: '0 0 8px' }} />
-            <Row gutter={[12, 12]}>
-              <Col span={12}>
-                <Statistic
-                  title='Sample size'
-                  value={stats.sample}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic
-                  title='Direction split'
-                  value={`${stats.longs}/${stats.shorts}`}
-                  suffix={<span style={{ color: mutedText }}>L/S</span>}
-                />
-              </Col>
-            </Row>
-            <div
-              style={{
-                display: 'flex',
-                gap: 12,
-                padding: 14,
-                borderRadius: 12,
-                border: `1px solid ${borderColor}`,
-                background: subtleSurface,
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <Text type='secondary' style={{ fontSize: 12, display: 'block', color: mutedText }}>
-                  Last trade
-                </Text>
-                <div style={{ fontWeight: 600, color: isDarkTheme ? '#f8fafc' : token.colorText }}>
-                  {latestTrade ? latestTrade.symbol || '—' : 'No trades recorded'}
-                </div>
-                <div style={{ color: mutedText, fontSize: 12 }}>
-                  {latestTrade ? formatRelative(latestTrade.createdAt) : 'Awaiting execution'}
-                </div>
+          </div>
+        </Col>
+
+        {/* Exit Reasons */}
+        <Col xs={24} sm={8}>
+          <div style={{ padding: 16, borderRadius: 12, background: subtleSurface, border: `1px solid ${borderColor}` }}>
+            <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 12 }}>
+              Exit Reasons
+            </Text>
+            <Space direction='vertical' size={6} style={{ width: '100%' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ color: isDarkTheme ? '#f8fafc' : token.colorText }}>🎯 Take Profit</Text>
+                <Tag color='success'>{stats.tpCount}</Tag>
               </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ color: isDarkTheme ? '#f8fafc' : token.colorText }}>📈 Trailing Stop</Text>
+                <Tag color='blue'>{stats.trailCount}</Tag>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ color: isDarkTheme ? '#f8fafc' : token.colorText }}>🛑 Stop Loss</Text>
+                <Tag color='error'>{stats.slCount}</Tag>
+              </div>
+            </Space>
+          </div>
+        </Col>
+      </Row>
+
+      <Divider style={{ margin: '20px 0' }} />
+
+      {/* Best/Worst Trades & Last Trade */}
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={8}>
+          <div style={{ padding: 14, borderRadius: 12, background: 'rgba(52, 211, 153, 0.1)', border: '1px solid rgba(52, 211, 153, 0.3)' }}>
+            <Space size={8} align='center'>
+              <Trophy size={18} color="#34d399" />
               <div>
-                <Text type='secondary' style={{ fontSize: 12, display: 'block', color: mutedText }}>
-                  PnL
+                <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>Best Trade</Text>
+                <Text style={{ color: '#34d399', fontWeight: 700, fontSize: 16 }}>
+                  {stats.bestTrade ? `+${formatUsd(stats.bestTrade.realizedPnlUsd)}` : '—'}
                 </Text>
-                <div
-                  style={{
-                    fontWeight: 600,
-                    color: (latestTrade?.realizedPnlUsd ?? 0) >= 0 ? token.colorSuccess : token.colorError,
-                  }}
-                >
-                  {formatUsd(latestTrade?.realizedPnlUsd ?? 0)}
-                </div>
+                {stats.bestTrade && (
+                  <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>
+                    {stats.bestTrade.symbol?.replace('/USDT', '')} • {formatRelative(stats.bestTrade.createdAt)}
+                  </Text>
+                )}
+              </div>
+            </Space>
+          </div>
+        </Col>
+        <Col xs={24} sm={8}>
+          <div style={{ padding: 14, borderRadius: 12, background: 'rgba(248, 113, 113, 0.1)', border: '1px solid rgba(248, 113, 113, 0.3)' }}>
+            <Space size={8} align='center'>
+              <Flame size={18} color="#f87171" />
+              <div>
+                <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>Worst Trade</Text>
+                <Text style={{ color: '#f87171', fontWeight: 700, fontSize: 16 }}>
+                  {stats.worstTrade ? formatUsd(stats.worstTrade.realizedPnlUsd) : '—'}
+                </Text>
+                {stats.worstTrade && (
+                  <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>
+                    {stats.worstTrade.symbol?.replace('/USDT', '')} • {formatRelative(stats.worstTrade.createdAt)}
+                  </Text>
+                )}
+              </div>
+            </Space>
+          </div>
+        </Col>
+        <Col xs={24} sm={8}>
+          <div style={{ padding: 14, borderRadius: 12, border: `1px solid ${borderColor}`, background: subtleSurface }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>Last Trade</Text>
+                <Text style={{ color: isDarkTheme ? '#f8fafc' : token.colorText, fontWeight: 600, fontSize: 14 }}>
+                  {latestTrade ? latestTrade.symbol?.replace('/USDT', '') || '—' : 'No trades'}
+                </Text>
+                <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>
+                  {latestTrade ? formatRelative(latestTrade.createdAt) : 'Awaiting execution'}
+                </Text>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>PnL</Text>
+                <Text style={{ 
+                  color: (latestTrade?.realizedPnlUsd ?? 0) >= 0 ? '#34d399' : '#f87171', 
+                  fontWeight: 700, 
+                  fontSize: 16 
+                }}>
+                  {latestTrade ? (latestTrade.realizedPnlUsd ?? 0) >= 0 ? '+' : '' : ''}{formatUsd(latestTrade?.realizedPnlUsd ?? 0)}
+                </Text>
               </div>
             </div>
-          </Space>
+          </div>
         </Col>
       </Row>
     </Card>

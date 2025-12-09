@@ -6,9 +6,8 @@
 
 import React from 'react';
 import { Badge, Popover, Switch, Space, Typography, Divider, List, Tag } from 'antd';
-import { BellOutlined, SoundOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { useTradeNotifications } from '../providers/TradeNotificationProvider';
-
+import { Bell, Volume2, CheckCircle } from 'lucide-react';
 const { Text } = Typography;
 
 function formatSymbol(symbol: string): string {
@@ -34,7 +33,7 @@ export default function NotificationBell() {
         <Space direction="vertical" style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Space>
-              <BellOutlined />
+              <Bell size={16} />
               <Text strong>Trade Notifications</Text>
             </Space>
             <Switch 
@@ -46,7 +45,7 @@ export default function NotificationBell() {
           
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Space>
-              <SoundOutlined />
+              <Volume2 size={16} />
               <Text>Sound Alerts</Text>
             </Space>
             <Switch 
@@ -77,7 +76,7 @@ export default function NotificationBell() {
           
           {browserPermission === 'granted' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#52c41a', fontSize: 12 }}>
-              <CheckCircleOutlined />
+              <CheckCircle size={14} />
               Browser notifications enabled
             </div>
           )}
@@ -193,12 +192,10 @@ export default function NotificationBell() {
             alignItems: 'center',
             justifyContent: 'center',
             cursor: 'pointer',
-            background: enabled ? 'rgba(96, 165, 250, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-            border: '1px solid rgba(148, 163, 184, 0.2)',
             transition: 'all 0.2s',
           }}
         >
-          <BellOutlined style={{ 
+          <Bell style={{ 
             fontSize: 18, 
             color: enabled ? '#60a5fa' : 'rgba(148, 163, 184, 0.6)' 
           }} />

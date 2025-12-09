@@ -1271,15 +1271,17 @@ export class SimpleAgent {
           
           // V5.10: Cancel backup STOP_MARKET when trailing activates
           // The native TRAILING_STOP_MARKET now protects the trade
+          // NOTE: Algo orders cannot be cancelled individually, use cancelAllOrders
           if (this.config.mode === 'live' && this.position?.stopLossOrderId) {
             try {
-              await this.config.exchange.cancelOrder?.(this.position.stopLossOrderId, symbol);
-              logger.info(`🗑️ [${symbol}] Cancelled backup SL - trailing now active | orderId=${this.position.stopLossOrderId}`);
+              // Cancel ALL orders then re-place only the trailing stop
+              await this.config.exchange.cancelAllOrders?.(symbol);
+              logger.info(`🗑️ [${symbol}] Cancelled all orders - trailing now active`);
               this.position.stopLossOrderId = undefined;
+              // Re-place trailing stop (it was cancelled too)
+              await this.setTrailingStopOnExchange(this.position);
             } catch (error: any) {
-              if (!error.message?.includes('Unknown order') && !error.message?.includes('not found')) {
-                logger.warn(`⚠️ [${symbol}] Failed to cancel backup SL:`, error.message);
-              }
+              logger.warn(`⚠️ [${symbol}] Failed to cancel orders for trailing activation:`, error.message);
             }
           }
         }
@@ -1704,49 +1706,24 @@ export class SimpleAgent {
   
   /**
    * Cancel existing stop loss order on exchange
+   * NOTE: For Binance Algo orders (STOP_MARKET, TRAILING_STOP_MARKET), individual cancelOrder
+   * doesn't work - must use cancelAllOrders which cancels both regular and algo orders
    */
   private async cancelStopLossOnExchange(): Promise<void> {
     if (this.config.mode === 'paper') return;
     
     const symbol = this.config.symbol;
     
-    // If we have a specific SL order ID, cancel just that order
-    if (this.position?.stopLossOrderId) {
-      try {
-        await this.config.exchange.cancelOrder?.(this.position.stopLossOrderId, symbol);
-        logger.info(`🗑️ [${symbol}] Cancelled SL order ${this.position.stopLossOrderId}`);
-        if (this.position) {
-          this.position.stopLossOrderId = undefined;
-        }
-      } catch (error: any) {
-        // Order might already be filled or cancelled
-        if (!error.message?.includes('Unknown order') && !error.message?.includes('not found')) {
-          logger.warn(`⚠️ [${symbol}] Failed to cancel SL order:`, error);
-        }
-      }
-    }
-    
-    // V5.10: Also cancel trailing stop order if present
-    if (this.position?.trailingOrderId) {
-      try {
-        await this.config.exchange.cancelOrder?.(this.position.trailingOrderId, symbol);
-        logger.info(`🗑️ [${symbol}] Cancelled trailing order ${this.position.trailingOrderId}`);
-        if (this.position) {
-          this.position.trailingOrderId = undefined;
-        }
-      } catch (error: any) {
-        // Order might already be filled or cancelled
-        if (!error.message?.includes('Unknown order') && !error.message?.includes('not found')) {
-          logger.warn(`⚠️ [${symbol}] Failed to cancel trailing order:`, error);
-        }
-      }
-    }
-    
-    // Also cancel all open orders for safety (in case of orphaned orders)
+    // Cancel ALL orders (both regular and algo) - this is the only reliable method
+    // for Binance Futures algo orders created via the new endpoint
     if (this.config.exchange.cancelAllOrders) {
       try {
         await this.config.exchange.cancelAllOrders(symbol);
-        logger.info(`🗑️ [${symbol}] Cancelled all open orders`);
+        logger.info(`🗑️ [${symbol}] Cancelled all open orders (SL + trailing)`);
+        if (this.position) {
+          this.position.stopLossOrderId = undefined;
+          this.position.trailingOrderId = undefined;
+        }
       } catch (error) {
         logger.warn(`⚠️ [${symbol}] Failed to cancel all orders:`, error);
       }
@@ -1766,30 +1743,34 @@ export class SimpleAgent {
     
     try {
       // Cancel existing SL order first if updating
+      // NOTE: Algo orders (STOP_MARKET) cannot be cancelled individually with cancelOrder
+      // Must use cancelAllOrders and re-place the trailing stop
       if (isUpdate && this.position?.stopLossOrderId) {
         try {
-          await this.config.exchange.cancelOrder?.(this.position.stopLossOrderId, symbol);
-          logger.info(`🔄 [${symbol}] Cancelled old SL order for update`);
-        } catch (error: any) {
-          // Ignore if order doesn't exist
-          if (!error.message?.includes('Unknown order') && !error.message?.includes('not found')) {
-            logger.warn(`⚠️ [${symbol}] Failed to cancel old SL:`, error);
+          await this.config.exchange.cancelAllOrders?.(symbol);
+          logger.info(`🔄 [${symbol}] Cancelled all orders for SL update`);
+          // Re-place trailing stop if it exists
+          if (this.position?.trailingOrderId) {
+            await this.setTrailingStopOnExchange(this.position);
           }
+        } catch (error: any) {
+          logger.warn(`⚠️ [${symbol}] Failed to cancel orders for SL update:`, error);
         }
       }
       
       // Format quantity to exchange precision for SL order
       const formattedQty = this.formatQtyForExchange(symbol, position.qty);
       
-      // Create new SL order
+      // Create new SL order using stopLossPrice (triggers CCXT Algo Order endpoint for Binance Futures)
+      // Binance changed their API in late 2024 - STOP_MARKET now requires Algo Order endpoint
       const slOrder = await this.config.exchange.createOrder(
         symbol,
-        'STOP_MARKET',  // Use STOP_MARKET for Binance futures
+        'market',  // CCXT will convert to STOP_MARKET when stopLossPrice is set
         side,
         formattedQty,
         undefined,
         {
-          stopPrice: position.stopLoss,
+          stopLossPrice: position.stopLoss,  // This triggers CCXT to use fapiPrivatePostAlgoOrder
           reduceOnly: true,
           workingType: 'MARK_PRICE',  // Use mark price to avoid manipulation
         }
