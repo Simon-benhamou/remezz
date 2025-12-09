@@ -6,10 +6,6 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Types
 interface Candle {
@@ -287,8 +283,8 @@ function runBacktest(candles: Candle[], symbol: string): Trade[] {
 
 function loadAllTrades(): Trade[] {
   const allTrades: Trade[] = [];
-  // Go up from dist/services to backend/data
-  const dataDir = path.join(__dirname, '..', '..', 'data');
+  // Use process.cwd() for reliable path resolution in Docker/Railway
+  const dataDir = path.join(process.cwd(), 'data');
   
   for (const symbol of SYMBOLS) {
     let filename = symbol.replace('/', '_').replace(':USDT', '') + '_15m.json';

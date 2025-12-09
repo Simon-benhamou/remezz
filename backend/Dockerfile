@@ -31,6 +31,9 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
 
+# Historical data for backtest and month macro analysis
+COPY data ./data
+
 # Build the application
 RUN npm run build
 
