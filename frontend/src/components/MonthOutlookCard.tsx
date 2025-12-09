@@ -46,6 +46,11 @@ export function MonthOutlookCard() {
 
   const { currentMonth, prediction, similarMonths, historicalBest, historicalWorst } = outlook;
 
+  // Validate required data exists
+  if (!prediction || !currentMonth || !similarMonths || !historicalBest || !historicalWorst) {
+    return null;
+  }
+
   const outlookConfig = {
     BULLISH: {
       icon: TrendingUp,
