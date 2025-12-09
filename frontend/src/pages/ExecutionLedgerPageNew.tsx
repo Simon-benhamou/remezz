@@ -55,9 +55,9 @@ export default function ExecutionLedgerPageNew() {
     let wins = 0, losses = 0, totalPnl = 0, totalFees = 0;
     trades.forEach(trade => {
       const pnl = Number(trade.realizedPnlUsd ?? 0);
+      const fees = Number(trade.feesUsd ?? 0);
       totalPnl += pnl;
-      const notional = (trade.entryPrice ?? 0) * trade.qty;
-      totalFees += notional * 0.001;
+      totalFees += fees;
       const outcome = asOutcome(trade);
       if (outcome === 'win') wins++;
       else if (outcome === 'loss') losses++;

@@ -132,7 +132,8 @@ export default function DashboardPageCompact() {
       const results = await Promise.all(
         sessions.map(async (session: any) => {
           try {
-            const tradesRes = await api.getTrades(session.id, { limit: 20 });
+            // Increased limit to get all trades for accurate chart
+            const tradesRes = await api.getTrades(session.id, { limit: 200 });
             return Array.isArray(tradesRes) ? tradesRes : (tradesRes?.trades || []);
           } catch {
             return [];
@@ -143,7 +144,7 @@ export default function DashboardPageCompact() {
       const validTrades = allTrades
         .filter((t: any) => t.exitPrice != null && t.entryPrice != null && t.realizedPnlUsd != null)
         .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        .slice(0, 100);
+        .slice(0, 500); // Increased from 100 to 500
       setTrades(validTrades);
     } catch (err) {
       console.error('Failed to load trades:', err);
@@ -425,22 +426,22 @@ export default function DashboardPageCompact() {
             }
             headStyle={{ background: 'transparent', borderBottom: '1px solid rgba(148, 163, 184, 0.1)' }}
           >
-            {/* Big PnL Display */}
+            {/* Big PnL Display - use ov.pnlUsd from backend (accurate, includes all trades & fees) */}
             <div style={{ marginBottom: 20 }}>
               <div style={{ marginBottom: 4 }}>
                 <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                   Total PnL (All-Time)
                 </Text>
               </div>
-              <span style={{ fontSize: 36, fontWeight: 700, color: stats.totalPnl >= 0 ? '#34d399' : '#f87171' }}>
-                {stats.totalPnl >= 0 ? '+' : '-'}${Math.abs(stats.totalPnl).toFixed(2)}
+              <span style={{ fontSize: 36, fontWeight: 700, color: (ov?.pnlUsd ?? 0) >= 0 ? '#34d399' : '#f87171' }}>
+                {(ov?.pnlUsd ?? 0) >= 0 ? '+' : '-'}${Math.abs(ov?.pnlUsd ?? 0).toFixed(2)}
               </span>
               <span style={{ 
                 marginLeft: 12, 
                 fontSize: 16, 
                 color: 'rgba(148, 163, 184, 0.7)'
               }}>
-                {trades.length} trades · {stats.winRate.toFixed(0)}% win rate
+                {ov?.totalTrades ?? trades.length} trades · {(ov?.avgWinRate ?? stats.winRate).toFixed(0)}% win rate
               </span>
             </div>
 
