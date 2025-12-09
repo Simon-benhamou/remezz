@@ -68,7 +68,7 @@ type Exchange = {
   fetchPositions?: (symbols?: string[]) => Promise<any[]>;
   fetchMyTrades?: (symbol: string, since?: number, limit?: number) => Promise<any[]>;
   cancelOrder?: (orderId: string, symbol: string) => Promise<any>;
-  cancelAllOrders?: (symbol: string) => Promise<any>;
+  cancelAllOrders?: (symbol: string, params?: Record<string, any>) => Promise<any>;
   // For quantity precision (CCXT method)
   amountToPrecision?: (symbol: string, amount: number) => string;
   markets?: Record<string, any>;
@@ -1274,13 +1274,12 @@ export class SimpleAgent {
           
           // V5.10: Cancel backup STOP_MARKET when trailing activates
           // The native TRAILING_STOP_MARKET now protects the trade
-          // NOTE: Algo orders cannot be cancelled individually, use cancelAllOrders
+          // NOTE: Must cancel both regular AND algo orders
           if (this.config.mode === 'live' && this.position?.stopLossOrderId) {
             try {
               // Cancel ALL orders then re-place only the trailing stop
-              await this.config.exchange.cancelAllOrders?.(symbol);
+              await this.cancelAllOrdersOnExchange();
               logger.info(`🗑️ [${symbol}] Cancelled all orders - trailing now active`);
-              this.position.stopLossOrderId = undefined;
               // Re-place trailing stop (it was cancelled too)
               await this.setTrailingStopOnExchange(this.position);
             } catch (error: any) {
@@ -1299,7 +1298,7 @@ export class SimpleAgent {
           if (this.config.mode === 'live' && this.position) {
             try {
               // Cancel existing trailing and re-place with wider callback
-              await this.config.exchange.cancelAllOrders?.(symbol);
+              await this.cancelAllOrdersOnExchange();
               await this.setTrailingStopOnExchange(this.position, true); // true = isWidening
               logger.info(`🎯 [${symbol}] Trailing WIDENED: callback now ${MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT}%`);
             } catch (error: any) {
@@ -1728,28 +1727,52 @@ export class SimpleAgent {
   }
   
   /**
+   * Cancel ALL orders on exchange (both regular AND algo orders)
+   * This is a helper that calls cancelAllOrders twice - once for regular, once for algo
+   */
+  private async cancelAllOrdersOnExchange(): Promise<void> {
+    if (this.config.mode === 'paper') return;
+    
+    const symbol = this.config.symbol;
+    
+    if (this.config.exchange.cancelAllOrders) {
+      // Step 1: Cancel REGULAR orders
+      try {
+        await this.config.exchange.cancelAllOrders(symbol);
+      } catch (err: any) {
+        // Ignore "no orders" errors
+      }
+      
+      // Step 2: Cancel ALGO orders (STOP_MARKET, TRAILING_STOP_MARKET)
+      try {
+        await this.config.exchange.cancelAllOrders(symbol, { conditional: true });
+      } catch (err: any) {
+        // Ignore "no orders" errors
+      }
+      
+      if (this.position) {
+        this.position.stopLossOrderId = undefined;
+        this.position.trailingOrderId = undefined;
+      }
+    }
+  }
+  
+  /**
    * Cancel existing stop loss order on exchange
-   * NOTE: For Binance Algo orders (STOP_MARKET, TRAILING_STOP_MARKET), individual cancelOrder
-   * doesn't work - must use cancelAllOrders which cancels both regular and algo orders
+   * NOTE: For Binance, we need TWO calls:
+   * 1. cancelAllOrders(symbol) - cancels REGULAR orders
+   * 2. cancelAllOrders(symbol, { conditional: true }) - cancels ALGO orders (STOP_MARKET, TRAILING_STOP_MARKET)
    */
   private async cancelStopLossOnExchange(): Promise<void> {
     if (this.config.mode === 'paper') return;
     
     const symbol = this.config.symbol;
     
-    // Cancel ALL orders (both regular and algo) - this is the only reliable method
-    // for Binance Futures algo orders created via the new endpoint
-    if (this.config.exchange.cancelAllOrders) {
-      try {
-        await this.config.exchange.cancelAllOrders(symbol);
-        logger.info(`🗑️ [${symbol}] Cancelled all open orders (SL + trailing)`);
-        if (this.position) {
-          this.position.stopLossOrderId = undefined;
-          this.position.trailingOrderId = undefined;
-        }
-      } catch (error) {
-        logger.warn(`⚠️ [${symbol}] Failed to cancel all orders:`, error);
-      }
+    try {
+      await this.cancelAllOrdersOnExchange();
+      logger.info(`🗑️ [${symbol}] Cancelled all open orders (regular + algo)`);
+    } catch (error) {
+      logger.warn(`⚠️ [${symbol}] Failed to cancel orders:`, error);
     }
   }
   
@@ -1766,11 +1789,10 @@ export class SimpleAgent {
     
     try {
       // Cancel existing SL order first if updating
-      // NOTE: Algo orders (STOP_MARKET) cannot be cancelled individually with cancelOrder
-      // Must use cancelAllOrders and re-place the trailing stop
+      // NOTE: Must cancel both regular AND algo orders, then re-place trailing
       if (isUpdate && this.position?.stopLossOrderId) {
         try {
-          await this.config.exchange.cancelAllOrders?.(symbol);
+          await this.cancelAllOrdersOnExchange();
           logger.info(`🔄 [${symbol}] Cancelled all orders for SL update`);
           // Re-place trailing stop if it exists
           if (this.position?.trailingOrderId) {
