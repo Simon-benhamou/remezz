@@ -17,8 +17,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Node.js deps
-COPY package*.json ./
-RUN npm ci --no-audit --no-fund
+COPY package.json ./
+RUN npm install --no-audit --no-fund
 
 # Prisma schema and migrations
 COPY prisma ./prisma
