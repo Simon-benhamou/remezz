@@ -77,7 +77,7 @@ export default function DashboardPageCompact() {
   const navigate = useNavigate();
   const { mode } = useMode();
 
-  // Build chart data
+  // Build chart data - NET P&L (after fees)
   const chartData = React.useMemo(() => {
     if (!trades || trades.length === 0) return [];
     const sorted = [...trades].sort(
@@ -86,7 +86,8 @@ export default function DashboardPageCompact() {
     let cumulative = 0;
     const intl = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
     return sorted.map((trade) => {
-      cumulative += Number(trade.realizedPnlUsd || 0);
+      // Net PnL = realizedPnl - fees
+      cumulative += Number(trade.realizedPnlUsd || 0) - Number(trade.feesUsd || 0);
       return {
         date: intl.format(new Date(trade.createdAt)),
         value: Number(cumulative.toFixed(2)),
