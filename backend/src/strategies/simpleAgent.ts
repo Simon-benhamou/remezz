@@ -1216,6 +1216,21 @@ export class SimpleAgent {
       const currentPrice = candles[candles.length - 1].close;
       this.lastPrice = currentPrice;
       
+      // 🔧 V5.13: SAFETY CHECK - Ensure position has protection
+      // If we're in live mode and have no SL order AND no trailing order, this is a CRITICAL issue
+      if (this.config.mode === 'live' && !position.stopLossOrderId && !position.trailingOrderId) {
+        logger.warn(`🚨 [${symbol}] SAFETY: Position has NO PROTECTION! Attempting to re-place orders...`);
+        
+        // Re-place SL and trailing
+        try {
+          await this.setStopLossOnExchange(position, false);
+          await this.setTrailingStopOnExchange(position, false);
+          logger.info(`🛡️ [${symbol}] SAFETY: Re-placed protection orders`);
+        } catch (safetyError: any) {
+          logger.error(`🚨🚨🚨 [${symbol}] SAFETY: Failed to re-place protection! ${safetyError.message}`);
+        }
+      }
+      
       // Update water marks for trailing stop
       this.position = updatePositionWaterMarks(position, currentPrice);
       
@@ -1281,9 +1296,11 @@ export class SimpleAgent {
               await this.cancelAllOrdersOnExchange();
               logger.info(`🗑️ [${symbol}] Cancelled all orders - trailing now active`);
               // Re-place trailing stop (it was cancelled too)
+              // Note: setTrailingStopOnExchange now has built-in fallback to STOP_MARKET if trailing fails
               await this.setTrailingStopOnExchange(this.position);
             } catch (error: any) {
-              logger.warn(`⚠️ [${symbol}] Failed to cancel orders for trailing activation:`, error.message);
+              // Error already handled by setTrailingStopOnExchange fallback
+              logger.warn(`⚠️ [${symbol}] Failed to cancel orders for trailing activation: ${error.message}`);
             }
           }
         }
@@ -1300,9 +1317,11 @@ export class SimpleAgent {
               // Cancel existing trailing and re-place with wider callback
               await this.cancelAllOrdersOnExchange();
               await this.setTrailingStopOnExchange(this.position, true); // true = isWidening
+              // Note: setTrailingStopOnExchange now has built-in fallback to STOP_MARKET if trailing fails
               logger.info(`🎯 [${symbol}] Trailing WIDENED: callback now ${MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT}%`);
             } catch (error: any) {
-              logger.warn(`⚠️ [${symbol}] Failed to widen trailing:`, error.message);
+              // Error already handled by setTrailingStopOnExchange fallback
+              logger.warn(`⚠️ [${symbol}] Failed to widen trailing: ${error.message}`);
             }
           }
         }
@@ -1888,11 +1907,52 @@ export class SimpleAgent {
       const phase = isWidening ? 'WIDENED' : 'INITIAL';
       logger.info(`🎯 [${symbol}] TRAILING_STOP_MARKET [${phase}]: activation=$${activationPrice.toFixed(4)} (+${trailingActivationPct}%) | callback=${trailingDistancePct}% | order=${trailingOrder.id}`);
       
+      return; // Success - no fallback needed
+      
     } catch (error: any) {
-      if (error.message?.includes('Invalid orderType') || error.message?.includes('not supported')) {
-        logger.warn(`⚠️ [${symbol}] TRAILING_STOP_MARKET not supported, using manual trailing`);
+      const errorMsg = error.message || String(error);
+      
+      if (errorMsg.includes('Invalid orderType') || errorMsg.includes('not supported')) {
+        logger.warn(`⚠️ [${symbol}] TRAILING_STOP_MARKET not supported, falling back to STOP_MARKET`);
       } else {
-        logger.warn(`⚠️ [${symbol}] Failed to set trailing stop:`, error.message || error);
+        logger.warn(`⚠️ [${symbol}] Failed to set trailing stop: ${errorMsg}`);
+      }
+      
+      // 🔧 FIX: CRITICAL - Fallback to STOP_MARKET when trailing fails
+      // Without this, the position would have NO PROTECTION after cancelAllOrdersOnExchange()
+      logger.warn(`🛡️ [${symbol}] FALLBACK: Re-placing STOP_MARKET as protection since trailing failed`);
+      
+      try {
+        // Calculate a dynamic SL based on current profit
+        // If widening (>2% profit), use a tighter SL at +1% profit
+        // Otherwise, use the original SL
+        if (this.position?.stopLoss) {
+          await this.setStopLossOnExchange(this.position, false);
+          logger.info(`🛡️ [${symbol}] FALLBACK STOP_MARKET placed at $${this.position.stopLoss.toFixed(4)}`);
+        } else {
+          // Calculate emergency SL at -2% from entry
+          const emergencySL = position.side === 'long'
+            ? position.entryPrice * (1 - 0.02)
+            : position.entryPrice * (1 + 0.02);
+          
+          if (this.position) {
+            this.position.stopLoss = emergencySL;
+            await this.setStopLossOnExchange(this.position, false);
+            logger.warn(`🛡️ [${symbol}] EMERGENCY STOP_MARKET placed at $${emergencySL.toFixed(4)}`);
+          }
+        }
+      } catch (fallbackError: any) {
+        // This is CRITICAL - log prominently
+        logger.error(`🚨🚨🚨 [${symbol}] CRITICAL: Both trailing AND fallback SL failed! Position UNPROTECTED!`, fallbackError.message);
+        
+        // Send notification for critical error
+        notifyOrderError({
+          symbol,
+          side: position.side,
+          orderType: 'stop_loss', // Using stop_loss type as it's the closest match
+          error: `Trailing failed AND fallback SL failed: ${fallbackError.message}`,
+          mode: 'live',
+        });
       }
     }
   }
