@@ -64,9 +64,24 @@ if (orphanSymbols.length > 0) {
   
   for (const symbol of orphanSymbols) {
     console.log(`Annulation ordres pour ${symbol}...`);
+    const ccxtSymbol = symbol.replace('USDT', '/USDT:USDT');
+    
     try {
-      await ex.cancelAllOrders(symbol.replace('USDT', '/USDT:USDT'));
-      console.log(`  OK - ordres annules`);
+      // Cancel regular orders
+      try {
+        await ex.cancelAllOrders(ccxtSymbol);
+      } catch (e) {
+        // Ignore
+      }
+      
+      // Cancel ALGO orders (STOP_MARKET, TRAILING_STOP_MARKET)
+      try {
+        await ex.cancelAllOrders(ccxtSymbol, { conditional: true });
+      } catch (e) {
+        // Ignore
+      }
+      
+      console.log(`  OK - ordres annules (regular + algo)`);
     } catch (e) {
       console.log(`  Erreur: ${e.message}`);
     }

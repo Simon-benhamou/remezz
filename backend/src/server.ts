@@ -1231,8 +1231,36 @@ app.get("/api/agent/overview", async (req, res) => {
         _sum: { fee: true }
       });
       totalPnlUsd -= (paperFees._sum.fee || 0);
+    } else if (mode === 'live' && userId) {
+      // For live mode: get initial capital from user setting
+      const liveStartSetting = await prisma.userSetting.findUnique({
+        where: {
+          userId_key: {
+            userId: userId,
+            key: 'liveStartBalance'
+          }
+        }
+      });
+      
+      if (liveStartSetting) {
+        initialCapital = parseFloat(liveStartSetting.value) || 500; // Default to 500 for live
+      } else {
+        // Fallback: use a reasonable default for live trading
+        // User should set this via settings for accurate ROI calculation
+        initialCapital = 500;
+      }
+      
+      // Sum from enriched sessions
+      totalPnlUsd = enrichedSessions.reduce((sum, s) => sum + (s.pnlUsd || 0), 0);
+      
+      // Subtract fees from live PnL for accurate net display
+      const liveFees = await prisma.fill.aggregate({
+        where: { session: { userId, mode: 'live' } },
+        _sum: { fee: true }
+      });
+      totalPnlUsd -= (liveFees._sum.fee || 0);
     } else {
-      // For live mode or combined, sum from enriched sessions
+      // For combined mode, sum from enriched sessions
       totalPnlUsd = enrichedSessions.reduce((sum, s) => sum + (s.pnlUsd || 0), 0);
       
       // Subtract fees from live PnL for accurate net display
@@ -1242,6 +1270,21 @@ app.get("/api/agent/overview", async (req, res) => {
       });
       totalPnlUsd -= (liveFees._sum.fee || 0);
     }
+    
+    // 📊 Calculate TODAY's PnL (trades closed today in local timezone)
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    const todayFills = await prisma.fill.findMany({
+      where: {
+        session: { userId, mode: mode as 'paper' | 'live' | undefined },
+        ts: { gte: todayStart },
+      },
+      select: { realizedPnl: true, fee: true }
+    });
+    
+    const todayPnlUsd = todayFills.reduce((sum, f) => sum + (f.realizedPnl || 0) - (f.fee || 0), 0);
+    const todayTrades = todayFills.length;
     
     // Add unrealized PnL from running agents
     const unrealizedPnl = allAgents.reduce((sum, agent) => {
@@ -1277,6 +1320,8 @@ app.get("/api/agent/overview", async (req, res) => {
       activeSymbols: allAgents.length > 0 ? MomentumConfig.SYMBOLS : [],
       // Add totals for header display
       pnlUsd: totalPnlUsd,
+      todayPnlUsd,
+      todayTrades,
       roiPct,
       netRoiPct,
       initialCapitalUsd: initialCapital,

@@ -97,6 +97,16 @@ export default function DashboardPageCompact() {
   // Stats
   const stats = React.useMemo(() => {
     const totalPnl = trades.reduce((sum, t) => sum + (t.realizedPnlUsd || 0), 0);
+    
+    // Today's PnL - filter trades from today (midnight local time)
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayTrades = trades.filter(t => new Date(t.createdAt) >= todayStart);
+    const todayPnl = todayTrades.reduce((sum, t) => sum + (t.realizedPnlUsd || 0), 0);
+    const todayWins = todayTrades.filter(t => (t.realizedPnlUsd || 0) > 0).length;
+    const todayLosses = todayTrades.filter(t => (t.realizedPnlUsd || 0) < 0).length;
+    const todayWinRate = (todayWins + todayLosses) > 0 ? (todayWins / (todayWins + todayLosses)) * 100 : 0;
+    
     const wins = trades.filter(t => (t.realizedPnlUsd || 0) > 0).length;
     const losses = trades.filter(t => (t.realizedPnlUsd || 0) < 0).length;
     const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
@@ -108,7 +118,7 @@ export default function DashboardPageCompact() {
       : 0;
     const longs = trades.filter(t => t.positionSide === 'long').length;
     const shorts = trades.filter(t => t.positionSide === 'short').length;
-    return { totalPnl, wins, losses, winRate, avgRoe, avgLev, longs, shorts };
+    return { totalPnl, todayPnl, todayTrades: todayTrades.length, todayWinRate, wins, losses, winRate, avgRoe, avgLev, longs, shorts };
   }, [trades]);
 
   async function loadTrades() {
@@ -188,25 +198,25 @@ export default function DashboardPageCompact() {
         <Col xs={12} sm={6}>
           <div style={statCardStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              {stats.totalPnl >= 0 ? <TrendingUp size={14} color="#34d399" /> : <TrendingDown size={14} color="#f87171" />}
-              <Text style={{ color: '#f87171', fontSize: 12, fontWeight: 500 }}>Total PnL</Text>
+              {stats.todayPnl >= 0 ? <TrendingUp size={14} color="#34d399" /> : <TrendingDown size={14} color="#f87171" />}
+              <Text style={{ color: stats.todayPnl >= 0 ? '#34d399' : '#f87171', fontSize: 12, fontWeight: 500 }}>Today's PnL</Text>
             </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: stats.totalPnl >= 0 ? '#34d399' : '#f87171' }}>
-              {stats.totalPnl >= 0 ? '' : '-'}${Math.abs(stats.totalPnl).toFixed(2)}
+            <div style={{ fontSize: 32, fontWeight: 700, color: stats.todayPnl >= 0 ? '#34d399' : '#f87171' }}>
+              {stats.todayPnl >= 0 ? '+' : '-'}${Math.abs(stats.todayPnl).toFixed(2)}
             </div>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>Cumulative</Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>{stats.todayTrades} trades today</Text>
           </div>
         </Col>
         <Col xs={12} sm={6}>
           <div style={statCardStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <span style={{ color: '#fbbf24', fontSize: 14 }}>%</span>
-              <Text style={{ color: '#fbbf24', fontSize: 12, fontWeight: 500 }}>Win Rate</Text>
+              <Text style={{ color: '#fbbf24', fontSize: 12, fontWeight: 500 }}>Today Win Rate</Text>
             </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: stats.winRate >= 50 ? '#34d399' : '#f87171' }}>
-              {stats.winRate.toFixed(1)}%
+            <div style={{ fontSize: 32, fontWeight: 700, color: stats.todayWinRate >= 50 ? '#34d399' : stats.todayTrades > 0 ? '#f87171' : '#94a3b8' }}>
+              {stats.todayTrades > 0 ? `${stats.todayWinRate.toFixed(0)}%` : '—'}
             </div>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>{stats.wins}W / {stats.losses}L</Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>All-time: {stats.winRate.toFixed(0)}% ({stats.wins}W/{stats.losses}L)</Text>
           </div>
         </Col>
         <Col xs={12} sm={6}>
@@ -414,15 +424,20 @@ export default function DashboardPageCompact() {
           >
             {/* Big PnL Display */}
             <div style={{ marginBottom: 20 }}>
+              <div style={{ marginBottom: 4 }}>
+                <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Total PnL (All-Time)
+                </Text>
+              </div>
               <span style={{ fontSize: 36, fontWeight: 700, color: stats.totalPnl >= 0 ? '#34d399' : '#f87171' }}>
-                {stats.totalPnl >= 0 ? '' : '-'}${Math.abs(stats.totalPnl).toFixed(2)}
+                {stats.totalPnl >= 0 ? '+' : '-'}${Math.abs(stats.totalPnl).toFixed(2)}
               </span>
               <span style={{ 
                 marginLeft: 12, 
-                fontSize: 18, 
-                color: stats.winRate >= 50 ? '#34d399' : '#f87171' 
+                fontSize: 16, 
+                color: 'rgba(148, 163, 184, 0.7)'
               }}>
-                {stats.winRate >= 50 ? '+' : '-'}{stats.winRate.toFixed(1)}%
+                {trades.length} trades · {stats.winRate.toFixed(0)}% win rate
               </span>
             </div>
 

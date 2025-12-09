@@ -75,7 +75,16 @@ function AuthenticatedApp() {
   const netRoiCandidate = Number(overview?.netRoiPct);
   const netRoiValue = Number.isFinite(netRoiCandidate) ? netRoiCandidate : roiValue;
   const showNetRoi = Math.abs(netRoiValue - roiValue) > 0.05;
-  const pnlValue = Number(overview?.pnlUsd ?? 0);
+  
+  // 📊 Use today's PnL for header display (matches Binance's daily view)
+  const todayPnlValue = Number(overview?.todayPnlUsd ?? 0);
+  const todayTrades = Number(overview?.todayTrades ?? 0);
+  // Calculate today's ROI based on initial capital
+  const initialCapital = Number(overview?.initialCapitalUsd ?? 0);
+  const todayRoiValue = initialCapital > 0 ? (todayPnlValue / initialCapital) * 100 : 0;
+  // Keep total PnL for tooltip/reference
+  const totalPnlValue = Number(overview?.pnlUsd ?? 0);
+  
   const activeAgents = overview?.activeCount ?? 0;
   const marketCoverage = Array.isArray(overview?.symbols) ? overview.symbols.length : 0;
 
@@ -210,14 +219,15 @@ function AuthenticatedApp() {
               </span>
               <span style={{ fontSize: 17, fontWeight: 700, color: '#f8fafc' }}>{formattedBalance}</span>
             </div>
-            {/* Inline stats */}
+            {/* Today's PnL - matches Binance daily view */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
-                <span style={{ color: pnlValue >= 0 ? '#60a5fa' : '#f87171', fontWeight: 600, fontSize: 15, fontFamily: "'JetBrains Mono', monospace" }}>
-                  {pnlValue >= 0 ? '+' : ''}{pnlValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}$
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }} title={`Total: ${totalPnlValue >= 0 ? '+' : ''}$${totalPnlValue.toFixed(2)}`}>
+                <span style={{ fontSize: 10, color: 'rgba(226, 232, 240, 0.5)', marginRight: 4 }}>TODAY</span>
+                <span style={{ color: todayPnlValue >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 15, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {todayPnlValue >= 0 ? '+' : ''}{todayPnlValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}$
                 </span>
-                <span style={{ color: roiValue >= 0 ? '#34d399' : '#f87171', fontSize: 13, fontWeight: 500 }}>
-                  ({roiValue >= 0 ? '+' : ''}{roiValue.toFixed(1)}%)
+                <span style={{ color: todayRoiValue >= 0 ? '#34d399' : '#f87171', fontSize: 13, fontWeight: 500 }}>
+                  ({todayRoiValue >= 0 ? '+' : ''}{todayRoiValue.toFixed(1)}%)
                 </span>
               </div>
             </div>
