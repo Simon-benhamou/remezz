@@ -134,11 +134,12 @@ export const MomentumConfig = {
     
     PROFIT_TARGET_PCT: 3.0,      // Take Profit 3% → 15% avec 5x leverage
     
-    // V5.11: Trailing Stop AGRESSIF - Protège les gains plus tôt
-    TRAILING_ACTIVATION_PCT: 0.5, // Active trailing à +0.5% (was 1.0%)
-    TRAILING_DISTANCE_PCT: 0.3,   // Trail de 0.3% (was 0.4%) - plus serré
-    TRAILING_TIGHTEN_AT_PCT: 1.5, // Resserre à 0.25% à partir de +1.5%
-    TRAILING_TIGHT_DISTANCE_PCT: 0.25,
+    // V5.12: SMART Trailing Stop - Starts tight, WIDENS at higher profit
+    // This lets winners run while protecting early gains
+    TRAILING_ACTIVATION_PCT: 0.8,       // Activate trailing at +0.8% profit
+    TRAILING_DISTANCE_PCT: 0.5,         // Initial callback: 0.5% (tight protection)
+    TRAILING_WIDEN_AT_PCT: 2.0,         // Widen callback when profit reaches 2%
+    TRAILING_WIDE_DISTANCE_PCT: 0.8,    // Widened callback: 0.8% (let winner run)
     
     // Smart Exits
     MOMENTUM_FADE_PROFIT_MIN: 1.5,  // Exit si profit > 1.5%...
@@ -816,17 +817,18 @@ export function shouldExitPosition(
     return { shouldExit: true, reason: 'time', pnlPct, holdMinutes };
   }
   
-  // 2. V5.8: Check TRAILING FIRST (protects gains before SL is hit)
-  // This is critical - if trailing is activated and price reverses, exit via trailing not SL
+  // 2. V5.12 SMART TRAILING: Starts tight, WIDENS at higher profit
+  // This lets winners run while protecting early gains
   const trailingActivation = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;
   
   if (pnlPct >= trailingActivation) {
     // Trailing is active or should activate
     let trailingDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
     
-    // Tighten trailing at higher profits (V5: at 2.5%)
-    if (pnlPct >= MomentumConfig.EXIT.TRAILING_TIGHTEN_AT_PCT) {
-      trailingDistance = MomentumConfig.EXIT.TRAILING_TIGHT_DISTANCE_PCT;
+    // V5.12: WIDEN callback at higher profits (opposite of old logic!)
+    // At 2%+ profit, give trade more room to breathe
+    if (pnlPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT) {
+      trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT;
     }
     
     // Calculate trailing stop price

@@ -188,7 +188,7 @@ export default function DashboardPageCompact() {
         <Col xs={12} sm={6}>
           <div style={statCardStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <TrendingDown size={14} color="#f87171" />
+              {stats.totalPnl >= 0 ? <TrendingUp size={14} color="#34d399" /> : <TrendingDown size={14} color="#f87171" />}
               <Text style={{ color: '#f87171', fontSize: 12, fontWeight: 500 }}>Total PnL</Text>
             </div>
             <div style={{ fontSize: 32, fontWeight: 700, color: stats.totalPnl >= 0 ? '#34d399' : '#f87171' }}>

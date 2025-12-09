@@ -530,6 +530,9 @@ export class SimpleAgent {
   // Track trailing stop activation (to notify only once)
   private trailingNotified: boolean = false;
   
+  // V5.12: Track if trailing has been widened (for SMART trailing)
+  private trailingWidened: boolean = false;
+  
   // V5.11: Track last processed candle timestamp to sync with backtest
   // Only check entry signals when a NEW 15m candle closes (not on every tick)
   private lastProcessedCandleTs: number = 0;
@@ -1286,6 +1289,25 @@ export class SimpleAgent {
           }
         }
         
+        // V5.12: SMART TRAILING - Widen callback when profit reaches 2%
+        // This lets winners run while protecting early gains
+        const widenThreshold = MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT; // 2%
+        if (!this.trailingWidened && exitSignal.pnlPct && exitSignal.pnlPct >= widenThreshold) {
+          this.trailingWidened = true;
+          logger.info(`📈 [${symbol}] Profit +${exitSignal.pnlPct.toFixed(1)}% >= ${widenThreshold}% - WIDENING trailing callback`);
+          
+          if (this.config.mode === 'live' && this.position) {
+            try {
+              // Cancel existing trailing and re-place with wider callback
+              await this.config.exchange.cancelAllOrders?.(symbol);
+              await this.setTrailingStopOnExchange(this.position, true); // true = isWidening
+              logger.info(`🎯 [${symbol}] Trailing WIDENED: callback now ${MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT}%`);
+            } catch (error: any) {
+              logger.warn(`⚠️ [${symbol}] Failed to widen trailing:`, error.message);
+            }
+          }
+        }
+        
         // Update trailing stop on exchange (live mode) or just log (paper mode)
         await this.updateTrailingStopOnExchange(exitSignal.newStopLoss);
       }
@@ -1335,8 +1357,9 @@ export class SimpleAgent {
     
     logger.info(`🚪 [${symbol}] CLOSING ${position.side.toUpperCase()} | entry=$${position.entryPrice.toFixed(4)} | exit=$${currentPrice.toFixed(4)} | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}) | reason=${reason}`);
     
-    // Reset trailing notification flag for next position
+    // Reset trailing flags for next position
     this.trailingNotified = false;
+    this.trailingWidened = false;
     
     // Store exit info for frontend display
     this.lastExit = {
@@ -1789,28 +1812,27 @@ export class SimpleAgent {
   }
   
   /**
-   * 🚀 V5.10: Set TRAILING_STOP_MARKET order on Binance (Native Trailing Stop)
+   * 🚀 V5.12: SMART Trailing Stop - Starts tight, widens at higher profit
    * 
-   * This is CRITICAL for matching backtest results because:
-   * - Binance tracks the high/low price in REAL-TIME (tick-by-tick)
-   * - Our manual trailing only updates every 60s, missing intra-candle moves
-   * - Backtest uses candle.high/low which captures all price extremes
+   * Phase 1 (0.8% → 2%): callback 0.5% (tight protection)
+   * Phase 2 (>2%): callback 0.8% (let winner run)
    * 
-   * With native trailing:
-   * - Activation: when profit reaches TRAILING_ACTIVATION_PCT (1%)
-   * - Callback: TRAILING_DISTANCE_PCT (0.4%) from the high/low
-   * - Binance handles everything server-side = 0 latency
+   * NOTE: Binance doesn't support dynamic callback, so we:
+   * 1. Place initial trailing with tight callback (0.5%)
+   * 2. When profit reaches 2%, cancel and re-place with wide callback (0.8%)
    */
-  private async setTrailingStopOnExchange(position: Position): Promise<void> {
+  private async setTrailingStopOnExchange(position: Position, isWidening: boolean = false): Promise<void> {
     if (this.config.mode === 'paper') return;
     if (!position.entryPrice) return;
     
     const symbol = this.config.symbol;
     const side = position.side === 'long' ? 'sell' : 'buy';
     
-    // Get trailing config (sync with backtest)
-    const trailingActivationPct = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;  // 1.0%
-    const trailingDistancePct = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;      // 0.4%
+    // V5.12: SMART trailing config
+    const trailingActivationPct = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;  // 0.8%
+    const trailingDistancePct = isWidening 
+      ? MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT    // 0.8% (widened)
+      : MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;        // 0.5% (initial)
     
     // Calculate activation price (when trailing starts)
     const activationPrice = position.side === 'long'
@@ -1822,19 +1844,17 @@ export class SimpleAgent {
       const formattedQty = this.formatQtyForExchange(symbol, position.qty);
       
       // Create TRAILING_STOP_MARKET order using CCXT unified params
-      // CCXT maps: trailingPercent/callbackRate -> callbackRate
-      //            trailingTriggerPrice -> activationPrice
       const trailingOrder = await this.config.exchange.createOrder(
         symbol,
-        'market',  // CCXT will convert to TRAILING_STOP_MARKET when trailingPercent is set
+        'market',
         side,
         formattedQty,
         undefined,
         {
-          trailingPercent: trailingDistancePct,      // 0.4% trailing distance (CCXT maps to callbackRate)
-          trailingTriggerPrice: activationPrice,     // Activate when profit >= 1% (CCXT maps to activationPrice)
+          trailingPercent: trailingDistancePct,
+          trailingTriggerPrice: activationPrice,
           reduceOnly: true,
-          workingType: 'MARK_PRICE',                 // Use mark price to avoid manipulation
+          workingType: 'MARK_PRICE',
         }
       );
       
@@ -1843,10 +1863,10 @@ export class SimpleAgent {
         this.position.trailingOrderId = trailingOrder.id;
       }
       
-      logger.info(`🎯 [${symbol}] TRAILING_STOP_MARKET set: activation=$${activationPrice.toFixed(4)} (+${trailingActivationPct}%) | callback=${trailingDistancePct}% | order=${trailingOrder.id}`);
+      const phase = isWidening ? 'WIDENED' : 'INITIAL';
+      logger.info(`🎯 [${symbol}] TRAILING_STOP_MARKET [${phase}]: activation=$${activationPrice.toFixed(4)} (+${trailingActivationPct}%) | callback=${trailingDistancePct}% | order=${trailingOrder.id}`);
       
     } catch (error: any) {
-      // TRAILING_STOP_MARKET might not be available on all symbols, fallback to manual
       if (error.message?.includes('Invalid orderType') || error.message?.includes('not supported')) {
         logger.warn(`⚠️ [${symbol}] TRAILING_STOP_MARKET not supported, using manual trailing`);
       } else {
@@ -2063,8 +2083,14 @@ export class SimpleAgent {
         
         logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%, fee: $${syncFeeUsd.toFixed(2)}, margin released: $${marginToRelease.toFixed(2)}`);
         
-        // V5.10: Cancel any remaining orders (trailing stop, backup SL) to avoid orphans
+        // V5.12: Cancel any remaining orders (trailing stop, backup SL) to avoid orphans
+        // This is CRITICAL - when Binance trailing triggers, the STOP_MARKET remains!
+        logger.info(`🧹 [${symbol}] Cleaning up orphan orders after position close...`);
         await this.cancelStopLossOnExchange();
+        
+        // Reset trailing flags
+        this.trailingNotified = false;
+        this.trailingWidened = false;
         
         this.position = null;
       }
