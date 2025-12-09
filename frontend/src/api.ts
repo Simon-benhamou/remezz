@@ -245,47 +245,6 @@ export const api = {
       reason: string;
       tradingRecommended: boolean;
     },
-  // Month macro analysis - shows ranking and projection
-  getMonthOutlook: async () =>
-    (await client.get('/api/month-outlook')).data as {
-      currentMonth: {
-        yearMonth: string;
-        monthName: string;
-        trades: number;
-        wins: number;
-        losses: number;
-        winRate: number;
-        totalPnl: number;
-        avgPnl: number;
-        slCount: number;
-        slRate: number;
-      };
-      dayOfMonth: number;
-      daysInMonth: number;
-      ranking: {
-        position: number;
-        totalMonths: number;
-        percentile: number;
-        status: 'TOP_TIER' | 'GOOD' | 'AVERAGE' | 'POOR' | 'WORST';
-      };
-      projection: {
-        projectedTrades: number;
-        projectedPnl: number;
-        projectedWinRate: number;
-        trend: 'IMPROVING' | 'STABLE' | 'DECLINING';
-      };
-      allMonthsRanked: Array<{
-        yearMonth: string;
-        monthName: string;
-        totalPnl: number;
-        winRate: number;
-        isCurrent: boolean;
-      }>;
-      averageMonthlyPnl: number;
-      bestMonth: { yearMonth: string; monthName: string; totalPnl: number; winRate: number };
-      worstMonth: { yearMonth: string; monthName: string; totalPnl: number; winRate: number };
-      decemberHistory: Array<{ yearMonth: string; trades: number; winRate: number; totalPnl: number }>;
-    },
   // Agent start/stop with new 4-agent system
   startAgents: async (mode: 'paper' | 'live', capitalUsd: number) =>
     (await client.post('/api/agent/start', { mode, capitalUsd })).data,

@@ -394,49 +394,6 @@ app.get("/api/market-conditions", async (req, res) => {
   }
 });
 
-// V5.11: Month Macro Analysis - predict month outcome based on historical patterns
-app.get("/api/month-outlook", async (req, res) => {
-  try {
-    const { analyzeMonthOutlook } = await import('./services/monthMacroAnalysis.js');
-    
-    // Get current month stats from DB for live data
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    const fills = await prisma.fill.findMany({
-      where: {
-        side: 'sell', // Exit fills
-        ts: { gte: startOfMonth },
-      },
-      select: {
-        realizedPnl: true,
-        exitReason: true,
-      },
-    });
-    
-    const currentMonthFromDb = fills.length > 0 ? {
-      trades: fills.length,
-      wins: fills.filter(f => (f.realizedPnl ?? 0) > 0).length,
-      totalPnl: fills.reduce((sum, f) => sum + (f.realizedPnl ?? 0), 0),
-      slCount: fills.filter(f => f.exitReason === 'SL' || f.exitReason === 'stop_loss').length,
-    } : undefined;
-    
-    const outlook = analyzeMonthOutlook(currentMonthFromDb);
-    
-    if (!outlook) {
-      return res.json({
-        error: 'No historical data available',
-        outlook: null,
-      });
-    }
-    
-    res.json(outlook);
-  } catch (error) {
-    logger.error("Failed to get month outlook", error);
-    res.status(500).json({ error: "Failed to get month outlook" });
-  }
-});
-
 // V5.5: Liquidity-aware position sizing info
 app.get("/api/liquidity-info", async (req, res) => {
   try {
