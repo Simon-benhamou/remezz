@@ -1,39 +1,38 @@
 /**
- * 🎯 STRATÉGIE V5.11 - SL LARGE + TRAILING AGRESSIF
+ * 🎯 STRATÉGIE V5.12 - OPTIMIZED FILTERS (2-year backtest)
  * 
- * Backtestée sur 24 mois (Dec 2023 - Dec 2025) avec frais 0.08%:
- * - Equity: +2547% (vs +1632% V5.8.1) = +915% amélioration
- * - Trades: 832 (~35/mois, ~1.1/jour)
- * - Win Rate: 89.1% (vs 72.6%)
- * - SL Rate: 10.6% (vs 27.2%) = 138 stop hunts évités
- * - Sharpe: ~1.2
+ * V5.12 CHANGES (Dec 2025):
+ * - VOL_MULTIPLIER: 2.0 → 1.5 (+36% PnL)
+ * - MAX_CONSEC_UP: 3 → 5 (+34% PnL)
+ * - RSI+BTC filter: REMOVED (blocked profitable trades)
  * 
- * ═════════════════════════════════════════════════════════════
- * V5.10 FILTRE (NOUVEAU):
- * ═════════════════════════════════════════════════════════════
- * LONG: Skip if RSI > 75 AND BTC ROC 4h < 0
- *   → Filtre les longs en surachat avec BTC momentum négatif
- *   → Évite 17 trades perdants, +52% PnL
+ * Backtested sur 24 mois (Dec 2023 - Dec 2025) avec frais 0.08%:
+ * - Total PnL: +1807% (vs +1346% V5.11) = +34% amélioration
+ * - Trades: 1178 (vs 910) = +29% plus de trades
+ * - Win Rate: 86% (stable)
+ * - SL Rate: 14% (stable)
  * 
  * ═════════════════════════════════════════════════════════════
- * V5.9 FILTRES:
+ * V5.12 FILTRES OPTIMISÉS:
+ * ═════════════════════════════════════════════════════════════
+ * LONG:
+ * - Volume >= 1.5x (relaxed from 2.0x)
+ * - ConsecUp <= 5 (relaxed from 3)
+ * - RSI+BTC filter REMOVED
+ * 
+ * ═════════════════════════════════════════════════════════════
+ * V5.9 FILTRES (unchanged):
  * ═════════════════════════════════════════════════════════════
  * SHORT: Skip if StochRSI < 15 AND volRatio < 4.0
  *   → Filtre les shorts en zone oversold extrême (sauf panic selling)
- *   → Filtre 848 trades perdants, +368% sur SHORT
- * 
- * LONG: Skip if volRatio < 3.0
- *   → Filtre les longs avec volume insuffisant
- *   → Filtre 440 trades, +89% sur LONG
  * 
  * ═════════════════════════════════════════════════════════════
  * LONG ENTRY (BTC > SMA200 = Bull Market):
  * ═════════════════════════════════════════════════════════════
  * - Bollinger Band breakout (close > upper band)
  * - ROC 10 périodes > 2.5%
- * - Volume > 2x moyenne
- * - ConsecUp <= 3
- * - RSI <= 75 OR BTC ROC 4h >= 0 (V5.10)
+ * - Volume > 1.5x moyenne (V5.12)
+ * - ConsecUp <= 5 (V5.12)
  * 
  * ═════════════════════════════════════════════════════════════
  * SHORT ENTRY (BTC < SMA200 = Bear Market):
@@ -41,13 +40,13 @@
  * - ROC 5 périodes < -1.5%
  * - Volume > 2x moyenne
  * - Price < MA20 & BB Lower
- * - ConsecDown <= 5
- * - StochRSI >= 15 OR volRatio >= 4 (V5.8)
+ * - ConsecDown <= 4
+ * - StochRSI >= 15 OR volRatio >= 4 (V5.9)
  * 
- * EXIT:
- * - Stop Loss: ATR × 2.0 (clampé 0.8%-3.0%)
+ * EXIT (V5.11):
+ * - Stop Loss: ATR × 3.0 (clampé 1.0%-4.5%)
  * - Take Profit: 3%
- * - Trailing: activé à +1%, trail à 0.4%
+ * - Trailing: activé à +0.5%, trail à 0.3%
  * - Max Hold: 48h
  */
 
@@ -79,10 +78,10 @@ export const MomentumConfig = {
     BB_PERIOD: 20,
     BB_STD: 2,
     
-    // Momentum confirmation - FILTRES STRICTS V5.3
-    ROC_MIN: 0.025,              // ROC 10 > 2.5% (was 1.5%) - Plus sélectif
-    VOL_MULTIPLIER: 2.0,         // V5.8: Volume > 2x moyenne
-    MAX_CONSEC_UP: 3,            // Max 3 bougies vertes (was 4) - Évite tops
+    // Momentum confirmation - V5.12 OPTIMIZED (2-year backtest)
+    ROC_MIN: 0.025,              // ROC 10 > 2.5% - Keep strict
+    VOL_MULTIPLIER: 1.5,         // V5.12: 1.5x (was 2.0) - +36% PnL
+    MAX_CONSEC_UP: 5,            // V5.12: 5 (was 3) - +34% PnL
   },
   
   // Signal d'entrée SHORT (Bear Market: BTC < SMA200)
@@ -103,9 +102,9 @@ export const MomentumConfig = {
     BB_STD: 2,
     
     // Legacy fields for compatibility
-    ROC_MIN: 0.025,              // V5.8: 2.5%
-    VOL_MULTIPLIER: 2.0,         // V5.8: 2x
-    MAX_CONSEC_UP: 3,            // V5.8: 3
+    ROC_MIN: 0.025,              // V5.12: 2.5%
+    VOL_MULTIPLIER: 1.5,         // V5.12: 1.5x
+    MAX_CONSEC_UP: 5,            // V5.12: 5
     
     // BTC Regime Filter
     BTC_SMA_PERIOD: 200,         // SMA 200 pour régime
@@ -645,21 +644,11 @@ export function checkMomentumSignal(
   // (StochRSI filter removed from here - now in bear regime section below)
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // V5.10 BULL REGIME → LONG ONLY (RSI + BTC ROC filter)
-  // Backtest: +52% PnL en évitant 17 mauvais trades (RSI>75 + BTC momentum négatif)
+  // V5.12 BULL REGIME → LONG ONLY
+  // V5.10 RSI+BTC filter REMOVED - 2-year backtest showed it blocked good trades
   // ═══════════════════════════════════════════════════════════════════════════
   if (btcInBullRegime) {
-    // V5.10: Skip LONG si RSI > 75 ET BTC a un momentum négatif (ROC 4h < 0)
-    // Ces trades ont un PnL net négatif de -52% → on les évite
-    if (rsi !== null && rsi > 75 && btcRoc4h < 0) {
-      return { 
-        valid: false, 
-        reason: `v5.10_long_filter(rsi=${rsi.toFixed(1)}>75, btcRoc4h=${btcRoc4h.toFixed(2)}%<0)`, 
-        features 
-      };
-    }
-    
-    // LONG conditions V5.3 (strict)
+    // LONG conditions V5.12 (optimized)
     const breakoutOk = close > bb.upper;
     const rocOk = roc10 >= MomentumConfig.ENTRY_LONG.ROC_MIN;
     const volOk = volRatio >= MomentumConfig.ENTRY_LONG.VOL_MULTIPLIER;

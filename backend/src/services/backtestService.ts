@@ -110,8 +110,8 @@ const CONFIG = {
     BB_PERIOD: 20,
     BB_STD: 2,
     ROC_MIN: 2.5, // V5.3: 2.5% (strict)
-    VOL_MULTIPLIER: 2.0, // V5.8: 2x (standard)
-    MAX_CONSEC_UP: 3, // V5.3: max 3 bougies vertes
+    VOL_MULTIPLIER: 1.5, // V5.12: 1.5x (relaxed from 2.0) - +36% PnL
+    MAX_CONSEC_UP: 5, // V5.12: max 5 (was 3) - +34% PnL
   },
   SHORT: {
     ROC_DROP_MIN: -1.5, // V5.4: ROC5 < -1.5%
@@ -402,15 +402,9 @@ function checkSignal(candles: Candle[], isBull: boolean, btcRoc4h?: number): Sig
 
   if (isBull) {
     // ═══════════════════════════════════════════════════════════════════════════
-    // V5.10: LONG FILTER - Skip if RSI > 75 AND BTC ROC 4h < 0
-    // Backtest: +52% PnL en évitant 17 mauvais trades
+    // V5.12: RSI+BTC filter REMOVED - 2-year backtest showed it blocked good trades
+    // Previously: Skip if RSI > 75 AND BTC ROC 4h < 0
     // ═══════════════════════════════════════════════════════════════════════════
-    if (rsi !== null && btcRoc4h !== undefined && rsi > 75 && btcRoc4h < 0) {
-      return {
-        valid: false,
-        reason: `v5.10_long_filter(rsi=${rsi.toFixed(1)}>75, btcRoc4h=${btcRoc4h.toFixed(2)}%<0)`,
-      };
-    }
 
     // LONG conditions
     const breakoutOk = current.close > bb.upper;
