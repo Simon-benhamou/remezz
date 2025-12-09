@@ -200,13 +200,13 @@ export default function DashboardPageCompact() {
         <Col xs={12} sm={6}>
           <div style={statCardStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              {stats.todayPnl >= 0 ? <TrendingUp size={14} color="#34d399" /> : <TrendingDown size={14} color="#f87171" />}
-              <Text style={{ color: stats.todayPnl >= 0 ? '#34d399' : '#f87171', fontSize: 12, fontWeight: 500 }}>Today's PnL</Text>
+              {(ov?.todayPnlUsd ?? 0) >= 0 ? <TrendingUp size={14} color="#34d399" /> : <TrendingDown size={14} color="#f87171" />}
+              <Text style={{ color: (ov?.todayPnlUsd ?? 0) >= 0 ? '#34d399' : '#f87171', fontSize: 12, fontWeight: 500 }}>Today's PnL</Text>
             </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: stats.todayPnl >= 0 ? '#34d399' : '#f87171' }}>
-              {stats.todayPnl >= 0 ? '+' : '-'}${Math.abs(stats.todayPnl).toFixed(2)}
+            <div style={{ fontSize: 32, fontWeight: 700, color: (ov?.todayPnlUsd ?? 0) >= 0 ? '#34d399' : '#f87171' }}>
+              {(ov?.todayPnlUsd ?? 0) >= 0 ? '+' : '-'}${Math.abs(ov?.todayPnlUsd ?? 0).toFixed(2)}
             </div>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>{stats.todayTrades} trades today</Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>{ov?.todayTrades ?? stats.todayTrades} trades today</Text>
           </div>
         </Col>
         <Col xs={12} sm={6}>
