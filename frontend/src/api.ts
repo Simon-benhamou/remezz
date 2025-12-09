@@ -245,7 +245,7 @@ export const api = {
       reason: string;
       tradingRecommended: boolean;
     },
-  // Month macro analysis - compares current month to historical patterns
+  // Month macro analysis - shows ranking and projection
   getMonthOutlook: async () =>
     (await client.get('/api/month-outlook')).data as {
       currentMonth: {
@@ -258,31 +258,33 @@ export const api = {
         totalPnl: number;
         avgPnl: number;
         slCount: number;
-        trailCount: number;
-        slRatio: number;
+        slRate: number;
       };
       dayOfMonth: number;
-      similarMonths: Array<{
-        month: {
-          yearMonth: string;
-          monthName: string;
-          trades: number;
-          winRate: number;
-          totalPnl: number;
-          slRatio: number;
-        };
-        similarity: number;
-        finalOutcome: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
-      }>;
-      prediction: {
-        outlook: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-        confidence: number;
-        expectedWinRate: number;
-        expectedPnl: number;
-        reasoning: string;
+      daysInMonth: number;
+      ranking: {
+        position: number;
+        totalMonths: number;
+        percentile: number;
+        status: 'TOP_TIER' | 'GOOD' | 'AVERAGE' | 'POOR' | 'WORST';
       };
-      historicalBest: { yearMonth: string; monthName: string; totalPnl: number };
-      historicalWorst: { yearMonth: string; monthName: string; totalPnl: number };
+      projection: {
+        projectedTrades: number;
+        projectedPnl: number;
+        projectedWinRate: number;
+        trend: 'IMPROVING' | 'STABLE' | 'DECLINING';
+      };
+      allMonthsRanked: Array<{
+        yearMonth: string;
+        monthName: string;
+        totalPnl: number;
+        winRate: number;
+        isCurrent: boolean;
+      }>;
+      averageMonthlyPnl: number;
+      bestMonth: { yearMonth: string; monthName: string; totalPnl: number; winRate: number };
+      worstMonth: { yearMonth: string; monthName: string; totalPnl: number; winRate: number };
+      decemberHistory: Array<{ yearMonth: string; trades: number; winRate: number; totalPnl: number }>;
     },
   // Agent start/stop with new 4-agent system
   startAgents: async (mode: 'paper' | 'live', capitalUsd: number) =>

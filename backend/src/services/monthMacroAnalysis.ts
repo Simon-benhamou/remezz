@@ -1,7 +1,6 @@
 /**
  * Month Macro Analysis Service
- * Compares current month's early signals to historical patterns
- * to predict if we're trending like a good month (Oct) or bad month (Sep)
+ * Shows where current month stands vs historical performance
  */
 
 import fs from 'fs';
@@ -20,25 +19,19 @@ interface Candle {
 
 interface Trade {
   symbol: string;
-  side: 'long' | 'short';
   entryTime: Date;
   exitTime: Date;
-  entryPrice: number;
-  exitPrice: number;
   pnlPct: number;
   pnlUsd: number;
   exitReason: 'SL' | 'TRAIL';
-  leverage: number;
   month: number;
   year: number;
   day: number;
 }
 
 interface Position {
-  side: 'long' | 'short';
   entryPrice: number;
   entryTime: Date;
-  qty: number;
   stopLoss: number;
   highWaterMark: number;
   trailingActive: boolean;
@@ -55,32 +48,50 @@ export interface MonthMetrics {
   totalPnl: number;
   avgPnl: number;
   slCount: number;
-  trailCount: number;
-  slRatio: number;
-}
-
-export interface SimilarMonth {
-  month: MonthMetrics;
-  similarity: number;
-  finalOutcome: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
+  slRate: number;
 }
 
 export interface MonthOutlook {
+  // Current month stats
   currentMonth: MonthMetrics;
   dayOfMonth: number;
-  similarMonths: SimilarMonth[];
-  prediction: {
-    outlook: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-    confidence: number;
-    expectedWinRate: number;
-    expectedPnl: number;
-    reasoning: string;
+  daysInMonth: number;
+  
+  // Ranking info
+  ranking: {
+    position: number;
+    totalMonths: number;
+    percentile: number; // 0-100, higher is better
+    status: 'TOP_TIER' | 'GOOD' | 'AVERAGE' | 'POOR' | 'WORST';
   };
-  historicalBest: MonthMetrics;
-  historicalWorst: MonthMetrics;
+  
+  // Projection based on current pace
+  projection: {
+    projectedTrades: number;
+    projectedPnl: number;
+    projectedWinRate: number;
+    trend: 'IMPROVING' | 'STABLE' | 'DECLINING';
+  };
+  
+  // Historical context
+  allMonthsRanked: Array<{
+    yearMonth: string;
+    monthName: string;
+    totalPnl: number;
+    winRate: number;
+    isCurrent: boolean;
+  }>;
+  
+  // Stats
+  averageMonthlyPnl: number;
+  bestMonth: MonthMetrics;
+  worstMonth: MonthMetrics;
+  
+  // December specific (if available)
+  decemberHistory: MonthMetrics[];
 }
 
-// V5.11 Strategy Config
+// Strategy config
 const CONFIG = {
   RSI_PERIOD: 14,
   RSI_OVERSOLD: 35,
@@ -94,20 +105,13 @@ const CONFIG = {
   TRAIL_ACTIVATION_PCT: 0.5,
   TRAIL_DISTANCE_PCT: 0.3,
   FEE_PCT: 0.04,
-  LEVERAGE: {
-    'SOL/USDT:USDT': 4.5,
-    'ETH/USDT:USDT': 4.5,
-    'BTC/USDT:USDT': 4,
-    'AVAX/USDT:USDT': 4,
-    'LINK/USDT:USDT': 4,
-    'DOT/USDT:USDT': 4,
-    'DOGE/USDT:USDT': 4,
-    'XRP/USDT:USDT': 4,
-    'ATOM/USDT:USDT': 4,
-  } as Record<string, number>
 };
 
-const SYMBOLS = Object.keys(CONFIG.LEVERAGE);
+const SYMBOLS = [
+  'SOL/USDT:USDT', 'ETH/USDT:USDT', 'BTC/USDT:USDT', 
+  'AVAX/USDT:USDT', 'LINK/USDT:USDT', 'DOT/USDT:USDT',
+  'DOGE/USDT:USDT', 'XRP/USDT:USDT', 'ATOM/USDT:USDT'
+];
 
 // Technical indicators
 function calculateRSI(closes: number[], period = 14): number[] {
@@ -151,15 +155,12 @@ function calculateEMA(data: number[], period: number): number[] {
   return ema;
 }
 
-function calculateMACD(closes: number[]): { macd: number[]; signal: number[]; histogram: number[] } {
+function calculateMACD(closes: number[]): { histogram: number[] } {
   const emaFast = calculateEMA(closes, CONFIG.MACD_FAST);
   const emaSlow = calculateEMA(closes, CONFIG.MACD_SLOW);
-  
   const macdLine = closes.map((_, i) => emaFast[i] - emaSlow[i]);
   const signalLine = calculateEMA(macdLine, CONFIG.MACD_SIGNAL);
-  const histogram = macdLine.map((m, i) => m - signalLine[i]);
-  
-  return { macd: macdLine, signal: signalLine, histogram };
+  return { histogram: macdLine.map((m, i) => m - signalLine[i]) };
 }
 
 function calculateATR(candles: Candle[], period = 14): number[] {
@@ -190,19 +191,17 @@ function runBacktest(candles: Candle[], symbol: string): Trade[] {
   
   const trades: Trade[] = [];
   let position: Position | null = null;
-  const leverage = CONFIG.LEVERAGE[symbol] || 4;
   
   for (let i = 50; i < candles.length; i++) {
     const candle = candles[i];
     const price = candle.close;
     const ts = new Date(candle.timestamp);
     
-    // Check exits first
     if (position) {
       const highPrice = candle.high;
       const lowPrice = candle.low;
       
-      if (position.side === 'long' && highPrice > position.highWaterMark) {
+      if (highPrice > position.highWaterMark) {
         position.highWaterMark = highPrice;
         const pnlPct = ((highPrice - position.entryPrice) / position.entryPrice) * 100;
         if (pnlPct >= CONFIG.TRAIL_ACTIVATION_PCT && !position.trailingActive) {
@@ -217,31 +216,27 @@ function runBacktest(candles: Candle[], symbol: string): Trade[] {
       let exitPrice: number | null = null;
       let exitReason: 'SL' | 'TRAIL' | null = null;
       
-      if (position.side === 'long' && lowPrice <= position.stopLoss) {
+      if (lowPrice <= position.stopLoss) {
         exitPrice = position.stopLoss;
         exitReason = 'SL';
-      } else if (position.trailingActive && position.side === 'long' && lowPrice <= position.trailingStop) {
+      } else if (position.trailingActive && lowPrice <= position.trailingStop) {
         exitPrice = position.trailingStop;
         exitReason = 'TRAIL';
       }
       
       if (exitPrice && exitReason) {
         const pnlPct = ((exitPrice - position.entryPrice) / position.entryPrice) * 100;
-        const notional = position.qty * position.entryPrice;
+        const notional = 1000;
         const fees = notional * CONFIG.FEE_PCT / 100 * 2;
         const pnlUsd = (pnlPct / 100) * notional - fees;
         
         trades.push({
           symbol,
-          side: position.side,
           entryTime: position.entryTime,
           exitTime: ts,
-          entryPrice: position.entryPrice,
-          exitPrice,
           pnlPct,
           pnlUsd,
           exitReason,
-          leverage,
           month: position.entryTime.getMonth() + 1,
           year: position.entryTime.getFullYear(),
           day: position.entryTime.getDate(),
@@ -250,7 +245,6 @@ function runBacktest(candles: Candle[], symbol: string): Trade[] {
       }
     }
     
-    // Check entry signals (LONG only)
     if (!position) {
       const prevRsi = rsi[i - 1];
       const currRsi = rsi[i];
@@ -265,10 +259,8 @@ function runBacktest(candles: Candle[], symbol: string): Trade[] {
         const slPct = Math.max(CONFIG.SL_MIN_PCT, Math.min(CONFIG.SL_MAX_PCT, slPctRaw));
         
         position = {
-          side: 'long',
           entryPrice: price,
           entryTime: ts,
-          qty: 1000 / price,
           stopLoss: price * (1 - slPct / 100),
           highWaterMark: price,
           trailingActive: false,
@@ -283,47 +275,23 @@ function runBacktest(candles: Candle[], symbol: string): Trade[] {
 
 function loadAllTrades(): Trade[] {
   const allTrades: Trade[] = [];
-  // Use process.cwd() for reliable path resolution in Docker/Railway
   const dataDir = path.join(process.cwd(), 'data');
   
   for (const symbol of SYMBOLS) {
-    let filename = symbol.replace('/', '_').replace(':USDT', '') + '_15m.json';
-    let filepath = path.join(dataDir, filename);
-    
-    if (!fs.existsSync(filepath)) {
-      filename = symbol.replace('/', '_').replace(':USDT', '') + '_1h.json';
-      filepath = path.join(dataDir, filename);
-    }
+    const filename = symbol.replace('/', '_').replace(':USDT', '') + '_1h.json';
+    const filepath = path.join(dataDir, filename);
     
     if (!fs.existsSync(filepath)) continue;
     
     const rawCandles = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
-    
-    let candles: Candle[];
-    if (filename.includes('15m')) {
-      candles = [];
-      for (let i = 0; i < rawCandles.length; i += 4) {
-        if (i + 3 >= rawCandles.length) break;
-        const chunk = rawCandles.slice(i, i + 4);
-        candles.push({
-          timestamp: chunk[0].openTime || chunk[0].timestamp,
-          open: chunk[0].open,
-          high: Math.max(...chunk.map((c: Candle) => c.high)),
-          low: Math.min(...chunk.map((c: Candle) => c.low)),
-          close: chunk[3].close,
-          volume: chunk.reduce((s: number, c: Candle) => s + c.volume, 0),
-        });
-      }
-    } else {
-      candles = rawCandles.map((c: Candle) => ({
-        timestamp: c.timestamp || c.openTime,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume,
-      }));
-    }
+    const candles: Candle[] = rawCandles.map((c: Candle) => ({
+      timestamp: c.timestamp || c.openTime,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+    }));
     
     const trades = runBacktest(candles, symbol);
     allTrades.push(...trades);
@@ -332,12 +300,10 @@ function loadAllTrades(): Trade[] {
   return allTrades;
 }
 
-function getMonthMetrics(trades: Trade[], upToDay?: number): MonthMetrics[] {
+function getMonthMetrics(trades: Trade[]): MonthMetrics[] {
   const monthlyMap = new Map<string, Trade[]>();
   
   for (const trade of trades) {
-    if (upToDay && trade.day > upToDay) continue;
-    
     const key = `${trade.year}-${String(trade.month).padStart(2, '0')}`;
     if (!monthlyMap.has(key)) monthlyMap.set(key, []);
     monthlyMap.get(key)!.push(trade);
@@ -348,9 +314,7 @@ function getMonthMetrics(trades: Trade[], upToDay?: number): MonthMetrics[] {
   return Array.from(monthlyMap.entries())
     .map(([yearMonth, monthTrades]) => {
       const wins = monthTrades.filter(t => t.pnlUsd > 0).length;
-      const losses = monthTrades.filter(t => t.pnlUsd <= 0).length;
       const slCount = monthTrades.filter(t => t.exitReason === 'SL').length;
-      const trailCount = monthTrades.filter(t => t.exitReason === 'TRAIL').length;
       const totalPnl = monthTrades.reduce((s, t) => s + t.pnlUsd, 0);
       const month = parseInt(yearMonth.split('-')[1]);
       
@@ -359,42 +323,30 @@ function getMonthMetrics(trades: Trade[], upToDay?: number): MonthMetrics[] {
         monthName: monthNames[month - 1],
         trades: monthTrades.length,
         wins,
-        losses,
+        losses: monthTrades.length - wins,
         winRate: monthTrades.length > 0 ? (wins / monthTrades.length) * 100 : 0,
         totalPnl,
         avgPnl: monthTrades.length > 0 ? totalPnl / monthTrades.length : 0,
         slCount,
-        trailCount,
-        slRatio: monthTrades.length > 0 ? slCount / monthTrades.length : 0,
+        slRate: monthTrades.length > 0 ? (slCount / monthTrades.length) * 100 : 0,
       };
     })
     .sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
 }
 
-function calculateSimilarity(current: MonthMetrics, historical: MonthMetrics): number {
-  const weights = {
-    winRate: 0.35,
-    avgPnl: 0.25,
-    slRatio: 0.25,
-    tradeCount: 0.15,
-  };
-  
-  const winRateDiff = Math.abs(current.winRate - historical.winRate) / 100;
-  const avgPnlDiff = Math.min(Math.abs(current.avgPnl - historical.avgPnl) / 20, 1);
-  const slRatioDiff = Math.abs(current.slRatio - historical.slRatio);
-  const tradeCountDiff = Math.min(Math.abs(current.trades - historical.trades) / 10, 1);
-  
-  const similarity = 1 - (
-    weights.winRate * winRateDiff +
-    weights.avgPnl * avgPnlDiff +
-    weights.slRatio * slRatioDiff +
-    weights.tradeCount * tradeCountDiff
-  );
-  
-  return Math.max(0, Math.min(100, similarity * 100));
+function getDaysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
 }
 
-export function analyzeMonthOutlook(): MonthOutlook | null {
+// Optional: pass current month stats from DB for live data
+export interface CurrentMonthStats {
+  trades: number;
+  wins: number;
+  totalPnl: number;
+  slCount: number;
+}
+
+export function analyzeMonthOutlook(currentMonthFromDb?: CurrentMonthStats): MonthOutlook | null {
   const allTrades = loadAllTrades();
   if (allTrades.length === 0) return null;
   
@@ -402,121 +354,136 @@ export function analyzeMonthOutlook(): MonthOutlook | null {
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
   const dayOfMonth = now.getDate();
+  const daysInMonth = getDaysInMonth(currentYear, currentMonth);
   
   const currentMonthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
-  const currentMonthTrades = allTrades.filter(t => 
-    t.year === currentYear && t.month === currentMonth && t.day <= dayOfMonth
-  );
-  
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   
-  // Build current metrics
-  const wins = currentMonthTrades.filter(t => t.pnlUsd > 0).length;
-  const losses = currentMonthTrades.filter(t => t.pnlUsd <= 0).length;
-  const slCount = currentMonthTrades.filter(t => t.exitReason === 'SL').length;
-  const trailCount = currentMonthTrades.filter(t => t.exitReason === 'TRAIL').length;
-  const totalPnl = currentMonthTrades.reduce((s, t) => s + t.pnlUsd, 0);
+  // Get all monthly metrics from backtest
+  const allMonthlyMetrics = getMonthMetrics(allTrades);
   
-  const currentMetrics: MonthMetrics = {
-    yearMonth: currentMonthKey,
-    monthName: monthNames[currentMonth - 1],
-    trades: currentMonthTrades.length,
-    wins,
-    losses,
-    winRate: currentMonthTrades.length > 0 ? (wins / currentMonthTrades.length) * 100 : 0,
-    totalPnl,
-    avgPnl: currentMonthTrades.length > 0 ? totalPnl / currentMonthTrades.length : 0,
-    slCount,
-    trailCount,
-    slRatio: currentMonthTrades.length > 0 ? slCount / currentMonthTrades.length : 0,
-  };
+  // Find or create current month metrics
+  // Prefer DB data if available, otherwise use backtest data
+  let currentMetrics: MonthMetrics;
+  const backtestCurrent = allMonthlyMetrics.find(m => m.yearMonth === currentMonthKey);
   
-  // Get historical metrics
-  const allMonthlyFull = getMonthMetrics(allTrades);
-  const allMonthlyPartial = getMonthMetrics(allTrades, dayOfMonth);
+  if (currentMonthFromDb && currentMonthFromDb.trades > 0) {
+    // Use live data from DB
+    const wins = currentMonthFromDb.wins;
+    const losses = currentMonthFromDb.trades - wins;
+    currentMetrics = {
+      yearMonth: currentMonthKey,
+      monthName: monthNames[currentMonth - 1],
+      trades: currentMonthFromDb.trades,
+      wins,
+      losses,
+      winRate: (wins / currentMonthFromDb.trades) * 100,
+      totalPnl: currentMonthFromDb.totalPnl,
+      avgPnl: currentMonthFromDb.totalPnl / currentMonthFromDb.trades,
+      slCount: currentMonthFromDb.slCount,
+      slRate: (currentMonthFromDb.slCount / currentMonthFromDb.trades) * 100,
+    };
+  } else if (backtestCurrent) {
+    currentMetrics = backtestCurrent;
+  } else {
+    currentMetrics = {
+      yearMonth: currentMonthKey,
+      monthName: monthNames[currentMonth - 1],
+      trades: 0,
+      wins: 0,
+      losses: 0,
+      winRate: 0,
+      totalPnl: 0,
+      avgPnl: 0,
+      slCount: 0,
+      slRate: 0,
+    };
+  }
   
-  const historicalPartialMetrics: MonthMetrics[] = [];
-  const fullMonthMetrics: MonthMetrics[] = [];
+  // Rank all months by PnL (excluding current incomplete month for fair comparison)
+  const completedMonths = allMonthlyMetrics.filter(m => m.yearMonth !== currentMonthKey);
+  const allMonthsForRanking = [...completedMonths, currentMetrics];
+  const rankedMonths = [...allMonthsForRanking].sort((a, b) => b.totalPnl - a.totalPnl);
   
-  for (const partial of allMonthlyPartial) {
-    if (partial.yearMonth === currentMonthKey) continue;
-    if (partial.trades === 0) continue;
+  // Find current month position in ranking
+  const currentPosition = rankedMonths.findIndex(m => m.yearMonth === currentMonthKey) + 1;
+  const totalMonths = rankedMonths.length;
+  const percentile = ((totalMonths - currentPosition) / (totalMonths - 1)) * 100;
+  
+  // Determine status
+  let status: 'TOP_TIER' | 'GOOD' | 'AVERAGE' | 'POOR' | 'WORST';
+  if (percentile >= 80) status = 'TOP_TIER';
+  else if (percentile >= 60) status = 'GOOD';
+  else if (percentile >= 40) status = 'AVERAGE';
+  else if (percentile >= 20) status = 'POOR';
+  else status = 'WORST';
+  
+  // Calculate projection based on current pace
+  const tradesPerDay = currentMetrics.trades / dayOfMonth;
+  const pnlPerDay = currentMetrics.totalPnl / dayOfMonth;
+  const projectedTrades = Math.round(tradesPerDay * daysInMonth);
+  const projectedPnl = pnlPerDay * daysInMonth;
+  
+  // Determine trend (compare first half pace to second half if applicable)
+  let trend: 'IMPROVING' | 'STABLE' | 'DECLINING' = 'STABLE';
+  if (dayOfMonth >= 6) {
+    const currentTrades = allTrades.filter(t => 
+      t.year === currentYear && t.month === currentMonth
+    );
+    const firstHalfTrades = currentTrades.filter(t => t.day <= dayOfMonth / 2);
+    const secondHalfTrades = currentTrades.filter(t => t.day > dayOfMonth / 2);
     
-    const full = allMonthlyFull.find(m => m.yearMonth === partial.yearMonth);
-    if (full && full.trades > 0) {
-      historicalPartialMetrics.push(partial);
-      fullMonthMetrics.push(full);
+    if (firstHalfTrades.length > 0 && secondHalfTrades.length > 0) {
+      const firstHalfPnl = firstHalfTrades.reduce((s, t) => s + t.pnlUsd, 0);
+      const secondHalfPnl = secondHalfTrades.reduce((s, t) => s + t.pnlUsd, 0);
+      
+      if (secondHalfPnl > firstHalfPnl + 10) trend = 'IMPROVING';
+      else if (secondHalfPnl < firstHalfPnl - 10) trend = 'DECLINING';
     }
   }
   
-  // Find similar months
-  const similarMonthsWithPartial = historicalPartialMetrics
-    .map((partial, idx) => {
-      const full = fullMonthMetrics[idx];
-      const similarity = calculateSimilarity(currentMetrics, partial);
-      const finalOutcome: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL' = 
-        full.totalPnl > 10 ? 'POSITIVE' : full.totalPnl < -10 ? 'NEGATIVE' : 'NEUTRAL';
-      
-      return {
-        month: full,
-        partial,
-        similarity,
-        finalOutcome,
-      };
-    })
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, 5);
-  
-  // Calculate prediction
-  const topSimilar = similarMonthsWithPartial.slice(0, 3);
-  const positiveCount = topSimilar.filter(m => m.finalOutcome === 'POSITIVE').length;
-  const negativeCount = topSimilar.filter(m => m.finalOutcome === 'NEGATIVE').length;
-  
-  const totalSimilarity = topSimilar.reduce((s, m) => s + m.similarity, 0) || 1;
-  const weightedWinRate = topSimilar.reduce((s, m) => s + m.month.winRate * m.similarity, 0) / totalSimilarity;
-  const weightedPnl = topSimilar.reduce((s, m) => s + m.month.totalPnl * m.similarity, 0) / totalSimilarity;
-  
-  let outlook: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-  let confidence: number;
-  let reasoning: string;
-  
-  if (positiveCount >= 2 && weightedPnl > 0) {
-    outlook = 'BULLISH';
-    confidence = Math.min(85, 50 + (topSimilar[0]?.similarity || 0) * 0.35);
-    reasoning = `Similar to ${topSimilar.filter(m => m.finalOutcome === 'POSITIVE').map(m => m.month.monthName + ' ' + m.month.yearMonth.split('-')[0]).join(', ')} which ended positive`;
-  } else if (negativeCount >= 2 || weightedPnl < -20) {
-    outlook = 'BEARISH';
-    confidence = Math.min(85, 50 + (topSimilar[0]?.similarity || 0) * 0.35);
-    reasoning = `Similar to ${topSimilar.filter(m => m.finalOutcome === 'NEGATIVE').map(m => m.month.monthName + ' ' + m.month.yearMonth.split('-')[0]).join(', ')} which ended negative`;
-  } else {
-    outlook = 'NEUTRAL';
-    confidence = 40;
-    reasoning = 'Mixed signals from similar historical months';
-  }
-  
-  const sortedByPnl = [...allMonthlyFull].sort((a, b) => b.totalPnl - a.totalPnl);
-  
-  // Handle edge case where we might not have enough months
-  if (sortedByPnl.length === 0) return null;
-  
-  const similarMonths: SimilarMonth[] = similarMonthsWithPartial.map(m => ({
-    month: m.month,
-    similarity: m.similarity,
-    finalOutcome: m.finalOutcome,
+  // Prepare ranked months for display
+  const allMonthsRanked = rankedMonths.slice(0, 12).map(m => ({
+    yearMonth: m.yearMonth,
+    monthName: m.monthName,
+    totalPnl: m.totalPnl,
+    winRate: m.winRate,
+    isCurrent: m.yearMonth === currentMonthKey,
   }));
+  
+  // Calculate average monthly PnL (excluding current)
+  const averageMonthlyPnl = completedMonths.length > 0
+    ? completedMonths.reduce((s, m) => s + m.totalPnl, 0) / completedMonths.length
+    : 0;
+  
+  // Best and worst months
+  const sortedByPnl = [...completedMonths].sort((a, b) => b.totalPnl - a.totalPnl);
+  const bestMonth = sortedByPnl[0] || currentMetrics;
+  const worstMonth = sortedByPnl[sortedByPnl.length - 1] || currentMetrics;
+  
+  // December history
+  const decemberHistory = allMonthlyMetrics.filter(m => m.monthName === 'Dec');
   
   return {
     currentMonth: currentMetrics,
     dayOfMonth,
-    similarMonths,
-    prediction: {
-      outlook,
-      confidence,
-      expectedWinRate: weightedWinRate,
-      expectedPnl: weightedPnl,
-      reasoning,
+    daysInMonth,
+    ranking: {
+      position: currentPosition,
+      totalMonths,
+      percentile: Math.round(percentile),
+      status,
     },
-    historicalBest: sortedByPnl[0],
-    historicalWorst: sortedByPnl[sortedByPnl.length - 1],
+    projection: {
+      projectedTrades,
+      projectedPnl,
+      projectedWinRate: currentMetrics.winRate,
+      trend,
+    },
+    allMonthsRanked,
+    averageMonthlyPnl,
+    bestMonth,
+    worstMonth,
+    decemberHistory,
   };
 }

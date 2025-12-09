@@ -1,16 +1,18 @@
 /**
  * Month Outlook Card Component
- * Displays macro analysis comparing current month to historical patterns
+ * Shows where current month stands vs historical performance
  */
 import { useEffect, useState } from 'react';
-import { Card, Row, Col, Statistic, Tag, Tooltip, Spin, Space } from 'antd';
+import { Card, Row, Col, Statistic, Tag, Tooltip, Spin, Progress, Space, Table } from 'antd';
 import { 
   CalendarOutlined, 
   RiseOutlined, 
   FallOutlined, 
-  MinusOutlined,
-  BarChartOutlined,
-  InfoCircleOutlined 
+  TrophyOutlined,
+  ThunderboltOutlined,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
+  MinusOutlined
 } from '@ant-design/icons';
 import { api } from '../api';
 
@@ -35,8 +37,7 @@ export function MonthOutlookCard() {
     };
 
     fetchOutlook();
-    // Refresh every 6 hours
-    const interval = setInterval(fetchOutlook, 6 * 60 * 60 * 1000);
+    const interval = setInterval(fetchOutlook, 5 * 60 * 1000); // Refresh every 5 min
     return () => clearInterval(interval);
   }, []);
 
@@ -54,38 +55,32 @@ export function MonthOutlookCard() {
     return null;
   }
 
-  const { currentMonth, prediction, similarMonths, historicalBest, historicalWorst } = outlook;
+  const { currentMonth, dayOfMonth, daysInMonth, ranking, projection, allMonthsRanked, averageMonthlyPnl, bestMonth, worstMonth } = outlook;
 
-  // Validate required data exists
-  if (!prediction || !currentMonth || !similarMonths || !historicalBest || !historicalWorst) {
+  if (!ranking || !projection || !currentMonth) {
     return null;
   }
 
-  const outlookConfig = {
-    BULLISH: {
-      icon: <RiseOutlined />,
-      color: '#52c41a',
-      tagColor: 'success',
-      label: 'BULLISH',
-    },
-    BEARISH: {
-      icon: <FallOutlined />,
-      color: '#ff4d4f',
-      tagColor: 'error',
-      label: 'BEARISH',
-    },
-    NEUTRAL: {
-      icon: <MinusOutlined />,
-      color: '#faad14',
-      tagColor: 'warning',
-      label: 'NEUTRAL',
-    },
+  // Status configuration
+  const statusConfig = {
+    TOP_TIER: { color: '#52c41a', tagColor: 'success', icon: <TrophyOutlined />, label: 'TOP TIER' },
+    GOOD: { color: '#73d13d', tagColor: 'success', icon: <RiseOutlined />, label: 'GOOD' },
+    AVERAGE: { color: '#faad14', tagColor: 'warning', icon: <MinusOutlined />, label: 'AVERAGE' },
+    POOR: { color: '#ff7a45', tagColor: 'warning', icon: <FallOutlined />, label: 'POOR' },
+    WORST: { color: '#ff4d4f', tagColor: 'error', icon: <FallOutlined />, label: 'WORST' },
   };
 
-  const config = outlookConfig[prediction.outlook];
+  const trendConfig = {
+    IMPROVING: { color: '#52c41a', icon: <ArrowUpOutlined />, label: 'Improving' },
+    STABLE: { color: '#faad14', icon: <MinusOutlined />, label: 'Stable' },
+    DECLINING: { color: '#ff4d4f', icon: <ArrowDownOutlined />, label: 'Declining' },
+  };
 
-  // Helper to format year from yearMonth (2024-09 -> '24)
-  const formatYear = (yearMonth: string) => yearMonth.slice(2, 4);
+  const config = statusConfig[ranking.status];
+  const trend = trendConfig[projection.trend];
+
+  // Format year from yearMonth
+  const formatYear = (ym: string) => ym.slice(2, 4);
 
   return (
     <Card
@@ -96,13 +91,17 @@ export function MonthOutlookCard() {
           <Space>
             <CalendarOutlined style={{ color: '#888' }} />
             <span style={{ color: '#fff', fontWeight: 500 }}>
-              {currentMonth.monthName} Outlook
+              {currentMonth.monthName} {currentMonth.yearMonth.split('-')[0]}
             </span>
-            <span style={{ color: '#666', fontSize: 12 }}>(Day {outlook.dayOfMonth})</span>
+            <span style={{ color: '#666', fontSize: 12 }}>
+              Day {dayOfMonth}/{daysInMonth}
+            </span>
           </Space>
-          <Tag color={config.tagColor} icon={config.icon}>
-            {config.label} {prediction.confidence.toFixed(0)}%
-          </Tag>
+          <Space>
+            <Tag color={config.tagColor} icon={config.icon}>
+              #{ranking.position}/{ranking.totalMonths} {config.label}
+            </Tag>
+          </Space>
         </div>
       }
     >
@@ -139,90 +138,133 @@ export function MonthOutlookCard() {
         <Col span={6}>
           <Statistic
             title="SL Rate"
-            value={currentMonth.slRatio * 100}
+            value={currentMonth.slRate}
             precision={0}
             suffix="%"
-            valueStyle={{ fontSize: 18, color: '#fff' }}
+            valueStyle={{ fontSize: 18, color: currentMonth.slRate > 30 ? '#ff4d4f' : '#fff' }}
           />
         </Col>
       </Row>
 
-      {/* Similar Months */}
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ color: '#888', fontSize: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
-          <BarChartOutlined />
-          Similar historical periods (first {outlook.dayOfMonth} days):
-          <Tooltip title="Compares current month's first days to same period in past months to predict outcome">
-            <InfoCircleOutlined style={{ cursor: 'help' }} />
-          </Tooltip>
+      {/* Ranking Progress */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+          <span style={{ color: '#888', fontSize: 12 }}>Ranking Percentile</span>
+          <span style={{ color: '#fff', fontSize: 12 }}>{ranking.percentile}% (better than {ranking.percentile}% of months)</span>
         </div>
-        <Space wrap>
-          {similarMonths.slice(0, 3).map((sim, idx) => {
-            const outcomeColor = sim.finalOutcome === 'POSITIVE' 
-              ? 'success'
-              : sim.finalOutcome === 'NEGATIVE'
-              ? 'error'
-              : 'warning';
-            
-            const year = formatYear(sim.month.yearMonth);
-            const pnlSign = sim.month.totalPnl >= 0 ? '+' : '';
+        <Progress 
+          percent={ranking.percentile} 
+          strokeColor={config.color}
+          trailColor="#303030"
+          showInfo={false}
+          size="small"
+        />
+      </div>
+
+      {/* Projection */}
+      <div style={{ 
+        background: '#1a1a1a', 
+        padding: '10px 12px', 
+        borderRadius: 6, 
+        marginBottom: 12,
+        borderLeft: `3px solid ${trend.color}`
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ color: '#888', fontSize: 11 }}>
+            <ThunderboltOutlined /> PROJECTION (at current pace)
+          </div>
+          <Tag color={projection.trend === 'IMPROVING' ? 'success' : projection.trend === 'DECLINING' ? 'error' : 'warning'} style={{ margin: 0 }}>
+            {trend.icon} {trend.label}
+          </Tag>
+        </div>
+        <Row gutter={16}>
+          <Col span={8}>
+            <div style={{ color: '#666', fontSize: 11 }}>Projected Trades</div>
+            <div style={{ color: '#fff', fontSize: 14, fontWeight: 500 }}>{projection.projectedTrades}</div>
+          </Col>
+          <Col span={8}>
+            <div style={{ color: '#666', fontSize: 11 }}>Projected PnL</div>
+            <div style={{ 
+              color: projection.projectedPnl >= 0 ? '#52c41a' : '#ff4d4f', 
+              fontSize: 14, 
+              fontWeight: 500 
+            }}>
+              ${projection.projectedPnl.toFixed(0)}
+            </div>
+          </Col>
+          <Col span={8}>
+            <div style={{ color: '#666', fontSize: 11 }}>vs Avg Month</div>
+            <div style={{ 
+              color: projection.projectedPnl > averageMonthlyPnl ? '#52c41a' : '#ff4d4f', 
+              fontSize: 14, 
+              fontWeight: 500 
+            }}>
+              {projection.projectedPnl > averageMonthlyPnl ? '↑' : '↓'} {Math.abs(projection.projectedPnl - averageMonthlyPnl).toFixed(0)}$
+            </div>
+          </Col>
+        </Row>
+      </div>
+
+      {/* Top/Bottom Months Mini Table */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ color: '#888', fontSize: 11, marginBottom: 6 }}>HISTORICAL RANKING (Best → Worst)</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {allMonthsRanked.slice(0, 6).map((m, idx) => {
+            const isGood = m.totalPnl > 20;
+            const isBad = m.totalPnl < -20;
+            const bgColor = m.isCurrent 
+              ? '#1890ff22' 
+              : isGood ? '#52c41a15' : isBad ? '#ff4d4f15' : '#ffffff08';
+            const borderColor = m.isCurrent ? '#1890ff' : 'transparent';
             
             return (
-              <Tooltip
-                key={idx}
-                title={
-                  <div>
-                    <div><strong>{sim.month.monthName} {sim.month.yearMonth.split('-')[0]}</strong></div>
-                    <div>Similarity: {sim.similarity.toFixed(0)}%</div>
-                    <div>Full month: {pnlSign}${sim.month.totalPnl.toFixed(0)} ({sim.month.winRate.toFixed(0)}% WR)</div>
-                  </div>
-                }
+              <Tooltip 
+                key={m.yearMonth}
+                title={`${m.monthName} ${m.yearMonth.split('-')[0]}: ${m.winRate.toFixed(0)}% WR`}
               >
-                <Tag 
-                  color={outcomeColor}
-                  style={{ cursor: 'help' }}
-                >
-                  {sim.month.monthName} '{year} → {pnlSign}${sim.month.totalPnl.toFixed(0)}
-                </Tag>
+                <div style={{ 
+                  padding: '4px 8px', 
+                  background: bgColor, 
+                  borderRadius: 4,
+                  border: `1px solid ${borderColor}`,
+                  fontSize: 11,
+                  cursor: 'help'
+                }}>
+                  <span style={{ color: '#888' }}>#{idx + 1}</span>{' '}
+                  <span style={{ color: m.isCurrent ? '#1890ff' : '#fff' }}>
+                    {m.monthName} '{formatYear(m.yearMonth)}
+                  </span>{' '}
+                  <span style={{ color: m.totalPnl >= 0 ? '#52c41a' : '#ff4d4f' }}>
+                    {m.totalPnl >= 0 ? '+' : ''}{m.totalPnl.toFixed(0)}$
+                  </span>
+                </div>
               </Tooltip>
             );
           })}
-        </Space>
-      </div>
-
-      {/* Prediction */}
-      <div style={{ 
-        background: '#1a1a1a', 
-        padding: '8px 12px', 
-        borderRadius: 6, 
-        marginBottom: 12,
-        borderLeft: `3px solid ${config.color}`
-      }}>
-        <div style={{ color: '#888', fontSize: 11, marginBottom: 4 }}>PREDICTION</div>
-        <div style={{ color: '#ccc', fontSize: 12, fontStyle: 'italic' }}>
-          "{prediction.reasoning}"
-        </div>
-        <div style={{ marginTop: 8, display: 'flex', gap: 16 }}>
-          <span style={{ fontSize: 12 }}>
-            <span style={{ color: '#666' }}>Expected WR:</span>{' '}
-            <span style={{ color: '#fff' }}>{prediction.expectedWinRate.toFixed(0)}%</span>
-          </span>
-          <span style={{ fontSize: 12 }}>
-            <span style={{ color: '#666' }}>Expected PnL:</span>{' '}
-            <span style={{ color: prediction.expectedPnl >= 0 ? '#52c41a' : '#ff4d4f' }}>
-              ${prediction.expectedPnl.toFixed(0)}
-            </span>
-          </span>
+          {allMonthsRanked.length > 6 && (
+            <div style={{ 
+              padding: '4px 8px', 
+              background: '#ffffff08', 
+              borderRadius: 4,
+              fontSize: 11,
+              color: '#666'
+            }}>
+              +{allMonthsRanked.length - 6} more
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Historical Context */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#555' }}>
+      {/* Footer Stats */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#555', borderTop: '1px solid #303030', paddingTop: 8 }}>
         <span>
-          📈 Best: {historicalBest.monthName} '{formatYear(historicalBest.yearMonth)} (+${historicalBest.totalPnl.toFixed(0)})
+          📊 Avg month: {averageMonthlyPnl >= 0 ? '+' : ''}{averageMonthlyPnl.toFixed(0)}$
         </span>
         <span>
-          📉 Worst: {historicalWorst.monthName} '{formatYear(historicalWorst.yearMonth)} (${historicalWorst.totalPnl.toFixed(0)})
+          🏆 Best: {bestMonth.monthName} '{formatYear(bestMonth.yearMonth)} (+{bestMonth.totalPnl.toFixed(0)}$)
+        </span>
+        <span>
+          💀 Worst: {worstMonth.monthName} '{formatYear(worstMonth.yearMonth)} ({worstMonth.totalPnl.toFixed(0)}$)
         </span>
       </div>
     </Card>
