@@ -1147,24 +1147,23 @@ export class SimpleAgent {
         // Save to DB with fee
         await this.savePositionToDb(position, 'live_entry', liveEntryFee);
         
-        // Set initial stop loss on exchange (temporary protection)
+        // Set initial stop loss on exchange (BACKUP protection)
         await this.setStopLossOnExchange(position);
         
         // 🚀 V5.10: Set TRAILING_STOP_MARKET order on Binance (native trailing - same as backtest!)
         // This ensures we capture the high/low in real-time, just like the backtest does with candle.high/low
+        // 
+        // 🛡️ STRATEGY: Keep BOTH orders initially:
+        // - Fixed SL protects against immediate drops (< -2.5%)
+        // - Trailing protects gains once activated (> +0.8%)
+        // - When trailing triggers, Binance auto-cancels the fixed SL
+        // - If price never reaches +0.8%, fixed SL protects the position
         const trailingSuccess = await this.setTrailingStopOnExchange(position);
         
-        // 🔧 FIX: If trailing stop was placed successfully, cancel the fixed SL to avoid double protection
-        // The trailing stop now provides ALL protection (just like in backtest)
-        if (trailingSuccess && this.position?.stopLossOrderId) {
-          try {
-            await this.config.exchange.cancelOrder(this.position.stopLossOrderId, symbol);
-            logger.info(`🗑️ [${symbol}] Cancelled fixed SL (trailing stop now active)`);
-            this.position.stopLossOrderId = undefined;
-          } catch (cancelError: any) {
-            logger.warn(`⚠️ [${symbol}] Could not cancel fixed SL after placing trailing:`, cancelError.message);
-            // Keep both orders as fallback
-          }
+        if (trailingSuccess) {
+          logger.info(`✅ [${symbol}] DUAL PROTECTION: Fixed SL @ $${position.stopLoss?.toFixed(4)} + Trailing @ +0.8%`);
+        } else {
+          logger.warn(`⚠️ [${symbol}] SINGLE PROTECTION: Only fixed SL active (trailing failed)`);
         }
         
         logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
@@ -1878,8 +1877,8 @@ export class SimpleAgent {
    * @returns true if trailing stop was placed successfully, false if fallback to STOP_MARKET was used
    */
   private async setTrailingStopOnExchange(position: Position, isWidening: boolean = false): Promise<boolean> {
-    if (this.config.mode === 'paper') return;
-    if (!position.entryPrice) return;
+    if (this.config.mode === 'paper') return false;
+    if (!position.entryPrice) return false;
     
     const symbol = this.config.symbol;
     const side = position.side === 'long' ? 'sell' : 'buy';
@@ -2139,8 +2138,12 @@ export class SimpleAgent {
         
         // Try to get the last trade to find exit price and orderId
         let exitPrice = this.position.entryPrice;
-        let reason = 'stop_loss_exchange';
         let exchangeOrderId: string | undefined;
+        
+        // 🔍 Determine exit reason based on profit/loss
+        // If position closed with profit, it was likely the trailing stop
+        // If position closed at break-even or loss, it was likely the fixed SL
+        let reason = 'stop_loss_exchange';
         
         try {
           if (this.config.exchange.fetchMyTrades) {
@@ -2165,6 +2168,17 @@ export class SimpleAgent {
         } else {
           pnlPct = ((this.position.entryPrice - exitPrice) / this.position.entryPrice) * 100;
           pnlUsd = this.position.qty * (this.position.entryPrice - exitPrice);
+        }
+        
+        // 🔍 Better exit reason detection:
+        // If PnL > -1%, it's likely trailing (trailing activates at +0.8%)
+        // If PnL < -1%, it's the fixed stop loss (usually -2% to -3%)
+        if (pnlPct > -1) {
+          reason = 'trailing_stop_exchange'; // Closed near/above entry = trailing
+          logger.info(`✅ [${symbol}] Detected TRAILING STOP exit (PnL: ${pnlPct.toFixed(2)}%)`);
+        } else {
+          reason = 'stop_loss_exchange'; // Closed with significant loss = fixed SL
+          logger.info(`🛑 [${symbol}] Detected FIXED SL exit (PnL: ${pnlPct.toFixed(2)}%)`);
         }
         
         const notionalUsd = this.position.qty * this.position.entryPrice;
