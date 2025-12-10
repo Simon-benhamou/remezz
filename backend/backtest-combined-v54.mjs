@@ -48,18 +48,20 @@ const CONFIG = {
   // Risk
   POSITION_SIZE_PCT: 0.4,  // 40% du capital par trade
   
-  // V5.7: Leverage par actif (plus conservateur pour volatiles)
+  // V5.7: Leverage par actif - 5x uniforme (backtest optimisé)
+  // Analyse: Avec SL max 4.5% × 5 = 22.5% impact sur margin
+  // Liquidation à ~80% du margin = large marge de sécurité
   LEVERAGE_BY_SYMBOL: {
-    'BTC/USDT:USDT': 4.5,   // BTC - test 4.5x
-    'ETH/USDT:USDT': 4.5,   // ETH
-    'XRP/USDT:USDT': 4.5,   // XRP
-    'SOL/USDT:USDT': 4.5,   // SOL
-    'SEI/USDT:USDT': 4.5,   // SEI - test 4.5x
-    'IMX/USDT:USDT': 4.5,   // IMX - test 4.5x
-    'DOT/USDT:USDT': 4.5,   // DOT
-    'DOGE/USDT:USDT': 4.5,  // DOGE
+    'BTC/USDT:USDT': 5,   // BTC - 5x
+    'ETH/USDT:USDT': 5,   // ETH
+    'XRP/USDT:USDT': 5,   // XRP
+    'SOL/USDT:USDT': 5,   // SOL
+    'SEI/USDT:USDT': 5,   // SEI - 5x
+    'IMX/USDT:USDT': 5,   // IMX - 5x
+    'DOT/USDT:USDT': 5,   // DOT
+    'DOGE/USDT:USDT': 5,  // DOGE
   },
-  LEVERAGE: 4.5,  // Default fallback
+  LEVERAGE: 5,  // Default fallback
   
   // V5.6: Liquidation Protection
   LIQUIDATION: {
