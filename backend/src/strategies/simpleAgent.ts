@@ -1147,12 +1147,25 @@ export class SimpleAgent {
         // Save to DB with fee
         await this.savePositionToDb(position, 'live_entry', liveEntryFee);
         
-        // Set initial stop loss on exchange
+        // Set initial stop loss on exchange (temporary protection)
         await this.setStopLossOnExchange(position);
         
         // 🚀 V5.10: Set TRAILING_STOP_MARKET order on Binance (native trailing - same as backtest!)
         // This ensures we capture the high/low in real-time, just like the backtest does with candle.high/low
-        await this.setTrailingStopOnExchange(position);
+        const trailingSuccess = await this.setTrailingStopOnExchange(position);
+        
+        // 🔧 FIX: If trailing stop was placed successfully, cancel the fixed SL to avoid double protection
+        // The trailing stop now provides ALL protection (just like in backtest)
+        if (trailingSuccess && this.position?.stopLossOrderId) {
+          try {
+            await this.config.exchange.cancelOrder(this.position.stopLossOrderId, symbol);
+            logger.info(`🗑️ [${symbol}] Cancelled fixed SL (trailing stop now active)`);
+            this.position.stopLossOrderId = undefined;
+          } catch (cancelError: any) {
+            logger.warn(`⚠️ [${symbol}] Could not cancel fixed SL after placing trailing:`, cancelError.message);
+            // Keep both orders as fallback
+          }
+        }
         
         logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
         
@@ -1861,8 +1874,10 @@ export class SimpleAgent {
    * NOTE: Binance doesn't support dynamic callback, so we:
    * 1. Place initial trailing with tight callback (0.5%)
    * 2. When profit reaches 2%, cancel and re-place with wide callback (0.8%)
+   * 
+   * @returns true if trailing stop was placed successfully, false if fallback to STOP_MARKET was used
    */
-  private async setTrailingStopOnExchange(position: Position, isWidening: boolean = false): Promise<void> {
+  private async setTrailingStopOnExchange(position: Position, isWidening: boolean = false): Promise<boolean> {
     if (this.config.mode === 'paper') return;
     if (!position.entryPrice) return;
     
@@ -1907,7 +1922,7 @@ export class SimpleAgent {
       const phase = isWidening ? 'WIDENED' : 'INITIAL';
       logger.info(`🎯 [${symbol}] TRAILING_STOP_MARKET [${phase}]: activation=$${activationPrice.toFixed(4)} (+${trailingActivationPct}%) | callback=${trailingDistancePct}% | order=${trailingOrder.id}`);
       
-      return; // Success - no fallback needed
+      return true; // Success - trailing stop placed successfully
       
     } catch (error: any) {
       const errorMsg = error.message || String(error);
@@ -1953,7 +1968,10 @@ export class SimpleAgent {
           error: `Trailing failed AND fallback SL failed: ${fallbackError.message}`,
           mode: 'live',
         });
+        return false; // Fallback failed - indicate failure
       }
+      
+      return false; // Fallback used - keep fixed SL as protection
     }
   }
   
@@ -2301,7 +2319,18 @@ export class SimpleAgent {
       // Exit side is opposite of position side (SELL to close LONG, BUY to close SHORT)
       const exitSide = position.side === 'long' ? 'sell' : 'buy';
       const isLive = this.config.mode === 'live';
-      const clientOrderId = exchangeOrderId || `${isLive ? 'live' : 'paper'}_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      
+      // 🔧 FIX: Use exchange orderId if available (for synced exits), otherwise generate unique ID
+      // Check if order already exists in DB to avoid duplicate clientOrderId constraint error
+      let clientOrderId = exchangeOrderId || `${isLive ? 'live' : 'paper'}_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      
+      if (exchangeOrderId) {
+        const existing = await this.config.prisma.order.findFirst({ where: { clientOrderId: exchangeOrderId } });
+        if (existing) {
+          logger.warn(`⚠️ [${this.config.symbol}] Exit order ${exchangeOrderId} already exists in DB, skipping save`);
+          return;
+        }
+      }
       
       // Calculate fee if not provided (0.04% taker fee on notional)
       const notionalUsd = position.qty * exitPrice;
