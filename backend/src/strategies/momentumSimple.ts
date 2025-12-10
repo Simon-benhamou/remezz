@@ -141,6 +141,11 @@ export const MomentumConfig = {
     TRAILING_WIDEN_AT_PCT: 2.0,         // Widen callback when profit reaches 2%
     TRAILING_WIDE_DISTANCE_PCT: 0.8,    // Widened callback: 0.8% (let winner run)
     
+    // V5.13: Trailing management mode
+    // false = app-side trailing (like paper, better results +17%)
+    // true = exchange trailing orders (gets triggered by noise)
+    USE_EXCHANGE_TRAILING: false,
+    
     // Smart Exits
     MOMENTUM_FADE_PROFIT_MIN: 1.5,  // Exit si profit > 1.5%...
     MOMENTUM_FADE_ROC_MAX: 0.005,   // ...et ROC5 < 0.5%

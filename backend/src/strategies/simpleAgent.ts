@@ -1877,7 +1877,9 @@ export class SimpleAgent {
    * @returns true if trailing stop was placed successfully, false if fallback to STOP_MARKET was used
    */
   private async setTrailingStopOnExchange(position: Position, isWidening: boolean = false): Promise<boolean> {
+    // V5.13: Skip exchange trailing if app-side management enabled (like paper mode)
     if (this.config.mode === 'paper') return false;
+    if (!MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) return false;
     if (!position.entryPrice) return false;
     
     const symbol = this.config.symbol;
