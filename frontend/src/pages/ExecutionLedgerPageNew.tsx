@@ -283,10 +283,10 @@ export default function ExecutionLedgerPageNew() {
               {trade.exitReason ? (
                 <Tag style={{
                   borderRadius: 3, border: 'none', fontSize: 8, padding: '2px 4px', whiteSpace: 'nowrap',
-                  background: trade.exitReason.includes('PROFIT') || trade.exitReason === 'TRAILING' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                  color: trade.exitReason.includes('PROFIT') || trade.exitReason === 'TRAILING' ? '#4ade80' : '#f87171',
+                  background: trade.exitReason.includes('PROFIT') || trade.exitReason.includes('TRAILING') ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                  color: trade.exitReason.includes('PROFIT') || trade.exitReason.includes('TRAILING') ? '#4ade80' : '#f87171',
                 }}>
-                  {trade.exitReason.replace(/_/g, ' ')}
+                  {trade.exitReason.includes('trailing_stop_exchange') ? '🎯 TRAILING STOP' : trade.exitReason.replace(/_/g, ' ').toUpperCase()}
                 </Tag>
               ) : <Text style={{ color: '#64748b', fontSize: 10 }}>-</Text>}
 

@@ -2139,10 +2139,9 @@ export class SimpleAgent {
         // Try to get the last trade to find exit price and orderId
         let exitPrice = this.position.entryPrice;
         let exchangeOrderId: string | undefined;
+        let orderType: string | undefined;
         
-        // 🔍 Determine exit reason based on profit/loss
-        // If position closed with profit, it was likely the trailing stop
-        // If position closed at break-even or loss, it was likely the fixed SL
+        // 🔍 Determine exit reason based on order data from Binance
         let reason = 'stop_loss_exchange';
         
         try {
@@ -2152,7 +2151,11 @@ export class SimpleAgent {
               const lastTrade = trades[trades.length - 1];
               exitPrice = lastTrade.price || exitPrice;
               exchangeOrderId = lastTrade.order || lastTrade.info?.orderId;
-              logger.info(`📈 [${symbol}] Found exit trade: $${exitPrice} orderId=${exchangeOrderId}`);
+              
+              // 🔍 Get order type from Binance (TRAILING_STOP_MARKET, STOP_MARKET, MARKET, etc.)
+              orderType = lastTrade.info?.type || lastTrade.type;
+              
+              logger.info(`📈 [${symbol}] Found exit trade: $${exitPrice} orderId=${exchangeOrderId} type=${orderType}`);
             }
           }
         } catch (tradeError) {
@@ -2170,15 +2173,27 @@ export class SimpleAgent {
           pnlUsd = this.position.qty * (this.position.entryPrice - exitPrice);
         }
         
-        // 🔍 Better exit reason detection:
-        // If PnL > -1%, it's likely trailing (trailing activates at +0.8%)
-        // If PnL < -1%, it's the fixed stop loss (usually -2% to -3%)
-        if (pnlPct > -1) {
-          reason = 'trailing_stop_exchange'; // Closed near/above entry = trailing
-          logger.info(`✅ [${symbol}] Detected TRAILING STOP exit (PnL: ${pnlPct.toFixed(2)}%)`);
-        } else {
-          reason = 'stop_loss_exchange'; // Closed with significant loss = fixed SL
-          logger.info(`🛑 [${symbol}] Detected FIXED SL exit (PnL: ${pnlPct.toFixed(2)}%)`);
+        // 🔍 V5.13: IMPROVED exit reason detection using order type
+        // Priority 1: Check if orderType explicitly says TRAILING_STOP_MARKET
+        if (orderType && orderType.includes('TRAILING')) {
+          reason = 'trailing_stop_exchange';
+          logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via orderType=${orderType} (PnL: ${pnlPct.toFixed(2)}%)`);
+        }
+        // Priority 2: Check if orderId matches our tracked trailingOrderId
+        else if (exchangeOrderId && this.position.trailingOrderId && exchangeOrderId === this.position.trailingOrderId) {
+          reason = 'trailing_stop_exchange';
+          logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via orderId match (PnL: ${pnlPct.toFixed(2)}%)`);
+        }
+        // Priority 3: If PnL > -1% and we had a trailing order active, assume trailing
+        // (Trailing activates at +0.8%, so any exit with PnL > -1% is likely trailing)
+        else if (pnlPct > -1 && this.position.trailingOrderId) {
+          reason = 'trailing_stop_exchange';
+          logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via PnL heuristic (PnL: ${pnlPct.toFixed(2)}%)`);
+        }
+        // Priority 4: Fixed stop loss (significant loss or orderType is STOP_MARKET)
+        else {
+          reason = 'stop_loss_exchange';
+          logger.info(`🛑 [${symbol}] Detected FIXED SL exit (PnL: ${pnlPct.toFixed(2)}%, type=${orderType})`);
         }
         
         const notionalUsd = this.position.qty * this.position.entryPrice;
@@ -2250,8 +2265,145 @@ export class SimpleAgent {
         logger.info(`✅ [${symbol}] Position verified on exchange: qty=${exchangeQty} entry=$${entryPrice} uPnL=$${unrealizedPnl.toFixed(2)}`);
       }
       
+      // 🔍 V5.13: Check for missing trades (trades that happened between ticks)
+      // This runs on every sync to catch trades that completed quickly
+      await this.checkMissingTrades();
+      
     } catch (error) {
       logger.error(`❌ [${symbol}] Failed to sync with exchange:`, error);
+    }
+  }
+  
+  /**
+   * 🔍 V5.13: Check for missing trades
+   * Compares Binance trade history with DB to find and log missing trades
+   * This catches trades that completed between ticks (entry->exit->entry within 1 minute)
+   */
+  private async checkMissingTrades(): Promise<void> {
+    const symbol = this.config.symbol;
+    
+    try {
+      // Get all trades from Binance for the last 2 hours (to catch recent misses)
+      if (!this.config.exchange.fetchMyTrades) {
+        return;
+      }
+      
+      const since = Date.now() - 2 * 3600 * 1000; // Last 2 hours
+      const binanceTrades = await this.config.exchange.fetchMyTrades(symbol, since, 50);
+      
+      if (!binanceTrades || binanceTrades.length === 0) {
+        logger.info(`✅ [${symbol}] No Binance trades found in last 24h`);
+        return;
+      }
+      
+      logger.info(`📊 [${symbol}] Found ${binanceTrades.length} Binance trades in last 24h`);
+      
+      // Group trades into entry/exit pairs
+      // Binance returns all trades chronologically, we need to match entries with exits
+      const tradePairs: Array<{
+        entryTrade: any;
+        exitTrade: any;
+      }> = [];
+      
+      let pendingEntry: any = null;
+      
+      for (const trade of binanceTrades) {
+        const side = trade.side; // 'buy' or 'sell'
+        const isBuy = side === 'buy';
+        
+        // For LONG positions: buy=entry, sell=exit
+        // For SHORT positions: sell=entry, buy=exit
+        // We'll assume LONG for simplicity (can be improved with order type detection)
+        
+        if (isBuy && !pendingEntry) {
+          // Entry for LONG
+          pendingEntry = trade;
+        } else if (!isBuy && pendingEntry) {
+          // Exit for LONG
+          tradePairs.push({
+            entryTrade: pendingEntry,
+            exitTrade: trade,
+          });
+          pendingEntry = null;
+        }
+      }
+      
+      logger.info(`📊 [${symbol}] Identified ${tradePairs.length} complete trade pairs from Binance`);
+      
+      // Now check which pairs are missing in our DB
+      let reconciledCount = 0;
+      
+      for (const pair of tradePairs) {
+        const entryOrderId = pair.entryTrade.order || pair.entryTrade.info?.orderId;
+        const exitOrderId = pair.exitTrade.order || pair.exitTrade.info?.orderId;
+        
+        // Check if exit order exists in DB
+        const existingOrder = await this.config.prisma.order.findFirst({
+          where: { clientOrderId: exitOrderId }
+        });
+        
+        if (existingOrder) {
+          // Trade already in DB, skip
+          continue;
+        }
+        
+        // Trade is missing! Reconstruct and save it
+        logger.warn(`⚠️ [${symbol}] Found missing trade: entry=${entryOrderId} exit=${exitOrderId}`);
+        
+        const entryPrice = pair.entryTrade.price;
+        const exitPrice = pair.exitTrade.price;
+        const qty = pair.exitTrade.amount;
+        
+        const pnlPct = ((exitPrice - entryPrice) / entryPrice) * 100;
+        const pnlUsd = qty * (exitPrice - entryPrice);
+        
+        // Determine exit reason based on order type
+        const orderType = pair.exitTrade.info?.type || pair.exitTrade.type;
+        let reason = 'stop_loss_exchange';
+        
+        if (orderType && orderType.includes('TRAILING')) {
+          reason = 'trailing_stop_exchange';
+        } else if (pnlPct > -1) {
+          reason = 'trailing_stop_exchange';
+        }
+        
+        // Reconstruct position object
+        const reconstructedPosition: Position = {
+          symbol,
+          side: 'long',
+          entryPrice,
+          qty,
+          entryTime: pair.entryTrade.timestamp || Date.now(),
+          leverage: 5, // Estimate
+          marginUsd: (qty * entryPrice) / 5, // Estimate
+          orderId: entryOrderId,
+        };
+        
+        // Check if this entry already exists (avoid duplicate entries)
+        const existingEntry = await this.config.prisma.order.findFirst({
+          where: { clientOrderId: entryOrderId }
+        });
+        
+        if (!existingEntry) {
+          // Save entry first
+          await this.savePositionToDb(reconstructedPosition, 'reconciled_entry', qty * entryPrice * 0.0004);
+        } else {
+          logger.info(`✓ [${symbol}] Entry ${entryOrderId} already exists, skipping entry save`);
+        }
+        
+        // Save exit (use undefined for exchangeOrderId to force unique ID generation)
+        // This avoids the "already exists" check in saveExitToDb
+        const exitFee = qty * exitPrice * 0.0004;
+        await this.saveExitToDb(reconstructedPosition, exitPrice, reason, pnlPct, pnlUsd, undefined, exitFee);
+        
+        reconciledCount++;
+        logger.info(`✅ [${symbol}] Reconciled missing trade: PnL=${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)})`);
+      }
+      
+      logger.info(`✅ [${symbol}] Reconciliation complete: ${reconciledCount} missing trades recovered`);
+      
+    } catch (error: any) {
+      logger.error(`❌ [${symbol}] Failed to reconcile trades:`, error.message);
     }
   }
   
