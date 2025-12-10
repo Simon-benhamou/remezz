@@ -195,21 +195,21 @@ export const MomentumConfig = {
     'ETH/USDT:USDT',   // #6
   ],
   
-  // V5.7: Leverage 4.5x uniforme (sweet spot ROI/risque)
-  // Backtest 24 mois: Tous les actifs avec 65%+ WR
+  // V5.8: Leverage 5x uniforme - Validé sûr (SL max 4.5% × 5 = 22.5% << 80% liquidation)
+  // Backtest 24 mois: Gains augmentés, pas de risque de liquidation
   LEVERAGE: {
-    'BTC/USDT:USDT': 4,
-    'ETH/USDT:USDT': 4,
-    'SOL/USDT:USDT': 4,
-    'XRP/USDT:USDT': 4,
-    'SEI/USDT:USDT': 4,
-    'IMX/USDT:USDT': 4,
-    'DOT/USDT:USDT': 4,
-    'DOGE/USDT:USDT': 4,
-    'SUI/USDT:USDT': 4,
-    'ADA/USDT:USDT': 4,
-    'LINK/USDT:USDT': 4,
-    'AVAX/USDT:USDT': 4,
+    'BTC/USDT:USDT': 5,
+    'ETH/USDT:USDT': 5,
+    'SOL/USDT:USDT': 5,
+    'XRP/USDT:USDT': 5,
+    'SEI/USDT:USDT': 5,
+    'IMX/USDT:USDT': 5,
+    'DOT/USDT:USDT': 5,
+    'DOGE/USDT:USDT': 5,
+    'SUI/USDT:USDT': 5,
+    'ADA/USDT:USDT': 5,
+    'LINK/USDT:USDT': 5,
+    'AVAX/USDT:USDT': 5,
   } as Record<string, number>,
 };
 
