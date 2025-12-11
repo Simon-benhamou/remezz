@@ -48,11 +48,20 @@ router.get("/", authenticateUser, async (req: AuthenticatedRequest, res) => {
     const equity = Number(orderSession?.startBalanceUsd || 0);
     const equityAlloc = equity * (budgetPct > 1 ? (budgetPct/100) : (budgetPct||1));
     
-    const isExit = (o.clientOrderId || '').endsWith('.exit');
-    const positionSide = isExit
-      ? (o.side === 'buy' ? 'short' : 'long')
-      : (o.side === 'buy' ? 'long' : 'short');
+    // 🔧 FIX: Robust exit detection using multiple signals instead of clientOrderId suffix
+    // An exit order has pctChange (price movement) or non-zero realizedPnl in fills
     const realizedNet = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.realizedPnl || 0), 0) : 0;
+    const hasPctChange = o.pctChange != null && o.pctChange !== 0;
+    const hasRealizedPnl = realizedNet !== 0;
+    const hasExitSuffix = (o.clientOrderId || '').endsWith('.exit');
+    const isExit = hasPctChange || hasRealizedPnl || hasExitSuffix;
+    
+    // For exits: positionSide matches the ORIGINAL position (LONG exit = positionSide 'long')
+    // For entries: positionSide matches the side (buy = 'long', sell = 'short')
+    const positionSide = isExit
+      ? (o.side === 'buy' ? 'short' : 'long')  // Buy to close SHORT, Sell to close LONG
+      : (o.side === 'buy' ? 'long' : 'short'); // Buy opens LONG, Sell opens SHORT
+    
     const feesUsd = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.fee || 0), 0) : 0;
     const realizedPnlUsd = realizedNet;
     const roePct = isExit && o.leverage && o.pctChange != null ? Number(o.pctChange) * Number(o.leverage) : null;
