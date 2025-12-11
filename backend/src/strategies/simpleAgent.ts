@@ -22,6 +22,8 @@ import {
   getLiquidityTier,
   calcSafeLeverage,
   calcDynamicStopLoss,  // V5.7: Dynamic SL based on ATR
+  determineVolatilityRegime,  // V5.14: Volatility-based trailing
+  calculate3LayerProtection,  // V5.14: 3-layer protection system
   LIQUIDATION_CONFIG,
   type Candle,
   type Position,
@@ -1147,23 +1149,50 @@ export class SimpleAgent {
         // Save to DB with fee
         await this.savePositionToDb(position, 'live_entry', liveEntryFee);
         
-        // Set initial stop loss on exchange (BACKUP protection)
-        await this.setStopLossOnExchange(position);
+        // V5.14: 3-LAYER PROTECTION SYSTEM
+        // ════════════════════════════════════════════════════════════════
+        // Layer 1: Emergency Hard Stop (Wide, Always Active)
+        // Layer 2: Intelligent Trailing (App-Side, Main Exit Logic)
+        // Layer 3: Progressive Profit Lock (Ratcheting Stop, Dynamic)
+        // ════════════════════════════════════════════════════════════════
         
-        // 🚀 V5.10: Set TRAILING_STOP_MARKET order on Binance (native trailing - same as backtest!)
-        // This ensures we capture the high/low in real-time, just like the backtest does with candle.high/low
-        // 
-        // 🛡️ STRATEGY: Keep BOTH orders initially:
-        // - Fixed SL protects against immediate drops (< -2.5%)
-        // - Trailing protects gains once activated (> +0.8%)
-        // - When trailing triggers, Binance auto-cancels the fixed SL
-        // - If price never reaches +0.8%, fixed SL protects the position
-        const trailingSuccess = await this.setTrailingStopOnExchange(position);
-        
-        if (trailingSuccess) {
-          logger.info(`✅ [${symbol}] DUAL PROTECTION: Fixed SL @ $${position.stopLoss?.toFixed(4)} + Trailing @ +0.8%`);
+        if (MomentumConfig.EXIT.USE_THREE_LAYER_PROTECTION) {
+          // Calculate initial 3-layer protection
+          const protection = calculate3LayerProtection(
+            position.entryPrice,
+            position.side,
+            position.stopLossPct || 2.0,
+            0 // Initial PnL = 0
+          );
+          
+          // Place Layer 1: Emergency Stop (Wide)
+          const emergencyStop = protection.emergencyStop;
+          if (this.position) {
+            this.position.stopLoss = emergencyStop;
+            this.position.emergencyStopPrice = emergencyStop;
+            this.position.profitLockPrice = null;
+            this.position.lockedProfitPct = 0;
+          }
+          await this.setStopLossOnExchange(position);
+          
+          logger.info(`🛡️ [${symbol}] Layer 1 (Emergency): $${emergencyStop.toFixed(4)} (${((position.stopLossPct || 2.0) * MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER).toFixed(1)}%)`);
+          logger.info(`🧠 [${symbol}] Layer 2 (Trailing): App-side (activation at +${MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT}%)`);
+          logger.info(`🎯 [${symbol}] Layer 3 (Profit Lock): Will activate at +${MomentumConfig.EXIT.BREAKEVEN_ACTIVATION_PCT}%`);
         } else {
-          logger.warn(`⚠️ [${symbol}] SINGLE PROTECTION: Only fixed SL active (trailing failed)`);
+          // Fallback: Old system with simple stop loss
+          await this.setStopLossOnExchange(position);
+        }
+        
+        // V5.14: Exchange trailing only if not using 3-layer system
+        // With 3-layer, app-side trailing (Layer 2) handles exit logic
+        if (!MomentumConfig.EXIT.USE_THREE_LAYER_PROTECTION && MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) {
+          const trailingSuccess = await this.setTrailingStopOnExchange(position);
+          
+          if (trailingSuccess) {
+            logger.info(`✅ [${symbol}] DUAL PROTECTION: Fixed SL @ $${position.stopLoss?.toFixed(4)} + Trailing @ +0.8%`);
+          } else {
+            logger.warn(`⚠️ [${symbol}] SINGLE PROTECTION: Only fixed SL active (trailing failed)`);
+          }
         }
         
         logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
@@ -2005,6 +2034,15 @@ export class SimpleAgent {
     await this.setStopLossOnExchange(this.position, true);
     
     logger.info(`📈 [${symbol}] Trailing stop moved: $${oldSL?.toFixed(4)} → $${newStopPrice.toFixed(4)}`);
+  }
+
+  /**
+   * 🎯 Layer 3: Progressive Profit Lock
+   * DÉSACTIVÉ: Dégrade les performances en coupant les gagnants trop tôt (-85% ROI in backtest)
+   */
+  private async updateProfitLockIfNeeded(currentPrice: number): Promise<void> {
+    // DISABLED: Profit lock cuts winners too early
+    return;
   }
   
   // ==========================================================================

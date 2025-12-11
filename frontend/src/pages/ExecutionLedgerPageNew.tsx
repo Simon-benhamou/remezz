@@ -45,10 +45,16 @@ function formatDuration(minutes?: number | null): string {
 }
 
 export default function ExecutionLedgerPageNew() {
-  const [trades, setTrades] = React.useState<TradeRow[]>([]);
+  const [allTrades, setAllTrades] = React.useState<TradeRow[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [searchText, setSearchText] = React.useState('');
+  const [modeFilter, setModeFilter] = React.useState<'all' | 'paper' | 'live'>('all');
   const { mode } = useMode();
+
+  const trades = React.useMemo(() => {
+    if (modeFilter === 'all') return allTrades;
+    return allTrades.filter(t => t.sessionMode === modeFilter);
+  }, [allTrades, modeFilter]);
 
   const summary = React.useMemo(() => {
     if (!trades.length) return null;
@@ -68,22 +74,23 @@ export default function ExecutionLedgerPageNew() {
   const loadTrades = React.useCallback(async () => {
     setLoading(true);
     try {
-      const sessionsList = await api.listSessions(mode);
-      const allTrades: TradeRow[] = [];
+      // 🔧 FIX: Load ALL sessions (paper + live) to see all trades
+      const sessionsList = await api.listSessions(); // No mode filter
+      const loadedTrades: TradeRow[] = [];
       for (const session of sessionsList.slice(0, 20)) {
         try {
           const res = await api.getTrades(session.id, { limit: 100 });
           const sessionTrades = Array.isArray(res) ? res : (res?.trades || []);
-          allTrades.push(...sessionTrades.map((t: any) => ({ ...t, sessionId: session.id, sessionSymbol: session.symbol, sessionMode: session.mode, outcome: asOutcome(t) })));
+          loadedTrades.push(...sessionTrades.map((t: any) => ({ ...t, sessionId: session.id, sessionSymbol: session.symbol, sessionMode: session.mode, outcome: asOutcome(t) })));
         } catch {}
       }
-      allTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setTrades(allTrades);
+      loadedTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setAllTrades(loadedTrades);
     } catch (e: any) {
       message.error(e?.message || 'Failed to load trades');
     }
     setLoading(false);
-  }, [mode]);
+  }, []);
 
   React.useEffect(() => { void loadTrades(); }, [loadTrades]);
 
@@ -130,7 +137,35 @@ export default function ExecutionLedgerPageNew() {
         <Title level={3} style={{ margin: 0, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 20 }}>📊</span> Execution Ledger
         </Title>
-        <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          {/* 🆕 Mode Filter */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Text style={{ color: '#94a3b8', fontSize: 12 }}>Mode:</Text>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {(['all', 'paper', 'live'] as const).map(m => (
+                <Button
+                  key={m}
+                  size="small"
+                  type={modeFilter === m ? 'primary' : 'default'}
+                  onClick={() => setModeFilter(m)}
+                  style={{
+                    background: modeFilter === m ? undefined : 'rgba(15, 23, 42, 0.8)',
+                    borderColor: modeFilter === m ? undefined : 'rgba(148, 163, 184, 0.2)',
+                  }}
+                >
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                  {m !== 'all' && (
+                    <Tag
+                      color={m === 'paper' ? 'blue' : 'green'}
+                      style={{ marginLeft: 4, fontSize: 10 }}
+                    >
+                      {allTrades.filter(t => t.sessionMode === m).length}
+                    </Tag>
+                  )}
+                </Button>
+              ))}
+            </div>
+          </div>
           <Input
             placeholder="Search..."
             prefix={<SearchOutlined style={{ color: '#64748b' }} />}
@@ -183,14 +218,14 @@ export default function ExecutionLedgerPageNew() {
         {/* Table Header */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '90px 55px 55px 95px 50px 70px 70px 70px 75px 55px 65px 45px 50px 110px 55px 55px',
+          gridTemplateColumns: '90px 55px 55px 55px 95px 50px 70px 70px 70px 75px 55px 65px 45px 50px 110px 55px 55px',
           padding: '12px 16px',
           borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
           background: 'rgba(15, 23, 42, 0.8)',
           minWidth: 1200,
         }}>
-          {['Date', 'Outcome', 'Session', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'P&L', 'ROE%', 'Notional', 'Lev', 'Dur', 'Exit Type', 'MaxP&L', 'Fees'].map((h, i) => (
-            <span key={i} style={{ ...headerStyle, textAlign: i >= 5 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</span>
+          {['Date', 'Outcome', 'Mode', 'Session', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'P&L', 'ROE%', 'Notional', 'Lev', 'Dur', 'Exit Type', 'MaxP&L', 'Fees'].map((h, i) => (
+            <span key={i} style={{ ...headerStyle, textAlign: i >= 6 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</span>
           ))}
         </div>
 
@@ -208,7 +243,7 @@ export default function ExecutionLedgerPageNew() {
               key={trade.id}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '90px 55px 55px 95px 50px 70px 70px 70px 75px 55px 65px 45px 50px 110px 55px 55px',
+                gridTemplateColumns: '90px 55px 55px 55px 95px 50px 70px 70px 70px 75px 55px 65px 45px 50px 110px 55px 55px',
                 padding: '10px 16px',
                 borderBottom: '1px solid rgba(148, 163, 184, 0.05)',
                 alignItems: 'center',
@@ -233,12 +268,18 @@ export default function ExecutionLedgerPageNew() {
                 {trade.outcome?.toUpperCase()}
               </Tag>
 
+              {/* Mode */}
+              <Tag style={{
+                fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 4, border: 'none',
+                background: trade.sessionMode === 'live' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                color: trade.sessionMode === 'live' ? '#4ade80' : '#60a5fa',
+              }}>
+                {(trade.sessionMode || 'unknown').toUpperCase()}
+              </Tag>
+
               {/* Session */}
               <div style={{ whiteSpace: 'nowrap' }}>
                 <div style={{ color: '#f8fafc', fontSize: 11 }}>{trade.sessionSymbol?.replace('/USDT:USDT', '')}</div>
-                <Tag style={{ fontSize: 7, padding: '0 2px', borderRadius: 2, border: 'none', background: trade.sessionMode === 'live' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(59, 130, 246, 0.1)', color: trade.sessionMode === 'live' ? '#f87171' : '#60a5fa' }}>
-                  {trade.sessionMode?.toUpperCase()}
-                </Tag>
               </div>
 
               {/* Symbol */}

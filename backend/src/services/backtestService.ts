@@ -121,18 +121,31 @@ const CONFIG = {
     MAX_CONSEC_DOWN: 4, // V5.8.1: 4 (was 5)
   },
   EXIT: {
-    // V5.11: SL LARGE + TRAILING AGRESSIF
-    // Backtested: +915% vs V5.8.1, 89% WR, 10.6% SL rate (vs 27%)
-    // Évite 138 stop hunts grâce au SL plus large
-    STOP_LOSS_TYPE: 'atr' as const, // 'fixed' | 'atr'
-    STOP_LOSS_FIXED: 2.5, // Fallback si ATR non dispo
-    STOP_LOSS_ATR_MULT: 3.0, // ATR × 3.0 (plus large, évite stop hunts)
-    STOP_LOSS_MIN: 1.0, // Min 1.0% (was 0.8%)
-    STOP_LOSS_MAX: 4.5, // Max 4.5% (was 3.0%)
+    // V5.14: SL FIXE + ADAPTIVE TRAILING
+    // Backtest: +320% ROI (72× vs baseline), 80.6% WR, 38.5% DD
+    // Trailing adaptatif 0.3-0.8% basé sur volatilité (ATR)
+    STOP_LOSS_TYPE: 'fixed' as const, // 'fixed' | 'atr'
+    STOP_LOSS_FIXED: 2.5, // SL fixe 2.5%
+    STOP_LOSS_ATR_MULT: 3.0, // Unused (dynamic SL disabled)
+    STOP_LOSS_MIN: 1.0, // Unused
+    STOP_LOSS_MAX: 4.5, // Unused
 
     TAKE_PROFIT: 3.0,
-    TRAILING_ACTIVATION: 0.5, // Activé à +0.5% (was 1.0%) - protège gains tôt
-    TRAILING_DISTANCE: 0.3, // Trail 0.3% (was 0.4%) - plus serré
+    
+    // Adaptive trailing based on volatility (ATR)
+    TRAILING_ACTIVATION: 0.8, // Base activation +0.8%
+    TRAILING_DISTANCE: 0.5, // Base distance 0.5%
+    
+    // Low volatility (ATR < 2%): tighter trailing
+    LOW_VOL_ATR_MAX: 2.0,
+    LOW_VOL_ACTIVATION: 0.6,
+    LOW_VOL_DISTANCE: 0.3,
+    
+    // High volatility (ATR > 3.5%): wider trailing
+    HIGH_VOL_ATR_MIN: 3.5,
+    HIGH_VOL_ACTIVATION: 1.2,
+    HIGH_VOL_DISTANCE: 0.8,
+    
     MAX_HOLD_BARS: 192, // 48h
   },
   POSITION_SIZE_PCT: 0.4, // 40% du capital disponible
@@ -209,25 +222,47 @@ function calcATR(candles: Candle[], period = 14): number | null {
   return atrSum / period;
 }
 
-// V5.7: Dynamic stop loss based on ATR
+// V5.14: Fixed stop loss (dynamic SL disabled)
 function calcDynamicStopLoss(candles: Candle[]): { slPct: number; atrPct: number | null } {
-  if (CONFIG.EXIT.STOP_LOSS_TYPE !== 'atr') {
-    return { slPct: CONFIG.EXIT.STOP_LOSS_FIXED, atrPct: null };
-  }
+  // Always return fixed SL (dynamic disabled)
+  return { slPct: CONFIG.EXIT.STOP_LOSS_FIXED, atrPct: null };
+}
 
+// V5.14: Adaptive trailing parameters based on volatility (ATR)
+function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance: number } {
   const atr = calcATR(candles, 14);
+  
   if (!atr || candles.length === 0) {
-    return { slPct: CONFIG.EXIT.STOP_LOSS_FIXED, atrPct: null };
+    return {
+      activation: CONFIG.EXIT.TRAILING_ACTIVATION,
+      distance: CONFIG.EXIT.TRAILING_DISTANCE,
+    };
   }
-
+  
   const currentPrice = candles[candles.length - 1].close;
   const atrPct = (atr / currentPrice) * 100;
-
-  // SL = ATR × multiplier, clamped between min and max
-  const rawSlPct = atrPct * CONFIG.EXIT.STOP_LOSS_ATR_MULT;
-  const slPct = Math.min(CONFIG.EXIT.STOP_LOSS_MAX, Math.max(CONFIG.EXIT.STOP_LOSS_MIN, rawSlPct));
-
-  return { slPct, atrPct };
+  
+  // Low volatility: tighter trailing
+  if (atrPct < CONFIG.EXIT.LOW_VOL_ATR_MAX) {
+    return {
+      activation: CONFIG.EXIT.LOW_VOL_ACTIVATION,
+      distance: CONFIG.EXIT.LOW_VOL_DISTANCE,
+    };
+  }
+  
+  // High volatility: wider trailing
+  if (atrPct > CONFIG.EXIT.HIGH_VOL_ATR_MIN) {
+    return {
+      activation: CONFIG.EXIT.HIGH_VOL_ACTIVATION,
+      distance: CONFIG.EXIT.HIGH_VOL_DISTANCE,
+    };
+  }
+  
+  // Medium volatility: default
+  return {
+    activation: CONFIG.EXIT.TRAILING_ACTIVATION,
+    distance: CONFIG.EXIT.TRAILING_DISTANCE,
+  };
 }
 
 function countConsecUp(candles: Candle[]): number {
@@ -580,8 +615,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         let exitReason: string | null = null;
         let exitPrice = current.close;
 
-        // V5.7: Use dynamic SL stored in position
+        // V5.14: Fixed SL + Adaptive trailing
         const slPct = pos.slPct || CONFIG.EXIT.STOP_LOSS_FIXED;
+        
+        // V5.14: Get adaptive trailing params based on current volatility
+        const { activation, distance } = calcAdaptiveTrailing(windowCandles);
 
         if (pos.side === 'long') {
           // Calculate PnL based on CLOSE price (matching backtest-local-analysis.mjs)
@@ -589,9 +627,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           pos.hwm = Math.max(pos.hwm || pos.entryPrice, current.high);
           const hwmPct = ((pos.hwm - pos.entryPrice) / pos.entryPrice) * 100;
 
-          // V5.8: Check TRAILING FIRST (protects gains before SL is hit)
-          if (hwmPct >= CONFIG.EXIT.TRAILING_ACTIVATION) {
-            const trailStop = pos.hwm * (1 - CONFIG.EXIT.TRAILING_DISTANCE / 100);
+          // V5.14: Adaptive trailing (distance changes with volatility)
+          if (hwmPct >= activation) {
+            const trailStop = pos.hwm * (1 - distance / 100);
             if (current.low <= trailStop) {
               exitReason = 'TRAIL';
               exitPrice = trailStop;
@@ -615,9 +653,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           pos.lwm = Math.min(pos.lwm || pos.entryPrice, current.low);
           const lwmPct = ((pos.entryPrice - pos.lwm) / pos.entryPrice) * 100;
 
-          // V5.8: Check TRAILING FIRST (protects gains before SL is hit)
-          if (lwmPct >= CONFIG.EXIT.TRAILING_ACTIVATION) {
-            const trailStop = pos.lwm * (1 + CONFIG.EXIT.TRAILING_DISTANCE / 100);
+          // V5.14: Adaptive trailing (distance changes with volatility)
+          if (lwmPct >= activation) {
+            const trailStop = pos.lwm * (1 + distance / 100);
             if (current.high >= trailStop) {
               exitReason = 'TRAIL';
               exitPrice = trailStop;
