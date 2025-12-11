@@ -341,5 +341,7 @@ export async function listAggregatedTrades(opts: TradeAggregationOptions): Promi
 
   const aggregated = aggregateFillsToLedgerTrades(mapped);
   const sorted = aggregated.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  return sorted.slice(0, limit);
+  // Don't slice - already limited by take (4000 fills → ~2000 trades max)
+  // Slicing here cuts old but valid trades when many exist
+  return sorted;
 }
