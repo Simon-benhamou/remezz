@@ -78,7 +78,7 @@ router.get("/", authenticateUser, async (req: AuthenticatedRequest, res) => {
   res.json(out);
 });
 
-// Aggregated trades: one row per exit (partial or full), with reconstructed entry price from realized PnL
+// Aggregated trades: read directly from Trade table (persisted on every exit)
 router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) => {
   if (!req.user?.id) {
     return res.status(401).json({ error: 'auth_required' });
@@ -101,13 +101,31 @@ router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) =
     }
   }
 
+  // Build where clause for Trade query
+  const where: any = {};
+  
+  if (sessionId) {
+    where.sessionId = sessionId;
+  } else if (req.user.role !== 'admin' && !req.user.isLegacy) {
+    // Non-admin users: only show their trades
+    const userSessions = await prisma.agentSession.findMany({
+      where: { userId: req.user.id },
+      select: { id: true },
+    });
+    where.sessionId = { in: userSessions.map((s) => s.id) };
+  }
+
+  if (from || to) {
+    where.exitTs = {};
+    if (from && !Number.isNaN(from.getTime())) where.exitTs.gte = from;
+    if (to && !Number.isNaN(to.getTime())) where.exitTs.lt = to;
+  }
+
   const [trades, session] = await Promise.all([
-    listAggregatedTrades({
-      sessionId,
-      from: from && !Number.isNaN(from.getTime()) ? from : undefined,
-      to: to && !Number.isNaN(to.getTime()) ? to : undefined,
-      limit,
-      userId: req.user.role === 'admin' || req.user.isLegacy ? undefined : req.user.id,
+    prisma.trade.findMany({
+      where,
+      orderBy: { exitTs: 'desc' },
+      take: limit,
     }),
     sessionId ? prisma.agentSession.findUnique({ where: { id: sessionId } }) : null,
   ]);
@@ -124,7 +142,7 @@ router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) =
     const roePct = leverage != null && trade.roiPct != null ? trade.roiPct * leverage : trade.roePct ?? null;
     return {
       id: trade.id,
-      createdAt: trade.createdAt,
+      createdAt: trade.exitTs, // exitTs is when trade completed
       symbol: trade.symbol,
       positionSide: trade.positionSide,
       qty: trade.qty,

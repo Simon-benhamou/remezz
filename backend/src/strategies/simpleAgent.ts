@@ -2560,7 +2560,7 @@ export class SimpleAgent {
       });
       
       // Log exit as a Fill record linked to the order (using order.id, not clientOrderId)
-      await this.config.prisma.fill.create({
+      const fill = await this.config.prisma.fill.create({
         data: {
           orderId: order.id,  // Use the generated Order ID
           sessionId: this.config.sessionId,
@@ -2579,6 +2579,58 @@ export class SimpleAgent {
           maxPnlPct: position.maxPnlPct ?? null,  // High water mark reached
         },
       });
+      
+      // 🆕 V5.14: Create Trade record for direct DB persistence (no more dynamic aggregation)
+      try {
+        const entryTs = new Date(position.entryTime);
+        const exitTs = fill.ts;
+        const durationMs = exitTs.getTime() - entryTs.getTime();
+        const durationMinutes = Math.max(0, Math.round(durationMs / 60000));
+        const entryNotional = position.entryPrice * position.qty;
+        const priceChange = position.side === 'long'
+          ? exitPrice - position.entryPrice
+          : position.entryPrice - exitPrice;
+        const pctChange = (priceChange / position.entryPrice) * 100;
+        const roiPct = entryNotional > 0 ? (pnlUsd / entryNotional) * 100 : 0;
+        const leverage = position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4;
+        const roePct = roiPct * leverage;
+
+        await this.config.prisma.trade.create({
+          data: {
+            id: order.id,  // Use exitOrderId as tradeId
+            sessionId: this.config.sessionId,
+            symbol: position.symbol,
+            positionSide: position.side,
+            qty: position.qty,
+            entryPrice: position.entryPrice,
+            exitPrice,
+            entryNotional,
+            realizedPnlUsd: pnlUsd,
+            feesUsd: calculatedFee * 2,  // Approximate entry + exit fees (both 0.04%)
+            pctChange,
+            roiPct,
+            leverage,
+            roePct,
+            orderCount: 2,  // Entry + exit
+            exitReason: reason.toUpperCase(),
+            durationMinutes,
+            maxPnlPct: position.maxPnlPct ?? null,
+            entryTs,
+            exitTs,
+          },
+        });
+
+        // Link Fill to Trade
+        await this.config.prisma.fill.update({
+          where: { id: fill.id },
+          data: { tradeId: order.id },
+        });
+
+        logger.info(`✅ [${this.config.symbol}] Trade created: ${position.side.toUpperCase()} ${position.qty} PnL=$${pnlUsd.toFixed(2)}`);
+      } catch (tradeError) {
+        logger.error(`❌ [${this.config.symbol}] Failed to create Trade:`, tradeError);
+        // Continue anyway - Fill was saved, Trade is optional for now
+      }
       
       // Delete the position (it's closed)
       await this.config.prisma.position.deleteMany({

@@ -99,6 +99,7 @@ model AgentSession {
   SessionKpi         SessionKpi?              @relation("AgentSessionToSessionKpi")
   strategies         Strategy[]
   triggers           TriggerLog[]
+  trades             Trade[]
 
   @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
@@ -260,12 +261,45 @@ model Fill {
   maxPnlPct      Float?        // High water mark PnL reached
   order          Order         @relation(fields: [orderId], references: [id])
   session        AgentSession? @relation(fields: [sessionId], references: [id])
+  trade          Trade?        @relation(fields: [tradeId], references: [id])
 
   @@index([sessionId])
   @@index([orderId])
   @@index([symbol, ts])
   @@index([strategyUsed])
   @@index([strategyFamily, strategyId])
+  @@index([tradeId])
+}
+
+model Trade {
+  id              String        @id @default(cuid())
+  sessionId       String
+  symbol          String
+  positionSide    String        // 'long' or 'short'
+  qty             Float
+  entryPrice      Float
+  exitPrice       Float
+  entryNotional   Float
+  realizedPnlUsd  Float
+  feesUsd         Float
+  pctChange       Float?
+  roiPct          Float?
+  leverage        Float?
+  roePct          Float?
+  orderCount      Int           @default(0)
+  exitReason      String?
+  durationMinutes Int?
+  maxPnlPct       Float?
+  entryTs         DateTime
+  exitTs          DateTime
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  session         AgentSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  fills           Fill[]
+
+  @@index([sessionId, exitTs])
+  @@index([symbol, exitTs])
+  @@index([exitTs])
 }
 
 model Position {
