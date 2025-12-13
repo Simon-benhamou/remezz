@@ -1,30 +1,19 @@
 /**
- * 🎯 STRATÉGIE V5.12 - OPTIMIZED FILTERS (2-year backtest)
+ * 🎯 STRATÉGIE V5.15 - WIDE EMERGENCY SL FIX (Dec 2025)
  * 
- * V5.12 CHANGES (Dec 2025):
+ * V5.15 CHANGES (Dec 2025):
+ * - STOP_LOSS_PCT: 2.5% → 6.0% (emergency protection only)
+ * - FIX: Prevents exit via exchange SL when in profit
+ * - Trailing stop is now PRIMARY exit mechanism (95%+ of exits)
+ * 
+ * V5.12 FILTRES OPTIMISÉS (2-year backtest):
  * - VOL_MULTIPLIER: 2.0 → 1.5 (+36% PnL)
  * - MAX_CONSEC_UP: 3 → 5 (+34% PnL)
  * - RSI+BTC filter: REMOVED (blocked profitable trades)
- * 
- * Backtested sur 24 mois (Dec 2023 - Dec 2025) avec frais 0.08%:
  * - Total PnL: +1807% (vs +1346% V5.11) = +34% amélioration
  * - Trades: 1178 (vs 910) = +29% plus de trades
  * - Win Rate: 86% (stable)
  * - SL Rate: 14% (stable)
- * 
- * ═════════════════════════════════════════════════════════════
- * V5.12 FILTRES OPTIMISÉS:
- * ═════════════════════════════════════════════════════════════
- * LONG:
- * - Volume >= 1.5x (relaxed from 2.0x)
- * - ConsecUp <= 5 (relaxed from 3)
- * - RSI+BTC filter REMOVED
- * 
- * ═════════════════════════════════════════════════════════════
- * V5.9 FILTRES (unchanged):
- * ═════════════════════════════════════════════════════════════
- * SHORT: Skip if StochRSI < 15 AND volRatio < 4.0
- *   → Filtre les shorts en zone oversold extrême (sauf panic selling)
  * 
  * ═════════════════════════════════════════════════════════════
  * LONG ENTRY (BTC > SMA200 = Bull Market):
@@ -43,10 +32,10 @@
  * - ConsecDown <= 4
  * - StochRSI >= 15 OR volRatio >= 4 (V5.9)
  * 
- * EXIT (V5.11):
- * - Stop Loss: ATR × 3.0 (clampé 1.0%-4.5%)
+ * EXIT (V5.15):
+ * - Stop Loss: Fixed 6.0% (EMERGENCY ONLY - crash protection)
  * - Take Profit: 3%
- * - Trailing: activé à +0.5%, trail à 0.3%
+ * - Trailing: activé à +0.8%, trail 0.5% → 0.8% (widens at +2%)
  * - Max Hold: 48h
  */
 

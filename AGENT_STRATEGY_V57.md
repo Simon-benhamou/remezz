@@ -157,7 +157,7 @@ Quand `BTC < SMA200`, l'agent cherche des opportunités SHORT.
 | **Stop Loss** | Fixed: 6.0% (Emergency protection only) | Crash protection - should rarely trigger |
 | **Take Profit** | +3.0% | Fermeture immédiate |
 | **Time Exit** | 48h (2880 min) | Fermeture si toujours ouvert |
-| **Trailing Stop** | Activé à +0.8% | Trail de 0.5% (0.8% widened) |
+| **Trailing Stop** | Activé à +0.8% | Trail de 0.5%, s'élargit à 0.8% quand profit > 2% |
 | **Momentum Fade** | PnL > 1.5% ET ROC5 < 0.5% | Fermeture (momentum perdu) |
 | **Volume Dry** | PnL > 0.5% ET Vol < 0.5x | Fermeture (plus de volume) |
 
