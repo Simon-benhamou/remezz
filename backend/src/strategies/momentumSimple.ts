@@ -56,9 +56,13 @@
 
 export const MomentumConfig = {
   // ═══════════════════════════════════════════════════════════════════════════
-  // V5.11 - SL LARGE (ATR×3.0) + TRAILING AGRESSIF (+0.5%, 0.3%)
-  // Backtest 24 mois avec frais 0.08%: +2547% equity, 832 trades, 89.1% WR
-  // Évite 138 stop hunts, SL rate 10.6% (vs 27.2% avec ATR×2.0)
+  // V5.15 - WIDE EMERGENCY SL (6%) + APP-SIDE TRAILING (PRIMARY EXIT)
+  // FIX: Stop loss widened from 2.5% to 6.0% to act as emergency protection only
+  // PROBLEM: In live mode, trades were exiting via exchange SL (even in profit)
+  //          instead of through the intelligent trailing stop
+  // SOLUTION: Wide fixed SL (6%) gives large gap for trailing to manage exits
+  //           Trailing activates at +0.8% and handles 95%+ of exits
+  //           Fixed SL only for crashes/bugs/connection loss - rarely triggered
   // ═══════════════════════════════════════════════════════════════════════════
   
   // V5.8: StochRSI Filter for SHORT - Skip if oversold AND no volume spike
@@ -125,10 +129,12 @@ export const MomentumConfig = {
   EXIT: {
     HOLD_PERIOD_MAX_MIN: 2880,   // 48 heures max hold
     
-    // V5.14: SL FIXE - 2.5% constant
-    // Layer 3 (Profit Lock) déplacera ce SL vers le haut pour sécuriser gains
+    // V5.15: SL WIDE - Emergency Protection Only
+    // Fixed SL is now WIDE (6%) to act as crash protection only, NOT for normal volatility
+    // Trailing stop is the PRIMARY exit mechanism - it activates at +0.8% and manages exits
+    // This prevents trades exiting via exchange SL when in profit due to normal market noise
     STOP_LOSS_TYPE: 'fixed' as const,  // 'fixed' | 'atr'
-    STOP_LOSS_PCT: 2.5,              // SL fixe 2.5% (Layer 1 emergency = 2.5% × 2.5 = 6.25%)
+    STOP_LOSS_PCT: 6.0,              // SL fixe 6.0% - EMERGENCY ONLY (was 2.5%)
     STOP_LOSS_ATR_MULT: 3.0,         // ATR × 3.0 (was 2.0) - plus large
     STOP_LOSS_MIN_PCT: 1.0,          // Min 1.0% (was 0.8%)
     STOP_LOSS_MAX_PCT: 4.5,          // Max 4.5% (was 3.0%)

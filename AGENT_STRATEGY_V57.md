@@ -154,49 +154,59 @@ Quand `BTC < SMA200`, l'agent cherche des opportunités SHORT.
 
 | Condition | Seuil | Action |
 |-----------|-------|--------|
-| **Stop Loss** | Dynamic: ATR(14) × 2.0 (min 0.8%, max 3.0%) | Fermeture immédiate |
+| **Stop Loss** | Fixed: 6.0% (Emergency protection only) | Crash protection - should rarely trigger |
 | **Take Profit** | +3.0% | Fermeture immédiate |
 | **Time Exit** | 48h (2880 min) | Fermeture si toujours ouvert |
-| **Trailing Stop** | Activé à +1.0% | Trail de 0.4% |
+| **Trailing Stop** | Activé à +0.8% | Trail de 0.5% (0.8% widened) |
 | **Momentum Fade** | PnL > 1.5% ET ROC5 < 0.5% | Fermeture (momentum perdu) |
 | **Volume Dry** | PnL > 0.5% ET Vol < 0.5x | Fermeture (plus de volume) |
 
-### Dynamic Stop Loss (V5.7) - NOUVEAU
+### Fixed Stop Loss (V5.15) - EMERGENCY PROTECTION
 
-Le SL s'adapte à la volatilité du marché via ATR:
+Le SL fixe agit comme protection d'urgence uniquement (crash, bug, perte connexion):
 
 ```typescript
-// Calcul du SL dynamique
-const atr = ATR(14);                       // Average True Range 14 périodes
-const slPct = (atr / price) * 2.0;         // ATR × multiplicateur
-const finalSL = clamp(slPct, 0.008, 0.03); // Entre 0.8% et 3.0%
+// SL fixe large: 6.0%
+// → Protection catastrophe uniquement
+// → Ne doit JAMAIS être touché en conditions normales
+// → Le trailing stop gère les sorties normales
 
-// Exemple:
-// ATR = $50, Prix = $3000
-// slPct = (50/3000) × 2.0 = 3.33% → clampé à 3.0%
+const slPct = 6.0;  // 6% emergency protection
+const stopLoss = entryPrice * (1 - slPct / 100);  // Pour LONG
+
+// Le trailing stop s'active à +0.8% et gère la sortie intelligemment
+// Distance: 0.5% (serré) → 0.8% (élargi à +2%)
 ```
 
-**Résultats backtest:** +370% PnL vs SL fixe, -20% stop hunts
+**Résultats:** Le SL large permet au trailing de gérer >95% des sorties
+**Problème résolu:** Plus d'exits via exchange SL quand position en profit
 
 ### Trailing Stop Détaillé:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         TRAILING STOP LOGIC                                 │
+│                         TRAILING STOP LOGIC (V5.15)                         │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  1. Position ouverte à $100 (LONG)                                         │
-│  2. SL dynamique calculé (ex: 2.1% basé sur ATR)                           │
+│  2. SL FIXE placé à $94 (-6%) → EMERGENCY ONLY                             │
+│     → Ce SL ne doit JAMAIS être touché sauf crash                          │
 │                                                                             │
-│  3. Prix monte à $101 (+1%) → Trailing ACTIVÉ                              │
-│     → Trail price = $101 × (1 - 0.4%) = $100.60                            │
+│  3. Prix monte à $100.80 (+0.8%) → Trailing ACTIVÉ                         │
+│     → Trail price = $100.80 × (1 - 0.5%) = $100.30                         │
+│     → Le trailing gère maintenant TOUTES les sorties                       │
 │                                                                             │
 │  4. Prix monte à $102 (+2%)                                                │
-│     → Trail price suit: $102 × (1 - 0.4%) = $101.59                        │
+│     → Trail s'élargit: callback 0.8% (au lieu de 0.5%)                     │
+│     → Trail price = $102 × (1 - 0.8%) = $101.18                            │
 │                                                                             │
-│  5. Prix redescend à $101.50                                               │
-│     → Trail price reste à $101.59 (ne descend jamais)                      │
-│     → Prix $101.50 < Trail $101.59 → EXIT avec +1.5% profit                │
+│  5. Prix redescend à $101.10                                               │
+│     → Trail price reste à $101.18 (ne descend jamais)                      │
+│     → Prix $101.10 < Trail $101.18 → EXIT avec +1.1% profit                │
+│     → SL fixe ($94) n'a JAMAIS été proche d'être touché                    │
+│                                                                             │
+│  ⚡ AVANTAGE: Gap large entre trailing ($101.18) et SL fixe ($94)          │
+│     permet au trailing de gérer les sorties sans interférence              │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
