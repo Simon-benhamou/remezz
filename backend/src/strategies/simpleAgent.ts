@@ -516,6 +516,15 @@ export class SimpleAgent {
   private position: Position | null = null;
   private running = false;
   private tickIntervalId: NodeJS.Timeout | null = null;
+
+  // Realtime app-side exits (WS-based) to react faster than 15m candle-close.
+  private realtimeExitIntervalId: NodeJS.Timeout | null = null;
+  private realtimeExitInProgress = false;
+  private closingPosition = false;
+  private rtBreachSinceMs: number | null = null;
+  private rtBreachTicks = 0;
+  private lastAppTrailingStop: number | null = null;
+
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
   private lastTickAt: number = 0;
@@ -615,6 +624,9 @@ export class SimpleAgent {
     if (this.config.mode === 'live') {
       await this.syncWithExchange();
     }
+
+    // Live mode: if we start with an existing position, enable realtime WS-based exits.
+    this.startRealtimeExitMonitorIfNeeded();
     
     // Tick toutes les minutes
     this.tickIntervalId = setInterval(() => this.tick(), 60_000);
@@ -630,6 +642,8 @@ export class SimpleAgent {
       clearInterval(this.tickIntervalId);
       this.tickIntervalId = null;
     }
+
+    this.stopRealtimeExitMonitor();
     
     // 📢 NOTIFICATION: Agent stopped
     notifyAgentStopped({
@@ -640,6 +654,153 @@ export class SimpleAgent {
     });
     
     logger.info(`⏹️ [${this.config.symbol}] STOPPED`);
+  }
+
+  // ==========================================================================
+  // REALTIME (WS) EXIT MONITOR
+  // ==========================================================================
+
+  private startRealtimeExitMonitorIfNeeded(): void {
+    if (this.config.mode !== 'live') return;
+    if (!this.running) return;
+    if (!this.position) return;
+    if (!MomentumConfig.EXIT.REALTIME_APP_EXIT_ENABLED) return;
+    if (this.realtimeExitIntervalId) return;
+
+    const pollMs = Math.max(250, Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_POLL_MS ?? 1000));
+
+    this.rtBreachSinceMs = null;
+    this.rtBreachTicks = 0;
+    this.lastAppTrailingStop = null;
+    this.closingPosition = false;
+
+    this.realtimeExitIntervalId = setInterval(() => {
+      void this.checkRealtimeExit().catch(err => {
+        logger.debug(`⚠️ [${this.config.symbol}] Realtime exit check error: ${String((err as any)?.message || err)}`);
+      });
+    }, pollMs);
+
+    logger.info(`📡 [${this.config.symbol}] Realtime WS exits enabled (poll ${pollMs}ms)`);
+  }
+
+  private stopRealtimeExitMonitor(): void {
+    if (this.realtimeExitIntervalId) {
+      clearInterval(this.realtimeExitIntervalId);
+      this.realtimeExitIntervalId = null;
+    }
+    this.rtBreachSinceMs = null;
+    this.rtBreachTicks = 0;
+    this.lastAppTrailingStop = null;
+    this.realtimeExitInProgress = false;
+  }
+
+  private async checkRealtimeExit(): Promise<void> {
+    if (!this.running) return;
+    if (this.config.mode !== 'live') return;
+    if (!MomentumConfig.EXIT.REALTIME_APP_EXIT_ENABLED) return;
+    if (this.realtimeExitInProgress) return;
+    if (this.closingPosition) return;
+    if (!this.position) return;
+
+    this.realtimeExitInProgress = true;
+    try {
+      const symbol = this.config.symbol;
+
+      // WebSocket ticker is 0 weight; if WS is unhealthy or cache-missing we do nothing here.
+      // (We don't want REST fallbacks in a tight loop, and we avoid noisy warnings.)
+      const ws = getBinanceWebSocket();
+      if (!ws.isHealthy()) return;
+      const ticker = ws.getTicker(symbol);
+      if (!ticker) return;
+      const tickerTs = Number.isFinite(Number(ticker.timestamp)) ? Number(ticker.timestamp) : Date.now();
+      if (Date.now() - tickerTs > 10_000) return;
+
+      const useMid = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_USE_MID_PRICE ?? true);
+      const mid = ticker.bid > 0 && ticker.ask > 0 ? (ticker.bid + ticker.ask) / 2 : 0;
+      const currentPrice = useMid && mid > 0 ? mid : ticker.last;
+      if (!Number.isFinite(currentPrice) || currentPrice <= 0) return;
+
+      this.lastPrice = currentPrice;
+
+      // Update watermarks in realtime so trailing can capture peaks/troughs.
+      this.position = updatePositionWaterMarks(this.position, currentPrice, currentPrice, currentPrice);
+
+      const exitSignal = shouldExitPosition(this.position, currentPrice, undefined, {
+        nowMs: Date.now(),
+        priceHigh: currentPrice,
+        priceLow: currentPrice,
+      });
+
+      const candidateStop = exitSignal.newStopLoss;
+      if (Number.isFinite(Number(candidateStop))) {
+        this.lastAppTrailingStop = candidateStop as number;
+        this.position.appTrailingStop = candidateStop as number;
+      }
+
+      if (!exitSignal.shouldExit) {
+        this.rtBreachSinceMs = null;
+        this.rtBreachTicks = 0;
+        return;
+      }
+
+      // Anti-noise confirmation.
+      const bufferPct = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_BUFFER_PCT ?? 0.05);
+      const confirmMs = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_MS ?? 1800);
+      const confirmTicks = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_TICKS ?? 2);
+
+      const now = Date.now();
+      const stopPrice = (() => {
+        if (exitSignal.reason === 'trailing' && candidateStop) return candidateStop as number;
+        if (exitSignal.reason === 'stoploss') {
+          const slPct = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
+          return this.position!.side === 'long'
+            ? this.position!.entryPrice * (1 - slPct / 100)
+            : this.position!.entryPrice * (1 + slPct / 100);
+        }
+        return undefined;
+      })();
+      const breach = (() => {
+        if ((exitSignal.reason === 'trailing' || exitSignal.reason === 'stoploss') && stopPrice) {
+          if (this.position!.side === 'long') {
+            return currentPrice <= stopPrice * (1 - bufferPct / 100);
+          }
+          return currentPrice >= stopPrice * (1 + bufferPct / 100);
+        }
+        return true;
+      })();
+
+      if (!breach) {
+        this.rtBreachSinceMs = null;
+        this.rtBreachTicks = 0;
+        return;
+      }
+
+      if (this.rtBreachSinceMs == null) {
+        this.rtBreachSinceMs = now;
+        this.rtBreachTicks = 1;
+        logger.debug(`🔎 [${symbol}] Realtime exit breach started (${exitSignal.reason}) price=$${currentPrice.toFixed(4)} stop=$${stopPrice?.toFixed(4) || 'n/a'}`);
+        return;
+      }
+
+      this.rtBreachTicks += 1;
+      const elapsed = now - this.rtBreachSinceMs;
+      const confirmed = elapsed >= confirmMs || this.rtBreachTicks >= confirmTicks;
+      if (!confirmed) return;
+
+      // Confirmed: close immediately.
+      this.stopRealtimeExitMonitor();
+
+      const reason = exitSignal.reason === 'stoploss'
+        ? 'stoploss_rt'
+        : exitSignal.reason === 'time'
+          ? 'time_rt'
+          : 'trailing_rt';
+
+      logger.info(`⚡ [${symbol}] REALTIME EXIT confirmed (${reason}) price=$${currentPrice.toFixed(4)} stop=$${stopPrice?.toFixed(4) || 'n/a'} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`);
+      await this.closePosition(this.position, currentPrice, reason);
+    } finally {
+      this.realtimeExitInProgress = false;
+    }
   }
   
   // ==========================================================================
@@ -1065,6 +1226,7 @@ export class SimpleAgent {
       };
       
       this.position = position;
+      this.closingPosition = false;
       
       // Commit MARGIN (not notional)
       this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
@@ -1174,6 +1336,7 @@ export class SimpleAgent {
         };
         
         this.position = position;
+        this.closingPosition = false;
         
         // Commit MARGIN (not notional)
         this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
@@ -1206,6 +1369,9 @@ export class SimpleAgent {
 
         // Save to DB with fee (store the emergency stop, not the tight strategy SL)
         await this.savePositionToDb(position, 'live_entry', liveEntryFee);
+
+        // Realtime app-side exits (WS-based) for fast trailing/stoploss reaction.
+        this.startRealtimeExitMonitorIfNeeded();
         
         // Optional: native exchange trailing (disabled by default)
         if (MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) {
@@ -1314,7 +1480,11 @@ export class SimpleAgent {
       const pnlPct = position.side === 'long'
         ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
         : ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
-      logger.info(`📊 [${symbol}] POSITION ${position.side.toUpperCase()} | entry=$${position.entryPrice.toFixed(2)} | now=$${currentPrice.toFixed(2)} | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | SL=$${this.position?.stopLoss?.toFixed(2) || 'N/A'}`);
+      const appTrail = this.position?.appTrailingStop;
+      const emergency = this.position?.emergencyStopPrice ?? this.position?.stopLoss;
+      logger.info(
+        `📊 [${symbol}] POSITION ${position.side.toUpperCase()} | entry=$${position.entryPrice.toFixed(2)} | now=$${currentPrice.toFixed(2)} | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | trail=$${appTrail ? appTrail.toFixed(2) : 'N/A'} | emergencySL=$${emergency ? emergency.toFixed(2) : 'N/A'}`
+      );
       
       // 📢 NOTIFICATION: Liquidation warning (check if price is close to liquidation)
       // Liquidation price calculation: 
@@ -1423,6 +1593,16 @@ export class SimpleAgent {
     reason: string
   ): Promise<void> {
     const symbol = this.config.symbol;
+
+    // Prevent duplicate close attempts and stop realtime monitor before placing orders.
+    if (this.closingPosition) {
+      logger.debug(`⚠️ [${symbol}] Close already in progress, skipping duplicate close (${reason})`);
+      return;
+    }
+    this.closingPosition = true;
+    this.stopRealtimeExitMonitor();
+
+    try {
     
     // Calculate PnL based on side
     let pnlPct: number;
@@ -1570,6 +1750,9 @@ export class SimpleAgent {
           mode: 'live',
         });
       }
+    }
+    } finally {
+      this.closingPosition = false;
     }
   }
   

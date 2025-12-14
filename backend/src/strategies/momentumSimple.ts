@@ -153,6 +153,16 @@ export const MomentumConfig = {
                                           // Example: ATR SL 2% → Emergency 5%
                                           // Example: ATR SL 3% → Emergency 7.5%
 
+    // Realtime App-Side Exit (WebSocket)
+    // Goal: react faster than 15m candle close while filtering micro-noise.
+    // This does NOT move the exchange emergency STOP_MARKET; it only decides when to close.
+    REALTIME_APP_EXIT_ENABLED: true,
+    REALTIME_APP_EXIT_POLL_MS: 1000,          // How often we check WS price when in position
+    REALTIME_APP_EXIT_CONFIRM_MS: 1800,       // Require breach to persist for at least this long
+    REALTIME_APP_EXIT_CONFIRM_TICKS: 2,       // ...or for this many consecutive checks
+    REALTIME_APP_EXIT_BUFFER_PCT: 0.05,       // Extra buffer beyond stop to avoid spread/mark noise
+    REALTIME_APP_EXIT_USE_MID_PRICE: true,    // Use (bid+ask)/2 when available
+
     // Profit-protection (Exchange, ratcheting)
     // Starts only after sufficient profit to avoid wick/mark noise.
     // Example long:
@@ -272,6 +282,7 @@ export interface Position {
   qty: number;
   entryTime: number;
   stopLoss?: number;
+  appTrailingStop?: number;  // App-side trailing stop (distinct from exchange emergency stop)
   stopLossPct?: number;      // V5.7: Store the SL percentage used (for dynamic SL tracking)
   orderId?: string;
   stopLossOrderId?: string;  // Track SL order ID for updates/cancellation
