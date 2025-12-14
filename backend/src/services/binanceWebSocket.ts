@@ -92,6 +92,26 @@ export interface BinancePositionData {
   timestamp: number;
 }
 
+export interface BinanceOrderTradeUpdate {
+  userId: string;
+  symbol: string; // Binance format, e.g. BTCUSDT
+  eventTime: number;
+  transactionTime: number;
+  executionType: string; // e.g. NEW, TRADE, CANCELED, EXPIRED
+  orderStatus: string;   // e.g. NEW, PARTIALLY_FILLED, FILLED, CANCELED
+  side: string;          // BUY / SELL
+  orderType: string;     // MARKET, STOP_MARKET, TRAILING_STOP_MARKET...
+  orderId?: string;
+  clientOrderId?: string;
+  averagePrice?: number;
+  lastFilledQty?: number;
+  lastFilledPrice?: number;
+  cumulativeFilledQty?: number;
+  stopPrice?: number;
+  reduceOnly?: boolean;
+  raw: any;
+}
+
 type SymbolRejectionReason = 'format' | 'unknown' | 'cached';
 
 type SymbolValidationResult =
@@ -335,6 +355,11 @@ class BinanceWebSocketManager {
   private balanceCache = new Map<string, BinanceBalance>();
   // Position cache: key = `${userId}_${symbol}` (e.g., "user123_BTCUSDT")
   private positionCache = new Map<string, BinancePositionData>();
+  // Order/trade update cache from ORDER_TRADE_UPDATE (user data stream)
+  // Key = `${userId}_${symbol}`
+  private orderTradeUpdateCache = new Map<string, BinanceOrderTradeUpdate[]>();
+  // Key = `${userId}_${orderId}`
+  private orderTradeUpdateByOrderId = new Map<string, BinanceOrderTradeUpdate>();
   // Track which users have had their position cache seeded (to avoid REST fallback)
   private positionCacheSeeded = new Set<string>();
   private lastUpdate = Date.now();
@@ -349,6 +374,8 @@ class BinanceWebSocketManager {
   // User data stream management
   private userDataStreams = new Map<string, { ws: WebSocket | null; listenKey: string; userId: string; keepAliveTimer?: NodeJS.Timeout }>();
   private userDataSubscriptions = new Map<string, Promise<void>>();
+
+  private readonly orderUpdateCacheLimitPerSymbol = 200;
   
   private isConnecting = false;
   private isConnected = false;
@@ -2043,7 +2070,37 @@ class BinanceWebSocketManager {
 
             // ORDER_TRADE_UPDATE event (order updates)
             if (msg.e === 'ORDER_TRADE_UPDATE') {
-              console.log(`📊 Order update for user ${userId}: ${msg.o?.s} ${msg.o?.S} ${msg.o?.X}`);
+              const order = msg.o || {};
+              const symbol = String(order.s || '').toUpperCase();
+
+              if (symbol) {
+                const reduceOnlyRaw = order.R;
+                const reduceOnly = reduceOnlyRaw === true || reduceOnlyRaw === 'true';
+
+                const update: BinanceOrderTradeUpdate = {
+                  userId,
+                  symbol,
+                  eventTime: Number(msg.E) || Date.now(),
+                  transactionTime: Number(order.T ?? msg.T ?? msg.E) || Date.now(),
+                  executionType: String(order.x || ''),
+                  orderStatus: String(order.X || ''),
+                  side: String(order.S || ''),
+                  orderType: String(order.o || ''),
+                  orderId: order.i !== undefined ? String(order.i) : undefined,
+                  clientOrderId: order.c !== undefined ? String(order.c) : undefined,
+                  averagePrice: order.ap !== undefined ? parseFloat(order.ap) : undefined,
+                  lastFilledQty: order.l !== undefined ? parseFloat(order.l) : undefined,
+                  lastFilledPrice: order.L !== undefined ? parseFloat(order.L) : undefined,
+                  cumulativeFilledQty: order.z !== undefined ? parseFloat(order.z) : undefined,
+                  stopPrice: order.sp !== undefined ? parseFloat(order.sp) : undefined,
+                  reduceOnly,
+                  raw: msg,
+                };
+
+                this.recordOrderTradeUpdate(update);
+              }
+
+              console.log(`📊 Order update for user ${userId}: ${order.s} ${order.S} ${order.X}`);
             }
 
           } catch (error) {
@@ -2166,6 +2223,65 @@ class BinanceWebSocketManager {
     } finally {
       this.userDataSubscriptions.delete(userId);
     }
+  }
+
+  private recordOrderTradeUpdate(update: BinanceOrderTradeUpdate): void {
+    const symbolKey = `${update.userId}_${update.symbol}`;
+    const existing = this.orderTradeUpdateCache.get(symbolKey) || [];
+    existing.push(update);
+
+    if (existing.length > this.orderUpdateCacheLimitPerSymbol) {
+      existing.splice(0, existing.length - this.orderUpdateCacheLimitPerSymbol);
+    }
+    this.orderTradeUpdateCache.set(symbolKey, existing);
+
+    if (update.orderId) {
+      const orderKey = `${update.userId}_${update.orderId}`;
+      this.orderTradeUpdateByOrderId.set(orderKey, update);
+    }
+  }
+
+  getRecentOrderTradeUpdates(userId: string, symbol: string, options?: { sinceMs?: number; limit?: number }): BinanceOrderTradeUpdate[] {
+    const normalizedSymbol = toBinanceSymbolId(symbol);
+    const key = `${userId}_${normalizedSymbol}`;
+    const updates = this.orderTradeUpdateCache.get(key) || [];
+
+    const sinceMs = options?.sinceMs;
+    const filtered = sinceMs ? updates.filter((u) => u.eventTime >= sinceMs) : updates;
+
+    const limit = options?.limit ?? filtered.length;
+    if (limit <= 0) return [];
+    if (filtered.length <= limit) return filtered.slice();
+    return filtered.slice(filtered.length - limit);
+  }
+
+  getLastFilledOrderTradeUpdate(
+    userId: string,
+    symbol: string,
+    options?: { reduceOnly?: boolean; side?: 'BUY' | 'SELL' }
+  ): BinanceOrderTradeUpdate | null {
+    const normalizedSymbol = toBinanceSymbolId(symbol);
+    const key = `${userId}_${normalizedSymbol}`;
+    const updates = this.orderTradeUpdateCache.get(key);
+    if (!updates || updates.length === 0) return null;
+
+    for (let i = updates.length - 1; i >= 0; i--) {
+      const u = updates[i];
+
+      if (options?.reduceOnly !== undefined && u.reduceOnly !== options.reduceOnly) continue;
+      if (options?.side && u.side !== options.side) continue;
+
+      const lastQty = Number(u.lastFilledQty ?? 0);
+      const cumQty = Number(u.cumulativeFilledQty ?? 0);
+      const isTrade = u.executionType === 'TRADE';
+      const hasFillQty = lastQty > 0 || cumQty > 0;
+      const hasPrice = Number(u.lastFilledPrice ?? 0) > 0 || Number(u.averagePrice ?? 0) > 0;
+
+      if (isTrade && hasFillQty && hasPrice) return u;
+      if (u.orderStatus === 'FILLED' && hasFillQty && hasPrice) return u;
+    }
+
+    return null;
   }
 
   /**
@@ -3265,6 +3381,24 @@ export function markPositionCacheSeeded(userId: string): void {
 export function isUserDataStreamActive(userId: string): boolean {
   const ws = getBinanceWebSocket();
   return ws.isUserDataStreamActive(userId);
+}
+
+export function getRecentOrderTradeUpdatesFromWebSocket(
+  userId: string,
+  symbol: string,
+  options?: { sinceMs?: number; limit?: number }
+): BinanceOrderTradeUpdate[] {
+  const ws = getBinanceWebSocket();
+  return ws.getRecentOrderTradeUpdates(userId, symbol, options);
+}
+
+export function getLastFilledOrderTradeUpdateFromWebSocket(
+  userId: string,
+  symbol: string,
+  options?: { reduceOnly?: boolean; side?: 'BUY' | 'SELL' }
+): BinanceOrderTradeUpdate | null {
+  const ws = getBinanceWebSocket();
+  return ws.getLastFilledOrderTradeUpdate(userId, symbol, options);
 }
 
 export function getUserDataStreamStatus(userId: string): { 

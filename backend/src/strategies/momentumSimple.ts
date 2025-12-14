@@ -836,9 +836,14 @@ export function checkMomentumSignal(
 export function shouldExitPosition(
   position: Position, 
   currentPrice: number,
-  candles?: Candle[]  // Optional candles for smart exits
+  candles?: Candle[],  // Optional candles for smart exits
+  opts?: {
+    nowMs?: number;
+    priceHigh?: number;
+    priceLow?: number;
+  }
 ): ExitSignal {
-  const now = Date.now();
+  const now = opts?.nowMs ?? Date.now();
   const holdMinutes = (now - position.entryTime) / 60000;
   
   // Calculate PnL based on position side
@@ -873,14 +878,16 @@ export function shouldExitPosition(
     
     if (position.side === 'long') {
       // For long: track highest price, stop is below it
-      const highWaterMark = position.highWaterMark 
-        ? Math.max(position.highWaterMark, currentPrice)
-        : currentPrice;
+      const effectiveHigh = opts?.priceHigh ?? currentPrice;
+      const highWaterMark = position.highWaterMark
+        ? Math.max(position.highWaterMark, effectiveHigh)
+        : effectiveHigh;
       
       trailingStopPrice = highWaterMark * (1 - trailingDistance / 100);
       
       // Check if price dropped below trailing stop
-      if (currentPrice <= trailingStopPrice) {
+      const effectiveLow = opts?.priceLow ?? currentPrice;
+      if (effectiveLow <= trailingStopPrice) {
         return { 
           shouldExit: true, 
           reason: 'trailing', 
@@ -901,14 +908,16 @@ export function shouldExitPosition(
       
     } else {
       // For short: track lowest price, stop is above it
-      const lowWaterMark = position.lowWaterMark 
-        ? Math.min(position.lowWaterMark, currentPrice)
-        : currentPrice;
+      const effectiveLow = opts?.priceLow ?? currentPrice;
+      const lowWaterMark = position.lowWaterMark
+        ? Math.min(position.lowWaterMark, effectiveLow)
+        : effectiveLow;
       
       trailingStopPrice = lowWaterMark * (1 + trailingDistance / 100);
       
       // Check if price rose above trailing stop
-      if (currentPrice >= trailingStopPrice) {
+      const effectiveHigh = opts?.priceHigh ?? currentPrice;
+      if (effectiveHigh >= trailingStopPrice) {
         return { 
           shouldExit: true, 
           reason: 'trailing', 
@@ -1056,7 +1065,12 @@ export function determineVolatilityRegime(
  * Update position water marks for trailing stop tracking
  * Call this every tick to track high/low
  */
-export function updatePositionWaterMarks(position: Position, currentPrice: number): Position {
+export function updatePositionWaterMarks(
+  position: Position,
+  currentPrice: number,
+  priceHigh?: number,
+  priceLow?: number,
+): Position {
   // Calculate current PnL %
   const currentPnlPct = position.side === 'long'
     ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
@@ -1068,14 +1082,16 @@ export function updatePositionWaterMarks(position: Position, currentPrice: numbe
     : currentPnlPct;
   
   if (position.side === 'long') {
-    const newHigh = position.highWaterMark 
-      ? Math.max(position.highWaterMark, currentPrice)
-      : currentPrice;
+    const effectiveHigh = priceHigh ?? currentPrice;
+    const newHigh = position.highWaterMark
+      ? Math.max(position.highWaterMark, effectiveHigh)
+      : effectiveHigh;
     return { ...position, highWaterMark: newHigh, maxPnlPct: newMaxPnlPct };
   } else {
-    const newLow = position.lowWaterMark 
-      ? Math.min(position.lowWaterMark, currentPrice)
-      : currentPrice;
+    const effectiveLow = priceLow ?? currentPrice;
+    const newLow = position.lowWaterMark
+      ? Math.min(position.lowWaterMark, effectiveLow)
+      : effectiveLow;
     return { ...position, lowWaterMark: newLow, maxPnlPct: newMaxPnlPct };
   }
 }

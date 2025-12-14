@@ -29,7 +29,19 @@ import {
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
-import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket, getPositionFromWebSocket, seedPositionCache, toBinanceSymbolId, isPositionCacheSeeded } from '../services/binanceWebSocket.js';
+import {
+  getBinanceWebSocket,
+  getKlinesOhlcvFromWebSocket,
+  seedKlinesFromWebSocket,
+  getBalanceFromWebSocket,
+  getTickerFromWebSocket,
+  getPositionFromWebSocket,
+  getLastFilledOrderTradeUpdateFromWebSocket,
+  isUserDataStreamActive,
+  seedPositionCache,
+  toBinanceSymbolId,
+  isPositionCacheSeeded,
+} from '../services/binanceWebSocket.js';
 import { 
   notifyTradeEntry, 
   notifyTradeExit, 
@@ -537,6 +549,14 @@ export class SimpleAgent {
   // V5.11: Track last processed candle timestamp to sync with backtest
   // Only check entry signals when a NEW 15m candle closes (not on every tick)
   private lastProcessedCandleTs: number = 0;
+
+  // Backtest parity: only evaluate exits on NEWLY CLOSED candles too.
+  private lastProcessedExitCandleTs: number = 0;
+
+  // Backtest parity: apply a post-exit cooldown to avoid immediate re-entries.
+  // Backtest service uses 8 bars (2h) cooldown after any exit.
+  private readonly ENTRY_COOLDOWN_BARS = 8;
+  private entryCooldownBarsRemaining: number = 0;
   
   // Cache pour éviter trop d'appels API (per-symbol only, BTC is global)
   private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
@@ -549,6 +569,10 @@ export class SimpleAgent {
   // Position sync throttling (WebSocket is primary, REST is fallback)
   private lastPositionSync: number = 0;
   private readonly POSITION_SYNC_INTERVAL_MS = 30_000; // 30 seconds (REST fallback, not WS)
+
+  // V5.13: Missing trade reconciliation throttling
+  private lastMissingTradesCheck: number = 0;
+  private readonly MISSING_TRADES_CHECK_INTERVAL_MS = 5 * 60_000; // 5 minutes
   
   constructor(config: SimpleAgentConfig) {
     this.config = config;
@@ -784,6 +808,17 @@ export class SimpleAgent {
       // New closed candle! Mark it as processed
       const isFirstCheck = this.lastProcessedCandleTs === 0;
       this.lastProcessedCandleTs = lastClosedCandleTs;
+
+      // Backtest parity: decrement cooldown once per CLOSED candle.
+      if (this.entryCooldownBarsRemaining > 0) {
+        this.entryCooldownBarsRemaining--;
+      }
+
+      // If we're still cooling down after an exit, skip entry checks.
+      if (this.entryCooldownBarsRemaining > 0) {
+        this.lastRejectReason = `cooldown_${this.entryCooldownBarsRemaining}bars`;
+        return;
+      }
       
       // Log the closed candle info
       const closedCandle = candles[candles.length - 1];
@@ -1013,7 +1048,7 @@ export class SimpleAgent {
         side,
         entryPrice: currentPrice,
         qty: sizing.qty,
-        entryTime: Date.now(),
+        entryTime: lastCandle.timestamp,
         leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
         marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
         stopLoss: side === 'long' 
@@ -1114,13 +1149,14 @@ export class SimpleAgent {
         
         const filledPrice = order.average || order.price || currentPrice;
         const filledQty = order.filled || formattedQty;
+        const entryTimeMs = (order as any)?.timestamp ?? lastCandle.timestamp;
         
         const position: Position = {
           symbol,
           side,
           entryPrice: filledPrice,
           qty: filledQty,
-          entryTime: Date.now(),
+          entryTime: entryTimeMs,
           leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
           marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
           stopLoss: side === 'long'
@@ -1231,10 +1267,20 @@ export class SimpleAgent {
     const symbol = this.config.symbol;
     
     try {
-      const candles = await this.fetchCandles();
-      if (candles.length === 0) return;
-      
-      const currentPrice = candles[candles.length - 1].close;
+      const allCandles = await this.fetchCandles();
+      if (allCandles.length === 0) return;
+
+      // Backtest parity: ignore in-progress candle for exit decisions.
+      const candles = allCandles.length > 1 ? allCandles.slice(0, -1) : allCandles;
+      const latestClosedCandle = candles[candles.length - 1];
+
+      // Only process exit once per newly-closed candle.
+      if (latestClosedCandle.timestamp === this.lastProcessedExitCandleTs) {
+        return;
+      }
+      this.lastProcessedExitCandleTs = latestClosedCandle.timestamp;
+
+      const currentPrice = latestClosedCandle.close;
       this.lastPrice = currentPrice;
       
       // 🔧 SAFETY CHECK - Ensure position has protection
@@ -1255,7 +1301,7 @@ export class SimpleAgent {
       }
       
       // Update water marks for trailing stop
-      this.position = updatePositionWaterMarks(position, currentPrice);
+      this.position = updatePositionWaterMarks(position, currentPrice, latestClosedCandle.high, latestClosedCandle.low);
       
       // Log position status every tick when in position
       const pnlPct = position.side === 'long'
@@ -1291,7 +1337,11 @@ export class SimpleAgent {
         });
       }
       
-      const exitSignal = shouldExitPosition(this.position!, currentPrice);
+      const exitSignal = shouldExitPosition(this.position!, currentPrice, undefined, {
+        nowMs: latestClosedCandle.timestamp,
+        priceHigh: latestClosedCandle.high,
+        priceLow: latestClosedCandle.low,
+      });
 
       // Emergency profit-protection (exchange-side): ratchet stop only after +2% PnL.
       // This is NOT the primary exit; trailing/app logic remains the priority.
@@ -1388,6 +1438,9 @@ export class SimpleAgent {
     // Reset trailing flags for next position
     this.trailingNotified = false;
     this.trailingWidened = false;
+
+    // Backtest parity: prevent immediate re-entry after an exit.
+    this.entryCooldownBarsRemaining = this.ENTRY_COOLDOWN_BARS;
     
     // Store exit info for frontend display
     this.lastExit = {
@@ -2211,21 +2264,40 @@ export class SimpleAgent {
         let reason = 'stop_loss_exchange';
         
         try {
-          if (this.config.exchange.fetchMyTrades) {
+          // Prefer WebSocket user-data fills (0 weight) when available
+          if (isUserDataStreamActive(this.config.userId)) {
+            const exitSide = this.position.side === 'long' ? 'SELL' : 'BUY';
+            const wsFill = getLastFilledOrderTradeUpdateFromWebSocket(this.config.userId, symbol, {
+              reduceOnly: true,
+              side: exitSide,
+            });
+
+            if (wsFill) {
+              const wsPrice = Number(wsFill.averagePrice ?? wsFill.lastFilledPrice);
+              if (Number.isFinite(wsPrice) && wsPrice > 0) {
+                exitPrice = wsPrice;
+              }
+              exchangeOrderId = wsFill.orderId;
+              orderType = wsFill.orderType;
+              logger.info(`📈 [${symbol}] Found exit fill via WS: $${exitPrice} orderId=${exchangeOrderId} type=${orderType}`);
+            } else {
+              logger.warn(`⚠️ [${symbol}] No WS exit fill found yet; using entryPrice fallback for sync.`);
+            }
+          }
+
+          // REST fallback (only if WS is not active or had no data)
+          if (!exchangeOrderId && this.config.exchange.fetchMyTrades) {
             const trades = await this.config.exchange.fetchMyTrades(symbol, Date.now() - 3600000, 10);
             if (trades && trades.length > 0) {
               const lastTrade = trades[trades.length - 1];
               exitPrice = lastTrade.price || exitPrice;
               exchangeOrderId = lastTrade.order || lastTrade.info?.orderId;
-              
-              // 🔍 Get order type from Binance (TRAILING_STOP_MARKET, STOP_MARKET, MARKET, etc.)
               orderType = lastTrade.info?.type || lastTrade.type;
-              
-              logger.info(`📈 [${symbol}] Found exit trade: $${exitPrice} orderId=${exchangeOrderId} type=${orderType}`);
+              logger.info(`📈 [${symbol}] Found exit trade via REST: $${exitPrice} orderId=${exchangeOrderId} type=${orderType}`);
             }
           }
         } catch (tradeError) {
-          logger.warn(`⚠️ [${symbol}] Could not fetch trades:`, tradeError);
+          logger.warn(`⚠️ [${symbol}] Could not determine exit trade:`, tradeError);
         }
         
         // Calculate PnL
@@ -2349,6 +2421,21 @@ export class SimpleAgent {
     const symbol = this.config.symbol;
     
     try {
+      if (this.config.mode !== 'live') {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - this.lastMissingTradesCheck < this.MISSING_TRADES_CHECK_INTERVAL_MS) {
+        return;
+      }
+      this.lastMissingTradesCheck = now;
+
+      // If user-data stream is active, rely on WS-based sync (avoid REST bursts)
+      if (isUserDataStreamActive(this.config.userId)) {
+        return;
+      }
+
       // Get all trades from Binance for the last 2 hours (to catch recent misses)
       if (!this.config.exchange.fetchMyTrades) {
         return;
