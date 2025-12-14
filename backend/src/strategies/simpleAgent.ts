@@ -1189,7 +1189,9 @@ export class SimpleAgent {
         // Exchange-side protection: EMERGENCY STOP ONLY (wide, crash protection)
         // Trailing exit is managed app-side; do NOT move exchange SL above entry.
         const baseSlPct = position.stopLossPct || 2.0;
-        const emergencySlPct = baseSlPct * (MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER || 2.5);
+        const emergencyTargetPct = baseSlPct * (MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER || 2.5);
+        const emergencyMaxPct = MomentumConfig.EXIT.EMERGENCY_STOP_MAX_PCT ?? 3.0;
+        const emergencySlPct = Math.min(emergencyTargetPct, emergencyMaxPct);
         const emergencyStop = position.side === 'long'
           ? position.entryPrice * (1 - emergencySlPct / 100)
           : position.entryPrice * (1 + emergencySlPct / 100);

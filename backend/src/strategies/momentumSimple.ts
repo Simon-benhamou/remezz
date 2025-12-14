@@ -128,7 +128,7 @@ export const MomentumConfig = {
     // V5.14: SL FIXE - 2.5% constant
     // Layer 3 (Profit Lock) déplacera ce SL vers le haut pour sécuriser gains
     STOP_LOSS_TYPE: 'fixed' as const,  // 'fixed' | 'atr'
-    STOP_LOSS_PCT: 2.5,              // SL fixe 2.5% (Layer 1 emergency = 2.5% × 2.5 = 6.25%)
+    STOP_LOSS_PCT: 2.5,              // SL fixe 2.5% (Emergency exchange = min(SL×mult, 3%))
     STOP_LOSS_ATR_MULT: 3.0,         // ATR × 3.0 (was 2.0) - plus large
     STOP_LOSS_MIN_PCT: 1.0,          // Min 1.0% (was 0.8%)
     STOP_LOSS_MAX_PCT: 4.5,          // Max 4.5% (was 3.0%)
@@ -148,7 +148,8 @@ export const MomentumConfig = {
     USE_EXCHANGE_TRAILING: false,         // App-side trailing is default
 
     // Emergency Stop Loss (Exchange)
-    EMERGENCY_STOP_MULTIPLIER: 2.5,       // Emergency SL = dynamic SL × 2.5
+    EMERGENCY_STOP_MULTIPLIER: 2.5,       // Emergency SL = dynamic SL × multiplier, capped
+    EMERGENCY_STOP_MAX_PCT: 3.0,          // Hard cap (user request): max 3% from entry on exchange
                                           // Example: ATR SL 2% → Emergency 5%
                                           // Example: ATR SL 3% → Emergency 7.5%
 
