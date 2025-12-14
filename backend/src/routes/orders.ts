@@ -85,8 +85,10 @@ router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) =
   }
 
   const sessionId = String(req.query.sessionId || "").trim();
+  const modeRaw = String(req.query.mode || "").trim();
+  const mode = modeRaw === 'paper' || modeRaw === 'live' ? (modeRaw as 'paper' | 'live') : null;
   const limitRaw = Number(req.query.limit ?? 200);
-  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 200;
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(5000, Math.floor(limitRaw))) : 200;
   const fromStr = String(req.query.from || '').trim();
   const toStr = String(req.query.to || '').trim();
 
@@ -107,12 +109,11 @@ router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) =
   if (sessionId) {
     where.sessionId = sessionId;
   } else if (req.user.role !== 'admin' && !req.user.isLegacy) {
-    // Non-admin users: only show their trades
-    const userSessions = await prisma.agentSession.findMany({
-      where: { userId: req.user.id },
-      select: { id: true },
-    });
-    where.sessionId = { in: userSessions.map((s) => s.id) };
+    // Non-admin users: only show their trades (optionally filtered by mode)
+    where.session = { userId: req.user.id, ...(mode ? { mode } : {}) };
+  } else if (mode) {
+    // Admin/legacy: allow optional mode filter when no sessionId is provided
+    where.session = { ...(mode ? { mode } : {}) };
   }
 
   if (from || to) {

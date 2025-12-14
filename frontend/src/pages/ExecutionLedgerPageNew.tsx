@@ -48,13 +48,11 @@ export default function ExecutionLedgerPageNew() {
   const [allTrades, setAllTrades] = React.useState<TradeRow[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [searchText, setSearchText] = React.useState('');
-  const [modeFilter, setModeFilter] = React.useState<'all' | 'paper' | 'live'>('all');
   const { mode } = useMode();
 
   const trades = React.useMemo(() => {
-    if (modeFilter === 'all') return allTrades;
-    return allTrades.filter(t => t.sessionMode === modeFilter);
-  }, [allTrades, modeFilter]);
+    return allTrades.filter(t => t.sessionMode === mode);
+  }, [allTrades, mode]);
 
   const summary = React.useMemo(() => {
     if (!trades.length) return null;
@@ -142,28 +140,7 @@ export default function ExecutionLedgerPageNew() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <Text style={{ color: '#94a3b8', fontSize: 12 }}>Mode:</Text>
             <div style={{ display: 'flex', gap: 4 }}>
-              {(['all', 'paper', 'live'] as const).map(m => (
-                <Button
-                  key={m}
-                  size="small"
-                  type={modeFilter === m ? 'primary' : 'default'}
-                  onClick={() => setModeFilter(m)}
-                  style={{
-                    background: modeFilter === m ? undefined : 'rgba(15, 23, 42, 0.8)',
-                    borderColor: modeFilter === m ? undefined : 'rgba(148, 163, 184, 0.2)',
-                  }}
-                >
-                  {m.charAt(0).toUpperCase() + m.slice(1)}
-                  {m !== 'all' && (
-                    <Tag
-                      color={m === 'paper' ? 'blue' : 'green'}
-                      style={{ marginLeft: 4, fontSize: 10 }}
-                    >
-                      {allTrades.filter(t => t.sessionMode === m).length}
-                    </Tag>
-                  )}
-                </Button>
-              ))}
+         
             </div>
           </div>
           <Input

@@ -1164,7 +1164,8 @@ app.get("/api/agent/overview", async (req, res) => {
       
       let state = 'STOPPED';
       let hasPosition = false;
-      let pnlUsd = session.SessionKpi?.realizedPnlUsd || 0;
+      const realizedPnlUsd = session.SessionKpi?.realizedPnlUsd || 0;
+      let unrealizedPnlUsd = 0;
       let winRate = session.SessionKpi?.winRate || 0;
       let bias: 'long' | 'short' | null = null;
       
@@ -1178,9 +1179,7 @@ app.get("/api/agent/overview", async (req, res) => {
         bias = agentState?.plan?.bias || null;
         
         // Add unrealized PnL if in position
-        if (agentState?.pos?.pnlUsd) {
-          pnlUsd += agentState.pos.pnlUsd;
-        }
+        unrealizedPnlUsd = agentState?.pos?.pnlUsd || 0;
       } else if (!session.stoppedAt) {
         // Session not stopped but agent not running - it crashed or was restarted
         state = 'WATCHING';
@@ -1191,123 +1190,103 @@ app.get("/api/agent/overview", async (req, res) => {
         state,
         hasPosition,
         bias,
-        pnlUsd,
+        pnlUsd: realizedPnlUsd + unrealizedPnlUsd,
+        realizedPnlUsd,
+        unrealizedPnlUsd,
         winRate,
       };
     });
     
-    // 🔧 FIX: Calculate total PnL and ROI from all sessions for this mode
-    // This ensures correct values are shown in the header after redeployment
-    let totalPnlUsd = 0;
-    let initialCapital = 10000;
-    
-    if (mode === 'paper' && userId) {
-      // Get initial capital setting
-      const setting = await prisma.userSetting.findUnique({
-        where: {
-          userId_key: {
-            userId: userId,
-            key: 'paperTradingCapital'
-          }
-        }
-      });
-      initialCapital = parseFloat(setting?.value || '10000') || 10000;
-      
-      // Sum ALL realized PnL from paper sessions (from DB, not in-memory)
-      const allPaperKpis = await prisma.sessionKpi.findMany({
-        where: {
-          session: {
-            userId,
-            mode: 'paper',
-          }
+    // Totals for header should be all-time and net of fees.
+    // Source of truth: Fill ledger (realizedPnl - fee), NOT SessionKpi (which is already net).
+    const requestedMode = mode === 'paper' || mode === 'live' ? mode : undefined;
+
+    const [paperCapSetting, liveStartSetting] = userId
+      ? await Promise.all([
+          prisma.userSetting.findUnique({
+            where: {
+              userId_key: {
+                userId,
+                key: 'paperTradingCapital',
+              },
+            },
+          }),
+          prisma.userSetting.findUnique({
+            where: {
+              userId_key: {
+                userId,
+                key: 'liveStartBalance',
+              },
+            },
+          }),
+        ])
+      : [null, null];
+
+    const paperInitial = parseFloat(paperCapSetting?.value || '10000') || 10000;
+    const liveInitial = parseFloat(liveStartSetting?.value || '500') || 500;
+    const initialCapital = requestedMode === 'paper'
+      ? paperInitial
+      : requestedMode === 'live'
+        ? liveInitial
+        : (paperInitial + liveInitial);
+
+    const pnlAgg = await prisma.fill.aggregate({
+      where: {
+        session: {
+          userId,
+          ...(requestedMode ? { mode: requestedMode } : {}),
         },
-        select: { realizedPnlUsd: true }
-      });
-      totalPnlUsd = allPaperKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
-      
-      // Subtract fees from paper PnL for accurate net display
-      const paperFees = await prisma.fill.aggregate({
-        where: { session: { userId, mode: 'paper' } },
-        _sum: { fee: true }
-      });
-      totalPnlUsd -= (paperFees._sum.fee || 0);
-    } else if (mode === 'live' && userId) {
-      // For live mode: get initial capital from user setting
-      const liveStartSetting = await prisma.userSetting.findUnique({
-        where: {
-          userId_key: {
-            userId: userId,
-            key: 'liveStartBalance'
-          }
-        }
-      });
-      
-      if (liveStartSetting) {
-        initialCapital = parseFloat(liveStartSetting.value) || 500; // Default to 500 for live
-      } else {
-        // Fallback: use a reasonable default for live trading
-        // User should set this via settings for accurate ROI calculation
-        initialCapital = 500;
-      }
-      
-      // Sum from enriched sessions
-      totalPnlUsd = enrichedSessions.reduce((sum, s) => sum + (s.pnlUsd || 0), 0);
-      
-      // Subtract fees from live PnL for accurate net display
-      const liveFees = await prisma.fill.aggregate({
-        where: { session: { userId, mode: 'live' } },
-        _sum: { fee: true }
-      });
-      totalPnlUsd -= (liveFees._sum.fee || 0);
-    } else {
-      // For combined mode, sum from enriched sessions
-      totalPnlUsd = enrichedSessions.reduce((sum, s) => sum + (s.pnlUsd || 0), 0);
-      
-      // Subtract fees from live PnL for accurate net display
-      const liveFees = await prisma.fill.aggregate({
-        where: { session: { userId, mode: 'live' } },
-        _sum: { fee: true }
-      });
-      totalPnlUsd -= (liveFees._sum.fee || 0);
-    }
+      },
+      _sum: { realizedPnl: true, fee: true },
+    });
+
+    const totalPnlUsd = (pnlAgg._sum.realizedPnl || 0) - (pnlAgg._sum.fee || 0);
     
     // 📊 Calculate TODAY's PnL (trades closed today in local timezone)
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     
-    const todayFills = await prisma.fill.findMany({
+    const todayAgg = await prisma.fill.aggregate({
       where: {
-        session: { userId, mode: mode as 'paper' | 'live' | undefined },
+        session: {
+          userId,
+          ...(requestedMode ? { mode: requestedMode } : {}),
+        },
         ts: { gte: todayStart },
       },
-      select: { realizedPnl: true, fee: true }
+      _sum: { realizedPnl: true, fee: true },
+      _count: { _all: true },
     });
-    
-    const todayPnlUsd = todayFills.reduce((sum, f) => sum + (f.realizedPnl || 0) - (f.fee || 0), 0);
-    const todayTrades = todayFills.length;
-    
-    // Add unrealized PnL from running agents
-    const unrealizedPnl = allAgents.reduce((sum, agent) => {
+
+    const todayPnlUsd = (todayAgg._sum.realizedPnl || 0) - (todayAgg._sum.fee || 0);
+    const todayTrades = todayAgg._count._all;
+
+    // Unrealized PnL from running agents (mode-filtered above)
+    const unrealizedPnlUsd = allAgents.reduce((sum, agent) => {
       const agentState = agent.getAgentState?.();
       return sum + (agentState?.pos?.pnlUsd || 0);
     }, 0);
-    
-    const netPnlUsd = totalPnlUsd + unrealizedPnl;
+
+    const netPnlUsd = totalPnlUsd + unrealizedPnlUsd;
     const roiPct = initialCapital > 0 ? (totalPnlUsd / initialCapital) * 100 : 0;
     const netRoiPct = initialCapital > 0 ? (netPnlUsd / initialCapital) * 100 : 0;
     
-    // 🔧 FIX: Calculate avgWinRate from all sessions with trades
-    // Sum wins and total trades from all SessionKpi records
-    const sessionsWithTrades = enrichedSessions.filter(s => {
-      const stats = s.SessionKpi?.stats as any;
-      return stats?.trades && stats.trades > 0;
+    // Avg win-rate should be computed from all sessions, not just the last 20.
+    const allKpis = await prisma.sessionKpi.findMany({
+      where: {
+        session: {
+          userId,
+          ...(requestedMode ? { mode: requestedMode } : {}),
+        },
+      },
+      select: { stats: true },
     });
-    
+
     let totalWins = 0;
     let totalTrades = 0;
-    for (const s of sessionsWithTrades) {
-      const stats = s.SessionKpi?.stats as any;
-      if (stats) {
+    for (const kpi of allKpis) {
+      const stats = kpi.stats as any;
+      if (stats?.trades && stats.trades > 0) {
         totalWins += stats.wins || 0;
         totalTrades += stats.trades || 0;
       }
@@ -1320,6 +1299,8 @@ app.get("/api/agent/overview", async (req, res) => {
       activeSymbols: allAgents.length > 0 ? MomentumConfig.SYMBOLS : [],
       // Add totals for header display
       pnlUsd: totalPnlUsd,
+      unrealizedPnlUsd,
+      netPnlUsd,
       todayPnlUsd,
       todayTrades,
       roiPct,

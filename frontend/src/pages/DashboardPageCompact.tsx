@@ -127,24 +127,13 @@ export default function DashboardPageCompact() {
   async function loadTrades() {
     setTradesLoading(true);
     try {
-      const sessionsRes = await api.listSessions(mode);
-      const sessions = Array.isArray(sessionsRes) ? sessionsRes : (sessionsRes?.sessions || []);
-      const results = await Promise.all(
-        sessions.map(async (session: any) => {
-          try {
-            // Increased limit to get all trades for accurate chart
-            const tradesRes = await api.getTrades(session.id, { limit: 200 });
-            return Array.isArray(tradesRes) ? tradesRes : (tradesRes?.trades || []);
-          } catch {
-            return [];
-          }
-        })
-      );
-      const allTrades = results.flat();
+      // Single call: backend filters by user + mode and returns trades across sessions.
+      // Use a higher limit for an all-time-like equity curve.
+      const tradesRes = await api.getTrades(undefined, { limit: 5000, mode: mode as any });
+      const allTrades = Array.isArray(tradesRes) ? tradesRes : (tradesRes?.trades || []);
       const validTrades = allTrades
         .filter((t: any) => t.exitPrice != null && t.entryPrice != null && t.realizedPnlUsd != null)
-        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        .slice(0, 500); // Increased from 100 to 500
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setTrades(validTrades);
     } catch (err) {
       console.error('Failed to load trades:', err);
@@ -173,11 +162,16 @@ export default function DashboardPageCompact() {
   React.useEffect(() => {
     load();
     loadTrades();
-    const iv = setInterval(() => {
+    const overviewIv = setInterval(() => {
       load();
-      loadTrades();
     }, 30000);
-    return () => clearInterval(iv);
+    const tradesIv = setInterval(() => {
+      loadTrades();
+    }, 120000);
+    return () => {
+      clearInterval(overviewIv);
+      clearInterval(tradesIv);
+    };
   }, [mode]);
 
   const recentTrades = trades.slice(0, 6);

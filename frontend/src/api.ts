@@ -117,7 +117,7 @@ export const api = {
   getOrders: async (sessionId?: string) => (await client.get("/api/orders", { params: { sessionId } })).data,
   getTrades: async (
     sessionId?: string,
-    opts?: { from?: string; to?: string; limit?: number }
+    opts?: { from?: string; to?: string; limit?: number; mode?: 'paper' | 'live' }
   ) => (await client.get("/api/orders/trades", { params: { sessionId, ...opts } })).data,
   getPerf: async (sessionId: string) =>
     (await client.get("/api/perf", { params: { sessionId } })).data,
