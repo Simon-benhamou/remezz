@@ -5,6 +5,12 @@
  */
 
 import ccxt from 'ccxt';
+import {
+  loadLocalJsonCandles,
+  mergeDedupCandles,
+  sliceCandlesByTime,
+  type BacktestCandle,
+} from './backtest/localOhlcvJsonStore.js';
 
 // ============================================================================
 // TYPES
@@ -361,40 +367,74 @@ interface Candle {
   volume: number;
 }
 
-async function fetchCandles(symbol: string, startDate: Date, endDate: Date): Promise<Candle[]> {
-  const allCandles: Candle[] = [];
-  let since = startDate.getTime();
-  const until = endDate.getTime();
+async function fetchCandlesFromCcxt(symbol: string, since: number, until: number): Promise<Candle[]> {
+  const out: Candle[] = [];
+  let cursor = since;
 
-  // Fetch 200 extra candles before startDate for indicators
-  const extraBars = 200 * 15 * 60 * 1000; // 200 bars × 15min
-  since -= extraBars;
-
-  while (since < until) {
+  while (cursor < until) {
     try {
-      const ohlcv = await exchange.fetchOHLCV(symbol, '15m', since, 1000);
+      const ohlcv = await exchange.fetchOHLCV(symbol, '15m', cursor, 1000);
       if (!ohlcv || ohlcv.length === 0) break;
 
+      let progressed = false;
       for (const c of ohlcv) {
-        allCandles.push({
-          timestamp: c[0] as number,
+        const ts = c[0] as number;
+        if (!Number.isFinite(ts)) continue;
+        if (ts > until) break;
+        if (out.length && ts <= out[out.length - 1].timestamp) continue;
+        out.push({
+          timestamp: ts,
           open: c[1] as number,
           high: c[2] as number,
           low: c[3] as number,
           close: c[4] as number,
           volume: c[5] as number,
         });
+        progressed = true;
       }
 
-      since = (ohlcv[ohlcv.length - 1][0] as number) + 1;
-      await new Promise((r) => setTimeout(r, 100)); // Rate limit
+      if (!progressed) break;
+      cursor = (ohlcv[ohlcv.length - 1][0] as number) + 1;
+      // keep rate-limit gentle
+      await new Promise((r) => setTimeout(r, 100));
     } catch (e) {
       console.error(`Error fetching ${symbol}:`, e);
       break;
     }
   }
 
-  return allCandles;
+  return out;
+}
+
+async function fetchCandles(symbol: string, startDate: Date, endDate: Date): Promise<Candle[]> {
+  const until = endDate.getTime();
+  const extraBarsMs = 200 * 15 * 60 * 1000; // 200 bars × 15min
+  const since = startDate.getTime() - extraBarsMs;
+
+  // Prefer local 24m dataset if present. Fetch only the delta outside local coverage.
+  const local = await loadLocalJsonCandles(symbol, '15m');
+  if (!local) {
+    return await fetchCandlesFromCcxt(symbol, since, until);
+  }
+
+  const needBefore = since < local.startTs;
+  const needAfter = until > local.endTs;
+
+  const localSlice = sliceCandlesByTime(local.candles, since, until);
+  const parts: BacktestCandle[][] = [localSlice];
+
+  if (needBefore) {
+    const before = await fetchCandlesFromCcxt(symbol, since, Math.min(until, local.startTs));
+    parts.unshift(before);
+  }
+  if (needAfter) {
+    const after = await fetchCandlesFromCcxt(symbol, Math.max(since, local.endTs), until);
+    parts.push(after);
+  }
+
+  const merged = mergeDedupCandles(parts);
+  // Ensure final range is bounded
+  return sliceCandlesByTime(merged, since, until);
 }
 
 // ============================================================================
