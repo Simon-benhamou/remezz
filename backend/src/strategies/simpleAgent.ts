@@ -23,7 +23,6 @@ import {
   calcSafeLeverage,
   calcDynamicStopLoss,  // V5.7: Dynamic SL based on ATR
   determineVolatilityRegime,  // V5.14: Volatility-based trailing
-  calculate3LayerProtection,  // V5.14: 3-layer protection system
   LIQUIDATION_CONFIG,
   type Candle,
   type Position,
@@ -1146,46 +1145,27 @@ export class SimpleAgent {
         const liveEntryNotional = filledQty * filledPrice;
         const liveEntryFee = order.fee?.cost ?? (liveEntryNotional * 0.0004);
         
-        // Save to DB with fee
+        // Exchange-side protection: EMERGENCY STOP ONLY (wide, crash protection)
+        // Trailing exit is managed app-side; do NOT move exchange SL above entry.
+        const baseSlPct = position.stopLossPct || 2.0;
+        const emergencySlPct = baseSlPct * (MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER || 2.5);
+        const emergencyStop = position.side === 'long'
+          ? position.entryPrice * (1 - emergencySlPct / 100)
+          : position.entryPrice * (1 + emergencySlPct / 100);
+
+        if (this.position) {
+          this.position.stopLoss = emergencyStop;
+          this.position.emergencyStopPrice = emergencyStop;
+        }
+        await this.setStopLossOnExchange(position);
+
+        logger.info(`🛡️ [${symbol}] Emergency STOP_MARKET set @ $${emergencyStop.toFixed(4)} (${emergencySlPct.toFixed(2)}%) | trailing exit = app-side`);
+
+        // Save to DB with fee (store the emergency stop, not the tight strategy SL)
         await this.savePositionToDb(position, 'live_entry', liveEntryFee);
         
-        // V5.14: 3-LAYER PROTECTION SYSTEM
-        // ════════════════════════════════════════════════════════════════
-        // Layer 1: Emergency Hard Stop (Wide, Always Active)
-        // Layer 2: Intelligent Trailing (App-Side, Main Exit Logic)
-        // Layer 3: Progressive Profit Lock (Ratcheting Stop, Dynamic)
-        // ════════════════════════════════════════════════════════════════
-        
-        if (MomentumConfig.EXIT.USE_THREE_LAYER_PROTECTION) {
-          // Calculate initial 3-layer protection
-          const protection = calculate3LayerProtection(
-            position.entryPrice,
-            position.side,
-            position.stopLossPct || 2.0,
-            0 // Initial PnL = 0
-          );
-          
-          // Place Layer 1: Emergency Stop (Wide)
-          const emergencyStop = protection.emergencyStop;
-          if (this.position) {
-            this.position.stopLoss = emergencyStop;
-            this.position.emergencyStopPrice = emergencyStop;
-            this.position.profitLockPrice = null;
-            this.position.lockedProfitPct = 0;
-          }
-          await this.setStopLossOnExchange(position);
-          
-          logger.info(`🛡️ [${symbol}] Layer 1 (Emergency): $${emergencyStop.toFixed(4)} (${((position.stopLossPct || 2.0) * MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER).toFixed(1)}%)`);
-          logger.info(`🧠 [${symbol}] Layer 2 (Trailing): App-side (activation at +${MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT}%)`);
-          logger.info(`🎯 [${symbol}] Layer 3 (Profit Lock): Will activate at +${MomentumConfig.EXIT.BREAKEVEN_ACTIVATION_PCT}%`);
-        } else {
-          // Fallback: Old system with simple stop loss
-          await this.setStopLossOnExchange(position);
-        }
-        
-        // V5.14: Exchange trailing only if not using 3-layer system
-        // With 3-layer, app-side trailing (Layer 2) handles exit logic
-        if (!MomentumConfig.EXIT.USE_THREE_LAYER_PROTECTION && MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) {
+        // Optional: native exchange trailing (disabled by default)
+        if (MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) {
           const trailingSuccess = await this.setTrailingStopOnExchange(position);
           
           if (trailingSuccess) {
@@ -1257,15 +1237,17 @@ export class SimpleAgent {
       const currentPrice = candles[candles.length - 1].close;
       this.lastPrice = currentPrice;
       
-      // 🔧 V5.13: SAFETY CHECK - Ensure position has protection
-      // If we're in live mode and have no SL order AND no trailing order, this is a CRITICAL issue
+      // 🔧 SAFETY CHECK - Ensure position has protection
+      // In live mode we require an emergency SL order; exchange trailing is optional.
       if (this.config.mode === 'live' && !position.stopLossOrderId && !position.trailingOrderId) {
         logger.warn(`🚨 [${symbol}] SAFETY: Position has NO PROTECTION! Attempting to re-place orders...`);
         
-        // Re-place SL and trailing
+        // Re-place emergency SL (and trailing only if enabled)
         try {
           await this.setStopLossOnExchange(position, false);
-          await this.setTrailingStopOnExchange(position, false);
+          if (MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) {
+            await this.setTrailingStopOnExchange(position, false);
+          }
           logger.info(`🛡️ [${symbol}] SAFETY: Re-placed protection orders`);
         } catch (safetyError: any) {
           logger.error(`🚨🚨🚨 [${symbol}] SAFETY: Failed to re-place protection! ${safetyError.message}`);
@@ -1310,6 +1292,10 @@ export class SimpleAgent {
       }
       
       const exitSignal = shouldExitPosition(this.position!, currentPrice);
+
+      // Emergency profit-protection (exchange-side): ratchet stop only after +2% PnL.
+      // This is NOT the primary exit; trailing/app logic remains the priority.
+      await this.updateEmergencyStopProfitProtectionIfNeeded(currentPrice, pnlPct);
       
       if (exitSignal.shouldExit) {
         logger.info(`🔴 [${symbol}] EXIT SIGNAL: reason=${exitSignal.reason} | PnL=${exitSignal.pnlPct?.toFixed(2)}% | holdMin=${exitSignal.holdMinutes?.toFixed(0)}`);
@@ -1327,23 +1313,6 @@ export class SimpleAgent {
             pnlPct: exitSignal.pnlPct,
             mode: this.config.mode,
           });
-          
-          // V5.10: Cancel backup STOP_MARKET when trailing activates
-          // The native TRAILING_STOP_MARKET now protects the trade
-          // NOTE: Must cancel both regular AND algo orders
-          if (this.config.mode === 'live' && this.position?.stopLossOrderId) {
-            try {
-              // Cancel ALL orders then re-place only the trailing stop
-              await this.cancelAllOrdersOnExchange();
-              logger.info(`🗑️ [${symbol}] Cancelled all orders - trailing now active`);
-              // Re-place trailing stop (it was cancelled too)
-              // Note: setTrailingStopOnExchange now has built-in fallback to STOP_MARKET if trailing fails
-              await this.setTrailingStopOnExchange(this.position);
-            } catch (error: any) {
-              // Error already handled by setTrailingStopOnExchange fallback
-              logger.warn(`⚠️ [${symbol}] Failed to cancel orders for trailing activation: ${error.message}`);
-            }
-          }
         }
         
         // V5.12: SMART TRAILING - Widen callback when profit reaches 2%
@@ -2012,6 +1981,12 @@ export class SimpleAgent {
   private async updateTrailingStopOnExchange(newStopPrice: number): Promise<void> {
     if (this.config.mode === 'paper') return;
     if (!this.position) return;
+
+    // App-side trailing mode: do NOT update exchange stop. This avoids wick/mark-price stop-outs.
+    // Emergency STOP_MARKET remains in place for crash protection.
+    if (!MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) {
+      return;
+    }
     
     // If we have a native trailing order, Binance handles everything - no manual update needed
     if (this.position.trailingOrderId) {
@@ -2034,6 +2009,57 @@ export class SimpleAgent {
     await this.setStopLossOnExchange(this.position, true);
     
     logger.info(`📈 [${symbol}] Trailing stop moved: $${oldSL?.toFixed(4)} → $${newStopPrice.toFixed(4)}`);
+  }
+
+  /**
+   * Profit-protection stop (exchange-side) with ~2% buffer.
+   * Starts only after +2% PnL, then ratchets in 1% steps:
+   * - +2% → stop @ breakeven
+   * - +3% → stop @ +1%
+   * - +4% → stop @ +2%
+   * This protects against crashes while avoiding most wick/mark noise.
+   */
+  private async updateEmergencyStopProfitProtectionIfNeeded(currentPrice: number, pnlPct: number): Promise<void> {
+    if (this.config.mode !== 'live') return;
+    if (!this.position) return;
+    if (!this.position.entryPrice) return;
+    if (!this.position.stopLoss) return; // emergency stop should always exist in live
+
+    const startAt = MomentumConfig.EXIT.EMERGENCY_PROFIT_LOCK_START_PCT ?? 2.0;
+    const distance = MomentumConfig.EXIT.EMERGENCY_PROFIT_LOCK_DISTANCE_PCT ?? 2.0;
+    const step = MomentumConfig.EXIT.EMERGENCY_PROFIT_LOCK_STEP_PCT ?? 1.0;
+
+    if (pnlPct < startAt) return;
+
+    // Lock profit in steps such that lockedProfitPct = floor(pnl - distance)
+    // Example: pnl=3.2, distance=2 → lock=1% (stop @ +1% profit)
+    const rawLock = pnlPct - distance;
+    const lockedProfitPct = Math.max(0, Math.floor(rawLock / step) * step);
+
+    const entry = this.position.entryPrice;
+    const desiredStop = this.position.side === 'long'
+      ? entry * (1 + lockedProfitPct / 100)
+      : entry * (1 - lockedProfitPct / 100);
+
+    // Safety: avoid placing an immediately-triggering stop
+    if (this.position.side === 'long' && desiredStop >= currentPrice) return;
+    if (this.position.side === 'short' && desiredStop <= currentPrice) return;
+
+    // Only ratchet in the favorable direction
+    const currentStop = this.position.stopLoss;
+    const isImprovement = this.position.side === 'long'
+      ? desiredStop > currentStop
+      : desiredStop < currentStop;
+    if (!isImprovement) return;
+
+    // Apply + update on exchange
+    this.position.stopLoss = desiredStop;
+    this.position.emergencyStopPrice = desiredStop;
+    await this.setStopLossOnExchange(this.position, true);
+
+    logger.info(
+      `🧷 [${this.config.symbol}] Profit-protection stop ratcheted: pnl=${pnlPct.toFixed(2)}% | locked=+${lockedProfitPct.toFixed(0)}% | stop=$${desiredStop.toFixed(4)} (≈${distance}% buffer)`
+    );
   }
 
   /**

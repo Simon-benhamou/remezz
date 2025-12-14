@@ -142,46 +142,25 @@ export const MomentumConfig = {
     TRAILING_WIDEN_AT_PCT: 2.0,         // Widen callback when profit reaches 2%
     TRAILING_WIDE_DISTANCE_PCT: 0.8,    // Widened callback: 0.8% (let winner run)
     
-    // V5.14: 3-LAYER PROTECTION SYSTEM 🛡️
-    // ════════════════════════════════════════════════════════════════
-    // Layer 1: EMERGENCY Hard Stop (Exchange, Wide)
-    //   → Protection catastrophe: crash app, perte connexion, bug
-    //   → SL très large (5-8%), jamais touché en conditions normales
-    //   → Toujours actif sur exchange dès l'entry
-    //
-    // Layer 2: INTELLIGENT Trailing (App-Side)
-    //   → Gestion smart de la sortie (ignores wicks, uses close only)
-    //   → Adaptatif selon volatilité (ATR-based distance)
-    //   → Meilleur performance (+17% vs exchange trailing)
-    //
-    // Layer 3: BREAKEVEN Protection (Exchange, Dynamic)
-    //   → Dès que profit > 1%, move emergency SL to breakeven
-    //   → Protection downside gratuite après activation trailing
-    //   → Évite les trades +0.8% → -2% (gap entre trailing activation et SL fixe)
-    // ════════════════════════════════════════════════════════════════
-    
-    USE_EXCHANGE_TRAILING: false,         // Layer 2: App-side trailing (better quality)
-    USE_THREE_LAYER_PROTECTION: false,    // Disabled - only using adaptive trailing
-    
-    // Layer 1: Emergency Stop Loss (Exchange)
+    // Protection setup
+    // - Emergency stop is placed on exchange (wide, crash protection)
+    // - Trailing exit is managed app-side (do NOT move exchange SL above entry)
+    USE_EXCHANGE_TRAILING: false,         // App-side trailing is default
+
+    // Emergency Stop Loss (Exchange)
     EMERGENCY_STOP_MULTIPLIER: 2.5,       // Emergency SL = dynamic SL × 2.5
                                           // Example: ATR SL 2% → Emergency 5%
                                           // Example: ATR SL 3% → Emergency 7.5%
-    
-    // Layer 3: Breakeven Protection + Progressive Profit Lock (Exchange)
-    BREAKEVEN_ACTIVATION_PCT: 1.0,        // At +1% profit → move emergency SL to BE
-    BREAKEVEN_BUFFER_PCT: 0.15,           // BE = entry × 1.0015 (buffer for fees)
-    
-    // Progressive Profit Lock (Ratcheting Stop)
-    // Déplace le stop loss progressivement pour garantir profit croissant
-    // DÉSACTIVÉ: Dégrade les performances en coupant les gagnants trop tôt
-    USE_PROFIT_LOCK: false,               // Disabled - cuts winners too early
-    PROFIT_LOCK_LEVELS: [
-      { profitPct: 1.5, lockPct: 0.5 },   // At +1.5% → lock +0.5% profit
-      { profitPct: 2.0, lockPct: 0.8 },   // At +2.0% → lock +0.8% profit
-      { profitPct: 2.5, lockPct: 1.2 },   // At +2.5% → lock +1.2% profit
-      { profitPct: 3.0, lockPct: 1.5 },   // At +3.0% → lock +1.5% profit
-    ],
+
+    // Profit-protection (Exchange, ratcheting)
+    // Starts only after sufficient profit to avoid wick/mark noise.
+    // Example long:
+    // - at +2% PnL → stop @ breakeven (0%)
+    // - at +3% PnL → stop @ +1%
+    // Keeps an approximate 2% buffer to current price.
+    EMERGENCY_PROFIT_LOCK_START_PCT: 2.0,
+    EMERGENCY_PROFIT_LOCK_DISTANCE_PCT: 2.0,
+    EMERGENCY_PROFIT_LOCK_STEP_PCT: 1.0,
     
     // Layer 2: Adaptive Trailing Distance (App-Side)
     // Distance varies by volatility regime (detected via ATR)
@@ -304,10 +283,8 @@ export interface Position {
   lowWaterMark?: number;   // Lowest price since entry (for short)
   trailingActive?: boolean;
   maxPnlPct?: number;      // V5.11: Track max PnL reached (for exit analysis)
-  // V5.14: 3-Layer Protection System
-  emergencyStopPrice?: number;   // Layer 1: Wide emergency stop (catastrophe protection)
-  profitLockPrice?: number | null;  // Layer 3: Progressive profit lock stop price
-  lockedProfitPct?: number;      // Layer 3: Current locked profit percentage
+  // Emergency protection (exchange-side)
+  emergencyStopPrice?: number;   // Wide emergency stop (catastrophe protection)
 }
 
 export interface SignalResult {
@@ -1075,87 +1052,6 @@ export function determineVolatilityRegime(
  * - Trailing Stop: Intelligent app-side trailing (main exit logic)
  * - Profit Lock Stop: Progressive stop that moves up to lock profits
  */
-export function calculate3LayerProtection(
-  entryPrice: number,
-  side: 'long' | 'short',
-  dynamicSlPct: number,
-  currentPnlPct: number
-): {
-  emergencyStop: number;
-  trailingStop: number | null;
-  profitLockStop: number | null;
-  profitLockActive: boolean;
-  lockedProfitPct: number;
-} {
-  const config = MomentumConfig.EXIT;
-  
-  if (!config.USE_THREE_LAYER_PROTECTION) {
-    // Fallback to simple SL
-    const simpleStop = side === 'long'
-      ? entryPrice * (1 - dynamicSlPct / 100)
-      : entryPrice * (1 + dynamicSlPct / 100);
-    
-    return {
-      emergencyStop: simpleStop,
-      trailingStop: null,
-      profitLockStop: null,
-      profitLockActive: false,
-      lockedProfitPct: 0
-    };
-  }
-  
-  // Layer 1: Emergency Stop (Wide, Always Active)
-  const emergencySlPct = dynamicSlPct * config.EMERGENCY_STOP_MULTIPLIER;
-  const emergencyStop = side === 'long'
-    ? entryPrice * (1 - emergencySlPct / 100)
-    : entryPrice * (1 + emergencySlPct / 100);
-  
-  // Layer 2: Trailing Stop (Calculated by shouldExitPosition)
-  // This is managed app-side, not placed on exchange
-  const trailingStop = null;
-  
-  // Layer 3: Progressive Profit Lock
-  // Find the highest profit lock level that has been reached
-  let lockedProfitPct = 0;
-  let profitLockActive = false;
-  
-  if (config.USE_PROFIT_LOCK && config.PROFIT_LOCK_LEVELS) {
-    // Check breakeven first
-    if (currentPnlPct >= config.BREAKEVEN_ACTIVATION_PCT) {
-      lockedProfitPct = config.BREAKEVEN_BUFFER_PCT;
-      profitLockActive = true;
-    }
-    
-    // Check progressive profit lock levels
-    for (const level of config.PROFIT_LOCK_LEVELS) {
-      if (currentPnlPct >= level.profitPct) {
-        lockedProfitPct = level.lockPct;
-        profitLockActive = true;
-      } else {
-        break; // Levels are sorted, stop at first not reached
-      }
-    }
-  } else if (currentPnlPct >= config.BREAKEVEN_ACTIVATION_PCT) {
-    // Fallback to simple breakeven
-    lockedProfitPct = config.BREAKEVEN_BUFFER_PCT;
-    profitLockActive = true;
-  }
-  
-  const profitLockStop = profitLockActive
-    ? (side === 'long'
-        ? entryPrice * (1 + lockedProfitPct / 100)
-        : entryPrice * (1 - lockedProfitPct / 100))
-    : null;
-  
-  return {
-    emergencyStop,
-    trailingStop,
-    profitLockStop,
-    profitLockActive,
-    lockedProfitPct
-  };
-}
-
 /**
  * Update position water marks for trailing stop tracking
  * Call this every tick to track high/low
