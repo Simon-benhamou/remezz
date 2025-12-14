@@ -733,8 +733,10 @@ export class SimpleAgent {
       
       // 1. Si on a une position, checker l'exit avec trailing
       if (this.position) {
+        // Avoid per-tick spam: checkExit already logs once per newly-closed 15m candle.
+        // Keep detailed tick-level traces available via LOG_LEVEL=debug.
         const shortSymbol = symbol.replace('/USDT:USDT', '');
-        logger.info(`🔄 [${shortSymbol}] #${this.tickCount} IN_${this.position.side.toUpperCase()}@$${this.position.entryPrice.toFixed(2)} | $${currentPrice.toFixed(2)} | ${this.config.mode}`);
+        logger.debug(`🔄 [${shortSymbol}] #${this.tickCount} IN_${this.position.side.toUpperCase()}@$${this.position.entryPrice.toFixed(2)} | $${currentPrice.toFixed(2)} | ${this.config.mode}`);
         await this.checkExit(this.position);
         return; // Don't look for new entries while in position
       }
@@ -742,16 +744,19 @@ export class SimpleAgent {
       // 2. Sinon, chercher une entrée (this sets lastRejectReason)
       await this.checkEntry();
       
-      // 📋 LOG: One line per tick with features summary
-      const shortSymbol = symbol.replace('/USDT:USDT', '');
-      const f = this.lastSignalFeatures;
-      // Show key metrics: vol ratio, ROC%, BB distance
-      const featuresSummary = f 
-        ? `vol=${f.volRatio.toFixed(1)}x roc=${f.roc.toFixed(1)}% bb=${f.bbDistance > 0 ? '+' : ''}${f.bbDistance.toFixed(1)}%`
-        : 'no_data';
-      // Simplified reject reason (just the key part)
-      const rejectKey = this.lastRejectReason?.split(':')[1]?.split('(')[0] || this.lastRejectReason?.split(':')[0] || '';
-      logger.info(`🔄 [${shortSymbol}] #${this.tickCount} WATCH | $${currentPrice.toFixed(2)} | ${featuresSummary} | ${rejectKey} | ${this.config.mode}`);
+      // 📋 LOG: One line per newly-closed candle (not per tick)
+      // When waiting for the next candle, stay silent.
+      if (this.lastRejectReason !== 'waiting_new_candle') {
+        const shortSymbol = symbol.replace('/USDT:USDT', '');
+        const f = this.lastSignalFeatures;
+        // Show key metrics: vol ratio, ROC%, BB distance
+        const featuresSummary = f
+          ? `vol=${f.volRatio.toFixed(1)}x roc=${f.roc.toFixed(1)}% bb=${f.bbDistance > 0 ? '+' : ''}${f.bbDistance.toFixed(1)}%`
+          : 'no_data';
+        // Simplified reject reason (just the key part)
+        const rejectKey = this.lastRejectReason?.split(':')[1]?.split('(')[0] || this.lastRejectReason?.split(':')[0] || '';
+        logger.info(`🕵️ [${shortSymbol}] 15m CHECK | $${currentPrice.toFixed(2)} | ${featuresSummary} | ${rejectKey} | ${this.config.mode}`);
+      }
       
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Tick error:`, error);
