@@ -4,23 +4,42 @@ function iso(d: Date) {
   return d.toISOString();
 }
 
+function parseNumberEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const v = Number(raw);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+function parseSymbolsEnv(): string[] | null {
+  const raw = process.env.SYMBOLS;
+  if (!raw) return null;
+  const syms = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return syms.length ? syms : null;
+}
+
 async function main() {
   const startDate = new Date(process.env.START_DATE || '2025-01-01T00:00:00.000Z');
   const endDate = new Date(process.env.END_DATE || '2025-12-16T00:00:00.000Z');
 
+  const defaultSymbols = [
+    'DOGE/USDT:USDT',
+    'IMX/USDT:USDT',
+    'SEI/USDT:USDT',
+    'SUI/USDT:USDT',
+    'XRP/USDT:USDT',
+    'ETH/USDT:USDT',
+  ];
+
   const params = {
     startDate,
     endDate,
-    initialCapital: 2000,
-    symbols: [
-      'DOGE/USDT:USDT',
-      'IMX/USDT:USDT',
-      'SEI/USDT:USDT',
-      'SUI/USDT:USDT',
-      'XRP/USDT:USDT',
-      'ETH/USDT:USDT',
-    ],
-    leverage: 4.5,
+    initialCapital: parseNumberEnv('INITIAL_CAPITAL', 2000),
+    symbols: parseSymbolsEnv() ?? defaultSymbols,
+    leverage: parseNumberEnv('LEVERAGE', 4.5),
   };
 
   console.log('\n════════════════════════════════════════════════════════════');

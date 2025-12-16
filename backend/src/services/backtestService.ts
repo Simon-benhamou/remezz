@@ -626,23 +626,15 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // 4. Max Hold Time
 
         const slPct = pos.stopLossPct;
-        const tpPct = CONFIG.EXIT.TAKE_PROFIT_PCT;
 
         if (pos.side === 'long') {
           const slPrice = pos.entryPrice * (1 - slPct / 100);
-          const tpPrice = pos.entryPrice * (1 + tpPct / 100);
 
           // SL hit? (wick went below stop)
           if (current.low <= slPrice) {
             shouldExit = true;
             exitReason = 'SL';
             exitPrice = slPrice;
-          }
-          // TP hit?
-          else if (current.high >= tpPrice) {
-            shouldExit = true;
-            exitReason = 'TP';
-            exitPrice = tpPrice;
           }
           // Trailing?
           else {
@@ -669,19 +661,12 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         } else {
           // SHORT
           const slPrice = pos.entryPrice * (1 + slPct / 100);
-          const tpPrice = pos.entryPrice * (1 - tpPct / 100);
 
           // SL hit?
           if (current.high >= slPrice) {
             shouldExit = true;
             exitReason = 'SL';
             exitPrice = slPrice;
-          }
-          // TP hit?
-          else if (current.low <= tpPrice) {
-            shouldExit = true;
-            exitReason = 'TP';
-            exitPrice = tpPrice;
           }
           // Trailing?
           else {

@@ -842,12 +842,8 @@ export function checkMomentumSignal(
  * Check if position should be closed - V5 with smart exits
  * 
  * Exit conditions:
- * 1. Max Hold: 48h
- * 2. Stop Loss: 2%
- * 3. Take Profit: 2.5%
- * 4. Trailing: activé à +1.5%, trail 0.8%
- * 5. Momentum Fade: profit > 2% et ROC5 < 0.5%
- * 6. Volume Dry-up: profit > 0.5% et volume < 0.5x avg
+ * 1. Trailing Stop (main exit)
+ * 2. Stop Loss (safety exit)
  */
 export function shouldExitPosition(
   position: Position, 
@@ -861,6 +857,7 @@ export function shouldExitPosition(
 ): ExitSignal {
   const now = opts?.nowMs ?? Date.now();
   const holdMinutes = (now - position.entryTime) / 60000;
+  void candles;
   
   // Calculate PnL based on position side
   let pnlPct: number;
@@ -870,12 +867,7 @@ export function shouldExitPosition(
     pnlPct = ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
   }
   
-  // 1. Time-based exit (48h max - V5)
-  if (holdMinutes >= MomentumConfig.EXIT.HOLD_PERIOD_MAX_MIN) {
-    return { shouldExit: true, reason: 'time', pnlPct, holdMinutes };
-  }
-  
-  // 2. V5.12 SMART TRAILING: Starts tight, WIDENS at higher profit
+  // 1. V5.12 SMART TRAILING: Starts tight, WIDENS at higher profit
   // This lets winners run while protecting early gains
   const trailingActivation = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;
   
@@ -953,37 +945,10 @@ export function shouldExitPosition(
     }
   }
   
-  // 3. Stop loss - V5.7: Use dynamic SL from position if available (only if trailing not active)
+  // 2. Stop loss - Use dynamic SL from position if available (only if trailing not active)
   const slPct = position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
   if (pnlPct <= -slPct) {
     return { shouldExit: true, reason: 'stoploss', pnlPct, holdMinutes };
-  }
-  
-  // 4. Take Profit (V5: 3%)
-  if (pnlPct >= MomentumConfig.EXIT.PROFIT_TARGET_PCT) {
-    return { shouldExit: true, reason: 'trailing', pnlPct, holdMinutes }; // Using 'trailing' for compat
-  }
-  
-  // 5. Smart Exits (require candles)
-  if (candles && candles.length >= 20) {
-    const closes = candles.map(c => c.close);
-    const volumes = candles.map(c => c.volume);
-    
-    // 5a. Momentum Fade: profit > 1.5% et ROC5 < 0.5%
-    if (pnlPct >= MomentumConfig.EXIT.MOMENTUM_FADE_PROFIT_MIN) {
-      const roc5 = calcROC(closes, 5);
-      if (roc5 < MomentumConfig.EXIT.MOMENTUM_FADE_ROC_MAX) {
-        return { shouldExit: true, reason: 'trailing', pnlPct, holdMinutes }; // momentum_fade
-      }
-    }
-    
-    // 5b. Volume Dry-up: profit > 0.5% et volume < 0.5x avg
-    if (pnlPct >= MomentumConfig.EXIT.VOLUME_DRY_PROFIT_MIN) {
-      const volRatio = calcVolRatio(volumes);
-      if (volRatio < MomentumConfig.EXIT.VOLUME_DRY_RATIO) {
-        return { shouldExit: true, reason: 'trailing', pnlPct, holdMinutes }; // volume_dry
-      }
-    }
   }
   
   return { shouldExit: false, reason: 'none', pnlPct, holdMinutes };
