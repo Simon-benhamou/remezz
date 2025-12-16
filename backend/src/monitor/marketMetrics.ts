@@ -203,7 +203,12 @@ function logFrameEvent(event: MarketFrameEvent, entry: SymbolMetrics): string | 
   const effectiveThrottle =
     event.status === 'stale' && event.ruleId === 'timestamp_drift' ? DRIFT_LOG_THROTTLE_MS : LOG_THROTTLE_MS;
   if (effectiveThrottle > 0) {
-    const throttleKey = `${entry.key}:${event.ruleId || event.status}:${event.source}`;
+    // Timestamp drift can happen across many symbols simultaneously (event-loop stall / clock skew).
+    // Throttle it globally to avoid log storms.
+    const throttleKey =
+      event.status === 'stale' && event.ruleId === 'timestamp_drift'
+        ? `GLOBAL:timestamp_drift:${event.source}`
+        : `${entry.key}:${event.ruleId || event.status}:${event.source}`;
     const now = Date.now();
     const last = lastLogAtByKey.get(throttleKey) || 0;
     if (now - last < effectiveThrottle) {
@@ -292,6 +297,13 @@ export function recordRestFallback(symbol: string, reason?: string): void {
   const entry = ensureSymbolMetrics(symbol);
   activateFallback(entry, reason || 'rest_fallback', true);
   totals.restFallbacks += 1;
+
+  // Explicitly suppress noisy drift-driven fallback logs.
+  // Timestamp drift is not fixed by REST; logging it per symbol is spam.
+  if (reason === 'ws_timestamp_drift') {
+    return;
+  }
+
   if (REST_FALLBACK_LOG_THROTTLE_MS > 0) {
     const key = `${entry.key}:${reason || 'unknown'}`;
     const now = Date.now();

@@ -284,6 +284,12 @@ export async function scheduleBinanceRestFallback<T>(
   task: () => Promise<T>,
   options?: { reason?: string; force?: boolean },
 ): Promise<T | null> {
+  // Timestamp drift indicates local lag/clock skew; REST won't fix it and can cause 429 storms.
+  // So we hard-suppress REST fallback attempts for this reason unless explicitly forced.
+  if (!options?.force && options?.reason === 'ws_timestamp_drift') {
+    return null;
+  }
+
   const key = normalizeRestFallbackKey(symbol);
   const existing = restFallbackInflight.get(key);
   if (existing) {
