@@ -17,7 +17,7 @@ import {
   checkMomentumSignal,
   shouldExitPosition,
   updatePositionWaterMarks,
-  calcDynamicStopLoss,
+  calcDynamicStopLoss as calcDynamicStopLossStrategy,
   calcSafeLeverage,
   calculatePositionSize,
   type Position,
@@ -768,7 +768,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
         if (!sizing.notionalUsd || sizing.notionalUsd < 20 || !sizing.marginUsd) continue;
 
-        const slCalc = calcDynamicStopLoss(windowCandles);
+        const slCalc = calcDynamicStopLossStrategy(windowCandles);
         const slPct = slCalc.slPct;
 
         const wasCapped = Boolean(sizing.wasLiquidityCapped);
