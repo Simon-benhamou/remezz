@@ -1,8 +1,111 @@
 import { Router } from "express";
 import { runBacktest, BacktestParams, BacktestResult } from "../services/backtestService.js";
 import { authenticateUser, AuthenticatedRequest } from "../middleware/auth.js";
+import crypto from 'node:crypto';
 
 export const router = Router();
+
+type CachedBacktestRun = {
+  id: string;
+  createdAt: string;
+  hash: string;
+  params: BacktestParams;
+  result: BacktestResult;
+};
+
+const backtestRunCacheByUser = new Map<string, CachedBacktestRun[]>();
+
+function getCacheUserKey(req: AuthenticatedRequest): string {
+  return req.user?.id || 'anonymous';
+}
+
+function getMaxCacheSize(): number {
+  const raw = process.env.BACKTEST_CACHE_MAX_PER_USER;
+  const n = raw ? Number(raw) : 10;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10;
+}
+
+function stableParamsHash(params: BacktestParams): string {
+  const normalized = {
+    startDate: params.startDate.toISOString(),
+    endDate: params.endDate.toISOString(),
+    initialCapital: Number(params.initialCapital),
+    leverage: Number(params.leverage),
+    symbols: [...params.symbols].sort(),
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
+}
+
+function cacheListForUser(userKey: string): CachedBacktestRun[] {
+  const existing = backtestRunCacheByUser.get(userKey);
+  if (existing) return existing;
+  const created: CachedBacktestRun[] = [];
+  backtestRunCacheByUser.set(userKey, created);
+  return created;
+}
+
+function upsertCache(userKey: string, entry: CachedBacktestRun) {
+  const list = cacheListForUser(userKey);
+  const existingIdx = list.findIndex((r) => r.hash === entry.hash);
+  if (existingIdx >= 0) list.splice(existingIdx, 1);
+  list.unshift(entry);
+  const max = getMaxCacheSize();
+  if (list.length > max) list.length = max;
+}
+
+/**
+ * GET /api/backtest/runs
+ * List cached runs for the authenticated user
+ */
+router.get('/runs', authenticateUser, (req: AuthenticatedRequest, res) => {
+  const userKey = getCacheUserKey(req);
+  const limitRaw = (req.query.limit as string | undefined) ?? '20';
+  const limit = Math.min(50, Math.max(1, Number(limitRaw) || 20));
+
+  const list = cacheListForUser(userKey)
+    .slice(0, limit)
+    .map((r) => ({
+      id: r.id,
+      createdAt: r.createdAt,
+      params: {
+        ...r.result.params,
+        startDate: r.result.params.startDate.toISOString(),
+        endDate: r.result.params.endDate.toISOString(),
+      },
+      summary: r.result.summary,
+    }));
+
+  res.json({ runs: list });
+});
+
+/**
+ * GET /api/backtest/runs/:id
+ * Fetch a cached run by id
+ */
+router.get('/runs/:id', authenticateUser, (req: AuthenticatedRequest, res) => {
+  const userKey = getCacheUserKey(req);
+  const id = req.params.id;
+  const list = cacheListForUser(userKey);
+  const hit = list.find((r) => r.id === id);
+  if (!hit) return res.status(404).json({ error: 'not_found' });
+
+  return res.json({
+    runId: hit.id,
+    cachedAt: hit.createdAt,
+    cacheHit: true,
+    ...hit.result,
+  });
+});
+
+/**
+ * DELETE /api/backtest/runs
+ * Clear cached runs for the authenticated user
+ */
+router.delete('/runs', authenticateUser, (req: AuthenticatedRequest, res) => {
+  const userKey = getCacheUserKey(req);
+  backtestRunCacheByUser.set(userKey, []);
+  res.json({ ok: true });
+});
 
 /**
  * POST /api/backtest/run
@@ -30,13 +133,40 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
       symbols: Array.isArray(symbols) ? symbols : [symbols],
       leverage: Number(leverage),
     };
+
+    const userKey = getCacheUserKey(req);
+    const hash = stableParamsHash(params);
+    const list = cacheListForUser(userKey);
+    const cached = list.find((r) => r.hash === hash);
+    if (cached) {
+      return res.json({
+        runId: cached.id,
+        cachedAt: cached.createdAt,
+        cacheHit: true,
+        ...cached.result,
+      });
+    }
     
     console.log(`[Backtest] Running backtest from ${params.startDate.toISOString()} to ${params.endDate.toISOString()}`);
     console.log(`[Backtest] Capital: $${params.initialCapital}, Symbols: ${params.symbols.join(', ')}`);
     
     const result = await runBacktest(params);
-    
-    res.json(result);
+
+    const entry: CachedBacktestRun = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      hash,
+      params,
+      result,
+    };
+    upsertCache(userKey, entry);
+
+    res.json({
+      runId: entry.id,
+      cachedAt: entry.createdAt,
+      cacheHit: false,
+      ...result,
+    });
   } catch (error: any) {
     console.error('[Backtest] Error:', error);
     res.status(500).json({ error: error.message || 'Backtest failed' });

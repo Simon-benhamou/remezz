@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Card,
   Form,
@@ -15,6 +15,7 @@ import {
   Tag,
   Tabs,
   Space,
+  List,
   message,
   Progress,
   Tooltip,
@@ -90,6 +91,9 @@ interface MonthlyStats {
 }
 
 interface BacktestResult {
+  runId?: string;
+  cachedAt?: string;
+  cacheHit?: boolean;
   params: {
     startDate: string;
     endDate: string;
@@ -121,6 +125,13 @@ interface BacktestResult {
   equityCurve: { date: string; equity: number }[];
   drawdownCurve: { date: string; drawdown: number }[];
 }
+
+type BacktestRunListItem = {
+  id: string;
+  createdAt: string;
+  params: BacktestResult['params'];
+  summary: BacktestResult['summary'];
+};
 
 // ============================================================================
 // HELPER COMPONENTS
@@ -296,6 +307,9 @@ export default function BacktestPage() {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runs, setRuns] = useState<BacktestRunListItem[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<string | 'all'>('all');
   const [selectedSymbol, setSelectedSymbol] = useState<string | 'all'>('all');
   const [selectedSide, setSelectedSide] = useState<'all' | 'long' | 'short'>('all');
@@ -316,9 +330,53 @@ export default function BacktestPage() {
     { value: 'BTC/USDT:USDT', label: 'BTC/USDT (+65%)' },
   ];
 
+  const refreshRuns = async () => {
+    setRunsLoading(true);
+    try {
+      const data = await api.backtest.listRuns(20);
+      setRuns(data.runs);
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || 'Failed to load backtest history');
+    } finally {
+      setRunsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshRuns();
+  }, []);
+
+  const handleLoadRun = async (id: string) => {
+    setLoading(true);
+    try {
+      const data = await api.backtest.getRun(id);
+      setResult(data);
+      setSelectedRunId(id);
+      message.success('Loaded cached backtest');
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || 'Failed to load cached backtest');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearRuns = async () => {
+    setRunsLoading(true);
+    try {
+      await api.backtest.clearRuns();
+      setRuns([]);
+      message.success('Backtest history cleared');
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || 'Failed to clear history');
+    } finally {
+      setRunsLoading(false);
+    }
+  };
+
   const handleRunBacktest = async (values: any) => {
     setLoading(true);
     setResult(null);
+    setSelectedRunId(null);
     
     try {
       const [startDate, endDate] = values.dateRange;
@@ -334,6 +392,7 @@ export default function BacktestPage() {
       const data = await api.backtest.run(params);
       setResult(data);
       message.success(`Backtest completed! ${data.trades.length} trades analyzed.`);
+      void refreshRuns();
     } catch (error: any) {
       message.error(error?.response?.data?.error || 'Backtest failed');
     } finally {
@@ -555,6 +614,67 @@ export default function BacktestPage() {
         <LineChartOutlined style={{ marginRight: 12 }} />
         Strategy Backtester
       </Title>
+
+      {/* History */}
+      <Card
+        style={{ marginBottom: 24, background: '#1e293b', border: '1px solid #334155' }}
+        bodyStyle={{ padding: 16 }}
+        title={<Text style={{ color: '#e2e8f0' }}>Recent Backtests (cached)</Text>}
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={() => void refreshRuns()} loading={runsLoading}>
+              Refresh
+            </Button>
+            <Button danger onClick={() => void handleClearRuns()} loading={runsLoading}>
+              Clear
+            </Button>
+          </Space>
+        }
+      >
+        {runs.length === 0 ? (
+          <Empty description={<Text style={{ color: '#94a3b8' }}>No cached runs yet</Text>} />
+        ) : (
+          <List
+            loading={runsLoading}
+            dataSource={runs}
+            renderItem={(r) => {
+              const isSelected = selectedRunId === r.id;
+              return (
+                <List.Item
+                  style={{
+                    border: '1px solid #334155',
+                    borderRadius: 8,
+                    marginBottom: 8,
+                    padding: 12,
+                    background: isSelected ? '#0f172a' : 'transparent',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => void handleLoadRun(r.id)}
+                >
+                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                    <Space direction="vertical" size={0}>
+                      <Text style={{ color: '#e2e8f0' }}>
+                        {dayjs(r.createdAt).format('DD/MM/YY HH:mm')} · ${r.params.initialCapital.toLocaleString()} · {r.params.leverage}x
+                      </Text>
+                      <Text style={{ color: '#94a3b8', fontSize: 12 }}>
+                        {dayjs(r.params.startDate).format('YYYY-MM-DD')} → {dayjs(r.params.endDate).format('YYYY-MM-DD')} · {r.params.symbols.length} symbols
+                      </Text>
+                    </Space>
+                    <Space direction="vertical" size={0} style={{ textAlign: 'right' }}>
+                      <Text style={{ color: r.summary.totalPnlUsd >= 0 ? '#10b981' : '#ef4444' }}>
+                        {formatCurrency(r.summary.totalPnlUsd)} ({formatPercent(r.summary.totalPnlPct)})
+                      </Text>
+                      <Text style={{ color: '#94a3b8', fontSize: 12 }}>
+                        {r.summary.totalTrades} trades · WR {r.summary.winRate.toFixed(1)}% · DD {r.summary.maxDrawdownPct.toFixed(1)}%
+                      </Text>
+                    </Space>
+                  </Space>
+                </List.Item>
+              );
+            }}
+          />
+        )}
+      </Card>
       
       {/* Form */}
       <Card 

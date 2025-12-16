@@ -281,5 +281,42 @@ export const api = {
       (await client.post('/api/backtest/run', params)).data,
     getPresets: async () =>
       (await client.get('/api/backtest/presets')).data,
+    listRuns: async (limit = 20) =>
+      (await client.get('/api/backtest/runs', { params: { limit } })).data as {
+        runs: Array<{
+          id: string;
+          createdAt: string;
+          params: {
+            startDate: string;
+            endDate: string;
+            initialCapital: number;
+            symbols: string[];
+            leverage: number;
+          };
+          summary: {
+            totalTrades: number;
+            wins: number;
+            losses: number;
+            winRate: number;
+            totalPnlUsd: number;
+            totalPnlPct: number;
+            maxDrawdownPct: number;
+            avgTradeUsd: number;
+            avgWinUsd: number;
+            avgLossUsd: number;
+            profitFactor: number;
+            sharpeRatio: number;
+            finalCapital: number;
+            longTrades: number;
+            shortTrades: number;
+            avgHoldMinutes: number;
+            totalFeesUsd: number;
+          };
+        }>;
+      },
+    getRun: async (id: string) =>
+      (await client.get(`/api/backtest/runs/${id}`)).data,
+    clearRuns: async () =>
+      (await client.delete('/api/backtest/runs')).data,
   },
 };
