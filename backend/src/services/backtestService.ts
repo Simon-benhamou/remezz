@@ -607,6 +607,13 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     console.log(`[Backtest] ${symbol}: ${allData[symbol].length} candles`);
   }
 
+  // Performance + correctness: track per-symbol candle cursor.
+  // We want the latest candle whose timestamp <= current BTC candle timestamp.
+  const symbolIdx: Record<string, number> = {};
+  for (const symbol of symbols) {
+    symbolIdx[symbol] = -1;
+  }
+
   // Initialize state
   let capital = initialCapital;
   let capitalInUse = 0;
@@ -644,6 +651,12 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     // Build a BTC window ending at this candle.
     const btcWindowCandles = btcCandles.slice(Math.max(0, btcIdx - 300), btcIdx + 1);
 
+    // Prevent event-loop starvation (important when backtest runs inside the API server
+    // alongside WebSockets). This avoids spurious WS drift bursts.
+    if (btcIdx % 25 === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+
     const day = new Date(btcCandle.timestamp).toISOString().slice(0, 10);
 
     // Track equity
@@ -661,8 +674,14 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     // Process each symbol
     for (const symbol of symbols) {
       const candles = allData[symbol];
-      const idx = candles.findIndex((c) => c.timestamp >= btcCandle.timestamp);
+      // Advance cursor to the last candle <= BTC timestamp (no look-ahead).
+      let idx = symbolIdx[symbol];
+      while (idx + 1 < candles.length && candles[idx + 1].timestamp <= btcCandle.timestamp) {
+        idx += 1;
+      }
+      symbolIdx[symbol] = idx;
       if (idx < 50) continue;
+      if (idx >= candles.length) continue;
 
       const windowCandles = candles.slice(Math.max(0, idx - 200), idx + 1);
       const current = candles[idx];
