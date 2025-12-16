@@ -16,10 +16,6 @@ import {
 
 import {
   MomentumConfig,
-  checkMomentumSignal,
-  calcSafeLeverage,
-  calculatePositionSize,
-  calcDynamicStopLoss as calcDynamicStopLossStrategy,
 } from '../strategies/momentumSimple.js';
 
 // ============================================================================
@@ -155,8 +151,127 @@ const CONFIG = {
 };
 
 // ============================================================================
+// SIGNAL CONFIG (V5.12)
+// ============================================================================
+
+// Use production config values directly for exact parity
+const SIGNAL_CONFIG = {
+  LONG: {
+    BB_PERIOD: MomentumConfig.ENTRY_LONG.BB_PERIOD,
+    BB_STD: MomentumConfig.ENTRY_LONG.BB_STD,
+    ROC_MIN: MomentumConfig.ENTRY_LONG.ROC_MIN, // 0.025 = 2.5% as ratio
+    VOL_MULTIPLIER: MomentumConfig.ENTRY_LONG.VOL_MULTIPLIER,
+    MAX_CONSEC_UP: MomentumConfig.ENTRY_LONG.MAX_CONSEC_UP,
+  },
+  SHORT: {
+    ROC_DROP_MIN: MomentumConfig.ENTRY_SHORT.ROC_DROP_MIN, // -0.015 = -1.5% as ratio
+    VOL_SPIKE: MomentumConfig.ENTRY_SHORT.VOL_SPIKE,
+    MAX_CONSEC_DOWN: MomentumConfig.ENTRY_SHORT.MAX_CONSEC_DOWN,
+  },
+  STOCHRSI: {
+    ENABLED: MomentumConfig.STOCHRSI_FILTER.ENABLED,
+    MIN_STOCHRSI: MomentumConfig.STOCHRSI_FILTER.MIN_STOCHRSI,
+    VOL_EXCEPTION: MomentumConfig.STOCHRSI_FILTER.VOLUME_EXCEPTION_MULTIPLIER,
+  },
+};
+
+// ============================================================================
 // INDICATORS
 // ============================================================================
+
+function calcSMA(values: number[], period: number): number {
+  if (values.length < period) return values[values.length - 1] || 0;
+  const slice = values.slice(-period);
+  return slice.reduce((a, b) => a + b, 0) / period;
+}
+
+function calcBB(closes: number[], period = 20, mult = 2) {
+  if (closes.length < period) return { upper: 0, middle: 0, lower: 0 };
+  const slice = closes.slice(-period);
+  const middle = slice.reduce((a, b) => a + b, 0) / period;
+  const variance = slice.reduce((sum, v) => sum + Math.pow(v - middle, 2), 0) / period;
+  const std = Math.sqrt(variance);
+  return { upper: middle + std * mult, middle, lower: middle - std * mult };
+}
+
+function calcROC(closes: number[], period: number): number {
+  if (closes.length < period + 1) return 0;
+  const current = closes[closes.length - 1];
+  const past = closes[closes.length - period - 1];
+  return past > 0 ? (current - past) / past : 0; // Returns ratio like production
+}
+
+function calcVolRatio(volumes: number[]): number {
+  if (volumes.length < 21) return 0;
+  const current = volumes[volumes.length - 1];
+  const avg = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
+  return avg > 0 ? current / avg : 0;
+}
+
+function countConsecUp(candles: Candle[]): number {
+  let count = 0;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    if (candles[i].close > candles[i].open) count++;
+    else break;
+  }
+  return count;
+}
+
+function countConsecDown(candles: Candle[]): number {
+  let count = 0;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    if (candles[i].close < candles[i].open) count++;
+    else break;
+  }
+  return count;
+}
+
+function calcRSI(closes: number[], period = 14): number | null {
+  if (closes.length < period + 1) return null;
+  let gains = 0;
+  let losses = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+
+function calcStochRSI(closes: number[], rsiPeriod = 14, stochPeriod = 14, smooth = 3): number | null {
+  const minLength = rsiPeriod + stochPeriod + smooth;
+  if (closes.length < minLength) return null;
+
+  const rsiValues: number[] = [];
+  for (let i = rsiPeriod + 1; i <= closes.length; i++) {
+    const slice = closes.slice(0, i);
+    const rsi = calcRSI(slice, rsiPeriod);
+    if (rsi !== null) rsiValues.push(rsi);
+  }
+
+  if (rsiValues.length < stochPeriod) return null;
+
+  const stochRsiRaw: number[] = [];
+  for (let i = stochPeriod; i <= rsiValues.length; i++) {
+    const rsiSlice = rsiValues.slice(i - stochPeriod, i);
+    const rsiHigh = Math.max(...rsiSlice);
+    const rsiLow = Math.min(...rsiSlice);
+    const currentRsi = rsiSlice[rsiSlice.length - 1];
+    if (rsiHigh === rsiLow) {
+      stochRsiRaw.push(50);
+    } else {
+      stochRsiRaw.push(((currentRsi - rsiLow) / (rsiHigh - rsiLow)) * 100);
+    }
+  }
+
+  if (stochRsiRaw.length < smooth) return null;
+  const smoothSlice = stochRsiRaw.slice(-smooth);
+  return smoothSlice.reduce((a, b) => a + b, 0) / smooth;
+}
 
 function calcATR(candles: Candle[], period = 14): number | null {
   if (candles.length < period + 1) return null;
@@ -202,6 +317,64 @@ function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance
     activation: CONFIG.EXIT.TRAILING_ACTIVATION_PCT,
     distance: CONFIG.EXIT.TRAILING_DISTANCE_PCT,
   };
+}
+
+// ============================================================================
+// SIGNAL CHECK V5.12
+// ============================================================================
+
+interface Signal {
+  valid: boolean;
+  side?: 'long' | 'short';
+  reason?: string;
+}
+
+function checkSignal(candles: Candle[], isBull: boolean): Signal {
+  if (candles.length < 50) return { valid: false, reason: 'insufficient_data' };
+
+  const closes = candles.map((c) => c.close);
+  const volumes = candles.map((c) => c.volume);
+  const current = candles[candles.length - 1];
+  const isBullish = current.close > current.open;
+  const isBearish = current.close < current.open;
+
+  const bb = calcBB(closes, SIGNAL_CONFIG.LONG.BB_PERIOD, SIGNAL_CONFIG.LONG.BB_STD);
+  const ma20 = calcSMA(closes, 20);
+  const volRatio = calcVolRatio(volumes);
+  const roc10 = calcROC(closes, 10);
+  const roc5 = calcROC(closes, 5);
+
+  const stochRsi = SIGNAL_CONFIG.STOCHRSI.ENABLED ? calcStochRSI(closes, 14, 14, 3) : null;
+
+  if (isBull) {
+    // LONG conditions V5.12
+    const breakoutOk = current.close > bb.upper;
+    const rocOk = roc10 >= SIGNAL_CONFIG.LONG.ROC_MIN;
+    const volOk = volRatio >= SIGNAL_CONFIG.LONG.VOL_MULTIPLIER;
+    const consecOk = countConsecUp(candles) <= SIGNAL_CONFIG.LONG.MAX_CONSEC_UP;
+
+    if (isBullish && breakoutOk && rocOk && volOk && consecOk) {
+      return { valid: true, side: 'long', reason: 'bull_breakout' };
+    }
+  } else {
+    // SHORT conditions
+    // StochRSI filter
+    if (stochRsi !== null && stochRsi < SIGNAL_CONFIG.STOCHRSI.MIN_STOCHRSI && volRatio < SIGNAL_CONFIG.STOCHRSI.VOL_EXCEPTION) {
+      return { valid: false, reason: 'stochrsi_filter' };
+    }
+
+    const dropOk = roc5 <= SIGNAL_CONFIG.SHORT.ROC_DROP_MIN;
+    const volOk = volRatio >= SIGNAL_CONFIG.SHORT.VOL_SPIKE;
+    const belowMa20 = current.close < ma20;
+    const belowBB = current.close < bb.lower;
+    const consecOk = countConsecDown(candles) <= SIGNAL_CONFIG.SHORT.MAX_CONSEC_DOWN;
+
+    if (isBearish && dropOk && volOk && belowMa20 && belowBB && consecOk) {
+      return { valid: true, side: 'short', reason: 'bear_breakdown' };
+    }
+  }
+
+  return { valid: false, reason: 'no_signal' };
 }
 
 // ============================================================================
@@ -365,10 +538,6 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
     if (btcCandle.timestamp < startTimestamp) continue;
     if (btcCandle.timestamp > endDate.getTime()) break;
-
-    // BTC context for regime detection (uses PRIOR close, not current)
-    const btcWindowEnd = btcIdx; // Exclude current (in-progress) candle
-    const btcWindowCandles = btcCandles.slice(Math.max(0, btcWindowEnd - 300), btcWindowEnd);
 
     // Prevent event-loop starvation
     if (btcIdx % 25 === 0) {
@@ -583,41 +752,47 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const availableCapital = capital - capitalInUse;
         if (availableCapital < 100) continue;
 
-        // Max positions check
-        const openPositions = symbols.reduce((acc, s) => acc + (positions[s] ? 1 : 0), 0);
-        const maxPositions = Math.max(1, Number(MomentumConfig.RISK.MAX_POSITIONS ?? 4));
-        if (openPositions >= maxPositions) continue;
+        // BTC regime: use PRIOR BTC close for regime (avoid look-ahead)
+        const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
+        const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
+        const isBullRegime = btcPriceForRegime > btcSma200;
 
-        // Use momentumSimple's checkMomentumSignal for entry
-        const signal = checkMomentumSignal(symbol, windowCandles, btcWindowCandles, {
-          nowMs: btcCandle.timestamp,
-        });
+        // Use local checkSignal (V5.12 strategy)
+        const signal = checkSignal(windowCandles, isBullRegime);
         if (!signal.valid || !signal.side) continue;
 
-        // Calculate position size using momentumSimple helpers
-        const baseLev = leverage || MomentumConfig.LEVERAGE[symbol] || 5;
-        const levCalc = calcSafeLeverage(windowCandles, baseLev);
+        // Simple position sizing: 40% of available capital as margin
+        const posLev = leverage || 4;
+        let marginUsd = availableCapital * 0.4; // 40% position sizing
+        let notionalUsd = marginUsd * posLev;
 
-        const sizing = calculatePositionSize({
-          symbol,
-          currentPrice: current.close,
-          totalCapitalUsd: availableCapital,
-          riskPerTradePct: MomentumConfig.RISK.RISK_PCT_PER_TRADE,
-          stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
-          safeLeverage: levCalc.leverage,
-          volume24h: undefined,
-        });
+        // Apply liquidity caps
+        const LIQUIDITY_CAPS: Record<string, number> = {
+          'BTC/USDT:USDT': 500_000,
+          'ETH/USDT:USDT': 500_000,
+          'XRP/USDT:USDT': 100_000,
+          'SOL/USDT:USDT': 100_000,
+          'SEI/USDT:USDT': 25_000,
+          'IMX/USDT:USDT': 25_000,
+          'DOT/USDT:USDT': 25_000,
+          'DOGE/USDT:USDT': 100_000,
+          'SUI/USDT:USDT': 50_000,
+          'ADA/USDT:USDT': 100_000,
+          'LINK/USDT:USDT': 50_000,
+          'AVAX/USDT:USDT': 50_000,
+        };
+        const cap = LIQUIDITY_CAPS[symbol] ?? Infinity;
+        const wasCapped = Number.isFinite(cap) && notionalUsd > cap;
+        if (wasCapped) {
+          notionalUsd = cap;
+          marginUsd = notionalUsd / posLev;
+        }
 
-        if (!sizing.notionalUsd || sizing.notionalUsd < 20 || !sizing.marginUsd) continue;
+        const qty = notionalUsd / current.close;
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+        if (marginUsd < 20) continue;
 
-        const slCalc = calcDynamicStopLossStrategy(windowCandles);
-        const slPct = slCalc.slPct;
-
-        const wasCapped = Boolean(sizing.wasLiquidityCapped);
-        const notionalUsd = sizing.notionalUsd;
-        const marginUsd = sizing.marginUsd;
-        const qty = sizing.qty;
-        const posLeverage = sizing.suggestedLeverage;
+        const slPct = CONFIG.EXIT.STOP_LOSS_PCT;
 
         capitalInUse += marginUsd;
         capital -= marginUsd;
@@ -631,7 +806,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           qty,
           notionalUsd,
           marginUsd,
-          leverage: posLeverage,
+          leverage: posLev,
           capitalBefore: capital + marginUsd,
           wasCapped,
           stopLossPct: slPct,
