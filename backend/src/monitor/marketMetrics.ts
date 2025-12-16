@@ -125,7 +125,16 @@ const totals = {
 };
 
 const LOG_THROTTLE_MS = Math.max(0, Number(process.env.MARKET_METRICS_LOG_THROTTLE_MS || 60000));
+const DRIFT_LOG_THROTTLE_MS = Math.max(
+  LOG_THROTTLE_MS,
+  Number(process.env.MARKET_METRICS_DRIFT_LOG_THROTTLE_MS || 300000),
+);
 const lastLogAtByKey = new Map<string, number>();
+const lastRestFallbackLogAtByKey = new Map<string, number>();
+const REST_FALLBACK_LOG_THROTTLE_MS = Math.max(
+  0,
+  Number(process.env.MARKET_METRICS_REST_FALLBACK_LOG_THROTTLE_MS || 60000),
+);
 
 function normalizeSymbolId(value: string): string {
   const trimmed = value?.trim();
@@ -191,11 +200,13 @@ function activateFallback(entry: SymbolMetrics, reason?: string, increment = fal
 
 function logFrameEvent(event: MarketFrameEvent, entry: SymbolMetrics): string | undefined {
   if (event.status === 'accepted') return undefined;
-  if (LOG_THROTTLE_MS > 0) {
+  const effectiveThrottle =
+    event.status === 'stale' && event.ruleId === 'timestamp_drift' ? DRIFT_LOG_THROTTLE_MS : LOG_THROTTLE_MS;
+  if (effectiveThrottle > 0) {
     const throttleKey = `${entry.key}:${event.ruleId || event.status}:${event.source}`;
     const now = Date.now();
     const last = lastLogAtByKey.get(throttleKey) || 0;
-    if (now - last < LOG_THROTTLE_MS) {
+    if (now - last < effectiveThrottle) {
       return undefined;
     }
     lastLogAtByKey.set(throttleKey, now);
@@ -281,6 +292,15 @@ export function recordRestFallback(symbol: string, reason?: string): void {
   const entry = ensureSymbolMetrics(symbol);
   activateFallback(entry, reason || 'rest_fallback', true);
   totals.restFallbacks += 1;
+  if (REST_FALLBACK_LOG_THROTTLE_MS > 0) {
+    const key = `${entry.key}:${reason || 'unknown'}`;
+    const now = Date.now();
+    const last = lastRestFallbackLogAtByKey.get(key) || 0;
+    if (now - last < REST_FALLBACK_LOG_THROTTLE_MS) {
+      return;
+    }
+    lastRestFallbackLogAtByKey.set(key, now);
+  }
   console.warn(
     JSON.stringify({
       event: 'rest_fallback',

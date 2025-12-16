@@ -1145,8 +1145,14 @@ class BinanceWebSocketManager {
         }
         const reason = validation.ruleId || 'stale';
         setFallbackState(rawSymbol, true, `ws_validation_${reason}`, { increment: false });
-        recordRestFallback(rawSymbol, `ws_${reason}`);
-        this.scheduleBookTickerRefresh(rawSymbol);
+
+        // Timestamp drift typically indicates local event-loop lag or clock skew.
+        // Triggering REST fallbacks per symbol can create bursts (and 429s) without improving data quality.
+        // We rely on server-time resync + reconnect logic instead.
+        if (reason !== 'timestamp_drift') {
+          recordRestFallback(rawSymbol, `ws_${reason}`);
+          this.scheduleBookTickerRefresh(rawSymbol);
+        }
       }
 
       recordMarketFrame({
@@ -1531,15 +1537,14 @@ class BinanceWebSocketManager {
       const lastNotified = this.lastTimestampDriftNotice.get(symbol) ?? 0;
       if (receivedTs - lastNotified >= 5_000) {
         console.warn(
-          `⚠️ WS timestamp drift for ${symbol}: age ${ageMs}ms (count ${nextStats.count}) — forcing REST snapshot`,
+          `⚠️ WS timestamp drift for ${symbol}: age ${ageMs}ms (count ${nextStats.count}) — suppressing REST fallback, will resync/reconnect if persistent`,
         );
         this.lastTimestampDriftNotice.set(symbol, receivedTs);
         setFallbackState(symbol, true, 'ws_timestamp_drift', { increment: nextStats.count === threshold });
-        if (nextStats.count === threshold) {
-          recordRestFallback(symbol, 'ws_timestamp_drift');
-          this.registerTimestampDriftBurst(receivedTs, ageMs);
-        }
-        this.scheduleBookTickerRefresh(symbol);
+
+        // Register drift bursts to trigger reconnect when drift is severe/persistent.
+        // (We avoid REST snapshots here to prevent 429 storms; drift is not fixed by REST.)
+        this.registerTimestampDriftBurst(receivedTs, ageMs);
       }
     }
   }
