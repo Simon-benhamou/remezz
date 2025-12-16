@@ -290,6 +290,14 @@ function calcATR(candles: Candle[], period = 14): number | null {
 
 // Adaptive trailing: tighter in low vol, wider in high vol
 function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance: number } {
+  // Check if adaptive trailing is enabled
+  if (!MomentumConfig.EXIT.ADAPTIVE_TRAILING) {
+    return {
+      activation: CONFIG.EXIT.TRAILING_ACTIVATION_PCT,
+      distance: CONFIG.EXIT.TRAILING_DISTANCE_PCT,
+    };
+  }
+
   const atr = calcATR(candles, 14);
   
   if (!atr || candles.length === 0) {
@@ -302,14 +310,20 @@ function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance
   const currentPrice = candles[candles.length - 1].close;
   const atrPct = (atr / currentPrice) * 100;
   
-  // Low volatility (ATR < 2%): tighter trailing
-  if (atrPct < 2.0) {
-    return { activation: 0.6, distance: 0.3 };
+  // Low volatility: tighter trailing (use production config)
+  if (atrPct < MomentumConfig.EXIT.LOW_VOL_ATR_MAX) {
+    return { 
+      activation: MomentumConfig.EXIT.LOW_VOL_ACTIVATION, 
+      distance: MomentumConfig.EXIT.LOW_VOL_DISTANCE,
+    };
   }
   
-  // High volatility (ATR > 3.5%): wider trailing
-  if (atrPct > 3.5) {
-    return { activation: 1.2, distance: 0.8 };
+  // High volatility: wider trailing (use production config)
+  if (atrPct > MomentumConfig.EXIT.HIGH_VOL_ATR_MIN) {
+    return { 
+      activation: MomentumConfig.EXIT.HIGH_VOL_ACTIVATION, 
+      distance: MomentumConfig.EXIT.HIGH_VOL_DISTANCE,
+    };
   }
   
   // Medium: default
