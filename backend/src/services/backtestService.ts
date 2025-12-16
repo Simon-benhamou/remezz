@@ -1,7 +1,9 @@
 /**
- * 🔬 Backtest Service - Detailed Trade-by-Trade Backtest Engine
+ * 🔬 Backtest Service - Unified Realistic Backtest Engine
  *
- * Returns individual trades with full details for analysis
+ * Uses momentumSimple strategy helpers for entries.
+ * Uses intrabar execution for stops/trailing/TP (realistic).
+ * Single mode - no legacy/agent split.
  */
 
 import ccxt from 'ccxt';
@@ -15,27 +17,41 @@ import {
 import {
   MomentumConfig,
   checkMomentumSignal,
-  shouldExitPosition,
-  updatePositionWaterMarks,
-  calcDynamicStopLoss as calcDynamicStopLossStrategy,
   calcSafeLeverage,
   calculatePositionSize,
-  type Position,
+  calcDynamicStopLoss as calcDynamicStopLossStrategy,
 } from '../strategies/momentumSimple.js';
-
-type BacktestSimPosition = Position & {
-  entryIdx: number;
-  capitalBefore: number;
-  wasCapped: boolean;
-  notionalUsd: number;
-  marginUsd: number;
-  leverage: number;
-  qty: number;
-};
 
 // ============================================================================
 // TYPES
 // ============================================================================
+
+interface Candle {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+interface BacktestSimPosition {
+  symbol: string;
+  side: 'long' | 'short';
+  entryPrice: number;
+  entryTime: number;
+  entryIdx: number;
+  qty: number;
+  notionalUsd: number;
+  marginUsd: number;
+  leverage: number;
+  capitalBefore: number;
+  wasCapped: boolean;
+  stopLossPct: number;
+  highWaterMark?: number;
+  lowWaterMark?: number;
+  appTrailingStop?: number;
+}
 
 export interface BacktestParams {
   startDate: Date;
@@ -43,6 +59,7 @@ export interface BacktestParams {
   initialCapital: number;
   symbols: string[];
   leverage: number;
+  mode?: 'legacy' | 'agent'; // Ignored - kept for API compatibility
 }
 
 export interface BacktestTrade {
@@ -69,15 +86,6 @@ export interface BacktestTrade {
   day: string;
   wasCapped: boolean;
   slippagePct: number;
-}
-
-function mapExitReason(reason: string | undefined): BacktestTrade['exitReason'] {
-  if (!reason) return 'UNKNOWN';
-  const r = reason.toLowerCase();
-  if (r.includes('stop')) return 'SL';
-  if (r.includes('time')) return 'TIME';
-  if (r.includes('trail')) return 'TRAIL';
-  return reason.toUpperCase();
 }
 
 export interface MonthlyStats {
@@ -125,123 +133,31 @@ export interface BacktestResult {
 }
 
 // ============================================================================
-// CONFIG V5.11 (synced with momentumSimple.ts)
-// SL Large (ATR×3.0) + Trailing Agressif (+0.5%, 0.3%)
-// Backtest 24 mois: +2547% ROI, 89% WR, 10.6% SL rate (vs 27% avant)
+// CONFIG (synced with MomentumConfig)
 // ============================================================================
 
 const CONFIG = {
-  // V5.8: StochRSI Filter - SHORT ONLY
-  // Skip SHORT if StochRSI < 15 AND volRatio < 4 (low quality signal)
-  // Backtest 24 mois: +1557% ROI with realistic fees
-  STOCHRSI_FILTER: {
-    ENABLED: true,
-    MIN_STOCHRSI: 15,
-    VOLUME_EXCEPTION_MULTIPLIER: 4.0,
-    RSI_PERIOD: 14,
-    STOCH_PERIOD: 14,
-    STOCH_SMOOTH: 3,
-  },
-  LONG: {
-    BB_PERIOD: 20,
-    BB_STD: 2,
-    ROC_MIN: 2.5, // V5.3: 2.5% (strict)
-    VOL_MULTIPLIER: 1.5, // V5.12: 1.5x (relaxed from 2.0) - +36% PnL
-    MAX_CONSEC_UP: 5, // V5.12: max 5 (was 3) - +34% PnL
-  },
-  SHORT: {
-    ROC_DROP_MIN: -1.5, // V5.4: ROC5 < -1.5%
-    VOL_SPIKE: 2.0, // V5.4: 2x volume
-    PRICE_BELOW_MA20: true,
-    PRICE_BELOW_BB_LOWER: true, // V5.4: BB breakdown
-    MAX_CONSEC_DOWN: 4, // V5.8.1: 4 (was 5)
-  },
   EXIT: {
-    // V5.14: SL FIXE + ADAPTIVE TRAILING
-    // Backtest: +320% ROI (72× vs baseline), 80.6% WR, 38.5% DD
-    // Trailing adaptatif 0.3-0.8% basé sur volatilité (ATR)
-    STOP_LOSS_TYPE: 'fixed' as const, // 'fixed' | 'atr'
-    STOP_LOSS_FIXED: 2.5, // SL fixe 2.5%
-    STOP_LOSS_ATR_MULT: 3.0, // Unused (dynamic SL disabled)
-    STOP_LOSS_MIN: 1.0, // Unused
-    STOP_LOSS_MAX: 4.5, // Unused
-
-    TAKE_PROFIT: 3.0,
-    
-    // Adaptive trailing based on volatility (ATR)
-    TRAILING_ACTIVATION: 0.8, // Base activation +0.8%
-    TRAILING_DISTANCE: 0.5, // Base distance 0.5%
-    
-    // Low volatility (ATR < 2%): tighter trailing
-    LOW_VOL_ATR_MAX: 2.0,
-    LOW_VOL_ACTIVATION: 0.6,
-    LOW_VOL_DISTANCE: 0.3,
-    
-    // High volatility (ATR > 3.5%): wider trailing
-    HIGH_VOL_ATR_MIN: 3.5,
-    HIGH_VOL_ACTIVATION: 1.2,
-    HIGH_VOL_DISTANCE: 0.8,
-    
-    MAX_HOLD_BARS: 192, // 48h
+    STOP_LOSS_PCT: MomentumConfig.EXIT.STOP_LOSS_PCT,
+    TAKE_PROFIT_PCT: MomentumConfig.EXIT.PROFIT_TARGET_PCT,
+    TRAILING_ACTIVATION_PCT: MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT,
+    TRAILING_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_DISTANCE_PCT,
+    TRAILING_WIDEN_AT_PCT: MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT,
+    TRAILING_WIDE_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT,
+    MAX_HOLD_BARS: 192, // 48h in 15m bars
   },
-  POSITION_SIZE_PCT: 0.4, // 40% du capital disponible
-  DEFAULT_LEVERAGE: 4.5, // V5.7: 4.5x uniforme
   COSTS: {
     TRADING_FEE_PCT: 0.04, // Binance taker fee
     SLIPPAGE_PCT: 0.05, // Realistic slippage
     FUNDING_RATE_PCT: 0.01, // 8h funding
     FUNDING_INTERVAL_BARS: 32, // 32 × 15min = 8h
   },
-  LIQUIDITY_CAPS: {
-    'BTC/USDT:USDT': 500_000,
-    'ETH/USDT:USDT': 500_000,
-    'XRP/USDT:USDT': 100_000,
-    'SOL/USDT:USDT': 100_000,
-    'SEI/USDT:USDT': 25_000,
-    'IMX/USDT:USDT': 25_000,
-    'DOT/USDT:USDT': 25_000,
-    'DOGE/USDT:USDT': 100_000,
-    'SUI/USDT:USDT': 50_000,
-    'ADA/USDT:USDT': 100_000,
-    'LINK/USDT:USDT': 50_000,
-    'AVAX/USDT:USDT': 50_000,
-  } as Record<string, number>,
 };
 
 // ============================================================================
 // INDICATORS
 // ============================================================================
 
-function calcSMA(values: number[], period: number): number {
-  if (values.length < period) return values[values.length - 1] || 0;
-  const slice = values.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
-}
-
-function calcBB(closes: number[], period = 20, mult = 2) {
-  if (closes.length < period) return { upper: 0, middle: 0, lower: 0 };
-  const slice = closes.slice(-period);
-  const middle = slice.reduce((a, b) => a + b, 0) / period;
-  const variance = slice.reduce((sum, v) => sum + Math.pow(v - middle, 2), 0) / period;
-  const std = Math.sqrt(variance);
-  return { upper: middle + std * mult, middle, lower: middle - std * mult };
-}
-
-function calcROC(closes: number[], period: number): number {
-  if (closes.length < period + 1) return 0;
-  const current = closes[closes.length - 1];
-  const past = closes[closes.length - period - 1];
-  return past > 0 ? ((current - past) / past) * 100 : 0;
-}
-
-function calcVolRatio(volumes: number[]): number {
-  if (volumes.length < 21) return 0;
-  const current = volumes[volumes.length - 1];
-  const avg = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
-  return avg > 0 ? current / avg : 0;
-}
-
-// V5.7: ATR calculation for dynamic stop loss
 function calcATR(candles: Candle[], period = 14): number | null {
   if (candles.length < period + 1) return null;
 
@@ -250,7 +166,6 @@ function calcATR(candles: Candle[], period = 14): number | null {
     const high = candles[i].high;
     const low = candles[i].low;
     const prevClose = candles[i - 1]?.close || high;
-
     const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
     atrSum += tr;
   }
@@ -258,128 +173,35 @@ function calcATR(candles: Candle[], period = 14): number | null {
   return atrSum / period;
 }
 
-// V5.14: Fixed stop loss (dynamic SL disabled)
-function calcDynamicStopLoss(candles: Candle[]): { slPct: number; atrPct: number | null } {
-  // Always return fixed SL (dynamic disabled)
-  return { slPct: CONFIG.EXIT.STOP_LOSS_FIXED, atrPct: null };
-}
-
-// V5.14: Adaptive trailing parameters based on volatility (ATR)
+// Adaptive trailing: tighter in low vol, wider in high vol
 function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance: number } {
   const atr = calcATR(candles, 14);
   
   if (!atr || candles.length === 0) {
     return {
-      activation: CONFIG.EXIT.TRAILING_ACTIVATION,
-      distance: CONFIG.EXIT.TRAILING_DISTANCE,
+      activation: CONFIG.EXIT.TRAILING_ACTIVATION_PCT,
+      distance: CONFIG.EXIT.TRAILING_DISTANCE_PCT,
     };
   }
   
   const currentPrice = candles[candles.length - 1].close;
   const atrPct = (atr / currentPrice) * 100;
   
-  // Low volatility: tighter trailing
-  if (atrPct < CONFIG.EXIT.LOW_VOL_ATR_MAX) {
-    return {
-      activation: CONFIG.EXIT.LOW_VOL_ACTIVATION,
-      distance: CONFIG.EXIT.LOW_VOL_DISTANCE,
-    };
+  // Low volatility (ATR < 2%): tighter trailing
+  if (atrPct < 2.0) {
+    return { activation: 0.6, distance: 0.3 };
   }
   
-  // High volatility: wider trailing
-  if (atrPct > CONFIG.EXIT.HIGH_VOL_ATR_MIN) {
-    return {
-      activation: CONFIG.EXIT.HIGH_VOL_ACTIVATION,
-      distance: CONFIG.EXIT.HIGH_VOL_DISTANCE,
-    };
+  // High volatility (ATR > 3.5%): wider trailing
+  if (atrPct > 3.5) {
+    return { activation: 1.2, distance: 0.8 };
   }
   
-  // Medium volatility: default
+  // Medium: default
   return {
-    activation: CONFIG.EXIT.TRAILING_ACTIVATION,
-    distance: CONFIG.EXIT.TRAILING_DISTANCE,
+    activation: CONFIG.EXIT.TRAILING_ACTIVATION_PCT,
+    distance: CONFIG.EXIT.TRAILING_DISTANCE_PCT,
   };
-}
-
-function countConsecUp(candles: Candle[]): number {
-  let count = 0;
-  for (let i = candles.length - 1; i >= 0; i--) {
-    if (candles[i].close > candles[i].open) count++;
-    else break;
-  }
-  return count;
-}
-
-function countConsecDown(candles: any[]): number {
-  let count = 0;
-  for (let i = candles.length - 1; i >= 0; i--) {
-    if (candles[i].close < candles[i].open) count++;
-    else break;
-  }
-  return count;
-}
-
-// V5.8: RSI calculation
-function calcRSI(closes: number[], period = 14): number | null {
-  if (closes.length < period + 1) return null;
-
-  let gains = 0;
-  let losses = 0;
-
-  for (let i = closes.length - period; i < closes.length; i++) {
-    const change = closes[i] - closes[i - 1];
-    if (change > 0) gains += change;
-    else losses += Math.abs(change);
-  }
-
-  const avgGain = gains / period;
-  const avgLoss = losses / period;
-
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - 100 / (1 + rs);
-}
-
-// V5.8: Stochastic RSI calculation
-function calcStochRSI(
-  closes: number[],
-  rsiPeriod = 14,
-  stochPeriod = 14,
-  smooth = 3,
-): number | null {
-  const minLength = rsiPeriod + stochPeriod + smooth;
-  if (closes.length < minLength) return null;
-
-  // Calculate RSI series
-  const rsiValues: number[] = [];
-  for (let i = rsiPeriod + 1; i <= closes.length; i++) {
-    const slice = closes.slice(0, i);
-    const rsi = calcRSI(slice, rsiPeriod);
-    if (rsi !== null) rsiValues.push(rsi);
-  }
-
-  if (rsiValues.length < stochPeriod) return null;
-
-  // Calculate StochRSI for recent values
-  const stochRsiRaw: number[] = [];
-  for (let i = stochPeriod; i <= rsiValues.length; i++) {
-    const rsiSlice = rsiValues.slice(i - stochPeriod, i);
-    const rsiHigh = Math.max(...rsiSlice);
-    const rsiLow = Math.min(...rsiSlice);
-    const currentRsi = rsiSlice[rsiSlice.length - 1];
-
-    if (rsiHigh === rsiLow) {
-      stochRsiRaw.push(50);
-    } else {
-      stochRsiRaw.push(((currentRsi - rsiLow) / (rsiHigh - rsiLow)) * 100);
-    }
-  }
-
-  if (stochRsiRaw.length < smooth) return null;
-
-  // Smooth the StochRSI (%K line)
-  const smoothSlice = stochRsiRaw.slice(-smooth);
-  return smoothSlice.reduce((a, b) => a + b, 0) / smooth;
 }
 
 // ============================================================================
@@ -387,15 +209,6 @@ function calcStochRSI(
 // ============================================================================
 
 const exchange = new ccxt.binanceusdm({ enableRateLimit: true });
-
-interface Candle {
-  timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
 
 async function fetchCandlesFromCcxt(symbol: string, since: number, until: number): Promise<Candle[]> {
   const out: Candle[] = [];
@@ -425,7 +238,6 @@ async function fetchCandlesFromCcxt(symbol: string, since: number, until: number
 
       if (!progressed) break;
       cursor = (ohlcv[ohlcv.length - 1][0] as number) + 1;
-      // keep rate-limit gentle
       await new Promise((r) => setTimeout(r, 100));
     } catch (e) {
       console.error(`Error fetching ${symbol}:`, e);
@@ -441,7 +253,6 @@ async function fetchCandles(symbol: string, startDate: Date, endDate: Date): Pro
   const extraBarsMs = 200 * 15 * 60 * 1000; // 200 bars × 15min
   const since = startDate.getTime() - extraBarsMs;
 
-  // Prefer local 24m dataset if present. Fetch only the delta outside local coverage.
   const local = await loadLocalJsonCandles(symbol, '15m');
   if (!local) {
     return await fetchCandlesFromCcxt(symbol, since, until);
@@ -454,101 +265,15 @@ async function fetchCandles(symbol: string, startDate: Date, endDate: Date): Pro
   const parts: BacktestCandle[][] = [localSlice];
 
   if (needBefore) {
-    const before = await fetchCandlesFromCcxt(symbol, since, Math.min(until, local.startTs));
-    parts.unshift(before);
+    const beforeCandles = await fetchCandlesFromCcxt(symbol, since, local.startTs - 1);
+    parts.unshift(beforeCandles);
   }
   if (needAfter) {
-    const after = await fetchCandlesFromCcxt(symbol, Math.max(since, local.endTs), until);
-    parts.push(after);
+    const afterCandles = await fetchCandlesFromCcxt(symbol, local.endTs + 1, until);
+    parts.push(afterCandles);
   }
 
-  const merged = mergeDedupCandles(parts);
-  // Ensure final range is bounded
-  return sliceCandlesByTime(merged, since, until);
-}
-
-// ============================================================================
-// SIGNAL DETECTION
-// ============================================================================
-
-interface Signal {
-  valid: boolean;
-  side?: 'long' | 'short';
-  reason?: string;
-}
-
-function checkSignal(candles: Candle[], isBull: boolean, btcRoc4h?: number): Signal {
-  if (candles.length < 50) return { valid: false, reason: 'insufficient_data' };
-
-  const closes = candles.map((c) => c.close);
-  const volumes = candles.map((c) => c.volume);
-  const current = candles[candles.length - 1];
-  const isBullish = current.close > current.open;
-  const isBearish = current.close < current.open;
-
-  const bb = calcBB(closes, CONFIG.LONG.BB_PERIOD, CONFIG.LONG.BB_STD);
-  const ma20 = calcSMA(closes, 20);
-  const volRatio = calcVolRatio(volumes);
-  const roc10 = calcROC(closes, 10);
-  const roc5 = calcROC(closes, 5);
-
-  // V5.9: StochRSI calculated here, applied to SHORT only below
-  const stochRsi = CONFIG.STOCHRSI_FILTER.ENABLED
-    ? calcStochRSI(
-        closes,
-        CONFIG.STOCHRSI_FILTER.RSI_PERIOD,
-        CONFIG.STOCHRSI_FILTER.STOCH_PERIOD,
-        CONFIG.STOCHRSI_FILTER.STOCH_SMOOTH,
-      )
-    : null;
-
-  // V5.10: RSI for LONG filter
-  const rsi = calcRSI(closes, 14);
-
-  if (isBull) {
-    // ═══════════════════════════════════════════════════════════════════════════
-    // V5.12: RSI+BTC filter REMOVED - 2-year backtest showed it blocked good trades
-    // Previously: Skip if RSI > 75 AND BTC ROC 4h < 0
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    // LONG conditions
-    const breakoutOk = current.close > bb.upper;
-    const rocOk = roc10 >= CONFIG.LONG.ROC_MIN;
-    const volOk = volRatio >= CONFIG.LONG.VOL_MULTIPLIER;
-    const consecOk = countConsecUp(candles) <= CONFIG.LONG.MAX_CONSEC_UP;
-
-    if (isBullish && breakoutOk && rocOk && volOk && consecOk) {
-      return { valid: true, side: 'long', reason: 'bull_breakout' };
-    }
-  } else {
-    // SHORT conditions (bear market)
-    // ═══════════════════════════════════════════════════════════════════════════
-    // V5.9: StochRSI FILTER - SHORT ONLY
-    // Skip SHORT if StochRSI < 15 AND volRatio < 4.0 (low quality signal)
-    // ═══════════════════════════════════════════════════════════════════════════
-    if (
-      stochRsi !== null &&
-      stochRsi < CONFIG.STOCHRSI_FILTER.MIN_STOCHRSI &&
-      volRatio < CONFIG.STOCHRSI_FILTER.VOLUME_EXCEPTION_MULTIPLIER
-    ) {
-      return {
-        valid: false,
-        reason: `v5.9_stochrsi_filter(${stochRsi.toFixed(1)}<15, vol=${volRatio.toFixed(1)}x<4)`,
-      };
-    }
-
-    const dropOk = roc5 <= CONFIG.SHORT.ROC_DROP_MIN;
-    const volOk = volRatio >= CONFIG.SHORT.VOL_SPIKE;
-    const belowMa20 = current.close < ma20;
-    const belowBB = current.close < bb.lower;
-    const consecOk = countConsecDown(candles) <= CONFIG.SHORT.MAX_CONSEC_DOWN;
-
-    if (isBearish && dropOk && volOk && belowMa20 && belowBB && consecOk) {
-      return { valid: true, side: 'short', reason: 'bear_breakdown' };
-    }
-  }
-
-  return { valid: false, reason: 'no_signal' };
+  return mergeDedupCandles(parts);
 }
 
 // ============================================================================
@@ -579,7 +304,6 @@ function calculatePnl(
   const totalCostsPct = (tradingFees + slippage + funding) * leverage;
   const netPnlPct = grossPnlPct - totalCostsPct;
 
-  const notionalUsd = marginUsd * leverage;
   const feesUsd = (totalCostsPct / 100) * marginUsd;
   const netPnlUsd = (netPnlPct / 100) * marginUsd;
 
@@ -607,12 +331,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     console.log(`[Backtest] ${symbol}: ${allData[symbol].length} candles`);
   }
 
-  // Performance + correctness: track per-symbol candle cursor.
-  // We want the latest candle whose timestamp <= current BTC candle timestamp.
+  // Track per-symbol candle cursor (avoid O(n²) findIndex)
   const symbolIdx: Record<string, number> = {};
-  for (const symbol of symbols) {
-    symbolIdx[symbol] = -1;
-  }
+  for (const symbol of symbols) symbolIdx[symbol] = -1;
 
   // Initialize state
   let capital = initialCapital;
@@ -624,35 +345,32 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   const drawdownCurve: { date: string; drawdown: number }[] = [];
   let tradeId = 0;
 
-  const positions: Record<string, any> = {};
+  const positions: Record<string, BacktestSimPosition | null> = {};
   const cooldowns: Record<string, number> = {};
   symbols.forEach((s) => {
     positions[s] = null;
     cooldowns[s] = 0;
   });
 
-  // Find start index (after 200 candles for indicators)
+  // Find start index (need 200 bars for SMA200)
   const startTimestamp = startDate.getTime();
   let startIdx = btcCandles.findIndex((c) => c.timestamp >= startTimestamp);
   if (startIdx < 200) startIdx = 200;
 
   console.log(`[Backtest] Starting simulation at index ${startIdx}...`);
 
-  // Main loop
+  // Main loop - iterate over BTC candles
   for (let btcIdx = startIdx; btcIdx < btcCandles.length; btcIdx++) {
     const btcCandle = btcCandles[btcIdx];
 
-    // Skip if before start date
     if (btcCandle.timestamp < startTimestamp) continue;
-    // Stop if after end date
     if (btcCandle.timestamp > endDate.getTime()) break;
 
-    // Strategy parity: use the same entry signal function as the live agent.
-    // Build a BTC window ending at this candle.
-    const btcWindowCandles = btcCandles.slice(Math.max(0, btcIdx - 300), btcIdx + 1);
+    // BTC context for regime detection (uses PRIOR close, not current)
+    const btcWindowEnd = btcIdx; // Exclude current (in-progress) candle
+    const btcWindowCandles = btcCandles.slice(Math.max(0, btcWindowEnd - 300), btcWindowEnd);
 
-    // Prevent event-loop starvation (important when backtest runs inside the API server
-    // alongside WebSockets). This avoids spurious WS drift bursts.
+    // Prevent event-loop starvation
     if (btcIdx % 25 === 0) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
@@ -664,7 +382,6 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     if (equityCurve.length === 0 || equityCurve[equityCurve.length - 1].date !== day) {
       equityCurve.push({ date: day, equity: totalEquity });
 
-      // Track drawdown
       if (totalEquity > peakCapital) peakCapital = totalEquity;
       const drawdownPct = ((peakCapital - totalEquity) / peakCapital) * 100;
       if (drawdownPct > maxDrawdown) maxDrawdown = drawdownPct;
@@ -674,11 +391,14 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     // Process each symbol
     for (const symbol of symbols) {
       const candles = allData[symbol];
-      // Advance cursor to the last candle <= BTC timestamp (no look-ahead).
       let idx = symbolIdx[symbol];
-      while (idx + 1 < candles.length && candles[idx + 1].timestamp <= btcCandle.timestamp) {
+
+      // Find the latest CLOSED candle for this symbol
+      // Candle timestamps are open-times, so "closed" means timestamp < btcCandle.timestamp
+      while (idx + 1 < candles.length && candles[idx + 1].timestamp < btcCandle.timestamp) {
         idx += 1;
       }
+
       symbolIdx[symbol] = idx;
       if (idx < 50) continue;
       if (idx >= candles.length) continue;
@@ -693,28 +413,124 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       // MANAGE EXISTING POSITION
       // ═══════════════════════════════════════════════════════════════════
       if (positions[symbol]) {
-        let pos = positions[symbol] as BacktestSimPosition;
+        const pos = positions[symbol]!;
         const holdBars = idx - pos.entryIdx;
 
-        // Strategy parity: update trailing watermarks exactly like the agent.
-        pos = updatePositionWaterMarks(pos, current.close, current.high, current.low) as BacktestSimPosition;
-        positions[symbol] = pos;
+        let shouldExit = false;
+        let exitPrice = current.close;
+        let exitReason = 'UNKNOWN';
 
-        const exitSignal = shouldExitPosition(pos, current.close, undefined, {
-          nowMs: current.timestamp,
-          priceHigh: current.high,
-          priceLow: current.low,
-        });
+        // Calculate current PnL %
+        const pnlPct =
+          pos.side === 'long'
+            ? ((current.close - pos.entryPrice) / pos.entryPrice) * 100
+            : ((pos.entryPrice - current.close) / pos.entryPrice) * 100;
 
-        if (exitSignal.newStopLoss && Number.isFinite(exitSignal.newStopLoss)) {
-          pos.appTrailingStop = exitSignal.newStopLoss;
+        // Update water marks with candle extremes
+        if (pos.side === 'long') {
+          pos.highWaterMark = Math.max(pos.highWaterMark ?? pos.entryPrice, current.high);
+        } else {
+          pos.lowWaterMark = Math.min(pos.lowWaterMark ?? pos.entryPrice, current.low);
         }
 
-        if (exitSignal.shouldExit) {
-          // Backtest parity with agent: execute at candle CLOSE (paper behavior).
-          const exitPrice = current.close;
-          const exitReason = mapExitReason(exitSignal.reason);
+        // Get adaptive trailing params
+        const { activation, distance } = calcAdaptiveTrailing(windowCandles);
 
+        // Check exits in priority order:
+        // 1. Stop Loss (intrabar - check if wick hit stop)
+        // 2. Take Profit (intrabar - check if wick hit TP)
+        // 3. Trailing Stop (intrabar - if activated, check if wick hit trail)
+        // 4. Max Hold Time
+
+        const slPct = pos.stopLossPct;
+        const tpPct = CONFIG.EXIT.TAKE_PROFIT_PCT;
+
+        if (pos.side === 'long') {
+          const slPrice = pos.entryPrice * (1 - slPct / 100);
+          const tpPrice = pos.entryPrice * (1 + tpPct / 100);
+
+          // SL hit? (wick went below stop)
+          if (current.low <= slPrice) {
+            shouldExit = true;
+            exitReason = 'SL';
+            exitPrice = slPrice;
+          }
+          // TP hit?
+          else if (current.high >= tpPrice) {
+            shouldExit = true;
+            exitReason = 'TP';
+            exitPrice = tpPrice;
+          }
+          // Trailing?
+          else {
+            const hwm = pos.highWaterMark!;
+            const hwmPct = ((hwm - pos.entryPrice) / pos.entryPrice) * 100;
+
+            if (hwmPct >= activation) {
+              // V5.12: Smart trailing - widen distance at higher profits
+              let trailDist = distance;
+              if (hwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {
+                trailDist = CONFIG.EXIT.TRAILING_WIDE_DISTANCE_PCT;
+              }
+              
+              const trailStop = hwm * (1 - trailDist / 100);
+              pos.appTrailingStop = trailStop;
+
+              if (current.low <= trailStop) {
+                shouldExit = true;
+                exitReason = 'TRAIL';
+                exitPrice = trailStop;
+              }
+            }
+          }
+        } else {
+          // SHORT
+          const slPrice = pos.entryPrice * (1 + slPct / 100);
+          const tpPrice = pos.entryPrice * (1 - tpPct / 100);
+
+          // SL hit?
+          if (current.high >= slPrice) {
+            shouldExit = true;
+            exitReason = 'SL';
+            exitPrice = slPrice;
+          }
+          // TP hit?
+          else if (current.low <= tpPrice) {
+            shouldExit = true;
+            exitReason = 'TP';
+            exitPrice = tpPrice;
+          }
+          // Trailing?
+          else {
+            const lwm = pos.lowWaterMark!;
+            const lwmPct = ((pos.entryPrice - lwm) / pos.entryPrice) * 100;
+
+            if (lwmPct >= activation) {
+              let trailDist = distance;
+              if (lwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {
+                trailDist = CONFIG.EXIT.TRAILING_WIDE_DISTANCE_PCT;
+              }
+              
+              const trailStop = lwm * (1 + trailDist / 100);
+              pos.appTrailingStop = trailStop;
+
+              if (current.high >= trailStop) {
+                shouldExit = true;
+                exitReason = 'TRAIL';
+                exitPrice = trailStop;
+              }
+            }
+          }
+        }
+
+        // Max hold time
+        if (!shouldExit && holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
+          shouldExit = true;
+          exitReason = 'TIME';
+          exitPrice = current.close;
+        }
+
+        if (shouldExit) {
           const pnl = calculatePnl(
             pos.entryPrice,
             exitPrice,
@@ -723,7 +539,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             pos.leverage,
             holdBars,
           );
-          capital += pnl.netPnlUsd + pos.marginUsd; // Return margin + PnL
+          capital += pnl.netPnlUsd + pos.marginUsd;
           capitalInUse -= pos.marginUsd;
 
           const month = new Date(current.timestamp).toISOString().slice(0, 7);
@@ -767,14 +583,21 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const availableCapital = capital - capitalInUse;
         if (availableCapital < 100) continue;
 
-        const signal = checkMomentumSignal(symbol, windowCandles, btcWindowCandles, { nowMs: btcCandle.timestamp });
+        // Max positions check
+        const openPositions = symbols.reduce((acc, s) => acc + (positions[s] ? 1 : 0), 0);
+        const maxPositions = Math.max(1, Number(MomentumConfig.RISK.MAX_POSITIONS ?? 4));
+        if (openPositions >= maxPositions) continue;
+
+        // Use momentumSimple's checkMomentumSignal for entry
+        const signal = checkMomentumSignal(symbol, windowCandles, btcWindowCandles, {
+          nowMs: btcCandle.timestamp,
+        });
         if (!signal.valid || !signal.side) continue;
 
-        // Leverage parity (agent): base leverage per symbol (or user override), reduced by ATR if high vol.
-        const baseLev = leverage || MomentumConfig.LEVERAGE[symbol] || 4;
+        // Calculate position size using momentumSimple helpers
+        const baseLev = leverage || MomentumConfig.LEVERAGE[symbol] || 5;
         const levCalc = calcSafeLeverage(windowCandles, baseLev);
 
-        // Agent parity: size using base stop-loss pct (risk model), not the dynamic SL.
         const sizing = calculatePositionSize({
           symbol,
           currentPrice: current.close,
@@ -796,7 +619,6 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const qty = sizing.qty;
         const posLeverage = sizing.suggestedLeverage;
 
-        // Block margin
         capitalInUse += marginUsd;
         capital -= marginUsd;
 
@@ -804,7 +626,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           symbol,
           side: signal.side,
           entryPrice: current.close,
-          entryTime: btcCandle.timestamp,
+          entryTime: current.timestamp,
           entryIdx: idx,
           qty,
           notionalUsd,
@@ -812,7 +634,6 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           leverage: posLeverage,
           capitalBefore: capital + marginUsd,
           wasCapped,
-          // Strategy parity: store dynamic SL percentage used (agent uses stopLossPct)
           stopLossPct: slPct,
           highWaterMark: signal.side === 'long' ? current.close : undefined,
           lowWaterMark: signal.side === 'short' ? current.close : undefined,
@@ -824,7 +645,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   // Close any remaining positions at market
   for (const symbol of symbols) {
     if (positions[symbol]) {
-      const pos = positions[symbol];
+      const pos = positions[symbol]!;
       const candles = allData[symbol];
       const lastCandle = candles[candles.length - 1];
       const holdBars = candles.length - pos.entryIdx;
@@ -915,7 +736,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   const grossWins = wins.reduce((sum, t) => sum + t.netPnlUsd, 0);
   const grossLosses = Math.abs(losses.reduce((sum, t) => sum + t.netPnlUsd, 0));
 
-  // Calculate Sharpe Ratio (simplified)
+  // Calculate Sharpe Ratio
   const dailyReturns = equityCurve
     .map((e, i) => {
       if (i === 0) return 0;

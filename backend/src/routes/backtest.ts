@@ -16,7 +16,7 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
       initialCapital = 2000,
       // V5.7: Default to TOP 6 performers
       symbols = ['DOGE/USDT:USDT', 'IMX/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT'],
-      leverage = 4.5
+      leverage = 4.5,
     } = req.body;
     
     if (!startDate || !endDate) {
