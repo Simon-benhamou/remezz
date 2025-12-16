@@ -31,7 +31,8 @@ export const capitalConfig: CapitalManagerConfig = {
   reserveTtlMs: 8000,
   reserveBufferPct: new PreciseDecimal('0.05'),
   perSymbolCapPct: perSymbolCapOverride ?? new PreciseDecimal('0.30'),
-  maxPositions: 8,
+  // V5.18: Increased max positions for larger accounts with adaptive sizing
+  maxPositions: 10,  // Was 8 - now supports up to 10 concurrent positions
   minOrderUSD: configuredMinNotional,
   validateLiveBalance: true,
 };

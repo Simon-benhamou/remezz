@@ -203,12 +203,23 @@ export const MomentumConfig = {
     VOLUME_DRY_RATIO: 0.5,          // ...et volume < 0.5x avg
   },
   
-  // Risk V5 - Sizing ajusté pour le risque
-  // ⚠️ MATH: Avec SL 1.5% × Lev 5x × Position 40% = 3% du capital total par trade
+  // Risk V5.18 - Adaptive sizing for capital scalability
+  // ⚠️ MATH: Avec SL 2.5% × Lev 5x × Position 40% = 5% du capital total par trade
   RISK: {
-    RISK_PCT_PER_TRADE: 1.0,     // 1% du capital par trade
-    POSITION_SIZE_PCT: 0.4,      // 40% du capital disponible par position (was 50%)
-    MAX_POSITIONS: 4,            // Max 4 positions
+    RISK_PCT_PER_TRADE: 1.0,           // 1% du capital par trade
+    // V5.18: Adaptive position sizing - scales with capital
+    POSITION_SIZE_PCT: 0.4,            // Base: 40% du capital disponible par position
+    POSITION_SIZE_PCT_BASE: 0.40,      // 40% for small accounts (<$2k)
+    POSITION_SIZE_PCT_BOOST_PER_5K: 0.03, // +3% per $5k capital
+    POSITION_SIZE_PCT_MAX: 0.55,       // Cap at 55%
+    // V5.18: Dynamic max positions based on capital
+    MAX_POSITIONS: 4,                  // Legacy: base max positions
+    MAX_POSITIONS_BASE: 2,             // Base for tiny accounts (<$500)
+    POSITIONS_PER_1500: 1,             // Add 1 slot per $1.5k capital
+    MAX_POSITIONS_CAP: 10,             // Cap at 10 concurrent positions
+    // V5.18: Minimum thresholds
+    MIN_AVAILABLE_CAPITAL_PCT: 0.02,   // 2% of initial capital minimum
+    MIN_AVAILABLE_CAPITAL_FLOOR: 15,   // Absolute floor $15
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1264,6 +1275,7 @@ export interface PositionSizeInput {
   stopLossPct: number;
   volume24h?: number;    // V5.5: Optional 24h volume for liquidity-aware sizing
   safeLeverage?: number; // V5.6: Optional ATR-adjusted leverage (from calcSafeLeverage)
+  initialCapitalUsd?: number; // V5.18: Initial account capital for adaptive sizing
 }
 
 export interface PositionSizeResult {
@@ -1282,37 +1294,45 @@ export interface PositionSizeResult {
 }
 
 /**
- * Calculate position size V5.6 - LIQUIDITY-AWARE + DYNAMIC LEVERAGE
+ * Calculate position size V5.18 - LIQUIDITY-AWARE + DYNAMIC LEVERAGE + ADAPTIVE SIZING
  * 
  * This version caps position size based on:
- * 1. Available capital (40% rule) - this is the MARGIN we use
+ * 1. Available capital (40-55% rule based on account size) - this is the MARGIN we use
  * 2. Symbol liquidity tier
  * 3. Actual 24h volume (if provided)
  * 4. V5.6: Dynamic leverage based on ATR volatility
+ * 5. V5.18: Adaptive sizing - bigger accounts use higher % to compensate for liquidity caps
  * 
  * IMPORTANT: With leverage, the NOTIONAL = margin × leverage
  * - margin = what we block from capital pool
  * - notional = actual position size (what we trade on exchange)
  * 
- * V5.6 LOGIC:
- * - If position is capped by liquidity, effective leverage may be lower
- * - Example: $500K capital, SEI cap $25K notional
- *   → margin = $200K (40% of $500K), but notional capped at $25K
- *   → effective leverage = $25K / margin_used = ~0.125x (no leverage needed!)
- *   → We only block margin_used = $25K / base_leverage = $5K
+ * V5.18 LOGIC:
+ * - Small accounts (<$2k): 40% sizing - aggressive for growth
+ * - Medium accounts ($2k-$10k): 40-46% - moderate scaling
+ * - Large accounts (>$10k): up to 55% - compensate for liquidity caps
  * 
- * This prevents market impact problems when scaling up capital
+ * This ensures ROI scales better with capital while respecting liquidity limits
  */
 export function calculatePositionSize(input: PositionSizeInput): PositionSizeResult {
-  const { symbol, currentPrice, totalCapitalUsd, stopLossPct, volume24h, safeLeverage } = input;
+  const { symbol, currentPrice, totalCapitalUsd, stopLossPct, volume24h, safeLeverage, initialCapitalUsd } = input;
+  
+  // V5.18: Use initial capital for adaptive sizing (fallback to available capital)
+  const accountCapital = initialCapitalUsd ?? totalCapitalUsd;
   
   // V5.6: Use safe leverage if provided (from ATR calculation), otherwise use base leverage
   const baseLeverage = MomentumConfig.LEVERAGE[symbol] || 4;
   const leverage = safeLeverage ?? baseLeverage;
   const stopPrice = currentPrice * (1 - stopLossPct / 100);
   
-  // Step 1: Calculate target margin (40% of capital) - this is what we'd LIKE to use
-  const targetMargin = totalCapitalUsd * MomentumConfig.RISK.POSITION_SIZE_PCT;
+  // V5.18: Adaptive position sizing - bigger accounts use higher % to compensate for liquidity caps
+  const positionSizePct = Math.min(
+    MomentumConfig.RISK.POSITION_SIZE_PCT_BASE + (accountCapital / 5000) * MomentumConfig.RISK.POSITION_SIZE_PCT_BOOST_PER_5K,
+    MomentumConfig.RISK.POSITION_SIZE_PCT_MAX
+  );
+  
+  // Step 1: Calculate target margin using adaptive sizing
+  const targetMargin = totalCapitalUsd * positionSizePct;
   
   // Step 2: Calculate target notional (margin × leverage) - this is the TARGET position size
   const targetNotional = targetMargin * leverage;

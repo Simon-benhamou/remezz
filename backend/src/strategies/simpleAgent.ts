@@ -387,6 +387,30 @@ export class CapitalPool {
   }
   
   /**
+   * V5.18: Get number of currently open positions
+   * Used for adaptive max positions based on capital
+   */
+  getOpenPositionCount(): number {
+    let count = 0;
+    this.inPositionByAgent.forEach((v) => {
+      if (v > 0) count++;
+    });
+    return count;
+  }
+  
+  /**
+   * V5.18: Calculate dynamic max positions based on account capital
+   * Larger accounts can have more concurrent positions for better capital utilization
+   */
+  getMaxPositions(): number {
+    const maxPositions = Math.min(
+      MomentumConfig.RISK.MAX_POSITIONS_BASE + Math.floor(this.totalCapitalUsd / 1500) * MomentumConfig.RISK.POSITIONS_PER_1500,
+      MomentumConfig.RISK.MAX_POSITIONS_CAP
+    );
+    return maxPositions;
+  }
+  
+  /**
    * Set total capital (used when user updates paper balance)
    */
   setTotalCapital(newTotalUsd: number): void {
@@ -1227,6 +1251,14 @@ export class SimpleAgent {
       }
     }
     
+    // V5.18: Check if we're at max positions before proceeding
+    const openPositionCount = this.config.capitalPool.getOpenPositionCount();
+    const maxPositions = this.config.capitalPool.getMaxPositions();
+    if (openPositionCount >= maxPositions) {
+      logger.info(`⚠️ [${symbol}] Max positions reached (${openPositionCount}/${maxPositions}) - waiting for existing positions to close`);
+      return;
+    }
+    
     // Get available capital from pool
     const availableCapital = this.config.capitalPool.getAvailableCapital();
     const poolStatus = this.config.capitalPool.getStatus();
@@ -1264,7 +1296,10 @@ export class SimpleAgent {
       });
     }
     
-    // Calculate position size V5.6 - now with liquidity awareness AND dynamic leverage
+    // V5.18: Get initial capital for adaptive sizing
+    const initialCapitalUsd = this.config.capitalPool.getTotalCapital();
+    
+    // Calculate position size V5.18 - now with liquidity awareness, dynamic leverage, AND adaptive sizing
     const sizing = calculatePositionSize({
       symbol,
       currentPrice,
@@ -1273,11 +1308,18 @@ export class SimpleAgent {
       stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
       volume24h, // V5.5: Pass volume for liquidity-aware sizing
       safeLeverage: leverageCalc.leverage, // V5.6: Pass ATR-adjusted leverage
+      initialCapitalUsd, // V5.18: Pass initial capital for adaptive sizing
     });
+    
+    // V5.18: Calculate adaptive sizing % for logging
+    const adaptiveSizingPct = Math.min(
+      MomentumConfig.RISK.POSITION_SIZE_PCT_BASE + (initialCapitalUsd / 5000) * MomentumConfig.RISK.POSITION_SIZE_PCT_BOOST_PER_5K,
+      MomentumConfig.RISK.POSITION_SIZE_PCT_MAX
+    );
     
     // V5.5: Log if position was capped due to liquidity
     if (sizing.wasLiquidityCapped) {
-      const targetNotional = availableCapital * MomentumConfig.RISK.POSITION_SIZE_PCT * sizing.suggestedLeverage;
+      const targetNotional = availableCapital * adaptiveSizingPct * sizing.suggestedLeverage;
       logger.warn(`🚨 [${symbol}] Position CAPPED by liquidity! Target notional=$${targetNotional.toFixed(0)} → Capped=$${sizing.notionalUsd.toFixed(0)} (max safe=$${sizing.maxSafePosition?.toFixed(0)}, tier=${sizing.liquidityTier})`);
     }
     

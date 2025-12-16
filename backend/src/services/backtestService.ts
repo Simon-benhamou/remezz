@@ -148,6 +148,21 @@ const CONFIG = {
     FUNDING_RATE_PCT: 0.01, // 8h funding
     FUNDING_INTERVAL_BARS: 32, // 32 × 15min = 8h
   },
+  // V5.18: Fine-tuned capital utilization for consistent ROI scaling
+  SIZING: {
+    // Minimum thresholds
+    MIN_AVAILABLE_CAPITAL_PCT: 0.02,     // 2% of initial capital minimum
+    MIN_AVAILABLE_CAPITAL_FLOOR: 15,     // Absolute floor $15
+    MIN_MARGIN_USD: 5,                   // Minimum margin per trade
+    // V5.18: More moderate position sizing boost
+    POSITION_SIZE_PCT_BASE: 0.40,        // 40% for small accounts
+    POSITION_SIZE_PCT_BOOST_PER_5K: 0.03, // +3% per $5k capital (gentler scaling)
+    POSITION_SIZE_PCT_MAX: 0.55,         // Cap at 55% (was 70%)
+    // V5.18: Max concurrent positions - more aggressive scaling
+    MAX_POSITIONS_BASE: 2,               // Base for tiny accounts
+    POSITIONS_PER_1500: 1,               // Add 1 slot per $1.5k (faster scaling)
+    MAX_POSITIONS_CAP: 10,               // Cap at 10 (was 8)
+  },
 };
 
 // ============================================================================
@@ -748,8 +763,26 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       // CHECK FOR NEW ENTRY
       // ═══════════════════════════════════════════════════════════════════
       if (!positions[symbol] && cooldowns[symbol] <= 0) {
+        // Count current open positions
+        const openPositionCount = Object.values(positions).filter(p => p !== null).length;
+        
+        // V5.18: Dynamic max positions - faster scaling for better diversification
+        const maxPositions = Math.min(
+          CONFIG.SIZING.MAX_POSITIONS_BASE + Math.floor(initialCapital / 1500) * CONFIG.SIZING.POSITIONS_PER_1500,
+          CONFIG.SIZING.MAX_POSITIONS_CAP
+        );
+        
+        // Skip if we already have max positions open
+        if (openPositionCount >= maxPositions) continue;
+        
         const availableCapital = capital - capitalInUse;
-        if (availableCapital < 100) continue;
+        
+        // V5.17: Low minimum to maximize trade opportunities
+        const minAvailableCapital = Math.max(
+          initialCapital * CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_PCT,
+          CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_FLOOR
+        );
+        if (availableCapital < minAvailableCapital) continue;
 
         // BTC regime: use PRIOR BTC close for regime (avoid look-ahead)
         const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
@@ -760,9 +793,15 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const signal = checkSignal(windowCandles, isBullRegime);
         if (!signal.valid || !signal.side) continue;
 
-        // Simple position sizing: 40% of available capital as margin
-        const posLev = leverage || 4;
-        let marginUsd = availableCapital * 0.4; // 40% position sizing
+        // V5.18: Keep leverage high for all accounts
+        const posLev = leverage || 5;
+
+        // V5.18: Dynamic position sizing - moderate boost for bigger accounts
+        const positionSizePct = Math.min(
+          CONFIG.SIZING.POSITION_SIZE_PCT_BASE + (initialCapital / 5000) * CONFIG.SIZING.POSITION_SIZE_PCT_BOOST_PER_5K,
+          CONFIG.SIZING.POSITION_SIZE_PCT_MAX
+        );
+        let marginUsd = availableCapital * positionSizePct;
         let notionalUsd = marginUsd * posLev;
 
         // Apply liquidity caps
@@ -789,7 +828,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
         const qty = notionalUsd / current.close;
         if (!Number.isFinite(qty) || qty <= 0) continue;
-        if (marginUsd < 20) continue;
+        // V5.13: Lower minimum margin for small accounts
+        if (marginUsd < CONFIG.SIZING.MIN_MARGIN_USD) continue;
 
         const slPct = CONFIG.EXIT.STOP_LOSS_PCT;
 
