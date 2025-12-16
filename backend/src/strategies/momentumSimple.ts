@@ -367,7 +367,7 @@ export interface MarketConditions {
 export function getMarketConditions(btcCandles: Candle[]): MarketConditions {
   const now = new Date();
   const dayOfWeek = now.getUTCDay();
-  const isTradingDay = MomentumConfig.ENTRY.ALLOWED_DAYS.includes(dayOfWeek);
+  const isTradingDay = true;
   
   if (btcCandles.length < 200) {
     return {
@@ -406,10 +406,7 @@ export function getMarketConditions(btcCandles: Candle[]): MarketConditions {
   let overallStatus: MarketConditions['overallStatus'] = 'neutral';
   let reason = '';
   
-  if (!isTradingDay) {
-    overallStatus = 'unfavorable';
-    reason = `Not a trading day (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]})`;
-  } else if (btcAboveSma200) {
+  if (btcAboveSma200) {
     overallStatus = 'favorable_long';
     reason = `V5.3 BULL: BTC ${btcNow.toFixed(0)} > SMA200 ${btcSma200.toFixed(0)} → LONG only`;
   } else {
@@ -609,7 +606,10 @@ function calcStochRSI(
 export function checkMomentumSignal(
   symbol: string,
   candles: Candle[],
-  btcCandles: Candle[]
+  btcCandles: Candle[],
+  opts?: {
+    nowMs?: number;
+  }
 ): SignalResult {
   // Need more data for SMA200
   if (candles.length < 50 || btcCandles.length < 200) {
@@ -641,8 +641,8 @@ export function checkMomentumSignal(
   
   // ========== COMMON DATA ==========
   const volRatio = calcVolRatio(volumes);
-  const dayOfWeek = new Date().getUTCDay();
-  const dayAllowed = MomentumConfig.ENTRY.ALLOWED_DAYS.includes(dayOfWeek);
+  const nowMs = opts?.nowMs ?? Date.now();
+  const dayOfWeek = new Date(nowMs).getUTCDay();
   const isBullish = close > open;
   const isBearish = close < open;
   const priceAboveMa20 = close > ma20;
@@ -689,11 +689,6 @@ export function checkMomentumSignal(
     rsi: rsi ?? undefined,  // V5.10
     btcRoc4h,  // V5.10
   };
-  
-  // ========== DAY FILTER ==========
-  if (!dayAllowed) {
-    return { valid: false, reason: `day_not_allowed(${dayOfWeek})`, features };
-  }
   
   // ═══════════════════════════════════════════════════════════════════════════
   // V5.9: StochRSI FILTER - SHORT ONLY (moved from here to bear regime section)

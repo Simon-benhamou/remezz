@@ -12,6 +12,27 @@ import {
   type BacktestCandle,
 } from './backtest/localOhlcvJsonStore.js';
 
+import {
+  MomentumConfig,
+  checkMomentumSignal,
+  shouldExitPosition,
+  updatePositionWaterMarks,
+  calcDynamicStopLoss,
+  calcSafeLeverage,
+  calculatePositionSize,
+  type Position,
+} from '../strategies/momentumSimple.js';
+
+type BacktestSimPosition = Position & {
+  entryIdx: number;
+  capitalBefore: number;
+  wasCapped: boolean;
+  notionalUsd: number;
+  marginUsd: number;
+  leverage: number;
+  qty: number;
+};
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -48,6 +69,15 @@ export interface BacktestTrade {
   day: string;
   wasCapped: boolean;
   slippagePct: number;
+}
+
+function mapExitReason(reason: string | undefined): BacktestTrade['exitReason'] {
+  if (!reason) return 'UNKNOWN';
+  const r = reason.toLowerCase();
+  if (r.includes('stop')) return 'SL';
+  if (r.includes('time')) return 'TIME';
+  if (r.includes('trail')) return 'TRAIL';
+  return reason.toUpperCase();
 }
 
 export interface MonthlyStats {
@@ -610,15 +640,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     // Stop if after end date
     if (btcCandle.timestamp > endDate.getTime()) break;
 
-    const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
-    const btcPrice = btcCloses[btcIdx - 1];
-    const isBullRegime = btcPrice > btcSma200;
-
-    // V5.10: Calculate BTC ROC 4h (16 x 15min candles) for LONG filter
-    const btcRoc4h =
-      btcIdx >= 17
-        ? ((btcCloses[btcIdx - 1] - btcCloses[btcIdx - 17]) / btcCloses[btcIdx - 17]) * 100
-        : 0;
+    // Strategy parity: use the same entry signal function as the live agent.
+    // Build a BTC window ending at this candle.
+    const btcWindowCandles = btcCandles.slice(Math.max(0, btcIdx - 300), btcIdx + 1);
 
     const day = new Date(btcCandle.timestamp).toISOString().slice(0, 10);
 
@@ -650,72 +674,28 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       // MANAGE EXISTING POSITION
       // ═══════════════════════════════════════════════════════════════════
       if (positions[symbol]) {
-        const pos = positions[symbol];
+        let pos = positions[symbol] as BacktestSimPosition;
         const holdBars = idx - pos.entryIdx;
-        let exitReason: string | null = null;
-        let exitPrice = current.close;
 
-        // V5.14: Fixed SL + Adaptive trailing
-        const slPct = pos.slPct || CONFIG.EXIT.STOP_LOSS_FIXED;
-        
-        // V5.14: Get adaptive trailing params based on current volatility
-        const { activation, distance } = calcAdaptiveTrailing(windowCandles);
+        // Strategy parity: update trailing watermarks exactly like the agent.
+        pos = updatePositionWaterMarks(pos, current.close, current.high, current.low) as BacktestSimPosition;
+        positions[symbol] = pos;
 
-        if (pos.side === 'long') {
-          // Calculate PnL based on CLOSE price (matching backtest-local-analysis.mjs)
-          const pnlPct = ((current.close - pos.entryPrice) / pos.entryPrice) * 100;
-          pos.hwm = Math.max(pos.hwm || pos.entryPrice, current.high);
-          const hwmPct = ((pos.hwm - pos.entryPrice) / pos.entryPrice) * 100;
+        const exitSignal = shouldExitPosition(pos, current.close, undefined, {
+          nowMs: current.timestamp,
+          priceHigh: current.high,
+          priceLow: current.low,
+        });
 
-          // V5.14: Adaptive trailing (distance changes with volatility)
-          if (hwmPct >= activation) {
-            const trailStop = pos.hwm * (1 - distance / 100);
-            if (current.low <= trailStop) {
-              exitReason = 'TRAIL';
-              exitPrice = trailStop;
-            }
-          }
-
-          // Then check SL (only if trailing didn't trigger)
-          if (!exitReason && pnlPct <= -slPct) {
-            exitReason = 'SL';
-            exitPrice = pos.entryPrice * (1 - slPct / 100);
-          } else if (!exitReason && pnlPct >= CONFIG.EXIT.TAKE_PROFIT) {
-            exitReason = 'TP';
-            exitPrice = pos.entryPrice * (1 + CONFIG.EXIT.TAKE_PROFIT / 100);
-          } else if (!exitReason && holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
-            exitReason = 'TIME';
-          }
-        } else {
-          // SHORT
-          // Calculate PnL based on CLOSE price (matching backtest-local-analysis.mjs)
-          const pnlPct = ((pos.entryPrice - current.close) / pos.entryPrice) * 100;
-          pos.lwm = Math.min(pos.lwm || pos.entryPrice, current.low);
-          const lwmPct = ((pos.entryPrice - pos.lwm) / pos.entryPrice) * 100;
-
-          // V5.14: Adaptive trailing (distance changes with volatility)
-          if (lwmPct >= activation) {
-            const trailStop = pos.lwm * (1 + distance / 100);
-            if (current.high >= trailStop) {
-              exitReason = 'TRAIL';
-              exitPrice = trailStop;
-            }
-          }
-
-          // Then check SL (only if trailing didn't trigger)
-          if (!exitReason && pnlPct <= -slPct) {
-            exitReason = 'SL';
-            exitPrice = pos.entryPrice * (1 + slPct / 100);
-          } else if (!exitReason && pnlPct >= CONFIG.EXIT.TAKE_PROFIT) {
-            exitReason = 'TP';
-            exitPrice = pos.entryPrice * (1 - CONFIG.EXIT.TAKE_PROFIT / 100);
-          } else if (!exitReason && holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
-            exitReason = 'TIME';
-          }
+        if (exitSignal.newStopLoss && Number.isFinite(exitSignal.newStopLoss)) {
+          pos.appTrailingStop = exitSignal.newStopLoss;
         }
 
-        // Execute exit
-        if (exitReason) {
+        if (exitSignal.shouldExit) {
+          // Backtest parity with agent: execute at candle CLOSE (paper behavior).
+          const exitPrice = current.close;
+          const exitReason = mapExitReason(exitSignal.reason);
+
           const pnl = calculatePnl(
             pos.entryPrice,
             exitPrice,
@@ -727,15 +707,15 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           capital += pnl.netPnlUsd + pos.marginUsd; // Return margin + PnL
           capitalInUse -= pos.marginUsd;
 
-          const month = new Date(btcCandle.timestamp).toISOString().slice(0, 7);
-          const exitDay = new Date(btcCandle.timestamp).toISOString().slice(0, 10);
+          const month = new Date(current.timestamp).toISOString().slice(0, 7);
+          const exitDay = new Date(current.timestamp).toISOString().slice(0, 10);
 
           trades.push({
             id: `trade_${++tradeId}`,
             symbol,
             side: pos.side,
             entryTime: new Date(pos.entryTime).toISOString(),
-            exitTime: new Date(btcCandle.timestamp).toISOString(),
+            exitTime: new Date(current.timestamp).toISOString(),
             entryPrice: pos.entryPrice,
             exitPrice,
             qty: pos.qty,
@@ -768,30 +748,41 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const availableCapital = capital - capitalInUse;
         if (availableCapital < 100) continue;
 
-        // V5.10: Pass btcRoc4h to checkSignal for LONG filter
-        const signal = checkSignal(windowCandles, isBullRegime, btcRoc4h);
+        const signal = checkMomentumSignal(symbol, windowCandles, btcWindowCandles, { nowMs: btcCandle.timestamp });
         if (!signal.valid || !signal.side) continue;
 
-        // V5.7: Calculate dynamic stop loss based on ATR
-        const { slPct, atrPct } = calcDynamicStopLoss(windowCandles);
+        // Leverage parity (agent): base leverage per symbol (or user override), reduced by ATR if high vol.
+        const baseLev = leverage || MomentumConfig.LEVERAGE[symbol] || 4;
+        const levCalc = calcSafeLeverage(windowCandles, baseLev);
 
-        // V5.7: Use default leverage from config
-        const posLeverage = leverage || CONFIG.DEFAULT_LEVERAGE;
+        // Agent parity: size using base stop-loss pct (risk model), not the dynamic SL.
+        const sizing = calculatePositionSize({
+          symbol,
+          currentPrice: current.close,
+          totalCapitalUsd: availableCapital,
+          riskPerTradePct: MomentumConfig.RISK.RISK_PCT_PER_TRADE,
+          stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
+          safeLeverage: levCalc.leverage,
+          volume24h: undefined,
+        });
 
-        // Calculate position size
-        const targetMargin = availableCapital * CONFIG.POSITION_SIZE_PCT;
-        const targetNotional = targetMargin * posLeverage;
-        const maxNotional = CONFIG.LIQUIDITY_CAPS[symbol] || 25_000;
-        const wasCapped = targetNotional > maxNotional;
-        const notionalUsd = Math.min(targetNotional, maxNotional);
-        const marginUsd = notionalUsd / posLeverage;
-        const qty = notionalUsd / current.close;
+        if (!sizing.notionalUsd || sizing.notionalUsd < 20 || !sizing.marginUsd) continue;
+
+        const slCalc = calcDynamicStopLoss(windowCandles);
+        const slPct = slCalc.slPct;
+
+        const wasCapped = Boolean(sizing.wasLiquidityCapped);
+        const notionalUsd = sizing.notionalUsd;
+        const marginUsd = sizing.marginUsd;
+        const qty = sizing.qty;
+        const posLeverage = sizing.suggestedLeverage;
 
         // Block margin
         capitalInUse += marginUsd;
         capital -= marginUsd;
 
         positions[symbol] = {
+          symbol,
           side: signal.side,
           entryPrice: current.close,
           entryTime: btcCandle.timestamp,
@@ -802,11 +793,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           leverage: posLeverage,
           capitalBefore: capital + marginUsd,
           wasCapped,
-          hwm: current.close,
-          lwm: current.close,
-          // V5.7: Store dynamic SL
-          slPct,
-          atrPct,
+          // Strategy parity: store dynamic SL percentage used (agent uses stopLossPct)
+          stopLossPct: slPct,
+          highWaterMark: signal.side === 'long' ? current.close : undefined,
+          lowWaterMark: signal.side === 'short' ? current.close : undefined,
         };
       }
     }
