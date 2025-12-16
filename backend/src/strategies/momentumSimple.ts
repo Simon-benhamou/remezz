@@ -157,6 +157,15 @@ export const MomentumConfig = {
     // Goal: react faster than 15m candle close while filtering micro-noise.
     // This does NOT move the exchange emergency STOP_MARKET; it only decides when to close.
     REALTIME_APP_EXIT_ENABLED: true,
+    // Realtime trailing can be evaluated either on ticker (fast but noisy) or on closed 1m candles (filters wicks).
+    // Recommended for "avoid noise": use 1m close-based trailing with 2 consecutive closes.
+    REALTIME_APP_EXIT_TRAILING_MODE: 'kline_1m_close' as const, // 'ticker' | 'kline_1m_close'
+    REALTIME_APP_EXIT_KLINE_INTERVAL: '1m' as const,
+    REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES: 2,
+    // If you want live to behave more like paper on exits, disable realtime trailing exits.
+    // You'll still be protected by the exchange emergency STOP_MARKET.
+    REALTIME_APP_EXIT_TRAILING_ENABLED: false,
+    REALTIME_APP_EXIT_STOPLOSS_ENABLED: true,
     REALTIME_APP_EXIT_POLL_MS: 1000,          // How often we check WS price when in position
     REALTIME_APP_EXIT_CONFIRM_MS: 1800,       // Require breach to persist for at least this long
     REALTIME_APP_EXIT_CONFIRM_TICKS: 2,       // ...or for this many consecutive checks

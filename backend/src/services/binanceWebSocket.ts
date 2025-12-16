@@ -62,6 +62,8 @@ export interface BinanceKlineData {
   symbol: string;
   timeframe: string;
   timestamp: number;
+  closeTime?: number;
+  isFinal?: boolean;
   open: number;
   high: number;
   low: number;
@@ -1742,6 +1744,8 @@ class BinanceWebSocketManager {
       symbol: this.normalizeCacheSymbol(data.s),
       timeframe: k.i,
       timestamp: k.t,
+      closeTime: Number.isFinite(Number(k.T)) ? Number(k.T) : undefined,
+      isFinal: Boolean(k.x),
       open: parseFloat(k.o),
       high: parseFloat(k.h),
       low: parseFloat(k.l),

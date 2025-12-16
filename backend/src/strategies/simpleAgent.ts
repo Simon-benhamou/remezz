@@ -524,6 +524,8 @@ export class SimpleAgent {
   private rtBreachSinceMs: number | null = null;
   private rtBreachTicks = 0;
   private lastAppTrailingStop: number | null = null;
+  private lastRtTrailingKlineTs: number | null = null;
+  private rtTrailingBreachCandles = 0;
 
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
@@ -672,7 +674,22 @@ export class SimpleAgent {
     this.rtBreachSinceMs = null;
     this.rtBreachTicks = 0;
     this.lastAppTrailingStop = null;
+    this.lastRtTrailingKlineTs = null;
+    this.rtTrailingBreachCandles = 0;
     this.closingPosition = false;
+
+    // If realtime trailing is enabled and we use kline-close mode, subscribe to 1m klines.
+    try {
+      const trailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
+      const trailingMode = (MomentumConfig.EXIT as any).REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
+      const klineInterval = (MomentumConfig.EXIT as any).REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined;
+      if (trailingEnabled && trailingMode === 'kline_1m_close') {
+        const ws = getBinanceWebSocket();
+        ws.subscribeToKline(this.config.symbol, klineInterval || '1m');
+      }
+    } catch {
+      // Non-fatal: realtime exit monitor should still run even if subscription fails.
+    }
 
     this.realtimeExitIntervalId = setInterval(() => {
       void this.checkRealtimeExit().catch(err => {
@@ -680,7 +697,13 @@ export class SimpleAgent {
       });
     }, pollMs);
 
-    logger.info(`📡 [${this.config.symbol}] Realtime WS exits enabled (poll ${pollMs}ms)`);
+    const trailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
+    const slEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_STOPLOSS_ENABLED ?? true);
+    const trailingMode = (MomentumConfig.EXIT as any).REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
+    const mode = trailingEnabled
+      ? (slEnabled ? `trail(${trailingMode || 'ticker'})+sl` : `trail(${trailingMode || 'ticker'})`)
+      : (slEnabled ? 'sl_only' : 'disabled');
+    logger.info(`📡 [${this.config.symbol}] Realtime WS exits enabled (poll ${pollMs}ms, mode=${mode})`);
   }
 
   private stopRealtimeExitMonitor(): void {
@@ -691,6 +714,8 @@ export class SimpleAgent {
     this.rtBreachSinceMs = null;
     this.rtBreachTicks = 0;
     this.lastAppTrailingStop = null;
+    this.lastRtTrailingKlineTs = null;
+    this.rtTrailingBreachCandles = 0;
     this.realtimeExitInProgress = false;
   }
 
@@ -722,10 +747,120 @@ export class SimpleAgent {
 
       this.lastPrice = currentPrice;
 
-      // Update watermarks in realtime so trailing can capture peaks/troughs.
-      this.position = updatePositionWaterMarks(this.position, currentPrice, currentPrice, currentPrice);
+      const rtTrailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
+      const rtStoplossEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_STOPLOSS_ENABLED ?? true);
+      const trailingMode = (MomentumConfig.EXIT as any).REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
 
-      const exitSignal = shouldExitPosition(this.position, currentPrice, undefined, {
+      // ----------------------------------------------------------------------
+      // 1) STOPLOSS realtime (ticker-based, protective)
+      // ----------------------------------------------------------------------
+      if (rtStoplossEnabled) {
+        const bufferPct = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_BUFFER_PCT ?? 0.05);
+        const confirmMs = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_MS ?? 1800);
+        const confirmTicks = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_TICKS ?? 2);
+        const now = Date.now();
+
+        const slPct = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
+        const slPrice = this.position!.side === 'long'
+          ? this.position!.entryPrice * (1 - slPct / 100)
+          : this.position!.entryPrice * (1 + slPct / 100);
+        const slBreach = this.position!.side === 'long'
+          ? currentPrice <= slPrice * (1 - bufferPct / 100)
+          : currentPrice >= slPrice * (1 + bufferPct / 100);
+
+        if (!slBreach) {
+          this.rtBreachSinceMs = null;
+          this.rtBreachTicks = 0;
+        } else {
+          if (this.rtBreachSinceMs == null) {
+            this.rtBreachSinceMs = now;
+            this.rtBreachTicks = 1;
+          } else {
+            this.rtBreachTicks += 1;
+          }
+
+          const elapsed = now - (this.rtBreachSinceMs ?? now);
+          const confirmed = elapsed >= confirmMs || this.rtBreachTicks >= confirmTicks;
+          if (confirmed) {
+            this.stopRealtimeExitMonitor();
+            logger.info(
+              `⚡ [${symbol}] REALTIME EXIT confirmed (stoploss_rt) price=$${currentPrice.toFixed(4)} sl=$${slPrice.toFixed(4)} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`,
+            );
+            await this.closePosition(this.position, currentPrice, 'stoploss_rt');
+            return;
+          }
+        }
+      }
+
+      // ----------------------------------------------------------------------
+      // 2) TRAILING realtime (noise-filtered)
+      //    Option A: ticker-based (fast but noisy)
+      //    Option B: 1m kline CLOSE-based (filters wicks)
+      // ----------------------------------------------------------------------
+      if (!rtTrailingEnabled) return;
+
+      if (trailingMode === 'kline_1m_close') {
+        const interval = ((MomentumConfig.EXIT as any).REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined) || '1m';
+        const confirmCandles = Math.max(1, Number((MomentumConfig.EXIT as any).REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES ?? 2));
+
+        // Ensure we are subscribed.
+        ws.subscribeToKline(symbol, interval);
+
+        const klines = ws.getKlines(symbol, interval);
+        const last = klines && klines.length ? klines[klines.length - 1] : null;
+        if (!last || !last.isFinal) return;
+
+        // Process once per newly-closed 1m candle.
+        if (this.lastRtTrailingKlineTs === last.timestamp) return;
+        this.lastRtTrailingKlineTs = last.timestamp;
+
+        // Update trailing state using the candle close, but do NOT allow wick-based breach.
+        const closePx = last.close;
+        if (!Number.isFinite(closePx) || closePx <= 0) return;
+
+        const priceHigh = this.position!.side === 'long' ? last.high : closePx;
+        const priceLow = this.position!.side === 'short' ? last.low : closePx;
+
+        const exitSignal = shouldExitPosition(this.position!, closePx, undefined, {
+          nowMs: Date.now(),
+          priceHigh,
+          priceLow,
+        });
+
+        const candidateStop = exitSignal.newStopLoss;
+        if (Number.isFinite(Number(candidateStop))) {
+          this.lastAppTrailingStop = candidateStop as number;
+          this.position!.appTrailingStop = candidateStop as number;
+        }
+
+        if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
+          this.rtTrailingBreachCandles = 0;
+          return;
+        }
+
+        // Confirm by consecutive 1m candle closes beyond the trailing stop.
+        this.rtTrailingBreachCandles += 1;
+        if (this.rtTrailingBreachCandles < confirmCandles) {
+          logger.debug(
+            `🔎 [${symbol}] Realtime trailing breach (1m close) ${this.rtTrailingBreachCandles}/${confirmCandles} close=$${closePx.toFixed(4)} stop=$${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'}`,
+          );
+          return;
+        }
+
+        this.stopRealtimeExitMonitor();
+        const execPx = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : closePx;
+        logger.info(
+          `⚡ [${symbol}] REALTIME EXIT confirmed (trailing_rt, 1m close) exec=$${execPx.toFixed(4)} close=$${closePx.toFixed(4)} stop=$${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'} | confirmCandles=${confirmCandles}`,
+        );
+        await this.closePosition(this.position!, execPx, 'trailing_rt');
+        return;
+      }
+
+      // Fallback: ticker-based trailing (legacy). Keep the existing anti-noise confirmation.
+      // Update watermarks in realtime so trailing can capture peaks/troughs.
+      this.position = updatePositionWaterMarks(this.position!, currentPrice, currentPrice, currentPrice);
+
+      const exitSignal = shouldExitPosition(this.position!, currentPrice, undefined, {
         nowMs: Date.now(),
         priceHigh: currentPrice,
         priceLow: currentPrice,
@@ -734,40 +869,25 @@ export class SimpleAgent {
       const candidateStop = exitSignal.newStopLoss;
       if (Number.isFinite(Number(candidateStop))) {
         this.lastAppTrailingStop = candidateStop as number;
-        this.position.appTrailingStop = candidateStop as number;
+        this.position!.appTrailingStop = candidateStop as number;
       }
 
-      if (!exitSignal.shouldExit) {
+      if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
         this.rtBreachSinceMs = null;
         this.rtBreachTicks = 0;
         return;
       }
 
-      // Anti-noise confirmation.
       const bufferPct = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_BUFFER_PCT ?? 0.05);
       const confirmMs = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_MS ?? 1800);
       const confirmTicks = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_TICKS ?? 2);
-
       const now = Date.now();
-      const stopPrice = (() => {
-        if (exitSignal.reason === 'trailing' && candidateStop) return candidateStop as number;
-        if (exitSignal.reason === 'stoploss') {
-          const slPct = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
-          return this.position!.side === 'long'
-            ? this.position!.entryPrice * (1 - slPct / 100)
-            : this.position!.entryPrice * (1 + slPct / 100);
-        }
-        return undefined;
-      })();
-      const breach = (() => {
-        if ((exitSignal.reason === 'trailing' || exitSignal.reason === 'stoploss') && stopPrice) {
-          if (this.position!.side === 'long') {
-            return currentPrice <= stopPrice * (1 - bufferPct / 100);
-          }
-          return currentPrice >= stopPrice * (1 + bufferPct / 100);
-        }
-        return true;
-      })();
+      const stopPrice = candidateStop as number | undefined;
+      if (!stopPrice) return;
+
+      const breach = this.position!.side === 'long'
+        ? currentPrice <= stopPrice * (1 - bufferPct / 100)
+        : currentPrice >= stopPrice * (1 + bufferPct / 100);
 
       if (!breach) {
         this.rtBreachSinceMs = null;
@@ -778,7 +898,7 @@ export class SimpleAgent {
       if (this.rtBreachSinceMs == null) {
         this.rtBreachSinceMs = now;
         this.rtBreachTicks = 1;
-        logger.debug(`🔎 [${symbol}] Realtime exit breach started (${exitSignal.reason}) price=$${currentPrice.toFixed(4)} stop=$${stopPrice?.toFixed(4) || 'n/a'}`);
+        logger.debug(`🔎 [${symbol}] Realtime trailing breach started (ticker) price=$${currentPrice.toFixed(4)} stop=$${stopPrice.toFixed(4)}`);
         return;
       }
 
@@ -787,17 +907,9 @@ export class SimpleAgent {
       const confirmed = elapsed >= confirmMs || this.rtBreachTicks >= confirmTicks;
       if (!confirmed) return;
 
-      // Confirmed: close immediately.
       this.stopRealtimeExitMonitor();
-
-      const reason = exitSignal.reason === 'stoploss'
-        ? 'stoploss_rt'
-        : exitSignal.reason === 'time'
-          ? 'time_rt'
-          : 'trailing_rt';
-
-      logger.info(`⚡ [${symbol}] REALTIME EXIT confirmed (${reason}) price=$${currentPrice.toFixed(4)} stop=$${stopPrice?.toFixed(4) || 'n/a'} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`);
-      await this.closePosition(this.position, currentPrice, reason);
+      logger.info(`⚡ [${symbol}] REALTIME EXIT confirmed (trailing_rt) price=$${currentPrice.toFixed(4)} stop=$${stopPrice.toFixed(4)} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`);
+      await this.closePosition(this.position!, currentPrice, 'trailing_rt');
     } finally {
       this.realtimeExitInProgress = false;
     }
