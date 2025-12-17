@@ -346,7 +346,7 @@ export interface SignalResult {
 
 export interface ExitSignal {
   shouldExit: boolean;
-  reason?: 'time' | 'stoploss' | 'trailing' | 'none';
+  reason?: 'time' | 'stoploss' | 'trailing' | 'regime_change' | 'momentum_reversal' | 'none';
   pnlPct?: number;
   holdMinutes?: number;
   newStopLoss?: number;  // Updated trailing stop
@@ -853,6 +853,8 @@ export function checkMomentumSignal(
  * Check if position should be closed - V5 with smart exits
  * 
  * Exit conditions:
+ * 0. REGIME CHANGE (NEW) - Exit if BTC regime flips
+ * 0b. MOMENTUM REVERSAL (NEW) - Exit if momentum reverses against position
  * 1. Trailing Stop (main exit)
  * 2. Stop Loss (safety exit)
  */
@@ -864,11 +866,11 @@ export function shouldExitPosition(
     nowMs?: number;
     priceHigh?: number;
     priceLow?: number;
+    btcCandles?: Candle[];  // NEW: BTC candles for regime detection
   }
 ): ExitSignal {
   const now = opts?.nowMs ?? Date.now();
   const holdMinutes = (now - position.entryTime) / 60000;
-  void candles;
   
   // Calculate PnL based on position side
   let pnlPct: number;
@@ -876,6 +878,68 @@ export function shouldExitPosition(
     pnlPct = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
   } else {
     pnlPct = ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
+  }
+  
+  // ============================================================================
+  // 0. REGIME CHANGE EXIT (NEW V5.13)
+  // Exit immediately if BTC regime flips (invalidates entry signal)
+  // ============================================================================
+  if (opts?.btcCandles && opts.btcCandles.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
+    const btcCloses = opts.btcCandles.map(c => c.close);
+    const btcSma200 = calcSMA(btcCloses, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
+    const btcNow = btcCloses[btcCloses.length - 1];
+    
+    // Check if regime changed
+    const currentlyBullRegime = btcNow > btcSma200;
+    const positionOpenedInBullRegime = position.side === 'long';  // LONG positions open in bull regime
+    
+    // If position side doesn't match current regime anymore, exit
+    if (positionOpenedInBullRegime && !currentlyBullRegime) {
+      // LONG position but now in BEAR regime
+      return { 
+        shouldExit: true, 
+        reason: 'regime_change', 
+        pnlPct, 
+        holdMinutes 
+      };
+    }
+    if (!positionOpenedInBullRegime && currentlyBullRegime) {
+      // SHORT position but now in BULL regime
+      return { 
+        shouldExit: true, 
+        reason: 'regime_change', 
+        pnlPct, 
+        holdMinutes 
+      };
+    }
+  }
+  
+  // ============================================================================
+  // 0b. MOMENTUM REVERSAL EXIT (NEW V5.13)
+  // Exit if short-term momentum reverses against the position
+  // ============================================================================
+  if (candles && candles.length >= 6) {
+    const closes = candles.map(c => c.close);
+    const roc5 = calcROC(closes, 5);
+    
+    if (position.side === 'long' && roc5 < -0.015) {
+      // LONG position but momentum turned bearish (-1.5%)
+      return { 
+        shouldExit: true, 
+        reason: 'momentum_reversal', 
+        pnlPct, 
+        holdMinutes 
+      };
+    }
+    if (position.side === 'short' && roc5 > 0.015) {
+      // SHORT position but momentum turned bullish (+1.5%)
+      return { 
+        shouldExit: true, 
+        reason: 'momentum_reversal', 
+        pnlPct, 
+        holdMinutes 
+      };
+    }
   }
   
   // 1. V5.12 SMART TRAILING: Starts tight, WIDENS at higher profit

@@ -635,14 +635,57 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const { activation, distance } = calcAdaptiveTrailing(windowCandles);
 
         // Check exits in priority order:
+        // 0. REGIME CHANGE (NEW V5.13) - Exit if BTC regime flips
+        // 0b. MOMENTUM REVERSAL (NEW V5.13) - Exit if momentum reverses
         // 1. Stop Loss (intrabar - check if wick hit stop)
         // 2. Take Profit (intrabar - check if wick hit TP)
         // 3. Trailing Stop (intrabar - if activated, check if wick hit trail)
         // 4. Max Hold Time
 
+        // ═══════════════════════════════════════════════════════════════════
+        // 0. REGIME CHANGE EXIT (V5.13)
+        // ═══════════════════════════════════════════════════════════════════
+        const btcSma200Current = calcSMA(btcCloses.slice(0, btcIdx + 1), 200);
+        const btcPriceCurrent = btcCloses[btcIdx];
+        const currentlyBullRegime = btcPriceCurrent > btcSma200Current;
+        const positionOpenedInBullRegime = pos.side === 'long';
+
+        if (positionOpenedInBullRegime && !currentlyBullRegime) {
+          // LONG position but now in BEAR regime
+          shouldExit = true;
+          exitReason = 'REGIME_CHANGE';
+          exitPrice = current.close;
+        } else if (!positionOpenedInBullRegime && currentlyBullRegime) {
+          // SHORT position but now in BULL regime
+          shouldExit = true;
+          exitReason = 'REGIME_CHANGE';
+          exitPrice = current.close;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 0b. MOMENTUM REVERSAL EXIT (V5.13)
+        // ═══════════════════════════════════════════════════════════════════
+        if (!shouldExit && windowCandles.length >= 6) {
+          const closes = windowCandles.map(c => c.close);
+          const roc5 = calcROC(closes, 5);
+
+          if (pos.side === 'long' && roc5 < -0.015) {
+            // LONG position but momentum turned bearish (-1.5%)
+            shouldExit = true;
+            exitReason = 'MOMENTUM_REVERSAL';
+            exitPrice = current.close;
+          } else if (pos.side === 'short' && roc5 > 0.015) {
+            // SHORT position but momentum turned bullish (+1.5%)
+            shouldExit = true;
+            exitReason = 'MOMENTUM_REVERSAL';
+            exitPrice = current.close;
+          }
+        }
+
         const slPct = pos.stopLossPct;
 
-        if (pos.side === 'long') {
+        // Only check SL/Trailing if regime change or momentum reversal didn't trigger
+        if (!shouldExit && pos.side === 'long') {
           const slPrice = pos.entryPrice * (1 - slPct / 100);
 
           // SL hit? (wick went below stop)
@@ -673,7 +716,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
               }
             }
           }
-        } else {
+        } else if (!shouldExit && pos.side === 'short') {
           // SHORT
           const slPrice = pos.entryPrice * (1 + slPct / 100);
 

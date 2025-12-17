@@ -845,10 +845,16 @@ export class SimpleAgent {
         const priceHigh = this.position!.side === 'long' ? last.high : closePx;
         const priceLow = this.position!.side === 'short' ? last.low : closePx;
 
-        const exitSignal = shouldExitPosition(this.position!, closePx, undefined, {
+        // V5.13: Fetch BTC candles for regime detection in realtime
+        const btcCandles = await this.fetchBtcCandles();
+        const symbolCandles = await this.fetchCandles();
+        const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
+        
+        const exitSignal = shouldExitPosition(this.position!, closePx, candles, {
           nowMs: Date.now(),
           priceHigh,
           priceLow,
+          btcCandles: btcCandles,
         });
 
         const candidateStop = exitSignal.newStopLoss;
@@ -884,10 +890,16 @@ export class SimpleAgent {
       // Update watermarks in realtime so trailing can capture peaks/troughs.
       this.position = updatePositionWaterMarks(this.position!, currentPrice, currentPrice, currentPrice);
 
-      const exitSignal = shouldExitPosition(this.position!, currentPrice, undefined, {
+      // V5.13: Fetch BTC candles for regime detection in realtime
+      const btcCandles = await this.fetchBtcCandles();
+      const symbolCandles = await this.fetchCandles();
+      const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
+      
+      const exitSignal = shouldExitPosition(this.position!, currentPrice, candles, {
         nowMs: Date.now(),
         priceHigh: currentPrice,
         priceLow: currentPrice,
+        btcCandles: btcCandles,
       });
 
       const candidateStop = exitSignal.newStopLoss;
@@ -1597,6 +1609,9 @@ export class SimpleAgent {
       const allCandles = await this.fetchCandles();
       if (allCandles.length === 0) return;
 
+      // Fetch BTC candles for regime detection (V5.13)
+      const btcCandles = await this.fetchBtcCandles();
+
       // Backtest parity: ignore in-progress candle for exit decisions.
       const candles = allCandles.length > 1 ? allCandles.slice(0, -1) : allCandles;
       const latestClosedCandle = candles[candles.length - 1];
@@ -1668,10 +1683,12 @@ export class SimpleAgent {
         });
       }
       
-      const exitSignal = shouldExitPosition(this.position!, currentPrice, undefined, {
+      // V5.13: Pass BTC candles for regime detection and symbol candles for momentum reversal
+      const exitSignal = shouldExitPosition(this.position!, currentPrice, candles, {
         nowMs: latestClosedCandle.timestamp,
         priceHigh: latestClosedCandle.high,
         priceLow: latestClosedCandle.low,
+        btcCandles: btcCandles,
       });
 
       // Emergency profit-protection (exchange-side): ratchet stop only after +2% PnL.
