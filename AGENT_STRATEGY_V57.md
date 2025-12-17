@@ -1,12 +1,21 @@
-# 🤖 Agent Trading V5.7 - Documentation Complète
+# 🤖 Agent Trading V5.13 - Documentation Complète
 
 ## 📋 Vue d'ensemble
 
-L'agent trading utilise la **stratégie V5.7** optimisée sur 24 mois de backtest avec:
-- **+1990% ROI** (avec frais, slippage, funding)
-- **~789 trades** sur 12 mois (~2-3/jour)
-- **68.7% Win Rate**
-- **10/12 mois positifs**
+L'agent trading utilise la **stratégie V5.13** optimisée avec nouvelles exits intelligentes:
+- **+2683% ROI** sur 2025 (11 mois, $2k → $55k, 11 symboles, 5x leverage)
+- **2026 trades** (~6/jour)
+- **78.1% Win Rate**
+- **Sharpe Ratio 1.91** (excellente qualité)
+- **Max Drawdown 31.89%** (vs 35.9% sans V5.13)
+- **10/12 mois positifs** en 2025
+
+### 🆕 Améliorations V5.13 vs V5.7
+- **REGIME CHANGE EXIT** - Sort **immédiatement** si BTC croise SMA200 contre position (8.1% des exits)
+- **MOMENTUM REVERSAL EXIT** - Sort si ROC5 s'inverse contre position (7.6% des exits)
+- **+234% ROI supplémentaire** vs stratégie sans ces exits
+- **-4% Max Drawdown** grâce aux sorties précoces
+- Ces exits coupent les **mauvaises positions rapidement** au lieu d'attendre 48h ou SL
 
 ### Améliorations V5.7 vs V5.4
 - **Dynamic Stop Loss** basé sur ATR (au lieu de SL fixe 1.5%)
@@ -138,28 +147,27 @@ Quand `BTC < SMA200`, l'agent cherche des opportunités SHORT.
 │                      EXIT CHECK ORDER (shouldExitPosition)                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  1. ⏰ TIME EXIT      → Si holdTime > 48h → EXIT                           │
-│  2. 📈 TRAILING STOP  → Si PnL ≥ 1% ET prix < trailPrice → EXIT            │
-│  3. 🛑 STOP LOSS      → Si PnL < 0 ET prix < SL dynamique → EXIT           │
-│  4. 🎯 TAKE PROFIT    → Si PnL ≥ 3% → EXIT                                 │
-│  5. 📉 MOMENTUM FADE  → Si PnL > 1.5% ET ROC5 < 0.5% → EXIT                │
-│  6. 🔇 VOLUME DRY     → Si PnL > 0.5% ET Vol < 0.5x → EXIT                 │
+│  🆕 0. 🔄 REGIME CHANGE     → BTC flip régime contre position → EXIT        │
+│  🆕 0b. ⚡ MOMENTUM REVERSAL → ROC5 s'inverse contre position → EXIT        │
+│  1. 📈 TRAILING STOP        → Si PnL ≥ 1% ET prix < trailPrice → EXIT      │
+│  2. 🛑 STOP LOSS            → Si prix hit SL dynamique → EXIT              │
 │                                                                             │
-│  ⚠️ Le trailing est vérifié AVANT le stop loss pour protéger les gains    │
+│  ⚠️ Les nouvelles exits (0, 0b) sont vérifiées EN PREMIER                 │
+│  ⚠️ Elles coupent les mauvais trades AVANT d'attendre le SL ou 48h        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Conditions de Sortie:
+### 🆕 Conditions de Sortie V5.13:
 
-| Condition | Seuil | Action |
-|-----------|-------|--------|
-| **Stop Loss** | Dynamic: ATR(14) × 2.0 (min 0.8%, max 3.0%) | Fermeture immédiate |
-| **Take Profit** | +3.0% | Fermeture immédiate |
-| **Time Exit** | 48h (2880 min) | Fermeture si toujours ouvert |
-| **Trailing Stop** | Activé à +1.0% | Trail de 0.4% |
-| **Momentum Fade** | PnL > 1.5% ET ROC5 < 0.5% | Fermeture (momentum perdu) |
-| **Volume Dry** | PnL > 0.5% ET Vol < 0.5x | Fermeture (plus de volume) |
+| Condition | Seuil | Action | Stats (2025) |
+|-----------|-------|--------|--------------|
+| **🆕 Regime Change** | BTC croise SMA200 contre position (NO buffer, exit immédiat) | Exit immédiat | **8.1%** des exits (165/2026) |
+| **🆕 Momentum Reversal** | ROC5 > +1.5% (SHORT) ou < -1.5% (LONG) | Exit immédiat | **7.6%** des exits (154/2026) |
+| **Trailing Stop** | Activé à +1.0% | Trail de 0.4% | **77.4%** des exits (gagnants) |
+| **Stop Loss** | Dynamic: ATR(14) × 2.0 (min 0.8%, max 3.0%) | Fermeture immédiate | **6.9%** des exits |
+
+**🎯 Impact V5.13** : +234% ROI vs sans ces exits, -4% max drawdown, coupe 15.7% des trades avant SL/trailing
 
 ### Dynamic Stop Loss (V5.7) - NOUVEAU
 

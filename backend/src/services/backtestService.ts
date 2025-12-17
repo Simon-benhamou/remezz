@@ -142,6 +142,7 @@ const CONFIG = {
     TRAILING_WIDE_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT,
     MAX_HOLD_BARS: 192, // 48h in 15m bars
   },
+  REGIME_CHANGE_EXIT: MomentumConfig.REGIME_CHANGE_EXIT,
   COSTS: {
     TRADING_FEE_PCT: 0.04, // Binance taker fee
     SLIPPAGE_PCT: 0.05, // Realistic slippage
@@ -643,23 +644,55 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // 4. Max Hold Time
 
         // ═══════════════════════════════════════════════════════════════════
-        // 0. REGIME CHANGE EXIT (V5.13)
+        // 0. REGIME CHANGE EXIT (V5.13 with confirmation filters)
         // ═══════════════════════════════════════════════════════════════════
-        const btcSma200Current = calcSMA(btcCloses.slice(0, btcIdx + 1), 200);
-        const btcPriceCurrent = btcCloses[btcIdx];
+        const btcWindowStart = Math.max(0, btcIdx - 200);
+        const btcWindowCandles = btcCandles.slice(btcWindowStart, btcIdx + 1);
+        const btcSma200Current = calcSMA(btcWindowCandles.map(c => c.close), 200);
+        const btcPriceCurrent = btcCandles[btcIdx].close;
+        
+        const distanceFromSma200Pct = ((btcPriceCurrent - btcSma200Current) / btcSma200Current) * 100;
+        const inBufferZone = Math.abs(distanceFromSma200Pct) <= CONFIG.REGIME_CHANGE_EXIT.BUFFER_ZONE_PCT;
+        
         const currentlyBullRegime = btcPriceCurrent > btcSma200Current;
         const positionOpenedInBullRegime = pos.side === 'long';
+        const regimeChanged = (positionOpenedInBullRegime && !currentlyBullRegime) || 
+                              (!positionOpenedInBullRegime && currentlyBullRegime);
 
-        if (positionOpenedInBullRegime && !currentlyBullRegime) {
-          // LONG position but now in BEAR regime
-          shouldExit = true;
-          exitReason = 'REGIME_CHANGE';
-          exitPrice = current.close;
-        } else if (!positionOpenedInBullRegime && currentlyBullRegime) {
-          // SHORT position but now in BULL regime
-          shouldExit = true;
-          exitReason = 'REGIME_CHANGE';
-          exitPrice = current.close;
+        if (regimeChanged && !inBufferZone) {
+          let confirmed = true;
+          
+          // Volume confirmation
+          if (CONFIG.REGIME_CHANGE_EXIT.REQUIRE_VOLUME_CONFIRMATION && btcWindowCandles.length >= 20) {
+            const btcVolumes = btcWindowCandles.slice(-20).map(c => c.volume);
+            const avgVol = btcVolumes.slice(0, -1).reduce((a, b) => a + b, 0) / (btcVolumes.length - 1);
+            const currentVol = btcVolumes[btcVolumes.length - 1];
+            const volRatio = currentVol / avgVol;
+            
+            if (volRatio < CONFIG.REGIME_CHANGE_EXIT.MIN_VOLUME_MULTIPLIER) {
+              confirmed = false;
+            }
+          }
+          
+          // Momentum confirmation
+          if (confirmed && CONFIG.REGIME_CHANGE_EXIT.REQUIRE_MOMENTUM_CONFIRMATION) {
+            const btcCloseWindow = btcWindowCandles.map(c => c.close);
+            if (btcCloseWindow.length >= 6) {
+              const btcRoc5 = calcROC(btcCloseWindow, 5);
+              
+              if (currentlyBullRegime && btcRoc5 < CONFIG.REGIME_CHANGE_EXIT.MIN_ROC5_BULL) {
+                confirmed = false;
+              } else if (!currentlyBullRegime && btcRoc5 > CONFIG.REGIME_CHANGE_EXIT.MIN_ROC5_BEAR) {
+                confirmed = false;
+              }
+            }
+          }
+          
+          if (confirmed) {
+            shouldExit = true;
+            exitReason = 'REGIME_CHANGE';
+            exitPrice = current.close;
+          }
         }
 
         // ═══════════════════════════════════════════════════════════════════

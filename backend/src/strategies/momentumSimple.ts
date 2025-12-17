@@ -71,6 +71,17 @@ export const MomentumConfig = {
     STOCH_SMOOTH: 3,                  // Smoothing period for StochRSI
   },
   
+  // V5.13: Regime Change Exit - Exit immediately on BTC regime flip
+  REGIME_CHANGE_EXIT: {
+    ENABLED: true,                    // Enable regime change exit
+    BUFFER_ZONE_PCT: 0.0,             // NO buffer - exit immediately on cross
+    REQUIRE_VOLUME_CONFIRMATION: false, // NO confirmation needed
+    MIN_VOLUME_MULTIPLIER: 2.0,       // (unused)
+    REQUIRE_MOMENTUM_CONFIRMATION: false, // NO confirmation needed
+    MIN_ROC5_BULL: 0.015,             // (unused)
+    MIN_ROC5_BEAR: -0.015,            // (unused)
+  },
+  
   // Signal d'entrée LONG (Bull Market: BTC > SMA200)
   // V5.8: Volume > 2x - Standard filter
   ENTRY_LONG: {
@@ -881,36 +892,71 @@ export function shouldExitPosition(
   }
   
   // ============================================================================
-  // 0. REGIME CHANGE EXIT (NEW V5.13)
-  // Exit immediately if BTC regime flips (invalidates entry signal)
+  // 0. REGIME CHANGE EXIT (V5.13 with confirmation filters)
+  // Exit if BTC regime flips WITH confirmation (volume + momentum)
+  // Avoids whipsaws when BTC oscillates around SMA200
   // ============================================================================
-  if (opts?.btcCandles && opts.btcCandles.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
-    const btcCloses = opts.btcCandles.map(c => c.close);
+  if (MomentumConfig.REGIME_CHANGE_EXIT.ENABLED && 
+      opts?.btcCandles && 
+      opts.btcCandles.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
+    
+    const btcCandles = opts.btcCandles;
+    const btcCloses = btcCandles.map(c => c.close);
     const btcSma200 = calcSMA(btcCloses, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
     const btcNow = btcCloses[btcCloses.length - 1];
+    
+    // Calculate distance from SMA200
+    const distanceFromSma200Pct = ((btcNow - btcSma200) / btcSma200) * 100;
+    const inBufferZone = Math.abs(distanceFromSma200Pct) <= MomentumConfig.REGIME_CHANGE_EXIT.BUFFER_ZONE_PCT;
     
     // Check if regime changed
     const currentlyBullRegime = btcNow > btcSma200;
     const positionOpenedInBullRegime = position.side === 'long';  // LONG positions open in bull regime
+    const regimeChanged = (positionOpenedInBullRegime && !currentlyBullRegime) || 
+                          (!positionOpenedInBullRegime && currentlyBullRegime);
     
-    // If position side doesn't match current regime anymore, exit
-    if (positionOpenedInBullRegime && !currentlyBullRegime) {
-      // LONG position but now in BEAR regime
-      return { 
-        shouldExit: true, 
-        reason: 'regime_change', 
-        pnlPct, 
-        holdMinutes 
-      };
-    }
-    if (!positionOpenedInBullRegime && currentlyBullRegime) {
-      // SHORT position but now in BULL regime
-      return { 
-        shouldExit: true, 
-        reason: 'regime_change', 
-        pnlPct, 
-        holdMinutes 
-      };
+    if (regimeChanged && !inBufferZone) {
+      // Regime changed AND we're outside the buffer zone - check confirmations
+      let confirmed = true;
+      
+      // CONFIRMATION 1: Volume spike (confirms conviction)
+      if (MomentumConfig.REGIME_CHANGE_EXIT.REQUIRE_VOLUME_CONFIRMATION && btcCandles.length >= 20) {
+        const volumes = btcCandles.slice(-20).map(c => c.volume);
+        const avgVol = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
+        const currentVol = volumes[volumes.length - 1];
+        const volRatio = currentVol / avgVol;
+        
+        if (volRatio < MomentumConfig.REGIME_CHANGE_EXIT.MIN_VOLUME_MULTIPLIER) {
+          confirmed = false; // Not enough volume to confirm regime change
+        }
+      }
+      
+      // CONFIRMATION 2: Momentum in the new direction
+      if (confirmed && MomentumConfig.REGIME_CHANGE_EXIT.REQUIRE_MOMENTUM_CONFIRMATION && btcCloses.length >= 6) {
+        const btcRoc5 = calcROC(btcCloses, 5);
+        
+        if (currentlyBullRegime) {
+          // Flipped to bull - require bullish momentum
+          if (btcRoc5 < MomentumConfig.REGIME_CHANGE_EXIT.MIN_ROC5_BULL) {
+            confirmed = false; // Not enough bullish momentum
+          }
+        } else {
+          // Flipped to bear - require bearish momentum
+          if (btcRoc5 > MomentumConfig.REGIME_CHANGE_EXIT.MIN_ROC5_BEAR) {
+            confirmed = false; // Not enough bearish momentum
+          }
+        }
+      }
+      
+      // Exit only if confirmed
+      if (confirmed) {
+        return { 
+          shouldExit: true, 
+          reason: 'regime_change', 
+          pnlPct, 
+          holdMinutes 
+        };
+      }
     }
   }
   
