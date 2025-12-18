@@ -758,9 +758,15 @@ export class SimpleAgent {
       // WebSocket ticker is 0 weight; if WS is unhealthy or cache-missing we do nothing here.
       // (We don't want REST fallbacks in a tight loop, and we avoid noisy warnings.)
       const ws = getBinanceWebSocket();
-      if (!ws.isHealthy()) return;
+      if (!ws.isHealthy()) {
+        logger.warn(`⚠️ [${symbol}] WebSocket UNHEALTHY - realtime exit monitoring paused`);
+        return;
+      }
       const ticker = ws.getTicker(symbol);
-      if (!ticker) return;
+      if (!ticker) {
+        logger.debug(`⚠️ [${symbol}] No ticker data from WebSocket`);
+        return;
+      }
       const tickerTs = Number.isFinite(Number(ticker.timestamp)) ? Number(ticker.timestamp) : Date.now();
       if (Date.now() - tickerTs > 10_000) return;
 
@@ -832,10 +838,24 @@ export class SimpleAgent {
 
         const klines = ws.getKlines(symbol, interval);
         const last = klines && klines.length ? klines[klines.length - 1] : null;
-        if (!last || !last.isFinal) return;
+        
+        if (!last) {
+          logger.debug(`⚠️ [${symbol}] No 1m klines received from WebSocket yet`);
+          return;
+        }
+        
+        if (!last.isFinal) {
+          const now = Date.now();
+          const candleAge = now - last.timestamp;
+          logger.debug(`⏳ [${symbol}] Waiting for 1m candle to close (age: ${Math.round(candleAge/1000)}s, close: ${last.close.toFixed(4)})`);
+          return;
+        }
 
         // Process once per newly-closed 1m candle.
         if (this.lastRtTrailingKlineTs === last.timestamp) return;
+        
+        const detectionDelay = Date.now() - (last.closeTime || last.timestamp);
+        logger.info(`📍 [${symbol}] NEW 1m candle closed | close=${last.close.toFixed(4)} | detection_delay=${detectionDelay}ms`);
         this.lastRtTrailingKlineTs = last.timestamp;
 
         // Update trailing state using the candle close, but do NOT allow wick-based breach.
@@ -864,23 +884,29 @@ export class SimpleAgent {
         }
 
         if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
+          if (this.rtTrailingBreachCandles > 0) {
+            logger.info(`✅ [${symbol}] Trailing breach CLEARED (was ${this.rtTrailingBreachCandles}/${confirmCandles}) | close=${closePx.toFixed(4)} | stop=${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'}`);
+          }
           this.rtTrailingBreachCandles = 0;
           return;
         }
 
         // Confirm by consecutive 1m candle closes beyond the trailing stop.
         this.rtTrailingBreachCandles += 1;
+        const stopPrice = (candidateStop as number | undefined)?.toFixed(4) || 'n/a';
+        logger.warn(
+          `🚨 [${symbol}] TRAILING BREACH detected! (${this.rtTrailingBreachCandles}/${confirmCandles}) | close=${closePx.toFixed(4)} | stop=${stopPrice} | side=${this.position!.side}`,
+        );
+        
         if (this.rtTrailingBreachCandles < confirmCandles) {
-          logger.debug(
-            `🔎 [${symbol}] Realtime trailing breach (1m close) ${this.rtTrailingBreachCandles}/${confirmCandles} close=$${closePx.toFixed(4)} stop=$${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'}`,
-          );
+          logger.info(`⏳ [${symbol}] Waiting for confirmation... (need ${confirmCandles - this.rtTrailingBreachCandles} more candle${confirmCandles - this.rtTrailingBreachCandles > 1 ? 's' : ''})`);
           return;
         }
 
         this.stopRealtimeExitMonitor();
         const execPx = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : closePx;
         logger.info(
-          `⚡ [${symbol}] REALTIME EXIT confirmed (trailing_rt, 1m close) exec=$${execPx.toFixed(4)} close=$${closePx.toFixed(4)} stop=$${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'} | confirmCandles=${confirmCandles}`,
+          `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (trailing_rt, 1m close) | exec=${execPx.toFixed(4)} | close=${closePx.toFixed(4)} | stop=${stopPrice} | confirmCandles=${confirmCandles}`,
         );
         await this.closePosition(this.position!, execPx, 'trailing_rt');
         return;

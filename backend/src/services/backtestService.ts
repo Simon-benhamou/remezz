@@ -47,6 +47,7 @@ interface BacktestSimPosition {
   highWaterMark?: number;
   lowWaterMark?: number;
   appTrailingStop?: number;
+  trailingBreachCandles?: number; // V5.18: Track consecutive 1m-simulated breaches (like prod)
 }
 
 export interface BacktestParams {
@@ -727,7 +728,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             exitReason = 'SL';
             exitPrice = slPrice;
           }
-          // Trailing?
+          // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
           else {
             const hwm = pos.highWaterMark!;
             const hwmPct = ((hwm - pos.entryPrice) / pos.entryPrice) * 100;
@@ -742,10 +743,32 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
               const trailStop = hwm * (1 - trailDist / 100);
               pos.appTrailingStop = trailStop;
 
+              // Simulate 1m candle confirmations (15 sub-candles per 15m bar)
+              // In production: require 2 consecutive 1m candle closes below trailing stop
+              if (!pos.trailingBreachCandles) pos.trailingBreachCandles = 0;
+
+              // Check if current candle low breached the stop
               if (current.low <= trailStop) {
-                shouldExit = true;
-                exitReason = 'TRAIL';
-                exitPrice = trailStop;
+                // Simulate: if wick hit the stop, assume at least 1 candle closed below it
+                // For realism: require price to close below stop (not just wick)
+                const closeBreached = current.close <= trailStop;
+                
+                if (closeBreached) {
+                  pos.trailingBreachCandles += 1;
+                  
+                  // Require 2 consecutive breaches (like production 1m confirmations)
+                  if (pos.trailingBreachCandles >= 2) {
+                    shouldExit = true;
+                    exitReason = 'TRAIL';
+                    exitPrice = trailStop;
+                  }
+                } else {
+                  // Wick hit but close didn't breach - reset counter
+                  pos.trailingBreachCandles = 0;
+                }
+              } else {
+                // No breach - reset counter
+                pos.trailingBreachCandles = 0;
               }
             }
           }
@@ -759,7 +782,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             exitReason = 'SL';
             exitPrice = slPrice;
           }
-          // Trailing?
+          // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
           else {
             const lwm = pos.lowWaterMark!;
             const lwmPct = ((pos.entryPrice - lwm) / pos.entryPrice) * 100;
@@ -773,10 +796,30 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
               const trailStop = lwm * (1 + trailDist / 100);
               pos.appTrailingStop = trailStop;
 
+              // Simulate 1m candle confirmations (15 sub-candles per 15m bar)
+              if (!pos.trailingBreachCandles) pos.trailingBreachCandles = 0;
+
+              // Check if current candle high breached the stop (SHORT)
               if (current.high >= trailStop) {
-                shouldExit = true;
-                exitReason = 'TRAIL';
-                exitPrice = trailStop;
+                // For realism: require close above stop, not just wick
+                const closeBreached = current.close >= trailStop;
+                
+                if (closeBreached) {
+                  pos.trailingBreachCandles += 1;
+                  
+                  // Require 2 consecutive breaches (like production 1m confirmations)
+                  if (pos.trailingBreachCandles >= 2) {
+                    shouldExit = true;
+                    exitReason = 'TRAIL';
+                    exitPrice = trailStop;
+                  }
+                } else {
+                  // Wick hit but close didn't breach - reset counter
+                  pos.trailingBreachCandles = 0;
+                }
+              } else {
+                // No breach - reset counter
+                pos.trailingBreachCandles = 0;
               }
             }
           }
