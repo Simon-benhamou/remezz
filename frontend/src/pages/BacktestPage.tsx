@@ -328,6 +328,11 @@ export default function BacktestPage() {
     { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT (+118%)' },
     { value: 'SOL/USDT:USDT', label: 'SOL/USDT (+111%)' },
     { value: 'BTC/USDT:USDT', label: 'BTC/USDT (+65%)' },
+    { value: 'UNI/USDT:USDT', label: 'UNI/USDT' },
+    { value: 'LTC/USDT:USDT', label: 'LTC/USDT' },
+    { value: 'FTM/USDT:USDT', label: 'FTM/USDT' },
+    { value: 'BCH/USDT:USDT', label: 'BCH/USDT' },
+    { value: 'APT/USDT:USDT', label: 'APT/USDT' },
   ];
 
   const refreshRuns = async () => {

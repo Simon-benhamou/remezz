@@ -880,20 +880,28 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         let marginUsd = availableCapital * positionSizePct;
         let notionalUsd = marginUsd * posLev;
 
-        // Apply liquidity caps
+        // Apply liquidity caps (aligned with prod LIQUIDITY_CONFIG)
         const LIQUIDITY_CAPS: Record<string, number> = {
+          // Tier HIGH: $500K
           'BTC/USDT:USDT': 500_000,
           'ETH/USDT:USDT': 500_000,
+          // Tier MEDIUM: $100K
           'XRP/USDT:USDT': 100_000,
           'SOL/USDT:USDT': 100_000,
+          'DOGE/USDT:USDT': 100_000,
+          'ADA/USDT:USDT': 100_000,
+          'AVAX/USDT:USDT': 100_000,
+          'LINK/USDT:USDT': 100_000,
+          'LTC/USDT:USDT': 100_000,
+          'BCH/USDT:USDT': 100_000,
+          'UNI/USDT:USDT': 100_000,
+          // Tier LOW: $25K
           'SEI/USDT:USDT': 25_000,
           'IMX/USDT:USDT': 25_000,
           'DOT/USDT:USDT': 25_000,
-          'DOGE/USDT:USDT': 100_000,
-          'SUI/USDT:USDT': 50_000,
-          'ADA/USDT:USDT': 100_000,
-          'LINK/USDT:USDT': 50_000,
-          'AVAX/USDT:USDT': 50_000,
+          'SUI/USDT:USDT': 25_000,
+          'FTM/USDT:USDT': 25_000,
+          'APT/USDT:USDT': 25_000,
         };
         const cap = LIQUIDITY_CAPS[symbol] ?? Infinity;
         const wasCapped = Number.isFinite(cap) && notionalUsd > cap;
