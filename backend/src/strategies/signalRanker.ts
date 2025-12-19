@@ -26,25 +26,84 @@ export interface RankedSignal {
 }
 
 /**
- * V5.22: Calculate signal quality score
+ * V5.22: Calculate signal quality score (LEGACY - Simple version)
+ * 
+ * Formula: ROC momentum (60%) + Volume confirmation (40%)
+ */
+export function calculateSignalScoreV22(roc5: number, volumeRatio: number): number {
+  const rocScore = Math.abs(roc5) * 0.6;
+  const volScore = Math.min(volumeRatio, 3) * 10 * 0.4;
+  return rocScore + volScore;
+}
+
+/**
+ * V5.23: Enhanced signal quality score with multi-factor analysis
  * 
  * CRITICAL: This scoring function is used by BOTH backtest and production.
  * Any changes here must maintain consistency between the two.
  * 
- * Formula: ROC momentum (60%) + Volume confirmation (40%)
+ * Formula breakdown:
+ * - BB Position (30%): Buy low / Sell high in band
+ * - ROC Momentum (25%): Rate of change strength
+ * - Volume (20%): Confirmation with volume
+ * - ATR Filter (15%): Penalty for excessive volatility
+ * - Trend Strength (10%): Alignment with SMA50
  * 
- * @param roc5 - Rate of change over 5 periods (e.g., 0.02 = 2%)
- * @param volumeRatio - Current volume / 19-period average (e.g., 2.5 = 2.5x average)
+ * @param params.roc5 - Rate of change over 5 periods (e.g., 0.02 = 2%)
+ * @param params.volumeRatio - Current volume / 19-period average
+ * @param params.bbPosition - Position in BB (0=lower, 0.5=middle, 1=upper)
+ * @param params.atrPct - ATR as % of price (e.g., 3.5 = 3.5% volatility)
+ * @param params.trendStrength - Price distance from SMA50 (positive=uptrend, negative=downtrend)
+ * @param params.side - 'long' or 'short' for directional scoring
  * @returns Quality score (higher = better opportunity)
  */
-export function calculateSignalScore(roc5: number, volumeRatio: number): number {
-  // ROC: Strong momentum = higher score
-  const rocScore = Math.abs(roc5) * 0.6;
+export function calculateSignalScore(params: {
+  roc5: number;
+  volumeRatio: number;
+  bbPosition: number;
+  atrPct: number;
+  trendStrength: number;
+  side: 'long' | 'short';
+}): number {
+  const { roc5, volumeRatio, bbPosition, atrPct, trendStrength, side } = params;
   
-  // Volume: High volume = higher score (cap at 3x to avoid extreme outliers)
-  const volScore = Math.min(volumeRatio, 3) * 10 * 0.4;
+  // 1. BB Position (30%) - Buy low, sell high
+  let bbScore = 0;
+  if (side === 'long') {
+    // LONG: Prefer buying near lower band (0 = perfect, 1 = worst)
+    bbScore = (1 - bbPosition) * 10 * 0.3;
+  } else {
+    // SHORT: Prefer selling near upper band (1 = perfect, 0 = worst)
+    bbScore = bbPosition * 10 * 0.3;
+  }
   
-  return rocScore + volScore;
+  // 2. ROC Momentum (25%) - Strong movement in our direction
+  const rocScore = Math.abs(roc5) * 10 * 0.25;
+  
+  // 3. Volume (20%) - High volume = conviction (cap at 3x)
+  const volScore = Math.min(volumeRatio, 3) * 10 * 0.2;
+  
+  // 4. ATR Filter (15%) - Penalty for high volatility
+  // Low ATR (<2%) = full points, High ATR (>5%) = zero points
+  const atrScore = Math.max(0, 1 - (atrPct - 2) / 3) * 10 * 0.15;
+  
+  // 5. Trend Strength (10%) - Alignment with SMA50
+  let trendScore = 0;
+  if (side === 'long' && trendStrength > 0) {
+    // LONG + uptrend = bonus
+    trendScore = Math.min(Math.abs(trendStrength) / 0.05, 1) * 10 * 0.1;
+  } else if (side === 'short' && trendStrength < 0) {
+    // SHORT + downtrend = bonus
+    trendScore = Math.min(Math.abs(trendStrength) / 0.05, 1) * 10 * 0.1;
+  }
+  // Counter-trend = 0 points (no penalty, just no bonus)
+  
+  return bbScore + rocScore + volScore + atrScore + trendScore;
+}
+
+// Backward compatibility: Use V5.22 scoring if only 2 params provided
+export function calculateSignalScoreCompat(roc5: number, volumeRatio: number): number {
+  return calculateSignalScoreV22(roc5, volumeRatio);
 }
 
 class SignalRanker {
@@ -75,12 +134,19 @@ class SignalRanker {
   
   /**
    * Calculate signal quality score
-   * V5.22: ROC momentum (60%) + Volume confirmation (40%)
+   * V5.23: Enhanced multi-factor scoring
    * 
    * Delegates to shared function to ensure consistency with backtest
    */
-  calculateScore(roc5: number, volumeRatio: number): number {
-    return calculateSignalScore(roc5, volumeRatio);
+  calculateScore(params: {
+    roc5: number;
+    volumeRatio: number;
+    bbPosition: number;
+    atrPct: number;
+    trendStrength: number;
+    side: 'long' | 'short';
+  }): number {
+    return calculateSignalScore(params);
   }
   
   /**

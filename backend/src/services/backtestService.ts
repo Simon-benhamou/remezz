@@ -246,6 +246,54 @@ function countConsecDown(candles: Candle[]): number {
   return count;
 }
 
+// V5.23: Calculate ATR (Average True Range) as % of price
+function calcATR(candles: Candle[], period = 14): number {
+  if (candles.length < period + 1) return 0;
+  
+  const trValues: number[] = [];
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevClose = i > 0 ? candles[i - 1].close : candles[i].close;
+    
+    const tr = Math.max(
+      high - low,
+      Math.abs(high - prevClose),
+      Math.abs(low - prevClose)
+    );
+    trValues.push(tr);
+  }
+  
+  const atr = trValues.reduce((sum, tr) => sum + tr, 0) / period;
+  const currentPrice = candles[candles.length - 1].close;
+  return currentPrice > 0 ? (atr / currentPrice) * 100 : 0; // Return as %
+}
+
+// V5.23: Calculate BB position (0 = lower band, 0.5 = middle, 1 = upper band)
+function calcBBPosition(candles: Candle[], period = 20, mult = 2): number {
+  const bb = calcBB(candles.map(c => c.close), period, mult);
+  const currentPrice = candles[candles.length - 1].close;
+  
+  if (bb.upper <= bb.lower) return 0.5; // Fallback
+  
+  // Normalize position: 0 = at lower band, 1 = at upper band
+  const position = (currentPrice - bb.lower) / (bb.upper - bb.lower);
+  return Math.max(0, Math.min(1, position)); // Clamp to [0, 1]
+}
+
+// V5.23: Calculate trend strength (distance from SMA50 as %)
+function calcTrendStrength(closes: number[], period = 50): number {
+  if (closes.length < period) return 0;
+  
+  const sma = calcSMA(closes, period);
+  const currentPrice = closes[closes.length - 1];
+  
+  if (sma === 0) return 0;
+  
+  // Positive = uptrend, Negative = downtrend
+  return (currentPrice - sma) / sma;
+}
+
 function calcRSI(closes: number[], period = 14): number | null {
   if (closes.length < period + 1) return null;
   let gains = 0;
@@ -293,20 +341,7 @@ function calcStochRSI(closes: number[], rsiPeriod = 14, stochPeriod = 14, smooth
   return smoothSlice.reduce((a, b) => a + b, 0) / smooth;
 }
 
-function calcATR(candles: Candle[], period = 14): number | null {
-  if (candles.length < period + 1) return null;
-
-  let atrSum = 0;
-  for (let i = candles.length - period; i < candles.length; i++) {
-    const high = candles[i].high;
-    const low = candles[i].low;
-    const prevClose = candles[i - 1]?.close || high;
-    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
-    atrSum += tr;
-  }
-
-  return atrSum / period;
-}
+// Removed: Duplicate calcATR function - using V5.23 version below
 
 // Adaptive trailing: tighter in low vol, wider in high vol
 function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance: number } {
@@ -318,17 +353,15 @@ function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance
     };
   }
 
-  const atr = calcATR(candles, 14);
+  // V5.23: calcATR now returns % directly
+  const atrPct = calcATR(candles, 14);
   
-  if (!atr || candles.length === 0) {
+  if (atrPct === 0 || candles.length === 0) {
     return {
       activation: CONFIG.EXIT.TRAILING_ACTIVATION_PCT,
       distance: CONFIG.EXIT.TRAILING_DISTANCE_PCT,
     };
   }
-  
-  const currentPrice = candles[candles.length - 1].close;
-  const atrPct = (atr / currentPrice) * 100;
   
   // Low volatility: tighter trailing (use production config)
   if (atrPct < MomentumConfig.EXIT.LOW_VOL_ATR_MAX) {
@@ -918,14 +951,28 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const signal = checkSignal(windowCandles, isBullRegime);
         if (!signal.valid || !signal.side) continue;
         
-        // Calculate signal quality score for ranking
+        // V5.23: Calculate enhanced signal quality score
         const closes = windowCandles.map(c => c.close);
         const volumes = windowCandles.map(c => c.volume);
+        
+        // Core indicators
         const roc5 = calcROC(closes, 5);
         const volumeRatio = volumes[volumes.length - 1] / (volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19);
         
-        // V5.22: Use shared scoring function (identical to production)
-        const score = calculateSignalScore(roc5, volumeRatio);
+        // V5.23: New indicators for enhanced scoring
+        const bbPosition = calcBBPosition(windowCandles, 20, 2);
+        const atrPct = calcATR(windowCandles, 14);
+        const trendStrength = calcTrendStrength(closes, 50);
+        
+        // V5.23: Use enhanced multi-factor scoring
+        const score = calculateSignalScore({
+          roc5,
+          volumeRatio,
+          bbPosition,
+          atrPct,
+          trendStrength,
+          side: signal.side!,
+        });
         
         // Add to candidates for ranking (signal.side guaranteed non-null here)
         signalCandidates.push({

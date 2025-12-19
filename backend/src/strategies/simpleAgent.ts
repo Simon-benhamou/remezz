@@ -589,12 +589,71 @@ export class SimpleAgent {
   // Backtest parity: only evaluate exits on NEWLY CLOSED candles too.
   private lastProcessedExitCandleTs: number = 0;
   
-  // V5.22: Helper method to calculate ROC for signal scoring
+  // V5.22/V5.23: Helper methods for signal scoring
   private calcROC(closes: number[], period: number = 5): number {
     if (closes.length < period + 1) return 0;
     const current = closes[closes.length - 1];
     const past = closes[closes.length - period - 1];
     return past > 0 ? (current - past) / past : 0;
+  }
+  
+  private calcSMA(values: number[], period: number): number {
+    if (values.length < period) return 0;
+    const slice = values.slice(-period);
+    return slice.reduce((sum, v) => sum + v, 0) / period;
+  }
+  
+  private calcBB(closes: number[], period = 20, mult = 2) {
+    if (closes.length < period) return { middle: 0, upper: 0, lower: 0 };
+    const sma = this.calcSMA(closes, period);
+    const slice = closes.slice(-period);
+    const variance = slice.reduce((sum, c) => sum + Math.pow(c - sma, 2), 0) / period;
+    const stdDev = Math.sqrt(variance);
+    return {
+      middle: sma,
+      upper: sma + stdDev * mult,
+      lower: sma - stdDev * mult,
+    };
+  }
+  
+  private calcATR(candles: Candle[], period = 14): number {
+    if (candles.length < period + 1) return 0;
+    const recentCandles = candles.slice(-period - 1);
+    const trValues: number[] = [];
+    
+    for (let i = 1; i < recentCandles.length; i++) {
+      const high = recentCandles[i].high;
+      const low = recentCandles[i].low;
+      const prevClose = recentCandles[i - 1].close;
+      
+      const tr = Math.max(
+        high - low,
+        Math.abs(high - prevClose),
+        Math.abs(low - prevClose)
+      );
+      trValues.push(tr);
+    }
+    
+    const atr = trValues.reduce((sum, tr) => sum + tr, 0) / period;
+    const currentPrice = candles[candles.length - 1].close;
+    return currentPrice > 0 ? (atr / currentPrice) * 100 : 0;
+  }
+  
+  private calcBBPosition(candles: Candle[], period = 20, mult = 2): number {
+    const closes = candles.map(c => c.close);
+    const bb = this.calcBB(closes, period, mult);
+    const currentPrice = candles[candles.length - 1].close;
+    
+    if (bb.upper <= bb.lower) return 0.5;
+    const position = (currentPrice - bb.lower) / (bb.upper - bb.lower);
+    return Math.max(0, Math.min(1, position));
+  }
+  
+  private calcTrendStrength(closes: number[], period = 50): number {
+    if (closes.length < period) return 0;
+    const sma = this.calcSMA(closes, period);
+    const currentPrice = closes[closes.length - 1];
+    return sma > 0 ? (currentPrice - sma) / sma : 0;
   }
 
   // Backtest parity: apply a post-exit cooldown to avoid immediate re-entries.
@@ -1237,23 +1296,32 @@ export class SimpleAgent {
       if (signal.valid && signal.side) {
         logger.info(`✅ [${shortSymbol}] SIGNAL ${signal.side.toUpperCase()} | $${currentPrice.toFixed(2)} | ${signal.reason}`);
         
-        // V5.22: Calculate signal quality score for ranking
-        // Extract features for scoring
+        // V5.23: Calculate enhanced signal quality score
         const closes = candles.map(c => c.close);
         const volumes = candles.map(c => c.volume);
         
-        // Calculate ROC momentum (5 periods as in backtest)
+        // Core indicators
         const roc5 = this.calcROC(closes, 5);
-        
-        // Calculate volume ratio (current vs 19-period avg)
         const currentVol = volumes[volumes.length - 1];
         const avgVol19 = volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19;
         const volumeRatio = avgVol19 > 0 ? currentVol / avgVol19 : 1;
         
-        // Calculate quality score: ROC momentum (60%) + Volume confirmation (40%)
-        const qualityScore = globalSignalRanker.calculateScore(roc5, volumeRatio);
+        // V5.23: New indicators for enhanced scoring
+        const bbPosition = this.calcBBPosition(candles, 20, 2);
+        const atrPct = this.calcATR(candles, 14);
+        const trendStrength = this.calcTrendStrength(closes, 50);
         
-        logger.info(`📊 [${shortSymbol}] Signal Quality Score: ${qualityScore.toFixed(2)} (ROC=${(roc5 * 100).toFixed(2)}%, Vol=${volumeRatio.toFixed(2)}x)`);
+        // V5.23: Use enhanced multi-factor scoring
+        const qualityScore = globalSignalRanker.calculateScore({
+          roc5,
+          volumeRatio,
+          bbPosition,
+          atrPct,
+          trendStrength,
+          side: signal.side,
+        });
+        
+        logger.info(`📊 [${shortSymbol}] Signal Quality Score: ${qualityScore.toFixed(2)} | ROC=${(roc5 * 100).toFixed(2)}% Vol=${volumeRatio.toFixed(1)}x BB=${(bbPosition * 100).toFixed(0)}% ATR=${atrPct.toFixed(1)}% Trend=${(trendStrength * 100).toFixed(1)}%`);
         
         // V5.22: Add signal to global ranker for prioritization
         globalSignalRanker.addSignal({
