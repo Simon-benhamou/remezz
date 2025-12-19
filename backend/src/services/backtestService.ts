@@ -18,6 +18,9 @@ import {
   MomentumConfig,
 } from '../strategies/momentumSimple.js';
 
+// V5.22: Import shared signal scoring function (ensures backtest = production)
+import { calculateSignalScore } from '../strategies/signalRanker.js';
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -588,7 +591,22 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       drawdownCurve.push({ date: day, drawdown: drawdownPct });
     }
 
-    // Process each symbol
+    // ═══════════════════════════════════════════════════════════════════
+    // V5.22: COLLECT SIGNALS FOR RANKING (Phase 1: Exits + Signal Detection)
+    // ═══════════════════════════════════════════════════════════════════
+    type SignalCandidate = {
+      symbol: string;
+      signal: { valid: boolean; side: 'long' | 'short'; };
+      score: number;
+      candles: BacktestCandle[];
+      current: BacktestCandle;
+      idx: number;
+      isBullRegime: boolean;
+    };
+    
+    const signalCandidates: SignalCandidate[] = [];
+    
+    // Process each symbol - handle exits and collect entry signals
     for (const symbol of symbols) {
       const candles = allData[symbol];
       let idx = symbolIdx[symbol];
@@ -610,7 +628,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       if (cooldowns[symbol] > 0) cooldowns[symbol]--;
 
       // ═══════════════════════════════════════════════════════════════════
-      // MANAGE EXISTING POSITION
+      // MANAGE EXISTING POSITION (Exits processed immediately)
       // ═══════════════════════════════════════════════════════════════════
       if (positions[symbol]) {
         const pos = positions[symbol]!;
@@ -879,21 +897,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       }
 
       // ═══════════════════════════════════════════════════════════════════
-      // CHECK FOR NEW ENTRY
+      // COLLECT ENTRY SIGNAL (V5.22: Don't enter yet, collect for ranking)
       // ═══════════════════════════════════════════════════════════════════
       if (!positions[symbol] && cooldowns[symbol] <= 0) {
-        // Count current open positions
-        const openPositionCount = Object.values(positions).filter(p => p !== null).length;
-        
-        // V5.18: Dynamic max positions - faster scaling for better diversification
-        const maxPositions = Math.min(
-          CONFIG.SIZING.MAX_POSITIONS_BASE + Math.floor(initialCapital / 1500) * CONFIG.SIZING.POSITIONS_PER_1500,
-          CONFIG.SIZING.MAX_POSITIONS_CAP
-        );
-        
-        // Skip if we already have max positions open
-        if (openPositionCount >= maxPositions) continue;
-        
         const availableCapital = capital - capitalInUse;
         
         // V5.17: Low minimum to maximize trade opportunities
@@ -911,74 +917,130 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // Use local checkSignal (V5.12 strategy)
         const signal = checkSignal(windowCandles, isBullRegime);
         if (!signal.valid || !signal.side) continue;
-
-        // V5.18: Keep leverage high for all accounts
-        const posLev = leverage || 5;
-
-        // V5.18: Dynamic position sizing - moderate boost for bigger accounts
-        const positionSizePct = Math.min(
-          CONFIG.SIZING.POSITION_SIZE_PCT_BASE + (initialCapital / 5000) * CONFIG.SIZING.POSITION_SIZE_PCT_BOOST_PER_5K,
-          CONFIG.SIZING.POSITION_SIZE_PCT_MAX
-        );
-        let marginUsd = availableCapital * positionSizePct;
-        let notionalUsd = marginUsd * posLev;
-
-        // Apply liquidity caps (aligned with prod LIQUIDITY_CONFIG)
-        const LIQUIDITY_CAPS: Record<string, number> = {
-          // Tier HIGH: $500K
-          'BTC/USDT:USDT': 500_000,
-          'ETH/USDT:USDT': 500_000,
-          // Tier MEDIUM: $100K
-          'XRP/USDT:USDT': 100_000,
-          'SOL/USDT:USDT': 100_000,
-          'DOGE/USDT:USDT': 100_000,
-          'ADA/USDT:USDT': 100_000,
-          'AVAX/USDT:USDT': 100_000,
-          'LINK/USDT:USDT': 100_000,
-          'LTC/USDT:USDT': 100_000,
-          'BCH/USDT:USDT': 100_000,
-          'UNI/USDT:USDT': 100_000,
-          // Tier LOW: $25K
-          'SEI/USDT:USDT': 25_000,
-          'IMX/USDT:USDT': 25_000,
-          'DOT/USDT:USDT': 25_000,
-          'SUI/USDT:USDT': 25_000,
-          'FTM/USDT:USDT': 25_000,
-          'APT/USDT:USDT': 25_000,
-        };
-        const cap = LIQUIDITY_CAPS[symbol] ?? Infinity;
-        const wasCapped = Number.isFinite(cap) && notionalUsd > cap;
-        if (wasCapped) {
-          notionalUsd = cap;
-          marginUsd = notionalUsd / posLev;
-        }
-
-        const qty = notionalUsd / current.close;
-        if (!Number.isFinite(qty) || qty <= 0) continue;
-        // V5.13: Lower minimum margin for small accounts
-        if (marginUsd < CONFIG.SIZING.MIN_MARGIN_USD) continue;
-
-        const slPct = CONFIG.EXIT.STOP_LOSS_PCT;
-
-        capitalInUse += marginUsd;
-        capital -= marginUsd;
-
-        positions[symbol] = {
+        
+        // Calculate signal quality score for ranking
+        const closes = windowCandles.map(c => c.close);
+        const volumes = windowCandles.map(c => c.volume);
+        const roc5 = calcROC(closes, 5);
+        const volumeRatio = volumes[volumes.length - 1] / (volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19);
+        
+        // V5.22: Use shared scoring function (identical to production)
+        const score = calculateSignalScore(roc5, volumeRatio);
+        
+        // Add to candidates for ranking (signal.side guaranteed non-null here)
+        signalCandidates.push({
           symbol,
-          side: signal.side,
-          entryPrice: current.close,
-          entryTime: current.timestamp,
-          entryIdx: idx,
-          qty,
-          notionalUsd,
-          marginUsd,
-          leverage: posLev,
-          capitalBefore: capital + marginUsd,
-          wasCapped,
-          stopLossPct: slPct,
-          highWaterMark: signal.side === 'long' ? current.close : undefined,
-          lowWaterMark: signal.side === 'short' ? current.close : undefined,
-        };
+          signal: { valid: signal.valid, side: signal.side! },
+          score,
+          candles: windowCandles,
+          current,
+          idx,
+          isBullRegime
+        });
+      }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════
+    // V5.22: RANK SIGNALS AND ENTER BEST OPPORTUNITIES (Phase 2: Entries)
+    // ═══════════════════════════════════════════════════════════════════
+    if (signalCandidates.length > 0) {
+      // Count current open positions
+      const openPositionCount = Object.values(positions).filter(p => p !== null).length;
+      
+      // V5.18: Dynamic max positions
+      const maxPositions = Math.min(
+        CONFIG.SIZING.MAX_POSITIONS_BASE + Math.floor(initialCapital / 1500) * CONFIG.SIZING.POSITIONS_PER_1500,
+        CONFIG.SIZING.MAX_POSITIONS_CAP
+      );
+      
+      const availableSlots = maxPositions - openPositionCount;
+      
+      if (availableSlots > 0) {
+        // RANK by score (highest first)
+        signalCandidates.sort((a, b) => b.score - a.score);
+        
+        // Take top N signals that fit available slots
+        const signalsToEnter = signalCandidates.slice(0, availableSlots);
+        
+        for (const candidate of signalsToEnter) {
+          const { symbol, signal, current, idx } = candidate;
+          const availableCapital = capital - capitalInUse;
+          
+          // Double-check capital still available
+          const minAvailableCapital = Math.max(
+            initialCapital * CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_PCT,
+            CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_FLOOR
+          );
+          if (availableCapital < minAvailableCapital) break;
+
+          // V5.18: Keep leverage high for all accounts
+          const posLev = leverage || 5;
+
+          // V5.18: Dynamic position sizing - moderate boost for bigger accounts
+          const positionSizePct = Math.min(
+            CONFIG.SIZING.POSITION_SIZE_PCT_BASE + (initialCapital / 5000) * CONFIG.SIZING.POSITION_SIZE_PCT_BOOST_PER_5K,
+            CONFIG.SIZING.POSITION_SIZE_PCT_MAX
+          );
+          let marginUsd = availableCapital * positionSizePct;
+          let notionalUsd = marginUsd * posLev;
+
+          // Apply liquidity caps (aligned with prod LIQUIDITY_CONFIG)
+          const LIQUIDITY_CAPS: Record<string, number> = {
+            // Tier HIGH: $500K
+            'BTC/USDT:USDT': 500_000,
+            'ETH/USDT:USDT': 500_000,
+            // Tier MEDIUM: $100K
+            'XRP/USDT:USDT': 100_000,
+            'SOL/USDT:USDT': 100_000,
+            'DOGE/USDT:USDT': 100_000,
+            'ADA/USDT:USDT': 100_000,
+            'AVAX/USDT:USDT': 100_000,
+            'LINK/USDT:USDT': 100_000,
+            'LTC/USDT:USDT': 100_000,
+            'BCH/USDT:USDT': 100_000,
+            'UNI/USDT:USDT': 100_000,
+            // Tier LOW: $25K
+            'SEI/USDT:USDT': 25_000,
+            'IMX/USDT:USDT': 25_000,
+            'DOT/USDT:USDT': 25_000,
+            'SUI/USDT:USDT': 25_000,
+            'FTM/USDT:USDT': 25_000,
+            'APT/USDT:USDT': 25_000,
+          };
+          const cap = LIQUIDITY_CAPS[symbol] ?? Infinity;
+          const wasCapped = Number.isFinite(cap) && notionalUsd > cap;
+          if (wasCapped) {
+            notionalUsd = cap;
+            marginUsd = notionalUsd / posLev;
+          }
+
+          const qty = notionalUsd / current.close;
+          if (!Number.isFinite(qty) || qty <= 0) continue;
+          // V5.13: Lower minimum margin for small accounts
+          if (marginUsd < CONFIG.SIZING.MIN_MARGIN_USD) continue;
+
+          const slPct = CONFIG.EXIT.STOP_LOSS_PCT;
+
+          capitalInUse += marginUsd;
+          capital -= marginUsd;
+
+          positions[symbol] = {
+            symbol,
+            side: signal.side,
+            entryPrice: current.close,
+            entryTime: current.timestamp,
+            entryIdx: idx,
+            qty,
+            notionalUsd,
+            marginUsd,
+            leverage: posLev,
+            capitalBefore: capital + marginUsd,
+            wasCapped,
+            stopLossPct: slPct,
+            highWaterMark: signal.side === 'long' ? current.close : undefined,
+            lowWaterMark: signal.side === 'short' ? current.close : undefined,
+          };
+        }
       }
     }
   }

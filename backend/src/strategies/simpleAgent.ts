@@ -29,6 +29,7 @@ import {
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
+import { globalSignalRanker } from './signalRanker.js';
 import {
   getBinanceWebSocket,
   getKlinesOhlcvFromWebSocket,
@@ -587,6 +588,14 @@ export class SimpleAgent {
 
   // Backtest parity: only evaluate exits on NEWLY CLOSED candles too.
   private lastProcessedExitCandleTs: number = 0;
+  
+  // V5.22: Helper method to calculate ROC for signal scoring
+  private calcROC(closes: number[], period: number = 5): number {
+    if (closes.length < period + 1) return 0;
+    const current = closes[closes.length - 1];
+    const past = closes[closes.length - period - 1];
+    return past > 0 ? (current - past) / past : 0;
+  }
 
   // Backtest parity: apply a post-exit cooldown to avoid immediate re-entries.
   // Backtest service uses 8 bars (2h) cooldown after any exit.
@@ -670,6 +679,9 @@ export class SimpleAgent {
     }
 
     this.stopRealtimeExitMonitor();
+    
+    // V5.22: Remove any pending signal for this agent from ranker
+    globalSignalRanker.removeSignal(this.config.symbol);
     
     // 📢 NOTIFICATION: Agent stopped
     notifyAgentStopped({
@@ -1225,6 +1237,36 @@ export class SimpleAgent {
       if (signal.valid && signal.side) {
         logger.info(`✅ [${shortSymbol}] SIGNAL ${signal.side.toUpperCase()} | $${currentPrice.toFixed(2)} | ${signal.reason}`);
         
+        // V5.22: Calculate signal quality score for ranking
+        // Extract features for scoring
+        const closes = candles.map(c => c.close);
+        const volumes = candles.map(c => c.volume);
+        
+        // Calculate ROC momentum (5 periods as in backtest)
+        const roc5 = this.calcROC(closes, 5);
+        
+        // Calculate volume ratio (current vs 19-period avg)
+        const currentVol = volumes[volumes.length - 1];
+        const avgVol19 = volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19;
+        const volumeRatio = avgVol19 > 0 ? currentVol / avgVol19 : 1;
+        
+        // Calculate quality score: ROC momentum (60%) + Volume confirmation (40%)
+        const qualityScore = globalSignalRanker.calculateScore(roc5, volumeRatio);
+        
+        logger.info(`📊 [${shortSymbol}] Signal Quality Score: ${qualityScore.toFixed(2)} (ROC=${(roc5 * 100).toFixed(2)}%, Vol=${volumeRatio.toFixed(2)}x)`);
+        
+        // V5.22: Add signal to global ranker for prioritization
+        globalSignalRanker.addSignal({
+          symbol,
+          side: signal.side,
+          score: qualityScore,
+          price: currentPrice,
+          timestamp: Date.now(),
+          roc5,
+          volumeRatio,
+          reason: signal.reason || 'momentum_signal',
+        });
+        
         // 📢 NOTIFICATION: Signal detected
         notifySignalDetected({
           symbol,
@@ -1258,7 +1300,7 @@ export class SimpleAgent {
           timestamp: new Date(),
         });
         
-        // Execute trade
+        // V5.22: Execute trade with ranking check
         this.lastRejectReason = ''; // Clear reject reason on signal
         await this.openPosition(signal.side, candles);
       } else {
@@ -1296,6 +1338,25 @@ export class SimpleAgent {
       logger.info(`⚠️ [${symbol}] Max positions reached (${openPositionCount}/${maxPositions}) - waiting for existing positions to close`);
       return;
     }
+    
+    // V5.22: Check if this signal is ranked high enough to execute
+    // Calculate how many position slots are available
+    const availableSlots = maxPositions - openPositionCount;
+    const shouldExecute = globalSignalRanker.shouldExecuteSignal(symbol, availableSlots);
+    
+    if (!shouldExecute) {
+      // This signal is not in the top N opportunities - defer it
+      const pendingSignals = globalSignalRanker.getPendingSignals();
+      const currentSignal = pendingSignals.find(s => s.symbol === symbol);
+      if (currentSignal) {
+        logger.info(`⏸️ [${symbol.replace('/USDT:USDT', '')}] Signal DEFERRED (score=${currentSignal.score.toFixed(2)}) - not in top ${availableSlots} opportunities`);
+      }
+      return;
+    }
+    
+    // Signal approved for execution - remove from pending
+    globalSignalRanker.removeSignal(symbol);
+    logger.info(`🎯 [${symbol.replace('/USDT:USDT', '')}] Signal APPROVED for execution (top ${availableSlots} opportunity)`);
     
     // Get available capital from pool
     const availableCapital = this.config.capitalPool.getAvailableCapital();
