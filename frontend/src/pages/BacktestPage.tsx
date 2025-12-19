@@ -517,11 +517,14 @@ export default function BacktestPage() {
     },
     {
       title: 'Capital',
-      dataIndex: 'capitalAfter',
-      key: 'capitalAfter',
+      key: 'capital',
       width: 100,
       align: 'right',
-      render: (v: number) => `$${v.toFixed(0)}`,
+      render: (_, r: BacktestTrade) => (
+        <Tooltip title={`Before: $${r.capitalBefore.toFixed(0)} → After: $${r.capitalAfter.toFixed(0)}`}>
+          <span style={{ color: '#94a3b8' }}>${r.capitalAfter.toFixed(0)}</span>
+        </Tooltip>
+      ),
     },
   ];
 

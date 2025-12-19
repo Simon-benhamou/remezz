@@ -535,7 +535,7 @@ function calculatePnl(
 
   const grossPnlPct = pricePct * leverage;
 
-  // Costs
+  // Costs (on notional, so multiply by leverage to get impact on margin %)
   const tradingFees = CONFIG.COSTS.TRADING_FEE_PCT * 2; // Entry + Exit
   const slippage = CONFIG.COSTS.SLIPPAGE_PCT * 2;
   const fundingPeriods = Math.floor(holdBars / CONFIG.COSTS.FUNDING_INTERVAL_BARS);
@@ -917,7 +917,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             feesUsd: pnl.feesUsd,
             exitReason,
             capitalBefore: pos.capitalBefore,
-            capitalAfter: capital,
+            capitalAfter: capital + capitalInUse, // Total capital (free + in use)
             month,
             day: exitDay,
             wasCapped: pos.wasCapped,
@@ -1109,6 +1109,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         holdBars,
       );
       capital += pnl.netPnlUsd + pos.marginUsd;
+      capitalInUse -= pos.marginUsd;
 
       trades.push({
         id: `trade_${++tradeId}`,
@@ -1129,7 +1130,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         feesUsd: pnl.feesUsd,
         exitReason: 'END',
         capitalBefore: pos.capitalBefore,
-        capitalAfter: capital,
+        capitalAfter: capital + capitalInUse, // Total capital (free + in use)
         month: new Date(lastCandle.timestamp).toISOString().slice(0, 7),
         day: new Date(lastCandle.timestamp).toISOString().slice(0, 10),
         wasCapped: pos.wasCapped,
