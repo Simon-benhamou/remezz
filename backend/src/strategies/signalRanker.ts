@@ -111,8 +111,17 @@ class SignalRanker {
   private pendingSignals: Map<string, RankedSignal> = new Map();
   
   // Timeout to batch signals (ms) - wait for all agents to report
-  private readonly BATCH_WINDOW_MS = 1000; // 1 second
+  // CRITICAL: This must allow enough time for all agents to submit their signals
+  // before any agent checks shouldExecuteSignal()
+  private readonly BATCH_WINDOW_MS = 2000; // 2 seconds - increased for multi-agent sync
   private batchTimeout: NodeJS.Timeout | null = null;
+  
+  // Track the candle timestamp that signals are for (prevents mixing signals from different candles)
+  private currentBatchCandleTs: number = 0;
+  
+  // Promise that resolves when batch window closes (allows agents to wait)
+  private batchCompletePromise: Promise<void> | null = null;
+  private batchCompleteResolve: (() => void) | null = null;
   
   /**
    * Add a signal candidate for ranking consideration
@@ -121,15 +130,42 @@ class SignalRanker {
     // Store signal (overwrites if symbol already has pending signal)
     this.pendingSignals.set(signal.symbol, signal);
     
+    // Create a new batch promise if one doesn't exist
+    if (!this.batchCompletePromise) {
+      this.batchCompletePromise = new Promise<void>((resolve) => {
+        this.batchCompleteResolve = resolve;
+      });
+    }
+    
     // Reset batch timer - wait for more signals to arrive
     if (this.batchTimeout) {
       clearTimeout(this.batchTimeout);
     }
     
-    // Auto-flush after batch window
+    // Auto-flush after batch window AND resolve the promise
     this.batchTimeout = setTimeout(() => {
       this.flushExpiredSignals();
+      // Resolve the batch promise so waiting agents can proceed
+      if (this.batchCompleteResolve) {
+        this.batchCompleteResolve();
+        this.batchCompletePromise = null;
+        this.batchCompleteResolve = null;
+      }
     }, this.BATCH_WINDOW_MS);
+  }
+  
+  /**
+   * Wait for the current batch window to close
+   * This ensures all agents have submitted their signals before ranking
+   * 
+   * CRITICAL for backtest parity: In backtest, all signals are collected
+   * synchronously before ranking. In live, agents run async, so we must
+   * wait for the batch window to ensure fair ranking.
+   */
+  async waitForBatch(): Promise<void> {
+    if (this.batchCompletePromise) {
+      await this.batchCompletePromise;
+    }
   }
   
   /**

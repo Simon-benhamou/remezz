@@ -941,11 +941,16 @@ export class SimpleAgent {
         const symbolCandles = await this.fetchCandles();
         const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
         
+        // IMPORTANT: For realtime 1m-based trailing, we ONLY check trailing stop.
+        // Regime change and momentum reversal should be evaluated on 15m candle close
+        // in checkExit() to match backtest behavior exactly.
         const exitSignal = shouldExitPosition(this.position!, closePx, candles, {
           nowMs: Date.now(),
           priceHigh,
           priceLow,
-          btcCandles: btcCandles,
+          // NOTE: Pass null for btcCandles to DISABLE regime_change detection in realtime
+          // Regime detection should only happen on 15m candle close (checkExit)
+          btcCandles: undefined,
         });
 
         const candidateStop = exitSignal.newStopLoss;
@@ -954,6 +959,8 @@ export class SimpleAgent {
           this.position!.appTrailingStop = candidateStop as number;
         }
 
+        // ONLY react to trailing exits in realtime - regime_change and momentum_reversal
+        // are handled in checkExit() on 15m candle close for backtest parity
         if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
           if (this.rtTrailingBreachCandles > 0) {
             logger.info(`✅ [${symbol}] Trailing breach CLEARED (was ${this.rtTrailingBreachCandles}/${confirmCandles}) | close=${closePx.toFixed(4)} | stop=${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'}`);
@@ -987,8 +994,9 @@ export class SimpleAgent {
       // Update watermarks in realtime so trailing can capture peaks/troughs.
       this.position = updatePositionWaterMarks(this.position!, currentPrice, currentPrice, currentPrice);
 
-      // V5.13: Fetch BTC candles for regime detection in realtime
-      const btcCandles = await this.fetchBtcCandles();
+      // Fetch symbol candles for trailing stop calculation
+      // NOTE: Do NOT pass btcCandles - regime detection should only happen on 15m close
+      // This ensures regime_change exits match backtest timing exactly
       const symbolCandles = await this.fetchCandles();
       const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
       
@@ -996,7 +1004,7 @@ export class SimpleAgent {
         nowMs: Date.now(),
         priceHigh: currentPrice,
         priceLow: currentPrice,
-        btcCandles: btcCandles,
+        // btcCandles: undefined - regime detection disabled in realtime for backtest parity
       });
 
       const candidateStop = exitSignal.newStopLoss;
@@ -1369,6 +1377,12 @@ export class SimpleAgent {
         });
         
         // V5.22: Execute trade with ranking check
+        // CRITICAL for backtest parity: Wait for batch window to close so all agents
+        // have submitted their signals before we check ranking. This ensures the same
+        // ranking behavior as backtest which collects all signals synchronously.
+        logger.info(`⏳ [${shortSymbol}] Waiting for signal ranking batch...`);
+        await globalSignalRanker.waitForBatch();
+        
         this.lastRejectReason = ''; // Clear reject reason on signal
         await this.openPosition(signal.side, candles);
       } else {
