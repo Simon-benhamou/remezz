@@ -925,7 +925,24 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           });
 
           positions[symbol] = null;
-          cooldowns[symbol] = 8; // 2h cooldown
+          
+          // V5.13: Adaptive cooldown based on exit reason
+          // - Profitable exits (TRAILING) = short cooldown (momentum continues)
+          // - Loss exits (STOP_LOSS) = longer cooldown (bad signal)
+          // - Regime/Momentum change = medium/long cooldown (wait for confirmation)
+          let cooldownBars = 8; // Default: 2h
+          
+          if (exitReason.includes('trailing') || exitReason === 'take_profit') {
+            cooldownBars = 2; // 30 minutes - profitable exit
+          } else if (exitReason.includes('stop') || exitReason.includes('sl')) {
+            cooldownBars = 10; // 2h30 - stop loss
+          } else if (exitReason.includes('momentum')) {
+            cooldownBars = 8; // 2h - momentum reversal
+          } else if (exitReason.includes('regime')) {
+            cooldownBars = 12; // 3h - regime change
+          }
+          
+          cooldowns[symbol] = cooldownBars;
         }
       }
 

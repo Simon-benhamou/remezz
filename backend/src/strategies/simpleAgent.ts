@@ -2008,8 +2008,31 @@ export class SimpleAgent {
     this.trailingNotified = false;
     this.trailingWidened = false;
 
-    // Backtest parity: prevent immediate re-entry after an exit.
-    this.entryCooldownBarsRemaining = this.ENTRY_COOLDOWN_BARS;
+    // V5.13: Adaptive cooldown based on exit reason
+    // - Profitable exits (TRAILING) = short cooldown (momentum continues)
+    // - Loss exits (STOP_LOSS) = longer cooldown (bad signal)
+    // - Regime/Momentum change = medium/long cooldown (wait for confirmation)
+    let cooldownBars = this.ENTRY_COOLDOWN_BARS; // Default: 8 bars (2h)
+    
+    if (reason.includes('trailing') || reason === 'take_profit') {
+      // Profitable exit = momentum likely continues, short cooldown
+      cooldownBars = 2; // 30 minutes
+      logger.info(`⏱️ [${symbol}] Cooldown: 2 bars (30min) - profitable exit, quick re-entry allowed`);
+    } else if (reason.includes('stop') || reason.includes('sl')) {
+      // Stop loss = bad signal, wait longer
+      cooldownBars = 10; // 2h30
+      logger.info(`⏱️ [${symbol}] Cooldown: 10 bars (2h30) - stop loss, extended wait`);
+    } else if (reason.includes('momentum')) {
+      // Momentum reversal = wait for momentum to stabilize
+      cooldownBars = 8; // 2h
+      logger.info(`⏱️ [${symbol}] Cooldown: 8 bars (2h) - momentum reversal`);
+    } else if (reason.includes('regime')) {
+      // Regime change = major shift, wait longer
+      cooldownBars = 12; // 3h
+      logger.info(`⏱️ [${symbol}] Cooldown: 12 bars (3h) - regime change, wait for confirmation`);
+    }
+    
+    this.entryCooldownBarsRemaining = cooldownBars;
     
     // Store exit info for frontend display
     this.lastExit = {
