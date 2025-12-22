@@ -722,8 +722,9 @@ export class SimpleAgent {
     // Live mode: if we start with an existing position, enable realtime WS-based exits.
     this.startRealtimeExitMonitorIfNeeded();
     
-    // Tick toutes les minutes
-    this.tickIntervalId = setInterval(() => this.tick(), 60_000);
+    // V5.13: Reduced tick interval from 60s to 15s for faster signal detection
+    // This ensures we check for new closed 15m candles within ~15-30s instead of up to 60s
+    this.tickIntervalId = setInterval(() => this.tick(), 15_000); // 15 seconds
     
     // Premier tick immédiat
     await this.tick();
@@ -1201,20 +1202,36 @@ export class SimpleAgent {
       }
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // V5.11: SYNC WITH BACKTEST - Use only CLOSED candles
-      // WebSocket returns the CURRENT candle (in-progress) as the last element
-      // We must EXCLUDE it and only use closed candles for signal detection
-      // This ensures live trading matches backtest behavior exactly
+      // V5.13: FIX - Wait for candle to be CLOSED before checking signal
+      // The issue was that slice(0, -1) would exclude the in-progress candle,
+      // but if the WebSocket hasn't received the new candle yet, we'd check
+      // the same old candle again. Now we check the timestamp to ensure we're
+      // looking at a NEW closed candle (timestamp must be >= lastProcessedCandleTs + 15min)
       // ═══════════════════════════════════════════════════════════════════════════
       
-      // Remove the last candle (in-progress) - keep only closed candles
-      const candles = allCandles.slice(0, -1);
-      
-      // Store last price for frontend (use in-progress candle for display)
+      // Store last price for frontend (use latest candle for display)
       const currentPrice = allCandles[allCandles.length - 1].close;
       this.lastPrice = currentPrice;
       
-      // The last CLOSED candle timestamp (for sync check)
+      // Find the last CLOSED candle (15min old or more)
+      const now = Date.now();
+      const CANDLE_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+      
+      // The last candle is closed if its timestamp is at least 15min old
+      let lastClosedIdx = allCandles.length - 1;
+      const lastCandleAge = now - allCandles[lastClosedIdx].timestamp;
+      
+      if (lastCandleAge < CANDLE_INTERVAL_MS) {
+        // Last candle is still in progress, use the previous one
+        lastClosedIdx = allCandles.length - 2;
+      }
+      
+      if (lastClosedIdx < 0) {
+        logger.warn(`⚠️ [${shortSymbol}] No closed candles available yet`);
+        return;
+      }
+      
+      const candles = allCandles.slice(0, lastClosedIdx + 1);
       const lastClosedCandleTs = candles[candles.length - 1].timestamp;
       
       // Check if this is the same closed candle we already processed
@@ -1226,6 +1243,16 @@ export class SimpleAgent {
       
       // New closed candle! Mark it as processed
       const isFirstCheck = this.lastProcessedCandleTs === 0;
+      const candleDate = new Date(lastClosedCandleTs).toISOString().slice(11, 19);
+      
+      if (!isFirstCheck) {
+        const closedCandle = candles[candles.length - 1];
+        const candleColor = closedCandle.close > closedCandle.open ? '🟢' : '🔴';
+        const candleChange = ((closedCandle.close - closedCandle.open) / closedCandle.open * 100).toFixed(2);
+        const changeNum = parseFloat(candleChange);
+        logger.info(`🕯️ [${shortSymbol}] New 15m candle CLOSED @ ${candleDate} ${candleColor} | $${closedCandle.close.toFixed(2)} (${changeNum > 0 ? '+' : ''}${candleChange}%) | Checking signal...`);
+      }
+      
       this.lastProcessedCandleTs = lastClosedCandleTs;
 
       // Backtest parity: decrement cooldown once per CLOSED candle.
@@ -1239,17 +1266,18 @@ export class SimpleAgent {
         return;
       }
       
-      // Log the closed candle info
-      const closedCandle = candles[candles.length - 1];
-      if (!isFirstCheck) {
-        const candleColor = closedCandle.close > closedCandle.open ? '🟢' : '🔴';
-        const candleChange = ((closedCandle.close - closedCandle.open) / closedCandle.open * 100).toFixed(2);
-        logger.info(`🕯️ [${shortSymbol}] New 15m candle CLOSED ${candleColor} | $${closedCandle.close.toFixed(2)} (${candleChange}%) | Checking signal...`);
-      }
-      
       // Fetch BTC candles pour corrélation (also use only closed candles)
       const allBtcCandles = await this.fetchBtcCandles();
-      const btcCandles = allBtcCandles.length > 1 ? allBtcCandles.slice(0, -1) : allBtcCandles;
+      
+      // V5.13: Same logic for BTC candles - use timestamp age
+      let btcLastClosedIdx = allBtcCandles.length - 1;
+      const btcLastCandleAge = now - allBtcCandles[btcLastClosedIdx].timestamp;
+      
+      if (btcLastCandleAge < CANDLE_INTERVAL_MS) {
+        btcLastClosedIdx = allBtcCandles.length - 2;
+      }
+      
+      const btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
       
       // Check signal (returns side: 'long' or 'short')
       const signal = checkMomentumSignal(symbol, candles, btcCandles);
@@ -1781,8 +1809,22 @@ export class SimpleAgent {
       // Fetch BTC candles for regime detection (V5.13)
       const btcCandles = await this.fetchBtcCandles();
 
-      // Backtest parity: ignore in-progress candle for exit decisions.
-      const candles = allCandles.length > 1 ? allCandles.slice(0, -1) : allCandles;
+      // V5.13: Same fix as checkEntry - use timestamp age instead of slice(0,-1)
+      const now = Date.now();
+      const CANDLE_INTERVAL_MS = 15 * 60 * 1000;
+      
+      let lastClosedIdx = allCandles.length - 1;
+      const lastCandleAge = now - allCandles[lastClosedIdx].timestamp;
+      
+      if (lastCandleAge < CANDLE_INTERVAL_MS) {
+        lastClosedIdx = allCandles.length - 2;
+      }
+      
+      if (lastClosedIdx < 0) {
+        return;
+      }
+      
+      const candles = allCandles.slice(0, lastClosedIdx + 1);
       const latestClosedCandle = candles[candles.length - 1];
 
       // Only process exit once per newly-closed candle.
