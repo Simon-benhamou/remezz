@@ -1243,14 +1243,19 @@ export class SimpleAgent {
       
       // New closed candle! Mark it as processed
       const isFirstCheck = this.lastProcessedCandleTs === 0;
-      const candleDate = new Date(lastClosedCandleTs).toISOString().slice(11, 19);
+      const candleStartTime = new Date(lastClosedCandleTs).toISOString().slice(11, 19);
+      const candleEndTime = new Date(lastClosedCandleTs + CANDLE_INTERVAL_MS).toISOString().slice(11, 19);
+      // Detection delay = time since candle closed (candleEnd = candleStart + 15min)
+      const detectionDelayMs = now - (lastClosedCandleTs + CANDLE_INTERVAL_MS);
+      const detectionDelaySec = Math.round(detectionDelayMs / 1000);
       
       if (!isFirstCheck) {
         const closedCandle = candles[candles.length - 1];
         const candleColor = closedCandle.close > closedCandle.open ? '🟢' : '🔴';
         const candleChange = ((closedCandle.close - closedCandle.open) / closedCandle.open * 100).toFixed(2);
         const changeNum = parseFloat(candleChange);
-        logger.info(`🕯️ [${shortSymbol}] New 15m candle CLOSED @ ${candleDate} ${candleColor} | $${closedCandle.close.toFixed(2)} (${changeNum > 0 ? '+' : ''}${candleChange}%) | Checking signal...`);
+        // Show candle period (start-end UTC) and detection delay for clarity
+        logger.info(`🕯️ [${shortSymbol}] New 15m candle CLOSED [${candleStartTime}-${candleEndTime} UTC] ${candleColor} | $${closedCandle.close.toFixed(2)} (${changeNum > 0 ? '+' : ''}${candleChange}%) | Detected +${detectionDelaySec}s`);
       }
       
       this.lastProcessedCandleTs = lastClosedCandleTs;
