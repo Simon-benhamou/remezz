@@ -408,6 +408,14 @@ class BinanceWebSocketManager {
   private serverTimeOffsetSamples: number[] = [];
   private serverTimeSyncTimer: NodeJS.Timeout | null = null;
   private serverTimeSyncInFlight: Promise<void> | null = null;
+  
+  // Health monitor: periodically check health and trigger reconnect if unhealthy too long
+  private healthMonitorTimer: NodeJS.Timeout | null = null;
+  private unhealthyStartTs = 0;
+  private readonly healthMonitorIntervalMs = 5_000;
+  private readonly unhealthyReconnectThresholdMs = 60_000; // Reconnect if unhealthy for 60s
+  private consecutiveUnhealthyChecks = 0;
+  private readonly maxConsecutiveUnhealthyBeforeReconnect = 12; // ~60s at 5s intervals
   private serverTimeLastSyncMs = 0;
   private lastServerTimeLogMs = 0;
   private readonly serverTimeSyncIntervalMs: number;
@@ -486,6 +494,98 @@ class BinanceWebSocketManager {
 
     if (!this.isTestMode) {
       this.ensureExchangeInfoFresh({ force: true });
+    }
+    
+    // Start health monitor to auto-reconnect if unhealthy for too long
+    if (!this.isTestMode) {
+      this.startHealthMonitor();
+    }
+  }
+
+  /**
+   * Health monitoring: checks WebSocket health periodically and triggers reconnect
+   * if unhealthy for too long. This prevents the system from being stuck in an
+   * unhealthy state without attempting recovery.
+   */
+  private startHealthMonitor(): void {
+    if (this.healthMonitorTimer) {
+      return;
+    }
+
+    this.healthMonitorTimer = setInterval(() => {
+      try {
+        this.checkHealthAndReconnect();
+      } catch (error) {
+        console.error('❌ Health monitor check failed:', error);
+      }
+    }, this.healthMonitorIntervalMs);
+    this.healthMonitorTimer.unref?.();
+  }
+
+  private stopHealthMonitor(): void {
+    if (this.healthMonitorTimer) {
+      clearInterval(this.healthMonitorTimer);
+      this.healthMonitorTimer = null;
+    }
+  }
+
+  private checkHealthAndReconnect(): void {
+    if (this.shuttingDown) {
+      return;
+    }
+
+    // Not connected at all - let normal reconnect logic handle it
+    if (!this.isConnected && !this.isConnecting) {
+      this.consecutiveUnhealthyChecks = 0;
+      this.unhealthyStartTs = 0;
+      return;
+    }
+
+    const healthy = this.isHealthy();
+    const receiving = this.isConnectedAndReceiving();
+    const now = Date.now();
+
+    if (healthy) {
+      // Reset counters when healthy
+      this.consecutiveUnhealthyChecks = 0;
+      this.unhealthyStartTs = 0;
+      return;
+    }
+
+    // We're unhealthy but still connected
+    if (receiving) {
+      // Receiving data but marked unhealthy (likely timestamp drift)
+      // Be more tolerant - only count if truly stale
+      const cacheAge = now - this.lastUpdate;
+      if (cacheAge < 15_000) {
+        // Data is reasonably fresh, don't count as truly unhealthy
+        this.consecutiveUnhealthyChecks = Math.max(0, this.consecutiveUnhealthyChecks - 1);
+        return;
+      }
+    }
+
+    // Track unhealthy duration
+    if (this.unhealthyStartTs === 0) {
+      this.unhealthyStartTs = now;
+    }
+    this.consecutiveUnhealthyChecks++;
+
+    const unhealthyDuration = now - this.unhealthyStartTs;
+
+    // Log status periodically (every 6th check = ~30s)
+    if (this.consecutiveUnhealthyChecks % 6 === 1) {
+      console.warn(`⚠️ WebSocket unhealthy for ${Math.round(unhealthyDuration / 1000)}s (checks: ${this.consecutiveUnhealthyChecks}/${this.maxConsecutiveUnhealthyBeforeReconnect})`);
+    }
+
+    // Force reconnect if unhealthy for too long
+    if (
+      this.consecutiveUnhealthyChecks >= this.maxConsecutiveUnhealthyBeforeReconnect ||
+      unhealthyDuration >= this.unhealthyReconnectThresholdMs
+    ) {
+      console.warn(`🔄 WebSocket unhealthy for ${Math.round(unhealthyDuration / 1000)}s - triggering automatic reconnect`);
+      this.consecutiveUnhealthyChecks = 0;
+      this.unhealthyStartTs = 0;
+      this.forceReconnect('health_monitor_timeout');
     }
   }
 
@@ -1877,7 +1977,9 @@ class BinanceWebSocketManager {
   }
 
   /**
-   * Check si le WebSocket est connecté et le cache est frais
+   * Check si le WebSocket est connecté et le cache est frais.
+   * This is a "strict" health check - returns true only if we have recent accepted frames.
+   * For a more lenient check (connected + has data), use isConnectedAndReceiving().
    */
   isHealthy(): boolean {
     if (!this.isConnected) return false;
@@ -1885,14 +1987,53 @@ class BinanceWebSocketManager {
 
     const now = Date.now();
     const cacheAge = now - this.lastUpdate;
-    if (cacheAge >= 10_000) return false;
+    // Increased from 10s to 20s to be more tolerant of temporary delays
+    if (cacheAge >= 20_000) return false;
 
     if (this.lastAcceptedTs <= 0) return false;
 
     const sinceLastAccept = now - this.lastAcceptedTs;
-    if (sinceLastAccept > WS_HEALTH_GRACE_MS) return false;
+    // Increased grace period from 15s to 30s for more stability
+    // This allows for temporary timestamp drift without marking as unhealthy
+    if (sinceLastAccept > 30_000) return false;
 
     return true;
+  }
+
+  /**
+   * Lenient health check: returns true if connected and receiving data (even if stale).
+   * Use this for realtime exit monitoring to avoid false positives during timestamp drift.
+   */
+  isConnectedAndReceiving(): boolean {
+    if (!this.isConnected) return false;
+    if (this.tickersCache.size === 0) return false;
+
+    const now = Date.now();
+    const cacheAge = now - this.lastUpdate;
+    // Returns true if we've received ANY data in the last 30s (even if marked stale)
+    return cacheAge < 30_000;
+  }
+
+  /**
+   * Get detailed health status for debugging
+   */
+  getHealthStatus(): { 
+    isConnected: boolean; 
+    tickerCount: number; 
+    lastUpdateAge: number; 
+    lastAcceptAge: number;
+    isHealthy: boolean;
+    isReceiving: boolean;
+  } {
+    const now = Date.now();
+    return {
+      isConnected: this.isConnected,
+      tickerCount: this.tickersCache.size,
+      lastUpdateAge: now - this.lastUpdate,
+      lastAcceptAge: this.lastAcceptedTs > 0 ? now - this.lastAcceptedTs : -1,
+      isHealthy: this.isHealthy(),
+      isReceiving: this.isConnectedAndReceiving(),
+    };
   }
 
   /**
@@ -1914,6 +2055,9 @@ class BinanceWebSocketManager {
       clearInterval(this.klineReconcileTimer);
       this.klineReconcileTimer = null;
     }
+    
+    // Stop health monitor
+    this.stopHealthMonitor();
 
     if (this.ws) {
       this.ws.close();
@@ -1924,6 +2068,8 @@ class BinanceWebSocketManager {
     this.isConnecting = false;
     this.lastHealthy = false;
     this.lastAcceptedTs = 0;
+    this.consecutiveUnhealthyChecks = 0;
+    this.unhealthyStartTs = 0;
     this.lastHealthReason = 'manual_close';
     this.activeStreams.clear();
     this.desiredKlineStreams.clear();

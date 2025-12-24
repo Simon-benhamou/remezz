@@ -551,6 +551,10 @@ export class SimpleAgent {
   private lastAppTrailingStop: number | null = null;
   private lastRtTrailingKlineTs: number | null = null;
   private rtTrailingBreachCandles = 0;
+  
+  // Throttle WebSocket unhealthy warnings (max once per 30s per agent)
+  private lastWsUnhealthyWarnTs = 0;
+  private static readonly WS_UNHEALTHY_WARN_THROTTLE_MS = 30_000;
 
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
@@ -827,13 +831,32 @@ export class SimpleAgent {
     try {
       const symbol = this.config.symbol;
 
-      // WebSocket ticker is 0 weight; if WS is unhealthy or cache-missing we do nothing here.
-      // (We don't want REST fallbacks in a tight loop, and we avoid noisy warnings.)
+      // WebSocket ticker is 0 weight; if WS is not receiving data we do nothing here.
+      // We use isConnectedAndReceiving() which is more lenient than isHealthy() -
+      // it allows realtime exit monitoring even during temporary timestamp drift.
       const ws = getBinanceWebSocket();
-      if (!ws.isHealthy()) {
-        logger.warn(`⚠️ [${symbol}] WebSocket UNHEALTHY - realtime exit monitoring paused`);
+      const wsConnected = ws.isConnectedAndReceiving();
+      const wsHealthy = ws.isHealthy();
+      
+      if (!wsConnected) {
+        // Throttled warning: max once per 30s per agent to avoid log spam
+        const now = Date.now();
+        if (now - this.lastWsUnhealthyWarnTs >= SimpleAgent.WS_UNHEALTHY_WARN_THROTTLE_MS) {
+          this.lastWsUnhealthyWarnTs = now;
+          const status = ws.getHealthStatus();
+          logger.warn(`⚠️ [${symbol}] WebSocket NOT CONNECTED - realtime exit monitoring paused | connected=${status.isConnected}, tickers=${status.tickerCount}, lastUpdate=${status.lastUpdateAge}ms ago`);
+        }
         return;
       }
+      
+      // If connected but not strictly "healthy", just log debug (no warning spam)
+      if (!wsHealthy) {
+        logger.debug(`[${symbol}] WebSocket connected but stale - continuing with cached data`);
+      }
+      
+      // Clear throttle timestamp when connected
+      this.lastWsUnhealthyWarnTs = 0;
+      
       const ticker = ws.getTicker(symbol);
       if (!ticker) {
         logger.debug(`⚠️ [${symbol}] No ticker data from WebSocket`);
