@@ -448,9 +448,15 @@ function checkSignal(candles: Candle[], isBull: boolean): Signal {
 // DATA FETCHING
 // ============================================================================
 
-const exchange = new ccxt.binanceusdm({ enableRateLimit: true });
+// V5.24: Remove global exchange instance to prevent rate limiting issues
+// Exchange will be created per backtest run and markets pre-loaded once
 
-async function fetchCandlesFromCcxt(symbol: string, since: number, until: number): Promise<Candle[]> {
+async function fetchCandlesFromCcxt(
+  exchange: any,
+  symbol: string,
+  since: number,
+  until: number
+): Promise<Candle[]> {
   const out: Candle[] = [];
   let cursor = since;
 
@@ -478,7 +484,8 @@ async function fetchCandlesFromCcxt(symbol: string, since: number, until: number
 
       if (!progressed) break;
       cursor = (ohlcv[ohlcv.length - 1][0] as number) + 1;
-      await new Promise((r) => setTimeout(r, 100));
+      // V5.24: Increase delay to prevent rate limiting (was 100ms)
+      await new Promise((r) => setTimeout(r, 250));
     } catch (e) {
       console.error(`Error fetching ${symbol}:`, e);
       break;
@@ -488,14 +495,19 @@ async function fetchCandlesFromCcxt(symbol: string, since: number, until: number
   return out;
 }
 
-async function fetchCandles(symbol: string, startDate: Date, endDate: Date): Promise<Candle[]> {
+async function fetchCandles(
+  exchange: any,
+  symbol: string,
+  startDate: Date,
+  endDate: Date
+): Promise<Candle[]> {
   const until = endDate.getTime();
   const extraBarsMs = 200 * 15 * 60 * 1000; // 200 bars × 15min
   const since = startDate.getTime() - extraBarsMs;
 
   const local = await loadLocalJsonCandles(symbol, '15m');
   if (!local) {
-    return await fetchCandlesFromCcxt(symbol, since, until);
+    return await fetchCandlesFromCcxt(exchange, symbol, since, until);
   }
 
   const needBefore = since < local.startTs;
@@ -505,11 +517,11 @@ async function fetchCandles(symbol: string, startDate: Date, endDate: Date): Pro
   const parts: BacktestCandle[][] = [localSlice];
 
   if (needBefore) {
-    const beforeCandles = await fetchCandlesFromCcxt(symbol, since, local.startTs - 1);
+    const beforeCandles = await fetchCandlesFromCcxt(exchange, symbol, since, local.startTs - 1);
     parts.unshift(beforeCandles);
   }
   if (needAfter) {
-    const afterCandles = await fetchCandlesFromCcxt(symbol, local.endTs + 1, until);
+    const afterCandles = await fetchCandlesFromCcxt(exchange, symbol, local.endTs + 1, until);
     parts.push(afterCandles);
   }
 
@@ -559,15 +571,31 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
   console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
 
+  // V5.24: Create exchange instance once per backtest and pre-load markets
+  // This prevents CCXT from calling loadMarkets() on every fetchOHLCV call
+  const exchange = new ccxt.binanceusdm({ 
+    enableRateLimit: true,
+    rateLimit: 500, // 500ms between requests (conservative)
+  });
+  
+  console.log(`[Backtest] Loading markets...`);
+  try {
+    await exchange.loadMarkets();
+    console.log(`[Backtest] Markets loaded successfully (${Object.keys(exchange.markets).length} markets)`);
+  } catch (error) {
+    console.error('[Backtest] Failed to load markets:', error);
+    throw new Error('Failed to initialize exchange: ' + (error instanceof Error ? error.message : String(error)));
+  }
+
   // Fetch BTC for regime detection
-  const btcCandles = await fetchCandles('BTC/USDT:USDT', startDate, endDate);
+  const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', startDate, endDate);
   const btcCloses = btcCandles.map((c) => c.close);
   console.log(`[Backtest] BTC: ${btcCandles.length} candles`);
 
   // Fetch all symbol data
   const allData: Record<string, Candle[]> = {};
   for (const symbol of symbols) {
-    allData[symbol] = await fetchCandles(symbol, startDate, endDate);
+    allData[symbol] = await fetchCandles(exchange, symbol, startDate, endDate);
     console.log(`[Backtest] ${symbol}: ${allData[symbol].length} candles`);
   }
 
