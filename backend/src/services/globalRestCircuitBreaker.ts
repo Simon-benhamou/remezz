@@ -31,11 +31,12 @@ class GlobalRestCircuitBreaker {
   private lastFailure = 0;
   private isOpen = false;
   private openedAt: number | null = null;
+  private closesAt: number | null = null;      // NEW: Track when circuit should close (for IP bans)
   private recentFailures: RestFailureRecord[] = [];
   
   // Configuration
   private readonly FAILURE_THRESHOLD = 5;        // Open circuit after N failures
-  private readonly COOLDOWN_MS = 60_000;         // 1 minute cooldown
+  private readonly DEFAULT_COOLDOWN_MS = 60_000; // 1 minute default cooldown
   private readonly FAILURE_WINDOW_MS = 30_000;   // Track failures in 30s window
   private readonly MAX_FAILURE_HISTORY = 20;     // Keep last 20 failures
   
@@ -43,7 +44,7 @@ class GlobalRestCircuitBreaker {
     // Log initialization
     console.log('[GlobalRestCircuitBreaker] Initialized with thresholds:', {
       failureThreshold: this.FAILURE_THRESHOLD,
-      cooldownMs: this.COOLDOWN_MS,
+      cooldownMs: this.DEFAULT_COOLDOWN_MS,
       failureWindowMs: this.FAILURE_WINDOW_MS,
     });
   }
@@ -57,9 +58,10 @@ class GlobalRestCircuitBreaker {
     
     // If circuit is open, check if we can close it
     if (this.isOpen) {
-      const timeSinceOpen = now - (this.openedAt ?? 0);
+      // Use explicit closesAt if set (from IP ban), otherwise use default cooldown
+      const closeTime = this.closesAt ?? (this.openedAt! + this.DEFAULT_COOLDOWN_MS);
       
-      if (timeSinceOpen >= this.COOLDOWN_MS) {
+      if (now >= closeTime) {
         // Cooldown period elapsed - CLOSE circuit
         this.closeCircuit();
         return true;
@@ -119,19 +121,23 @@ class GlobalRestCircuitBreaker {
   
   /**
    * Open the circuit - BLOCK all REST calls
+   * @param untilTimestamp Optional: specific timestamp when circuit should close (for IP bans)
    */
-  private openCircuit(): void {
+  private openCircuit(untilTimestamp?: number): void {
     this.isOpen = true;
     this.openedAt = Date.now();
+    this.closesAt = untilTimestamp ?? (this.openedAt + this.DEFAULT_COOLDOWN_MS);
     
     const agentIds = [...new Set(this.recentFailures.map(f => f.agentId))];
     const symbols = [...new Set(this.recentFailures.map(f => f.symbol))];
+    const cooldownSeconds = Math.round((this.closesAt - this.openedAt) / 1000);
     
     console.error('🚫 [GlobalRestCircuitBreaker] CIRCUIT OPENED - All REST calls blocked', {
       failureCount: this.failureCount,
       affectedAgents: agentIds.length,
       affectedSymbols: symbols,
-      cooldownSeconds: this.COOLDOWN_MS / 1000,
+      cooldownSeconds,
+      closesAt: new Date(this.closesAt).toISOString(),
       recentErrors: this.recentFailures.slice(-5).map(f => ({
         agent: f.agentId,
         symbol: f.symbol,
@@ -152,6 +158,7 @@ class GlobalRestCircuitBreaker {
     
     this.isOpen = false;
     this.openedAt = null;
+    this.closesAt = null;
     this.failureCount = 0;
     this.recentFailures = [];
   }
@@ -165,27 +172,34 @@ class GlobalRestCircuitBreaker {
   }
   
   /**
-   * Force open the circuit (emergency mode)
+   * Force open the circuit (emergency mode, e.g., IP ban)
+   * @param reason Description of why circuit is opened
+   * @param untilTimestamp Optional: specific timestamp when circuit should close
    */
-  forceOpen(reason: string): void {
-    console.error('[GlobalRestCircuitBreaker] Force opening circuit (emergency mode):', reason);
+  forceOpen(reason: string, untilTimestamp?: number): void {
+    const now = Date.now();
+    // Default to 5 minutes if no timestamp provided
+    const closeTime = untilTimestamp ?? (now + 5 * 60 * 1000);
+    const durationSeconds = Math.round((closeTime - now) / 1000);
+    
+    console.error(`[GlobalRestCircuitBreaker] Force opening circuit (emergency mode): ${reason}`);
+    console.error(`[GlobalRestCircuitBreaker] Circuit will close at ${new Date(closeTime).toISOString()} (in ${durationSeconds}s)`);
+    
     this.isOpen = true;
-    this.openedAt = Date.now();
+    this.openedAt = now;
+    this.closesAt = closeTime;
   }
   
   /**
    * Get current circuit state (for monitoring)
    */
   getState(): CircuitBreakerState {
-    const now = Date.now();
     return {
       isOpen: this.isOpen,
       failureCount: this.failureCount,
       lastFailure: this.lastFailure || null,
       openedAt: this.openedAt,
-      closesAt: this.isOpen && this.openedAt 
-        ? this.openedAt + this.COOLDOWN_MS 
-        : null,
+      closesAt: this.closesAt,
       recentFailures: this.recentFailures.slice(-10), // Last 10
     };
   }
@@ -201,10 +215,9 @@ class GlobalRestCircuitBreaker {
    * Get time remaining until circuit closes (if open)
    */
   getRemainingCooldown(): number {
-    if (!this.isOpen || !this.openedAt) return 0;
+    if (!this.isOpen || !this.closesAt) return 0;
     
-    const elapsed = Date.now() - this.openedAt;
-    const remaining = Math.max(0, this.COOLDOWN_MS - elapsed);
+    const remaining = Math.max(0, this.closesAt - Date.now());
     return remaining;
   }
 }

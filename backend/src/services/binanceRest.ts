@@ -114,15 +114,15 @@ export async function fetchBinanceOhlcv(
           // Add cooldown period after ban expires
           ipBannedUntil = banTimestamp + IP_BAN_COOLDOWN_MS;
           console.error(`🚫 Binance IP ban detected until ${new Date(banTimestamp).toISOString()} (+ ${IP_BAN_COOLDOWN_MS/1000/60}min cooldown)`);
-          // Record IP ban in global circuit breaker (force open)
-          globalRestCircuitBreaker.forceOpen(`ip_ban_until_${new Date(ipBannedUntil).toISOString()}`);
+          // Record IP ban in global circuit breaker (force open until ban + cooldown expires)
+          globalRestCircuitBreaker.forceOpen(`ip_ban_until_${new Date(banTimestamp).toISOString()}`, ipBannedUntil);
         }
       } catch (parseError) {
         // Fallback: ban for 10 minutes if we can't parse the timestamp
         ipBannedUntil = now + 10 * 60 * 1000;
         console.error(`🚫 Binance IP ban detected (timestamp parse failed), waiting 10 minutes`);
         // Force open circuit breaker for fallback ban
-        globalRestCircuitBreaker.forceOpen('ip_ban_parse_failed_10min');
+        globalRestCircuitBreaker.forceOpen('ip_ban_parse_failed_10min', ipBannedUntil);
       }
     }
     

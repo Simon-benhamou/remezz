@@ -43,6 +43,7 @@ import {
   toBinanceSymbolId,
   isPositionCacheSeeded,
 } from '../services/binanceWebSocket.js';
+import { globalRestCircuitBreaker } from '../services/globalRestCircuitBreaker.js';
 import { 
   notifyTradeEntry, 
   notifyTradeExit, 
@@ -1650,7 +1651,17 @@ export class SimpleAgent {
     } else {
       // Live trade
       try {
-        // 🔧 FIX: Ensure markets are loaded before any exchange operation
+        // � Check circuit breaker FIRST - don't attempt REST calls if IP is banned
+        if (!globalRestCircuitBreaker.canMakeRequest()) {
+          const state = globalRestCircuitBreaker.getState();
+          const remainingMs = state.closesAt ? state.closesAt - Date.now() : 0;
+          const remainingSec = Math.round(remainingMs / 1000);
+          logger.warn(`🚫 [${symbol}] REST circuit breaker is OPEN - cannot open position (${remainingSec}s remaining)`);
+          this.config.capitalPool.cancelReservation(this.config.sessionId);
+          return;
+        }
+        
+        // �🔧 FIX: Ensure markets are loaded before any exchange operation
         // This is critical for setLeverage which needs market info to send correct parameters to Binance
         const exchangeMarkets = (this.config.exchange as any).markets;
         if (!exchangeMarkets || Object.keys(exchangeMarkets).length === 0) {
@@ -2102,6 +2113,16 @@ export class SimpleAgent {
     } else {
       // Live close
       try {
+        // 🚫 Check circuit breaker FIRST - don't attempt REST calls if IP is banned
+        if (!globalRestCircuitBreaker.canMakeRequest()) {
+          const state = globalRestCircuitBreaker.getState();
+          const remainingMs = state.closesAt ? state.closesAt - Date.now() : 0;
+          const remainingSec = Math.round(remainingMs / 1000);
+          logger.error(`🚫 [${symbol}] REST circuit breaker is OPEN - cannot close position (${remainingSec}s remaining) ⚠️ POSITION REMAINS OPEN!`);
+          // Don't clear position or release capital - the position is still open on exchange!
+          return;
+        }
+        
         // FIRST: Cancel any open SL/TP orders to avoid orphaned orders
         await this.cancelStopLossOnExchange();
         
