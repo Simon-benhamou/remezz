@@ -3222,6 +3222,40 @@ process.on('SIGINT', shutdown);
   }
 })();
 
+// ============================================
+// V5.24: INITIALIZE BINANCE WEBSOCKET BEFORE SERVER STARTS
+// ============================================
+// This ensures WebSocket is connected and ready before agents try to use it
+// Prevents "WebSocket not ready" fallback to REST API on startup
+(async () => {
+  try {
+    logger.info('🌐 Initializing Binance WebSocket...');
+    const ws = getBinanceWebSocket();
+    
+    // Wait for WebSocket to connect (with timeout)
+    const maxWait = 10000; // 10 seconds max
+    const startTime = Date.now();
+    
+    while (!ws.isConnected() && Date.now() - startTime < maxWait) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    if (ws.isConnected()) {
+      logger.info('✅ Binance WebSocket connected and ready');
+      
+      // Give it a moment to subscribe to initial streams
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      logger.info('✅ WebSocket initialization complete');
+    } else {
+      logger.warn('⚠️ WebSocket connection timeout - agents will use REST fallback initially');
+    }
+  } catch (error) {
+    logger.warn('⚠️ Failed to initialize WebSocket:', error);
+    logger.info('ℹ️ Agents will use REST fallback on startup');
+  }
+})();
+
 server.listen(cfg.PORT, () => {
   logger.info(`✅ Server listening on :${cfg.PORT}`);
   logger.info(`📈 Strategy: Momentum Simple (Vol 5x + BTC MA50 + 2h Mom)`);

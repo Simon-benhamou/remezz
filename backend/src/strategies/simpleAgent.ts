@@ -2307,7 +2307,7 @@ export class SimpleAgent {
         return candles;
       }
     } catch (error) {
-      // WebSocket not ready, fall through to REST
+      // WebSocket not ready, fall through to cache/wait
     }
     
     // 3. Check local REST cache
@@ -2315,9 +2315,10 @@ export class SimpleAgent {
       return this.candleCache.candles;
     }
     
-    // 4. REST API fallback
+    // 4. REST API fallback (only when WebSocket doesn't have enough data)
+    // V5.24: Should rarely happen now that WebSocket is initialized before server starts
     try {
-      logger.info(`🌐 [${symbol}] Fetching via REST API (WebSocket not ready)`);
+      logger.info(`🌐 [${symbol}] Fetching via REST API (WebSocket cache insufficient)`);
       const ohlcv = await this.config.exchange.fetchOHLCV(symbol, '15m', undefined, 100);
       
       const candles: Candle[] = ohlcv.map(c => ({
@@ -2378,7 +2379,7 @@ export class SimpleAgent {
         return candles;
       }
     } catch (error) {
-      logger.warn('⚠️ [BTC] WebSocket cache miss, checking REST cache');
+      // WebSocket cache miss - continue to cached/wait
     }
     
     // 3. Check global REST cache (shared between all agents)
@@ -2396,9 +2397,10 @@ export class SimpleAgent {
     }
     
     // 5. REST API fallback - set up promise so other agents wait
+    // V5.24: Should rarely happen now that WebSocket is initialized before server starts
     const fetchPromise = (async () => {
       try {
-        logger.info('🌐 [BTC] Fetching via REST API (WebSocket not ready)');
+        logger.info('🌐 [BTC] Fetching via REST API (WebSocket cache insufficient)');
         // V5: Need 220 candles for SMA200 regime filter with some buffer
         const ohlcv = await this.config.exchange.fetchOHLCV(btcSymbolCcxt, '15m', undefined, 220);
         
