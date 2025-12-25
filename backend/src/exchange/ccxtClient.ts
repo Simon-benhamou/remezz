@@ -32,6 +32,9 @@ function mapExchangeId(exchangeId: string, type: 'spot'|'swap' = 'spot'): string
   return exchangeIdMap[exchangeId] || exchangeId;
 }
 
+// Track if markets have been loaded globally (to ensure we load ONCE on startup)
+let marketsLoadedOnce = false;
+
 async function getPublicExchangeFor(exchangeId: string, type: 'spot'|'swap') {
   const ccxtExchangeId = mapExchangeId(exchangeId, type);
   const key = `${ccxtExchangeId}:${type}`;
@@ -42,24 +45,44 @@ async function getPublicExchangeFor(exchangeId: string, type: 'spot'|'swap') {
   const promise = (async () => {
     const Klass: any = (ccxt as any)[ccxtExchangeId];
     if (!Klass) throw new Error('Unknown exchange ' + ccxtExchangeId);
-    const inst = new Klass({ enableRateLimit: true });
+    const inst = new Klass({ 
+      enableRateLimit: true,
+      rateLimit: 500 // Slow down to avoid rate limits
+    });
     // @ts-ignore
     inst.options = inst.options || {};
     // @ts-ignore
     inst.options.defaultType = type;
     
-    // 🚨 CRITICAL: NEVER loadMarkets for Binance - use WebSocket only
-    if (ccxtExchangeId !== 'binance') {
-      await inst.loadMarkets();
+    // For Binance: load markets ONCE at startup, then reuse forever
+    // This is required for CCXT to resolve symbols correctly
+    const isBinance = ccxtExchangeId === 'binance' || ccxtExchangeId === 'binanceusdm' || ccxtExchangeId === 'binancecoinm';
+    if (isBinance && marketsLoadedOnce) {
+      console.log(`✅ Reusing already-loaded markets for ${ccxtExchangeId} (no API call)`);
+      // Markets should already be loaded from first call, copy from existing
+      const existingSwap = publicExchanges.get(`binanceusdm:swap`);
+      const existingSpot = publicExchanges.get(`binance:spot`);
+      const existing = existingSwap || existingSpot;
+      if (existing && Object.keys(existing.markets || {}).length > 0) {
+        inst.markets = existing.markets;
+        inst.markets_by_id = existing.markets_by_id;
+        inst.symbols = existing.symbols;
+        inst.currencies = existing.currencies;
+      } else {
+        // Fallback: load anyway but this shouldn't happen
+        console.log(`📡 Loading markets for ${ccxtExchangeId}:${type} (ONCE only)`);
+        await inst.loadMarkets();
+      }
     } else {
-      console.log('⚠️ Skipping loadMarkets for Binance - using WebSocket streams only');
-      // Initialize empty markets structure to avoid errors
-      inst.markets = {};
-      inst.markets_by_id = {};
-      inst.symbols = [];
-      inst.currencies = {};
+      // Load markets ONCE - required for CCXT to work
+      console.log(`📡 Loading markets for ${ccxtExchangeId}:${type} (ONCE only)`);
+      await inst.loadMarkets();
+      if (isBinance) {
+        marketsLoadedOnce = true;
+      }
     }
     
+    console.log(`✅ Markets loaded for ${ccxtExchangeId}:${type}, ${Object.keys(inst.markets || {}).length} symbols`);
     publicExchanges.set(key, inst);
     return inst;
   })();
@@ -168,20 +191,16 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
         (userExchange as any).markets = pub.markets;
         (userExchange as any).markets_by_id = pub.markets_by_id;
         (userExchange as any).symbols = pub.symbols;
+        (userExchange as any).currencies = pub.currencies;
         console.log('Markets assigned from shared public exchange, total:', Object.keys(userExchange.markets || {}).length);
       }
     } catch (e) {
-      // 🚨 CRITICAL: NEVER loadMarkets for Binance - even in fallback
-      if (exchangeId === 'binance' && MARKET_TYPE === 'spot') {
-        console.warn('⚠️ Failed to seed markets for Binance, but skipping loadMarkets - using WebSocket only');
-        // Initialize empty markets structure to avoid errors
-        (userExchange as any).markets = {};
-        (userExchange as any).markets_by_id = {};
-        (userExchange as any).symbols = [];
-      } else {
-        console.warn('Failed to seed markets from public exchange, falling back to loadMarkets once:', (e as any)?.message || e);
-        await userExchange.loadMarkets();
-      }
+      // 🚨 For Binance: fallback to loadMarkets ONCE if public exchange seeding failed
+      const isBinance = exchangeId === 'binance' || ccxtExchangeId === 'binanceusdm' || ccxtExchangeId === 'binancecoinm';
+      console.warn('Failed to seed markets from public exchange, falling back to loadMarkets once:', (e as any)?.message || e);
+      // Always load markets as fallback - it's required for CCXT to work
+      await userExchange.loadMarkets();
+      console.log('Markets loaded via fallback, total:', Object.keys(userExchange.markets || {}).length);
     }
 
     userExchanges.set(cacheKey, userExchange);

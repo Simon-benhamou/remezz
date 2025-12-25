@@ -571,21 +571,15 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
   console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
 
-  // V5.24: Create exchange instance once per backtest and pre-load markets
-  // This prevents CCXT from calling loadMarkets() on every fetchOHLCV call
+  // V5.24: Create exchange instance once per backtest
+  // Skip loadMarkets() - we don't need market info for OHLCV fetching
+  // CCXT will call loadMarkets internally if needed, but we add proper rate limiting
   const exchange = new ccxt.binanceusdm({ 
     enableRateLimit: true,
-    rateLimit: 500, // 500ms between requests (conservative)
+    rateLimit: 1000, // 1000ms between requests (conservative to avoid bans)
   });
   
-  console.log(`[Backtest] Loading markets...`);
-  try {
-    await exchange.loadMarkets();
-    console.log(`[Backtest] Markets loaded successfully (${Object.keys(exchange.markets).length} markets)`);
-  } catch (error) {
-    console.error('[Backtest] Failed to load markets:', error);
-    throw new Error('Failed to initialize exchange: ' + (error instanceof Error ? error.message : String(error)));
-  }
+  console.log(`[Backtest] Exchange ready (skipping loadMarkets to avoid API weight)`);
 
   // Fetch BTC for regime detection
   const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', startDate, endDate);

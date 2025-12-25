@@ -1061,6 +1061,11 @@ class BinanceWebSocketManager {
     const response = await exchangeInfoRestLimiter.run(() => fetch(url));
 
     if (!response.ok) {
+      // V5.24: If rate limited, silently skip without throwing to avoid log spam
+      if (response.status === 418 || response.status === 429) {
+        console.debug('⏳ Exchange info fetch skipped (rate limited) - will retry later');
+        return;
+      }
       const body = await response.text().catch(() => '');
       throw new Error(`HTTP ${response.status} ${body}`.trim());
     }
@@ -1462,6 +1467,11 @@ class BinanceWebSocketManager {
         const start = Date.now();
         const response = await fetch(`${this.endpoints.rest}/fapi/v1/time`);
         if (!response.ok) {
+          // V5.24: If rate limited (418/429), back off silently - don't keep logging
+          if (response.status === 418 || response.status === 429) {
+            // Already rate limited, just skip silently until ban expires
+            return;
+          }
           throw new Error(`HTTP ${response.status}`);
         }
         const payload: any = await response.json();
@@ -1483,7 +1493,10 @@ class BinanceWebSocketManager {
         this.serverTimeLastSyncMs = Date.now();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(`⚠️ Failed to sync Binance server time: ${message}`);
+        // V5.24: Don't spam logs when banned - only log non-418 errors
+        if (!message.includes('418') && !message.includes('429')) {
+          console.warn(`⚠️ Failed to sync Binance server time: ${message}`);
+        }
       }
     })();
 

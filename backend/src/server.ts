@@ -300,16 +300,25 @@ app.get("/api/market-conditions", async (req, res) => {
       }
     }
     
-    // If no agent running, fetch BTC candles directly to compute market conditions
+    // If no agent running, try WebSocket data first, then give up (no REST to avoid bans)
     try {
-      const ccxt = await import('ccxt');
-      const publicExchange = new ccxt.default.binance({
-        enableRateLimit: true,
-        options: { defaultType: 'future' },
-      });
+      const { getKlinesOhlcvFromWebSocket } = await import('./services/binanceWebSocket.js');
       
-      // Fetch 100 15m BTC candles (about 25 hours of data)
-      const btcCandles = await publicExchange.fetchOHLCV('BTC/USDT:USDT', '15m', undefined, 100);
+      // Try to get BTC candles from WebSocket cache (0 API weight)
+      const wsKlines = getKlinesOhlcvFromWebSocket('BTCUSDT', '15m');
+      
+      if (!wsKlines || wsKlines.length < 50) {
+        return res.json({
+          status: 'unknown',
+          reason: 'No agent running and WebSocket data not ready yet - please wait',
+          tradingRecommended: false,
+          marketQuality: 'unknown',
+          qualityReason: 'WebSocket kline cache not populated',
+        });
+      }
+      
+      // Convert WebSocket format to candle format
+      const btcCandles = wsKlines;
       
       if (btcCandles.length < 50) {
         return res.json({
