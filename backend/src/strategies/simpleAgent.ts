@@ -954,12 +954,27 @@ export class SimpleAgent {
         logger.info(`📍 [${symbol}] NEW 1m candle closed | close=${last.close.toFixed(4)} | detection_delay=${detectionDelay}ms`);
         this.lastRtTrailingKlineTs = last.timestamp;
 
-        // Update trailing state using the candle close, but do NOT allow wick-based breach.
+        // Update trailing state using the candle close for breach detection.
+        // V5.25 FIX: Use proper high/low for breach detection:
+        // - LONG: breach when price drops below trailing stop -> use last.low
+        // - SHORT: breach when price rises above trailing stop -> use last.high
+        // This ensures we detect when the trailing stop was hit during the candle.
         const closePx = last.close;
         if (!Number.isFinite(closePx) || closePx <= 0) return;
 
-        const priceHigh = this.position!.side === 'long' ? last.high : closePx;
-        const priceLow = this.position!.side === 'short' ? last.low : closePx;
+        // For watermark updates (to move the trailing stop favorably):
+        // - LONG: use last.high to track highest price (move stop up)
+        // - SHORT: use last.low to track lowest price (move stop down)
+        // For breach detection (to check if stop was hit):
+        // - LONG: use last.low (did price drop to stop?)
+        // - SHORT: use last.high (did price rise to stop?)
+        const priceHigh = last.high;
+        const priceLow = last.low;
+
+        // V5.25 FIX: Update watermarks with 1m candle data so trailing stop follows profit!
+        // This was missing - the watermark wasn't being updated on 1m candles,
+        // so the trailing stop never moved up/down with the price.
+        this.position = updatePositionWaterMarks(this.position!, closePx, priceHigh, priceLow);
 
         // V5.13: Fetch BTC candles for regime detection in realtime
         const btcCandles = await this.fetchBtcCandles();
