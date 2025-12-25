@@ -95,6 +95,17 @@ async function getPublicExchangeFor(exchangeId: string, type: 'spot'|'swap') {
   }
 }
 
+/**
+ * V5.25: Get cached exchange for backtest/public data fetching
+ * This reuses the same exchange instance with pre-loaded markets (0 API weight after first call)
+ */
+export async function getCachedExchange(): Promise<any> {
+  const exchangeId = getConfig().EXCHANGE_ID || 'binance';
+  // For Binance, we always use 'swap' (binanceusdm) for futures trading
+  const marketType = 'swap';
+  return getPublicExchangeFor(exchangeId, marketType);
+}
+
 // Function to clear user exchange cache (useful when API keys are updated)
 export function clearUserExchangeCache(userId: string): void {
   for (const [key] of userExchanges) {

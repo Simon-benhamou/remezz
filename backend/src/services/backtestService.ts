@@ -6,7 +6,6 @@
  * Single mode - no legacy/agent split.
  */
 
-import ccxt from 'ccxt';
 import {
   loadLocalJsonCandles,
   mergeDedupCandles,
@@ -17,6 +16,12 @@ import {
 import {
   MomentumConfig,
 } from '../strategies/momentumSimple.js';
+
+// V5.25: Import cached exchange client to avoid loadMarkets on every backtest
+import { getCachedExchange } from '../exchange/ccxtClient.js';
+
+// V5.25: Import global REST circuit breaker to avoid bans
+import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
 
 // V5.22: Import shared signal scoring function (ensures backtest = production)
 import { calculateSignalScore } from '../strategies/signalRanker.js';
@@ -462,6 +467,13 @@ async function fetchCandlesFromCcxt(
 
   while (cursor < until) {
     try {
+      // V5.25: Check circuit breaker before each REST call
+      if (!globalRestCircuitBreaker.canMakeRequest()) {
+        console.error(`[Backtest] 🚫 REST circuit breaker is OPEN - cannot fetch ${symbol}`);
+        console.error(`[Backtest] Please wait for rate limit to expire before running backtest`);
+        throw new Error('REST_CIRCUIT_BREAKER_OPEN');
+      }
+      
       const ohlcv = await exchange.fetchOHLCV(symbol, '15m', cursor, 1000);
       if (!ohlcv || ohlcv.length === 0) break;
 
@@ -484,9 +496,20 @@ async function fetchCandlesFromCcxt(
 
       if (!progressed) break;
       cursor = (ohlcv[ohlcv.length - 1][0] as number) + 1;
-      // V5.24: Increase delay to prevent rate limiting (was 100ms)
-      await new Promise((r) => setTimeout(r, 250));
-    } catch (e) {
+      // V5.25: Increase delay significantly to prevent rate limiting (was 250ms, now 500ms)
+      await new Promise((r) => setTimeout(r, 500));
+    } catch (e: any) {
+      // V5.25: Handle rate limit errors properly
+      if (e?.message?.includes('418') || e?.message?.includes('banned') || e?.message?.includes('-1003')) {
+        // Extract ban timestamp if present
+        const match = e.message?.match(/banned until (\d+)/);
+        if (match) {
+          const banUntil = parseInt(match[1], 10);
+          globalRestCircuitBreaker.forceOpen(`Backtest banned: ${symbol}`, banUntil);
+        } else {
+          globalRestCircuitBreaker.forceOpen(`Backtest rate limited: ${symbol}`);
+        }
+      }
       console.error(`Error fetching ${symbol}:`, e);
       break;
     }
@@ -571,24 +594,30 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
   console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
 
-  // V5.24: Create exchange instance once per backtest
-  // Skip loadMarkets() - we don't need market info for OHLCV fetching
-  // CCXT will call loadMarkets internally if needed, but we add proper rate limiting
-  const exchange = new ccxt.binanceusdm({ 
-    enableRateLimit: true,
-    rateLimit: 1000, // 1000ms between requests (conservative to avoid bans)
-  });
+  // V5.25: Check circuit breaker BEFORE starting backtest
+  if (!globalRestCircuitBreaker.canMakeRequest()) {
+    throw new Error('REST circuit breaker is OPEN - Binance rate limit active. Please wait before running backtest.');
+  }
+
+  // V5.25: Use cached exchange to avoid loadMarkets on every backtest
+  // getCachedExchange() loads markets ONCE and caches them globally
+  const exchange = await getCachedExchange();
   
-  console.log(`[Backtest] Exchange ready (skipping loadMarkets to avoid API weight)`);
+  console.log(`[Backtest] Exchange ready (using cached markets - 0 API weight)`);
 
   // Fetch BTC for regime detection
   const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', startDate, endDate);
   const btcCloses = btcCandles.map((c) => c.close);
   console.log(`[Backtest] BTC: ${btcCandles.length} candles`);
 
-  // Fetch all symbol data
+  // V5.25: Add delay between symbols to avoid rate limiting
   const allData: Record<string, Candle[]> = {};
-  for (const symbol of symbols) {
+  for (let i = 0; i < symbols.length; i++) {
+    const symbol = symbols[i];
+    // Wait 1 second between each symbol to spread API calls
+    if (i > 0) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
     allData[symbol] = await fetchCandles(exchange, symbol, startDate, endDate);
     console.log(`[Backtest] ${symbol}: ${allData[symbol].length} candles`);
   }
