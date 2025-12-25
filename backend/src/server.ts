@@ -13,7 +13,7 @@ import { getConfig } from "./utils/env.js";
 import { authMiddleware, AuthenticatedRequest } from "./utils/security.js";
 import { prisma } from "./db/client.js";
 import { initializeDatabaseConnection, disconnectDatabase } from "./db/connection.js";
-import { getUserExchange, preloadMarkets, isIpBanned, setIpBan, getIpBanExpiry, areMarketsLoaded, initializeMinimalMarkets } from "./exchange/ccxtClient.js";
+import { getUserExchange, preloadMarkets, isIpBanned, setIpBan, getIpBanExpiry, areMarketsLoaded, initializeMinimalMarkets, getCachedExchange } from "./exchange/ccxtClient.js";
 import { getUserCredentials } from "./services/userCredentials.js";
 
 // Essential routes
@@ -27,7 +27,7 @@ import portfolioRouter from "./routes/portfolio.js";
 import { router as backtestRouter } from "./routes/backtest.js";
 
 // Services
-import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket } from "./services/binanceWebSocket.js";
+import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket, seedKlinesFromWebSocket } from "./services/binanceWebSocket.js";
 import { initNotificationService } from "./services/notificationService.js";
 
 // Strategy
@@ -3149,6 +3149,86 @@ process.on('SIGINT', shutdown);
   }
 })();
 
+// ============================================
+// V5.29: PRE-LOAD KLINES TO AVOID REST CALLS DURING AGENT STARTUP
+// ============================================
+// Instead of each agent making individual REST calls, pre-load ALL klines once
+// and seed the WebSocket cache so agents find data immediately
+
+async function preloadKlinesForActiveSymbols(): Promise<void> {
+  try {
+    // Get unique symbols from active sessions
+    const activeSessions = await prisma.agentSession.findMany({
+      where: { stoppedAt: null, haltedAt: null },
+      select: { symbol: true }
+    });
+    
+    if (activeSessions.length === 0) {
+      logger.info('📋 No active sessions - skipping klines preload');
+      return;
+    }
+    
+    // Get unique symbols + always include BTC for regime filter
+    const symbols = [...new Set(activeSessions.map(s => s.symbol))];
+    if (!symbols.some(s => s.includes('BTC'))) {
+      symbols.unshift('BTC/USDT:USDT');
+    }
+    
+    logger.info(`📊 Pre-loading klines for ${symbols.length} symbols: ${symbols.slice(0, 5).join(', ')}${symbols.length > 5 ? '...' : ''}`);
+    
+    // Check if IP is banned - skip REST preload
+    if (isIpBanned()) {
+      logger.warn('⚠️ IP is banned - skipping klines preload, agents will use WebSocket stream');
+      return;
+    }
+    
+    // Get a shared exchange instance for fetching
+    const exchange = await getCachedExchange();
+    if (!exchange) {
+      logger.warn('⚠️ No exchange available for klines preload');
+      return;
+    }
+    
+    // Fetch klines for each symbol with rate limiting (sequential, not parallel)
+    let loaded = 0;
+    let failed = 0;
+    
+    for (const symbol of symbols) {
+      try {
+        // Convert to Binance format for WS cache key
+        const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
+        
+        // Fetch 220 candles (enough for SMA200 + buffer)
+        const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 220);
+        
+        if (ohlcv && ohlcv.length > 0) {
+          // Seed the WebSocket cache
+          seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
+          loaded++;
+        }
+        
+        // Small delay to avoid rate limits (50ms between calls)
+        await new Promise(r => setTimeout(r, 50));
+        
+      } catch (error: any) {
+        failed++;
+        // Check for IP ban
+        if (error?.message?.includes('418') || error?.message?.includes('banned')) {
+          logger.warn('🚫 IP ban detected during klines preload - stopping');
+          setIpBan(30 * 60 * 1000); // 30 min ban
+          break;
+        }
+        logger.warn(`⚠️ Failed to preload klines for ${symbol}:`, error?.message);
+      }
+    }
+    
+    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed)`);
+    
+  } catch (error) {
+    logger.warn('⚠️ Failed to preload klines:', error);
+  }
+}
+
 // Restore active sessions - ONLY restore sessions that exist in DB, don't create new ones
 // This function is called AFTER markets + WebSocket are ready
 async function restoreActiveSessions() {
@@ -3380,7 +3460,13 @@ async function runStartupSequence(): Promise<void> {
   
   // Now we always have markets (either full or minimal), so restore sessions
   if (areMarketsLoaded()) {
-    logger.info('♻️ Step 3/3: Restoring active sessions...');
+    // V5.29: Pre-load klines BEFORE starting agents to avoid individual REST calls
+    if (marketsLoaded && !isIpBanned()) {
+      logger.info('📊 Step 3a/3: Pre-loading klines for active symbols...');
+      await preloadKlinesForActiveSymbols();
+    }
+    
+    logger.info('♻️ Step 3b/3: Restoring active sessions...');
     await restoreActiveSessions();
     logger.info('✅ Startup initialization complete');
     
