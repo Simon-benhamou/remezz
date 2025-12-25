@@ -48,7 +48,7 @@ export function areMarketsLoaded(): boolean {
 // This allows agents to work with WebSocket data without needing loadMarkets()
 const COMMON_BINANCE_FUTURES_SYMBOLS = [
   'BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'ATOM',
-  'SUI', 'SEI', 'IMX', 'APT', 'LTC', 'BCH', 'UNI', 'FTM', 'MATIC', 'ARB',
+  'SUI', 'SEI', 'IMX', 'APT', 'LTC', 'BCH', 'UNI', 'SONIC', 'MATIC', 'ARB',
   'OP', 'NEAR', 'FIL', 'AAVE', 'MKR', 'SAND', 'MANA', 'AXS', 'TRX', 'ETC',
   'XLM', 'VET', 'ALGO', 'HBAR', 'ICP', 'EGLD', 'THETA', 'XMR', 'EOS', 'NEO',
   'PEPE', 'SHIB', 'FLOKI', 'WIF', 'BONK', 'ORDI', 'INJ', 'TIA', 'JUP', 'PYTH',

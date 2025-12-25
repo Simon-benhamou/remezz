@@ -1119,7 +1119,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             'IMX/USDT:USDT': 25_000,
             'DOT/USDT:USDT': 25_000,
             'SUI/USDT:USDT': 25_000,
-            'FTM/USDT:USDT': 25_000,
+            'SONIC/USDT:USDT': 25_000,
             'APT/USDT:USDT': 25_000,
           };
           const cap = LIQUIDITY_CAPS[symbol] ?? Infinity;

@@ -66,7 +66,7 @@ const NON_RECOMMENDED_CRYPTOS = [
   { symbol: 'ATOM/USDT', name: 'Cosmos', category: '⚠️ Non testé', icon: '⚛️', roi: 'N/A', badge: 'default', recommended: false },
   { symbol: 'UNI/USDT', name: 'Uniswap', category: '⚠️ Non testé', icon: '🦄', roi: 'N/A', badge: 'default', recommended: false },
   { symbol: 'LTC/USDT', name: 'Litecoin', category: '⚠️ Non testé', icon: 'Ł', roi: 'N/A', badge: 'default', recommended: false },
-  { symbol: 'FTM/USDT', name: 'Fantom', category: '⚠️ Non testé', icon: '👻', roi: 'N/A', badge: 'default', recommended: false },
+  { symbol: 'SONIC/USDT', name: 'Sonic', category: '⚠️ Non testé', icon: '🎵', roi: 'N/A', badge: 'default', recommended: false },
   { symbol: 'BCH/USDT', name: 'Bitcoin Cash', category: '⚠️ Non testé', icon: '💵', roi: 'N/A', badge: 'default', recommended: false },
   { symbol: 'APT/USDT', name: 'Aptos', category: '⚠️ Non testé', icon: '🅰️', roi: 'N/A', badge: 'default', recommended: false },
 ];
