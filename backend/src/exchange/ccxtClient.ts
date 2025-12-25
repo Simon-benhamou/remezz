@@ -44,6 +44,92 @@ export function areMarketsLoaded(): boolean {
   return globalMarketsCache !== null;
 }
 
+// V5.28: Generate minimal markets for Binance Futures when REST is unavailable
+// This allows agents to work with WebSocket data without needing loadMarkets()
+const COMMON_BINANCE_FUTURES_SYMBOLS = [
+  'BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'ATOM',
+  'SUI', 'SEI', 'IMX', 'APT', 'LTC', 'BCH', 'UNI', 'FTM', 'MATIC', 'ARB',
+  'OP', 'NEAR', 'FIL', 'AAVE', 'MKR', 'SAND', 'MANA', 'AXS', 'TRX', 'ETC',
+  'XLM', 'VET', 'ALGO', 'HBAR', 'ICP', 'EGLD', 'THETA', 'XMR', 'EOS', 'NEO',
+  'PEPE', 'SHIB', 'FLOKI', 'WIF', 'BONK', 'ORDI', 'INJ', 'TIA', 'JUP', 'PYTH',
+];
+
+function generateMinimalBinanceFuturesMarkets(): typeof globalMarketsCache {
+  const markets: Record<string, any> = {};
+  const markets_by_id: Record<string, any> = {};
+  const symbols: string[] = [];
+  
+  for (const base of COMMON_BINANCE_FUTURES_SYMBOLS) {
+    const symbol = `${base}/USDT:USDT`;
+    const id = `${base}USDT`;
+    
+    const market = {
+      id,
+      symbol,
+      base,
+      quote: 'USDT',
+      settle: 'USDT',
+      baseId: base,
+      quoteId: 'USDT',
+      settleId: 'USDT',
+      type: 'swap',
+      spot: false,
+      margin: false,
+      swap: true,
+      future: false,
+      option: false,
+      active: true,
+      contract: true,
+      linear: true,
+      inverse: false,
+      contractSize: 1,
+      expiry: undefined,
+      expiryDatetime: undefined,
+      strike: undefined,
+      optionType: undefined,
+      precision: {
+        amount: 3,
+        price: base === 'BTC' ? 1 : base === 'ETH' ? 2 : 4,
+        base: 8,
+        quote: 8,
+      },
+      limits: {
+        amount: { min: 0.001, max: 10000 },
+        price: { min: 0.0001, max: 1000000 },
+        cost: { min: 5, max: 10000000 },
+        leverage: { min: 1, max: 125 },
+      },
+      info: { symbol: id },
+    };
+    
+    markets[symbol] = market;
+    markets_by_id[id] = market;
+    symbols.push(symbol);
+  }
+  
+  console.log(`🔧 Generated minimal markets for ${symbols.length} Binance Futures symbols`);
+  
+  return {
+    markets,
+    markets_by_id,
+    symbols,
+    currencies: { USDT: { id: 'USDT', code: 'USDT' } },
+    loadedAt: Date.now(),
+  };
+}
+
+// V5.28: Initialize minimal markets when REST is unavailable
+export function initializeMinimalMarkets(): boolean {
+  if (globalMarketsCache) {
+    console.log('✅ Markets already loaded, skipping minimal init');
+    return true;
+  }
+  
+  console.log('⚠️ Initializing minimal markets (REST unavailable)');
+  globalMarketsCache = generateMinimalBinanceFuturesMarkets();
+  return true;
+}
+
 // Function to clear symbol resolution cache
 export function clearSymbolResolutionCache(): void {
   symbolResolutionCache.clear();

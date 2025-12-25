@@ -13,7 +13,7 @@ import { getConfig } from "./utils/env.js";
 import { authMiddleware, AuthenticatedRequest } from "./utils/security.js";
 import { prisma } from "./db/client.js";
 import { initializeDatabaseConnection, disconnectDatabase } from "./db/connection.js";
-import { getUserExchange, preloadMarkets, isIpBanned, setIpBan, getIpBanExpiry, areMarketsLoaded } from "./exchange/ccxtClient.js";
+import { getUserExchange, preloadMarkets, isIpBanned, setIpBan, getIpBanExpiry, areMarketsLoaded, initializeMinimalMarkets } from "./exchange/ccxtClient.js";
 import { getUserCredentials } from "./services/userCredentials.js";
 
 // Essential routes
@@ -3328,10 +3328,7 @@ async function restoreActiveSessions() {
 // CRITICAL: These must run in order, not in parallel!
 // 1. Load markets ONCE (single REST call)
 // 2. Initialize WebSocket (no REST calls)
-// 3. Restore active sessions (ONLY if markets loaded)
-// If IP is banned, schedule retry after ban expires
-
-let startupRetryScheduled = false;
+// 3. Restore active sessions (use minimal markets fallback if REST unavailable)
 
 async function runStartupSequence(): Promise<void> {
   let marketsLoaded = false;
@@ -3373,29 +3370,43 @@ async function runStartupSequence(): Promise<void> {
     logger.warn('⚠️ Failed to initialize WebSocket:', error);
   }
   
-  // STEP 3: Restore active sessions ONLY if markets are loaded
-  if (marketsLoaded || areMarketsLoaded()) {
+  // STEP 3: Ensure markets are available (use minimal fallback if needed) and restore sessions
+  if (!marketsLoaded && !areMarketsLoaded()) {
+    // REST API unavailable (IP banned or other issue) - use minimal hardcoded markets
+    logger.info('🔧 REST API unavailable - initializing minimal hardcoded markets for common symbols...');
+    initializeMinimalMarkets();
+    logger.info('✅ Minimal markets initialized - agents can work with WebSocket data');
+  }
+  
+  // Now we always have markets (either full or minimal), so restore sessions
+  if (areMarketsLoaded()) {
     logger.info('♻️ Step 3/3: Restoring active sessions...');
     await restoreActiveSessions();
     logger.info('✅ Startup initialization complete');
-  } else if (isIpBanned() && !startupRetryScheduled) {
-    // Schedule retry after IP ban expires
-    const banExpiry = getIpBanExpiry();
-    const waitMs = Math.max(0, banExpiry - Date.now()) + 5000; // 5s buffer after ban expires
-    const waitMinutes = Math.ceil(waitMs / 60000);
     
-    logger.warn(`⏳ IP is banned - scheduling startup retry in ${waitMinutes} minutes (after ${new Date(banExpiry).toISOString()})`);
-    startupRetryScheduled = true;
-    
-    setTimeout(async () => {
-      logger.info('🔄 IP ban should have expired - retrying startup sequence...');
-      startupRetryScheduled = false;
-      await runStartupSequence();
-    }, waitMs);
-    
-    logger.info('⚠️ Startup delayed - sessions will be restored after IP ban expires');
+    // If we're using minimal markets, try to upgrade to full markets later when ban expires
+    if (!marketsLoaded && isIpBanned()) {
+      const banExpiry = getIpBanExpiry();
+      const waitMs = Math.max(0, banExpiry - Date.now()) + 60000; // 1 min buffer
+      const waitMinutes = Math.ceil(waitMs / 60000);
+      logger.info(`📅 Will try to load full markets in ${waitMinutes} minutes (after IP ban expires)`);
+      
+      setTimeout(async () => {
+        try {
+          logger.info('🔄 Attempting to load full markets...');
+          const fullLoaded = await preloadMarkets();
+          if (fullLoaded) {
+            logger.info('✅ Full markets loaded - all symbols now available');
+          } else {
+            logger.warn('⚠️ Full markets still unavailable - continuing with minimal markets');
+          }
+        } catch (error) {
+          logger.warn('⚠️ Failed to load full markets:', error);
+        }
+      }, waitMs);
+    }
   } else {
-    logger.warn('⚠️ Skipping session restore - markets not available');
+    logger.error('❌ Failed to initialize markets - this should not happen');
   }
 }
 
