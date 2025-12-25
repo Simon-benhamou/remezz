@@ -3232,18 +3232,18 @@ process.on('SIGINT', shutdown);
     logger.info('🌐 Initializing Binance WebSocket...');
     const ws = getBinanceWebSocket();
     
-    // Wait for WebSocket to connect (with timeout)
+    // Wait for WebSocket to connect and become healthy (with timeout)
     const maxWait = 10000; // 10 seconds max
     const startTime = Date.now();
     
-    while (!ws.isConnected() && Date.now() - startTime < maxWait) {
+    while (!ws.isConnectedAndReceiving() && Date.now() - startTime < maxWait) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     
-    if (ws.isConnected()) {
-      logger.info('✅ Binance WebSocket connected and ready');
+    if (ws.isConnectedAndReceiving()) {
+      logger.info('✅ Binance WebSocket connected and receiving data');
       
-      // Give it a moment to subscribe to initial streams
+      // Give it a moment to accumulate some initial candle data
       await new Promise(resolve => setTimeout(resolve, 1000));
       
       logger.info('✅ WebSocket initialization complete');
