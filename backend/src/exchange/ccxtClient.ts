@@ -39,6 +39,11 @@ export function getIpBanExpiry(): number {
   return ipBannedUntil;
 }
 
+// V5.27: Check if markets are loaded
+export function areMarketsLoaded(): boolean {
+  return globalMarketsCache !== null;
+}
+
 // Function to clear symbol resolution cache
 export function clearSymbolResolutionCache(): void {
   symbolResolutionCache.clear();

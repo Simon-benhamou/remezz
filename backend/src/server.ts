@@ -13,7 +13,7 @@ import { getConfig } from "./utils/env.js";
 import { authMiddleware, AuthenticatedRequest } from "./utils/security.js";
 import { prisma } from "./db/client.js";
 import { initializeDatabaseConnection, disconnectDatabase } from "./db/connection.js";
-import { getUserExchange, preloadMarkets, isIpBanned, setIpBan } from "./exchange/ccxtClient.js";
+import { getUserExchange, preloadMarkets, isIpBanned, setIpBan, getIpBanExpiry, areMarketsLoaded } from "./exchange/ccxtClient.js";
 import { getUserCredentials } from "./services/userCredentials.js";
 
 // Essential routes
@@ -3323,21 +3323,27 @@ async function restoreActiveSessions() {
 }
 
 // ============================================
-// V5.26: SEQUENTIAL STARTUP - Markets → WebSocket → Restore
+// V5.27: SEQUENTIAL STARTUP - Markets → WebSocket → Restore
 // ============================================
 // CRITICAL: These must run in order, not in parallel!
 // 1. Load markets ONCE (single REST call)
 // 2. Initialize WebSocket (no REST calls)
-// 3. Restore active sessions (requires markets + WebSocket)
-(async () => {
+// 3. Restore active sessions (ONLY if markets loaded)
+// If IP is banned, schedule retry after ban expires
+
+let startupRetryScheduled = false;
+
+async function runStartupSequence(): Promise<void> {
+  let marketsLoaded = false;
+  
   // STEP 1: Preload markets first
   try {
     logger.info('📡 Step 1/3: Preloading exchange markets...');
-    const success = await preloadMarkets();
-    if (success) {
+    marketsLoaded = await preloadMarkets();
+    if (marketsLoaded) {
       logger.info('✅ Markets preloaded successfully');
     } else {
-      logger.warn('⚠️ Markets preload failed (may be IP banned) - will retry when ban expires');
+      logger.warn('⚠️ Markets preload failed (may be IP banned)');
     }
   } catch (error) {
     logger.warn('⚠️ Failed to preload markets:', error);
@@ -3367,12 +3373,36 @@ async function restoreActiveSessions() {
     logger.warn('⚠️ Failed to initialize WebSocket:', error);
   }
   
-  // STEP 3: Restore active sessions AFTER markets + WebSocket are ready
-  logger.info('♻️ Step 3/3: Restoring active sessions...');
-  await restoreActiveSessions();
-  
-  logger.info('✅ Startup initialization complete');
-})();
+  // STEP 3: Restore active sessions ONLY if markets are loaded
+  if (marketsLoaded || areMarketsLoaded()) {
+    logger.info('♻️ Step 3/3: Restoring active sessions...');
+    await restoreActiveSessions();
+    logger.info('✅ Startup initialization complete');
+  } else if (isIpBanned() && !startupRetryScheduled) {
+    // Schedule retry after IP ban expires
+    const banExpiry = getIpBanExpiry();
+    const waitMs = Math.max(0, banExpiry - Date.now()) + 5000; // 5s buffer after ban expires
+    const waitMinutes = Math.ceil(waitMs / 60000);
+    
+    logger.warn(`⏳ IP is banned - scheduling startup retry in ${waitMinutes} minutes (after ${new Date(banExpiry).toISOString()})`);
+    startupRetryScheduled = true;
+    
+    setTimeout(async () => {
+      logger.info('🔄 IP ban should have expired - retrying startup sequence...');
+      startupRetryScheduled = false;
+      await runStartupSequence();
+    }, waitMs);
+    
+    logger.info('⚠️ Startup delayed - sessions will be restored after IP ban expires');
+  } else {
+    logger.warn('⚠️ Skipping session restore - markets not available');
+  }
+}
+
+// Run startup sequence
+runStartupSequence().catch(error => {
+  logger.error('❌ Startup sequence failed:', error);
+});
 
 server.listen(cfg.PORT, () => {
   logger.info(`✅ Server listening on :${cfg.PORT}`);
