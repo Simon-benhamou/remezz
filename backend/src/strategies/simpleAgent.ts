@@ -44,6 +44,7 @@ import {
   isPositionCacheSeeded,
 } from '../services/binanceWebSocket.js';
 import { globalRestCircuitBreaker } from '../services/globalRestCircuitBreaker.js';
+import { isIpBanned } from '../exchange/ccxtClient.js';
 import { 
   notifyTradeEntry, 
   notifyTradeExit, 
@@ -1676,19 +1677,18 @@ export class SimpleAgent {
           return;
         }
         
-        // �🔧 FIX: Ensure markets are loaded before any exchange operation
-        // This is critical for setLeverage which needs market info to send correct parameters to Binance
+        // V5.26: Check if markets are loaded before any exchange operation
+        // NEVER call loadMarkets - it should have been done at startup via preloadMarkets()
         const exchangeMarkets = (this.config.exchange as any).markets;
         if (!exchangeMarkets || Object.keys(exchangeMarkets).length === 0) {
-          logger.info(`🔄 [${symbol}] Loading exchange markets (required for setLeverage)...`);
-          try {
-            await (this.config.exchange as any).loadMarkets();
-            const loadedMarkets = (this.config.exchange as any).markets;
-            logger.info(`✅ [${symbol}] Markets loaded: ${Object.keys(loadedMarkets || {}).length} markets`);
-          } catch (mkErr: any) {
-            logger.error(`❌ [${symbol}] Failed to load markets:`, mkErr?.message);
-            // Continue anyway - setLeverage might still work with manual symbol conversion
+          if (isIpBanned()) {
+            logger.error(`🚫 [${symbol}] Markets not loaded and IP is banned - cannot open position`);
+            this.config.capitalPool.cancelReservation(this.config.sessionId);
+            return;
           }
+          logger.warn(`⚠️ [${symbol}] Markets not loaded - this should have been done at startup!`);
+          // Don't call loadMarkets here - it's a REST call that could get us banned
+          // Continue anyway - setLeverage might still work with manual symbol conversion
         }
         
         // Set leverage - Binance Futures requires integer leverage

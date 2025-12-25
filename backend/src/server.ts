@@ -13,7 +13,7 @@ import { getConfig } from "./utils/env.js";
 import { authMiddleware, AuthenticatedRequest } from "./utils/security.js";
 import { prisma } from "./db/client.js";
 import { initializeDatabaseConnection, disconnectDatabase } from "./db/connection.js";
-import { getUserExchange } from "./exchange/ccxtClient.js";
+import { getUserExchange, preloadMarkets, isIpBanned, setIpBan } from "./exchange/ccxtClient.js";
 import { getUserCredentials } from "./services/userCredentials.js";
 
 // Essential routes
@@ -529,14 +529,13 @@ app.post("/api/agent/start", async (req, res) => {
         } else {
           // Fallback to REST only if circuit breaker allows
           const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
-          if (globalRestCircuitBreaker.canMakeRequest()) {
+          if (globalRestCircuitBreaker.canMakeRequest() && !isIpBanned()) {
             logger.info(`[Live] WebSocket balance not available, falling back to REST...`);
             
-            // Ensure markets are loaded for the exchange (critical for setLeverage later)
+            // V5.26: Markets should already be loaded from startup via preloadMarkets()
+            // Don't call loadMarkets() here - it's a REST call that could get us banned
             if (!exchange.markets || Object.keys(exchange.markets).length === 0) {
-              logger.info('[Live] Loading markets for exchange...');
-              await exchange.loadMarkets();
-              logger.info(`[Live] Markets loaded: ${Object.keys(exchange.markets).length} markets`);
+              logger.warn('[Live] Markets not loaded - this should have been done at startup!');
             }
             
             const balance = await exchange.fetchBalance({ type: 'future' });
@@ -552,7 +551,7 @@ app.post("/api/agent/start", async (req, res) => {
             }
           } else {
             const remaining = globalRestCircuitBreaker.getRemainingCooldown();
-            logger.error(`❌ [Live] REST circuit breaker is OPEN (${Math.round(remaining/1000)}s remaining), cannot fetch balance`);
+            logger.error(`❌ [Live] REST circuit breaker is OPEN or IP banned (${Math.round(remaining/1000)}s remaining), cannot fetch balance`);
             return res.status(503).json({ 
               error: 'Binance API temporarily unavailable (rate limit). Please try again later.',
               retryAfter: Math.ceil(remaining / 1000)
@@ -2186,17 +2185,19 @@ app.post("/api/agent/restart", async (req, res) => {
           actualCapital = wsBalance.total;
           logger.info(`✅ [Restart Live] Using WebSocket balance: $${actualCapital.toFixed(2)} (0 API weight)`);
         } else {
-          // Fallback to REST only if circuit breaker allows
+          // Fallback to REST only if circuit breaker allows and not IP banned
           const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
-          if (!globalRestCircuitBreaker.canMakeRequest()) {
-            logger.error(`[Restart Live] ❌ REST circuit breaker is OPEN and no WebSocket balance`);
+          if (!globalRestCircuitBreaker.canMakeRequest() || isIpBanned()) {
+            logger.error(`[Restart Live] ❌ REST circuit breaker is OPEN or IP banned, and no WebSocket balance`);
             return res.status(429).json({ 
               error: 'Rate limited by Binance. Please wait and try again.',
             });
           }
           
+          // V5.26: Markets should already be loaded from startup via preloadMarkets()
+          // Don't call loadMarkets() here - it's a REST call
           if (!exchange.markets || Object.keys(exchange.markets).length === 0) {
-            await exchange.loadMarkets();
+            logger.warn('[Restart Live] Markets not loaded - this should have been done at startup!');
           }
           
           const balance = await exchange.fetchBalance({ type: 'future' });
@@ -3149,7 +3150,8 @@ process.on('SIGINT', shutdown);
 })();
 
 // Restore active sessions - ONLY restore sessions that exist in DB, don't create new ones
-(async () => {
+// This function is called AFTER markets + WebSocket are ready
+async function restoreActiveSessions() {
   try {
     // Get only active sessions (not stopped)
     const activeSessions = await prisma.agentSession.findMany({
@@ -3318,16 +3320,32 @@ process.on('SIGINT', shutdown);
   } catch (error) {
     logger.warn('⚠️ Failed to restore sessions:', error);
   }
-})();
+}
 
 // ============================================
-// V5.24: INITIALIZE BINANCE WEBSOCKET BEFORE SERVER STARTS
+// V5.26: SEQUENTIAL STARTUP - Markets → WebSocket → Restore
 // ============================================
-// This ensures WebSocket is connected and ready before agents try to use it
-// Prevents "WebSocket not ready" fallback to REST API on startup
+// CRITICAL: These must run in order, not in parallel!
+// 1. Load markets ONCE (single REST call)
+// 2. Initialize WebSocket (no REST calls)
+// 3. Restore active sessions (requires markets + WebSocket)
 (async () => {
+  // STEP 1: Preload markets first
   try {
-    logger.info('🌐 Initializing Binance WebSocket...');
+    logger.info('📡 Step 1/3: Preloading exchange markets...');
+    const success = await preloadMarkets();
+    if (success) {
+      logger.info('✅ Markets preloaded successfully');
+    } else {
+      logger.warn('⚠️ Markets preload failed (may be IP banned) - will retry when ban expires');
+    }
+  } catch (error) {
+    logger.warn('⚠️ Failed to preload markets:', error);
+  }
+  
+  // STEP 2: Initialize WebSocket AFTER markets are ready
+  try {
+    logger.info('🌐 Step 2/3: Initializing Binance WebSocket...');
     const ws = getBinanceWebSocket();
     
     // Wait for WebSocket to connect and become healthy (with timeout)
@@ -3340,18 +3358,20 @@ process.on('SIGINT', shutdown);
     
     if (ws.isConnectedAndReceiving()) {
       logger.info('✅ Binance WebSocket connected and receiving data');
-      
       // Give it a moment to accumulate some initial candle data
       await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      logger.info('✅ WebSocket initialization complete');
     } else {
       logger.warn('⚠️ WebSocket connection timeout - agents will use REST fallback initially');
     }
   } catch (error) {
     logger.warn('⚠️ Failed to initialize WebSocket:', error);
-    logger.info('ℹ️ Agents will use REST fallback on startup');
   }
+  
+  // STEP 3: Restore active sessions AFTER markets + WebSocket are ready
+  logger.info('♻️ Step 3/3: Restoring active sessions...');
+  await restoreActiveSessions();
+  
+  logger.info('✅ Startup initialization complete');
 })();
 
 server.listen(cfg.PORT, () => {

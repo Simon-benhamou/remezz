@@ -14,6 +14,31 @@ const publicExchangePromises: Map<string, Promise<any>> = new Map();
 // Cache symbol resolutions to avoid repeated market lookups
 const symbolResolutionCache: Map<string, string> = new Map();
 
+// V5.25: Global markets cache - loaded ONCE at startup, shared across ALL instances
+let globalMarketsCache: {
+  markets: any;
+  markets_by_id: any;
+  symbols: string[];
+  currencies: any;
+  loadedAt: number;
+} | null = null;
+
+// V5.25: Track if we're currently IP banned
+let ipBannedUntil: number = 0;
+
+export function isIpBanned(): boolean {
+  return Date.now() < ipBannedUntil;
+}
+
+export function setIpBan(untilTimestamp: number): void {
+  ipBannedUntil = untilTimestamp;
+  console.warn(`🚫 IP banned until ${new Date(untilTimestamp).toISOString()}`);
+}
+
+export function getIpBanExpiry(): number {
+  return ipBannedUntil;
+}
+
 // Function to clear symbol resolution cache
 export function clearSymbolResolutionCache(): void {
   symbolResolutionCache.clear();
@@ -32,57 +57,117 @@ function mapExchangeId(exchangeId: string, type: 'spot'|'swap' = 'spot'): string
   return exchangeIdMap[exchangeId] || exchangeId;
 }
 
-// Track if markets have been loaded globally (to ensure we load ONCE on startup)
-let marketsLoadedOnce = false;
+/**
+ * V5.25: Load markets ONCE at server startup
+ * This should be called early in server initialization
+ * Returns true if successful, false if banned/failed
+ */
+export async function preloadMarkets(): Promise<boolean> {
+  if (globalMarketsCache) {
+    console.log('✅ Markets already preloaded, skipping');
+    return true;
+  }
+  
+  if (isIpBanned()) {
+    console.warn('🚫 Cannot preload markets - IP is banned until', new Date(ipBannedUntil).toISOString());
+    return false;
+  }
+  
+  try {
+    console.log('📡 Preloading markets (ONCE at startup)...');
+    const exchangeId = getConfig().EXCHANGE_ID || 'binance';
+    const ccxtExchangeId = mapExchangeId(exchangeId, 'swap');
+    const Klass: any = (ccxt as any)[ccxtExchangeId];
+    const inst = new Klass({ enableRateLimit: true, rateLimit: 1000 });
+    inst.options = inst.options || {};
+    inst.options.defaultType = 'swap';
+    
+    await inst.loadMarkets();
+    
+    globalMarketsCache = {
+      markets: inst.markets,
+      markets_by_id: inst.markets_by_id,
+      symbols: inst.symbols,
+      currencies: inst.currencies,
+      loadedAt: Date.now(),
+    };
+    
+    console.log(`✅ Markets preloaded: ${Object.keys(inst.markets).length} symbols cached`);
+    return true;
+  } catch (e: any) {
+    // Check if it's an IP ban
+    if (e?.message?.includes('418') || e?.message?.includes('banned')) {
+      const match = e.message?.match(/banned until (\d+)/);
+      if (match) {
+        setIpBan(parseInt(match[1], 10));
+      }
+    }
+    console.error('❌ Failed to preload markets:', e?.message);
+    return false;
+  }
+}
 
+/**
+ * V5.25: Get a public exchange instance with cached markets
+ * NEVER makes REST calls if markets are already cached
+ */
 async function getPublicExchangeFor(exchangeId: string, type: 'spot'|'swap') {
   const ccxtExchangeId = mapExchangeId(exchangeId, type);
   const key = `${ccxtExchangeId}:${type}`;
+  
+  // Return cached instance if available
   if (publicExchanges.has(key)) return publicExchanges.get(key);
+  
+  // Wait for in-flight creation
   const inflight = publicExchangePromises.get(key);
   if (inflight) return inflight;
 
   const promise = (async () => {
     const Klass: any = (ccxt as any)[ccxtExchangeId];
     if (!Klass) throw new Error('Unknown exchange ' + ccxtExchangeId);
+    
     const inst = new Klass({ 
       enableRateLimit: true,
-      rateLimit: 500 // Slow down to avoid rate limits
+      rateLimit: 500
     });
-    // @ts-ignore
     inst.options = inst.options || {};
-    // @ts-ignore
     inst.options.defaultType = type;
     
-    // For Binance: load markets ONCE at startup, then reuse forever
-    // This is required for CCXT to resolve symbols correctly
-    const isBinance = ccxtExchangeId === 'binance' || ccxtExchangeId === 'binanceusdm' || ccxtExchangeId === 'binancecoinm';
-    if (isBinance && marketsLoadedOnce) {
-      console.log(`✅ Reusing already-loaded markets for ${ccxtExchangeId} (no API call)`);
-      // Markets should already be loaded from first call, copy from existing
-      const existingSwap = publicExchanges.get(`binanceusdm:swap`);
-      const existingSpot = publicExchanges.get(`binance:spot`);
-      const existing = existingSwap || existingSpot;
-      if (existing && Object.keys(existing.markets || {}).length > 0) {
-        inst.markets = existing.markets;
-        inst.markets_by_id = existing.markets_by_id;
-        inst.symbols = existing.symbols;
-        inst.currencies = existing.currencies;
-      } else {
-        // Fallback: load anyway but this shouldn't happen
-        console.log(`📡 Loading markets for ${ccxtExchangeId}:${type} (ONCE only)`);
-        await inst.loadMarkets();
-      }
+    // V5.25: Use global cache - NEVER make REST calls if we have cache
+    if (globalMarketsCache) {
+      inst.markets = globalMarketsCache.markets;
+      inst.markets_by_id = globalMarketsCache.markets_by_id;
+      inst.symbols = globalMarketsCache.symbols;
+      inst.currencies = globalMarketsCache.currencies;
+      console.log(`✅ Markets assigned from global cache (0 API calls)`);
+    } else if (isIpBanned()) {
+      // IP is banned and no cache - throw error, don't make REST call
+      throw new Error(`IP is banned until ${new Date(ipBannedUntil).toISOString()} and no markets cache available`);
     } else {
-      // Load markets ONCE - required for CCXT to work
-      console.log(`📡 Loading markets for ${ccxtExchangeId}:${type} (ONCE only)`);
-      await inst.loadMarkets();
-      if (isBinance) {
-        marketsLoadedOnce = true;
+      // No cache and not banned - load once
+      console.log(`📡 Loading markets for ${ccxtExchangeId}:${type} (first time)...`);
+      try {
+        await inst.loadMarkets();
+        // Cache globally for future use
+        globalMarketsCache = {
+          markets: inst.markets,
+          markets_by_id: inst.markets_by_id,
+          symbols: inst.symbols,
+          currencies: inst.currencies,
+          loadedAt: Date.now(),
+        };
+        console.log(`✅ Markets loaded and cached: ${Object.keys(inst.markets).length} symbols`);
+      } catch (e: any) {
+        if (e?.message?.includes('418') || e?.message?.includes('banned')) {
+          const match = e.message?.match(/banned until (\d+)/);
+          if (match) {
+            setIpBan(parseInt(match[1], 10));
+          }
+        }
+        throw e;
       }
     }
     
-    console.log(`✅ Markets loaded for ${ccxtExchangeId}:${type}, ${Object.keys(inst.markets || {}).length} symbols`);
     publicExchanges.set(key, inst);
     return inst;
   })();
@@ -191,27 +276,35 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
     // @ts-ignore
     userExchange.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
 
-    // Seed markets from shared public instance to avoid loadMarkets REST weight
-    try {
-      const pub = await getPublicExchangeFor(exchangeId, MARKET_TYPE);
-      if (typeof (userExchange as any).setMarkets === 'function') {
-        (userExchange as any).setMarkets(pub.markets, pub.currencies);
-        console.log('Markets seeded from shared public exchange, total:', Object.keys(userExchange.markets || {}).length);
-      } else {
-        // Fallback: assign primary structures
-        (userExchange as any).markets = pub.markets;
-        (userExchange as any).markets_by_id = pub.markets_by_id;
-        (userExchange as any).symbols = pub.symbols;
-        (userExchange as any).currencies = pub.currencies;
-        console.log('Markets assigned from shared public exchange, total:', Object.keys(userExchange.markets || {}).length);
+    // V5.25: Use global markets cache - NEVER make REST calls
+    if (globalMarketsCache) {
+      userExchange.markets = globalMarketsCache.markets;
+      userExchange.markets_by_id = globalMarketsCache.markets_by_id;
+      userExchange.symbols = globalMarketsCache.symbols;
+      userExchange.currencies = globalMarketsCache.currencies;
+      console.log('✅ Markets assigned from global cache (0 API calls)');
+    } else if (isIpBanned()) {
+      // IP is banned and no cache - throw error
+      throw new Error(`IP is banned until ${new Date(ipBannedUntil).toISOString()} and no markets cache available`);
+    } else {
+      // No cache, not banned - try to get from public exchange (which will cache)
+      try {
+        const pub = await getPublicExchangeFor(exchangeId, MARKET_TYPE);
+        userExchange.markets = pub.markets;
+        userExchange.markets_by_id = pub.markets_by_id;
+        userExchange.symbols = pub.symbols;
+        userExchange.currencies = pub.currencies;
+        console.log('✅ Markets assigned from public exchange');
+      } catch (e: any) {
+        // Check for ban and update state
+        if (e?.message?.includes('418') || e?.message?.includes('banned')) {
+          const match = e.message?.match(/banned until (\d+)/);
+          if (match) {
+            setIpBan(parseInt(match[1], 10));
+          }
+        }
+        throw e; // Don't fallback to loadMarkets - that would make another REST call!
       }
-    } catch (e) {
-      // 🚨 For Binance: fallback to loadMarkets ONCE if public exchange seeding failed
-      const isBinance = exchangeId === 'binance' || ccxtExchangeId === 'binanceusdm' || ccxtExchangeId === 'binancecoinm';
-      console.warn('Failed to seed markets from public exchange, falling back to loadMarkets once:', (e as any)?.message || e);
-      // Always load markets as fallback - it's required for CCXT to work
-      await userExchange.loadMarkets();
-      console.log('Markets loaded via fallback, total:', Object.keys(userExchange.markets || {}).length);
     }
 
     userExchanges.set(cacheKey, userExchange);
