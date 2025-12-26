@@ -56,6 +56,7 @@ interface BacktestSimPosition {
   lowWaterMark?: number;
   appTrailingStop?: number;
   trailingBreachCandles?: number; // V5.18: Track consecutive 1m-simulated breaches (like prod)
+  trailingActive?: boolean; // V5.26: Once trailing activates, it stays active
 }
 
 export interface BacktestParams {
@@ -833,9 +834,18 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
           else {
             const hwm = pos.highWaterMark!;
+            // V5.26 FIX: Use pnlPct (current close) for activation, not hwmPct (max)
+            // This aligns with production which uses current PnL for activation
+            const pnlPct = ((current.close - pos.entryPrice) / pos.entryPrice) * 100;
             const hwmPct = ((hwm - pos.entryPrice) / pos.entryPrice) * 100;
 
-            if (hwmPct >= activation) {
+            // V5.26: Check if activation threshold reached NOW or was reached before
+            const shouldActivateNow = pnlPct >= activation;
+            if (shouldActivateNow) {
+              pos.trailingActive = true;
+            }
+            
+            if (pos.trailingActive) {
               // V5.12: Smart trailing - widen distance at higher profits
               let trailDist = distance;
               if (hwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {
@@ -887,9 +897,18 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
           else {
             const lwm = pos.lowWaterMark!;
+            // V5.26 FIX: Use pnlPct (current close) for activation, not lwmPct (max)
+            // This aligns with production which uses current PnL for activation
+            const pnlPct = ((pos.entryPrice - current.close) / pos.entryPrice) * 100;
             const lwmPct = ((pos.entryPrice - lwm) / pos.entryPrice) * 100;
 
-            if (lwmPct >= activation) {
+            // V5.26: Check if activation threshold reached NOW or was reached before
+            const shouldActivateNow = pnlPct >= activation;
+            if (shouldActivateNow) {
+              pos.trailingActive = true;
+            }
+            
+            if (pos.trailingActive) {
               let trailDist = distance;
               if (lwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {
                 trailDist = CONFIG.EXIT.TRAILING_WIDE_DISTANCE_PCT;

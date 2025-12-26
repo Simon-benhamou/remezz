@@ -999,6 +999,11 @@ export class SimpleAgent {
           this.lastAppTrailingStop = candidateStop as number;
           this.position!.appTrailingStop = candidateStop as number;
         }
+        
+        // V5.26: Persist trailing activation - once active, stays active
+        if (exitSignal.trailingActivated) {
+          this.position!.trailingActive = true;
+        }
 
         // ONLY react to trailing exits in realtime - regime_change and momentum_reversal
         // are handled in checkExit() on 15m candle close for backtest parity
@@ -1052,6 +1057,11 @@ export class SimpleAgent {
       if (Number.isFinite(Number(candidateStop))) {
         this.lastAppTrailingStop = candidateStop as number;
         this.position!.appTrailingStop = candidateStop as number;
+      }
+      
+      // V5.26: Persist trailing activation - once active, stays active
+      if (exitSignal.trailingActivated) {
+        this.position!.trailingActive = true;
       }
 
       if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
@@ -1955,6 +1965,11 @@ export class SimpleAgent {
         priceLow: latestClosedCandle.low,
         btcCandles: btcCandles,
       });
+
+      // V5.26: Persist trailing activation - once active, stays active
+      if (exitSignal.trailingActivated) {
+        this.position!.trailingActive = true;
+      }
 
       // Emergency profit-protection (exchange-side): ratchet stop only after +2% PnL.
       // This is NOT the primary exit; trailing/app logic remains the priority.

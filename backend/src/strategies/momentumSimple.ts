@@ -361,6 +361,7 @@ export interface ExitSignal {
   pnlPct?: number;
   holdMinutes?: number;
   newStopLoss?: number;  // Updated trailing stop
+  trailingActivated?: boolean;  // V5.26: Flag to persist trailing activation
 }
 
 // ============================================================================
@@ -992,7 +993,12 @@ export function shouldExitPosition(
   // This lets winners run while protecting early gains
   const trailingActivation = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;
   
-  if (pnlPct >= trailingActivation) {
+  // V5.26 FIX: Once trailing activates, it STAYS active even if pnlPct drops!
+  // Check if trailing was previously activated OR should activate now
+  const shouldActivateNow = pnlPct >= trailingActivation;
+  const trailingIsActive = position.trailingActive === true || shouldActivateNow;
+  
+  if (trailingIsActive) {
     // Trailing is active or should activate
     let trailingDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
     
@@ -1022,7 +1028,8 @@ export function shouldExitPosition(
           reason: 'trailing', 
           pnlPct, 
           holdMinutes,
-          newStopLoss: trailingStopPrice
+          newStopLoss: trailingStopPrice,
+          trailingActivated: true
         };
       }
       
@@ -1032,7 +1039,8 @@ export function shouldExitPosition(
         reason: 'none', 
         pnlPct, 
         holdMinutes,
-        newStopLoss: trailingStopPrice
+        newStopLoss: trailingStopPrice,
+        trailingActivated: true  // V5.26: Signal that trailing is now active
       };
       
     } else {
@@ -1052,7 +1060,8 @@ export function shouldExitPosition(
           reason: 'trailing', 
           pnlPct, 
           holdMinutes,
-          newStopLoss: trailingStopPrice
+          newStopLoss: trailingStopPrice,
+          trailingActivated: true
         };
       }
       
@@ -1061,7 +1070,8 @@ export function shouldExitPosition(
         reason: 'none', 
         pnlPct, 
         holdMinutes,
-        newStopLoss: trailingStopPrice
+        newStopLoss: trailingStopPrice,
+        trailingActivated: true  // V5.26: Signal that trailing is now active
       };
     }
   }
