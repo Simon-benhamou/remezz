@@ -119,20 +119,41 @@ export async function loadLocalJsonCandles(
 
   // NOTE: files are large JSON arrays. We parse once and keep in-memory (LRU).
   const raw = await fs.readFile(file, 'utf8');
-  const parsed = JSON.parse(raw) as LocalJsonCandle[];
-  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  const json = JSON.parse(raw);
+  
+  // Support two formats:
+  // 1. Array of objects: [{ openTime, open, high, low, close, volume }, ...]
+  // 2. Object with candles array: { symbol, timeframe, candles: [[ts, o, h, l, c, v], ...] }
+  let parsed: (LocalJsonCandle | number[])[];
+  if (Array.isArray(json)) {
+    parsed = json as LocalJsonCandle[];
+  } else if (json && typeof json === 'object' && Array.isArray(json.candles)) {
+    parsed = json.candles as number[][];
+  } else {
+    return null;
+  }
+  if (parsed.length === 0) return null;
 
   const candles: BacktestCandle[] = [];
   let lastTs = -Infinity;
   for (const item of parsed) {
-    const ts = Number(item?.openTime);
+    let ts: number, open: number, high: number, low: number, close: number, volume: number;
+    
+    if (Array.isArray(item)) {
+      // Format: [timestamp, open, high, low, close, volume]
+      [ts, open, high, low, close, volume] = item as number[];
+    } else {
+      // Format: { openTime, open, high, low, close, volume }
+      ts = Number((item as LocalJsonCandle)?.openTime);
+      open = Number((item as LocalJsonCandle).open);
+      high = Number((item as LocalJsonCandle).high);
+      low = Number((item as LocalJsonCandle).low);
+      close = Number((item as LocalJsonCandle).close);
+      volume = Number((item as LocalJsonCandle).volume ?? 0);
+    }
+    
     if (!Number.isFinite(ts)) continue;
     if (ts <= lastTs) continue;
-    const open = Number(item.open);
-    const high = Number(item.high);
-    const low = Number(item.low);
-    const close = Number(item.close);
-    const volume = Number(item.volume ?? 0);
     if (![open, high, low, close, volume].every((v) => Number.isFinite(v))) continue;
     candles.push({ timestamp: ts, open, high, low, close, volume });
     lastTs = ts;

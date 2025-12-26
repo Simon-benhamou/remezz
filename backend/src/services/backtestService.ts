@@ -59,6 +59,12 @@ interface BacktestSimPosition {
   trailingActive?: boolean; // V5.26: Once trailing activates, it stays active
 }
 
+export interface SignalOverrides {
+  ROC_MIN?: number;        // Override for LONG ROC threshold (default 0.025 = 2.5%)
+  VOL_MULTIPLIER?: number; // Override for LONG volume multiplier (default 1.5)
+  MAX_CONSEC_UP?: number;  // Override for max consecutive up candles (default 5)
+}
+
 export interface BacktestParams {
   startDate: Date;
   endDate: Date;
@@ -66,6 +72,7 @@ export interface BacktestParams {
   symbols: string[];
   leverage: number;
   mode?: 'legacy' | 'agent'; // Ignored - kept for API compatibility
+  signalOverrides?: SignalOverrides; // V5.12.1: Allow testing different entry thresholds
 }
 
 export interface BacktestTrade {
@@ -185,8 +192,8 @@ const SIGNAL_CONFIG = {
   LONG: {
     BB_PERIOD: MomentumConfig.ENTRY_LONG.BB_PERIOD,
     BB_STD: MomentumConfig.ENTRY_LONG.BB_STD,
-    ROC_MIN: MomentumConfig.ENTRY_LONG.ROC_MIN, // 0.025 = 2.5% as ratio
-    VOL_MULTIPLIER: MomentumConfig.ENTRY_LONG.VOL_MULTIPLIER,
+    ROC_MIN: MomentumConfig.ENTRY_LONG.ROC_MIN, // V5.13: 0.0175 = 1.75% as ratio
+    VOL_MULTIPLIER: MomentumConfig.ENTRY_LONG.VOL_MULTIPLIER, // V5.13: 1.15x
     MAX_CONSEC_UP: MomentumConfig.ENTRY_LONG.MAX_CONSEC_UP,
   },
   SHORT: {
@@ -402,7 +409,7 @@ interface Signal {
   reason?: string;
 }
 
-function checkSignal(candles: Candle[], isBull: boolean): Signal {
+function checkSignal(candles: Candle[], isBull: boolean, overrides?: SignalOverrides): Signal {
   if (candles.length < 50) return { valid: false, reason: 'insufficient_data' };
 
   const closes = candles.map((c) => c.close);
@@ -419,12 +426,17 @@ function checkSignal(candles: Candle[], isBull: boolean): Signal {
 
   const stochRsi = SIGNAL_CONFIG.STOCHRSI.ENABLED ? calcStochRSI(closes, 14, 14, 3) : null;
 
+  // Use overrides if provided, otherwise use default SIGNAL_CONFIG
+  const rocMin = overrides?.ROC_MIN ?? SIGNAL_CONFIG.LONG.ROC_MIN;
+  const volMultiplier = overrides?.VOL_MULTIPLIER ?? SIGNAL_CONFIG.LONG.VOL_MULTIPLIER;
+  const maxConsecUp = overrides?.MAX_CONSEC_UP ?? SIGNAL_CONFIG.LONG.MAX_CONSEC_UP;
+
   if (isBull) {
-    // LONG conditions V5.12
+    // LONG conditions V5.12 (with overrides support)
     const breakoutOk = current.close > bb.upper;
-    const rocOk = roc10 >= SIGNAL_CONFIG.LONG.ROC_MIN;
-    const volOk = volRatio >= SIGNAL_CONFIG.LONG.VOL_MULTIPLIER;
-    const consecOk = countConsecUp(candles) <= SIGNAL_CONFIG.LONG.MAX_CONSEC_UP;
+    const rocOk = roc10 >= rocMin;
+    const volOk = volRatio >= volMultiplier;
+    const consecOk = countConsecUp(candles) <= maxConsecUp;
 
     if (isBullish && breakoutOk && rocOk && volOk && consecOk) {
       return { valid: true, side: 'long', reason: 'bull_breakout' };
@@ -591,7 +603,7 @@ function calculatePnl(
 // ============================================================================
 
 export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
-  const { startDate, endDate, initialCapital, symbols, leverage } = params;
+  const { startDate, endDate, initialCapital, symbols, leverage, signalOverrides } = params;
 
   console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
 
@@ -1034,8 +1046,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
         const isBullRegime = btcPriceForRegime > btcSma200;
 
-        // Use local checkSignal (V5.12 strategy)
-        const signal = checkSignal(windowCandles, isBullRegime);
+        // Use local checkSignal (V5.12 strategy) with optional overrides
+        const signal = checkSignal(windowCandles, isBullRegime, signalOverrides);
         if (!signal.valid || !signal.side) continue;
         
         // V5.23: Calculate enhanced signal quality score
