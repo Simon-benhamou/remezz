@@ -20,10 +20,11 @@ const __dirname = path.dirname(__filename);
 
 // Configuration
 const DATA_DIR = path.join(__dirname, '../data');
-const TARGET_DATE = new Date('2024-12-25T23:59:59Z'); // 25 décembre 2024
+const TARGET_DATE = new Date('2025-12-27T23:59:59Z'); // 27 décembre 2025 (today)
 const START_DATE = new Date('2024-01-01T00:00:00Z'); // Début 2024
 
 // Symbols to fetch (all symbols from backtest dropdown)
+// Note: FTM was rebranded to SONIC on Binance in late 2024
 const SYMBOLS = [
   'BTC/USDT:USDT',
   'ETH/USDT:USDT',
@@ -40,7 +41,7 @@ const SYMBOLS = [
   'SUI/USDT:USDT',
   'UNI/USDT:USDT',
   'LTC/USDT:USDT',
-  'FTM/USDT:USDT',
+  'SONIC/USDT:USDT',  // Formerly FTM
   'BCH/USDT:USDT',
   'APT/USDT:USDT',
 ];

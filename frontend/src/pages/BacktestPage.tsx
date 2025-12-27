@@ -697,7 +697,8 @@ export default function BacktestPage() {
             initialCapital: 2000,
             leverage: 4.5,
             symbols: defaultSymbols,
-            dateRange: [dayjs().subtract(3, 'month'), dayjs()],
+            // Data files cover 2024-01-01 to 2025-12-26
+            dateRange: [dayjs('2024-01-01'), dayjs('2025-12-26')],
           }}
           style={{ gap: 16, flexWrap: 'wrap' }}
         >
