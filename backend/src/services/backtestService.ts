@@ -587,23 +587,26 @@ function calculatePnl(
       ? ((exitPrice - entryPrice) / entryPrice) * 100
       : ((entryPrice - exitPrice) / entryPrice) * 100;
 
-  // PnL% on margin (ROE) = price change × leverage
-  const grossPnlPct = pricePct * leverage;
+  // Calculate notional
+  const notionalUsd = marginUsd * leverage;
 
-  // Costs (on notional, so multiply by leverage to get impact on margin %)
-  const tradingFees = CONFIG.COSTS.TRADING_FEE_PCT * 2; // Entry + Exit
-  const slippage = CONFIG.COSTS.SLIPPAGE_PCT * 2;
+  // PnL$ = price change % applied to notional (this is the absolute profit/loss in dollars)
+  const grossPnlUsd = (pricePct / 100) * notionalUsd;
+
+  // Costs in $ (calculated as % of notional)
+  const tradingFees = CONFIG.COSTS.TRADING_FEE_PCT * 2; // Entry + Exit (0.08%)
+  const slippage = CONFIG.COSTS.SLIPPAGE_PCT * 2; // (0.10%)
   const fundingPeriods = Math.floor(holdBars / CONFIG.COSTS.FUNDING_INTERVAL_BARS);
   const funding = fundingPeriods * CONFIG.COSTS.FUNDING_RATE_PCT;
+  
+  const totalCostsNotionalPct = tradingFees + slippage + funding; // % of notional
+  const feesUsd = (totalCostsNotionalPct / 100) * notionalUsd;
+  
+  const netPnlUsd = grossPnlUsd - feesUsd;
 
-  const totalCostsPct = (tradingFees + slippage + funding) * leverage;
-  const netPnlPct = grossPnlPct - totalCostsPct;
-
-  // 🐛 FIX: Calculate PnL$ on NOTIONAL, not margin
-  // PnL$ = price change $ × qty = price change % × notional
-  const notionalUsd = marginUsd * leverage;
-  const feesUsd = (totalCostsPct / 100) * marginUsd;
-  const netPnlUsd = (pricePct / 100) * notionalUsd - feesUsd;
+  // PnL% on margin (ROE) for display purposes
+  const grossPnlPct = (grossPnlUsd / marginUsd) * 100;
+  const netPnlPct = (netPnlUsd / marginUsd) * 100;
 
   return { grossPnlPct, netPnlPct, netPnlUsd, feesUsd };
 }
