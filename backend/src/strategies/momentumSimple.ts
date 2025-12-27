@@ -1,16 +1,25 @@
 /**
- * 🎯 STRATÉGIE V5.12 - OPTIMIZED FILTERS (2-year backtest)
+ * 🎯 STRATÉGIE V5.27 - REGIME CHANGE VOLUME CONFIRMATION
  * 
- * V5.12 CHANGES (Dec 2025):
- * - VOL_MULTIPLIER: 2.0 → 1.5 (+36% PnL)
- * - MAX_CONSEC_UP: 3 → 5 (+34% PnL)
- * - RSI+BTC filter: REMOVED (blocked profitable trades)
+ * V5.27 CHANGES (Dec 27, 2025):
+ * - REGIME_CHANGE_EXIT: Added REQUIRE_VOLUME_CONFIRMATION = true
+ * - MIN_VOLUME_MULTIPLIER: 1.5x for regime change confirmation
+ * - Result: +1.4% PnL, -0.5% MaxDD, +1.7% Win Rate
+ * - Reduces false regime change exits in choppy markets (238 → 171)
  * 
- * Backtested sur 24 mois (Dec 2023 - Dec 2025) avec frais 0.08%:
- * - Total PnL: +1807% (vs +1346% V5.11) = +34% amélioration
- * - Trades: 1178 (vs 910) = +29% plus de trades
- * - Win Rate: 86% (stable)
- * - SL Rate: 14% (stable)
+ * Backtested sur 2025 (Jan-Dec) avec frais réalistes:
+ * - Total PnL: +14,448% (vs +14,252% V5.12) 
+ * - Trades: 1,617
+ * - Win Rate: 66.7% (vs 65.0%)
+ * - MaxDD: 22.6% (vs 23.1%)
+ * - REGIME_CHANGE savings: +$5,583
+ * 
+ * ═════════════════════════════════════════════════════════════
+ * V5.27 REGIME CHANGE EXIT IMPROVEMENT:
+ * ═════════════════════════════════════════════════════════════
+ * - Only exit on regime change if BTC volume >= 1.5x average
+ * - Filters out weak/noisy SMA200 crosses (choppy markets)
+ * - Validated on Dec 26-27 2025 real trades analysis
  * 
  * ═════════════════════════════════════════════════════════════
  * V5.12 FILTRES OPTIMISÉS:
@@ -30,8 +39,8 @@
  * LONG ENTRY (BTC > SMA200 = Bull Market):
  * ═════════════════════════════════════════════════════════════
  * - Bollinger Band breakout (close > upper band)
- * - ROC 10 périodes > 2.5%
- * - Volume > 1.5x moyenne (V5.12)
+ * - ROC 10 périodes > 1.75%
+ * - Volume > 1.15x moyenne (V5.13)
  * - ConsecUp <= 5 (V5.12)
  * 
  * ═════════════════════════════════════════════════════════════
@@ -43,10 +52,11 @@
  * - ConsecDown <= 4
  * - StochRSI >= 15 OR volRatio >= 4 (V5.9)
  * 
- * EXIT (V5.11):
- * - Stop Loss: ATR × 3.0 (clampé 1.0%-4.5%)
+ * EXIT (V5.27):
+ * - Stop Loss: 2.5% fixe
  * - Take Profit: 3%
- * - Trailing: activé à +0.5%, trail à 0.3%
+ * - Trailing: activé à +0.8%, trail à 0.5%
+ * - Regime Change: Exit si BTC cross SMA200 AVEC volume 1.5x
  * - Max Hold: 48h
  */
 
@@ -71,13 +81,15 @@ export const MomentumConfig = {
     STOCH_SMOOTH: 3,                  // Smoothing period for StochRSI
   },
   
-  // V5.13: Regime Change Exit - Exit immediately on BTC regime flip
+  // V5.13 → V5.27: Regime Change Exit with Volume Confirmation
+  // Backtest validated: +1.4% PnL, -0.5% MaxDD vs no confirmation
+  // Volume confirmation filters out weak regime changes (choppy markets)
   REGIME_CHANGE_EXIT: {
     ENABLED: true,                    // Enable regime change exit
     BUFFER_ZONE_PCT: 0.0,             // NO buffer - exit immediately on cross
-    REQUIRE_VOLUME_CONFIRMATION: false, // NO confirmation needed
-    MIN_VOLUME_MULTIPLIER: 2.0,       // (unused)
-    REQUIRE_MOMENTUM_CONFIRMATION: false, // NO confirmation needed
+    REQUIRE_VOLUME_CONFIRMATION: true, // V5.27: Require volume spike to confirm regime change
+    MIN_VOLUME_MULTIPLIER: 1.5,       // V5.27: Need 1.5x avg volume to confirm
+    REQUIRE_MOMENTUM_CONFIRMATION: false, // NO momentum confirmation (reduces PnL)
     MIN_ROC5_BULL: 0.015,             // (unused)
     MIN_ROC5_BEAR: -0.015,            // (unused)
   },

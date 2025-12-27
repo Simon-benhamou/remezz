@@ -98,8 +98,8 @@ model AgentSession {
   positions          Position[]
   SessionKpi         SessionKpi?              @relation("AgentSessionToSessionKpi")
   strategies         Strategy[]
-  triggers           TriggerLog[]
   trades             Trade[]
+  triggers           TriggerLog[]
 
   @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
@@ -256,9 +256,9 @@ model Fill {
   symbol         String?
   strategyFamily String?
   strategyId     String?
-  exitReason     String?       // TRAIL, SL, TIME, SIGNAL, MANUAL
-  entryTs        DateTime?     // When position was opened (for duration calc)
-  maxPnlPct      Float?        // High water mark PnL reached
+  entryTs        DateTime?
+  exitReason     String?
+  maxPnlPct      Float?
   order          Order         @relation(fields: [orderId], references: [id])
   session        AgentSession? @relation(fields: [sessionId], references: [id])
   trade          Trade?        @relation(fields: [tradeId], references: [id])
@@ -272,10 +272,10 @@ model Fill {
 }
 
 model Trade {
-  id              String        @id @default(cuid())
+  id              String       @id @default(cuid())
   sessionId       String
   symbol          String
-  positionSide    String        // 'long' or 'short'
+  positionSide    String
   qty             Float
   entryPrice      Float
   exitPrice       Float
@@ -286,16 +286,16 @@ model Trade {
   roiPct          Float?
   leverage        Float?
   roePct          Float?
-  orderCount      Int           @default(0)
+  orderCount      Int          @default(0)
   exitReason      String?
   durationMinutes Int?
   maxPnlPct       Float?
   entryTs         DateTime
   exitTs          DateTime
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-  session         AgentSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
   fills           Fill[]
+  session         AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, exitTs])
   @@index([symbol, exitTs])

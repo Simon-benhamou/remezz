@@ -146,20 +146,25 @@ export interface BacktestResult {
 }
 
 // ============================================================================
-// CONFIG (synced with MomentumConfig)
+// CONFIG (synced with MomentumConfig) - V5.27: Uses getters for dynamic values
 // ============================================================================
 
 const CONFIG = {
-  EXIT: {
-    STOP_LOSS_PCT: MomentumConfig.EXIT.STOP_LOSS_PCT,
-    TAKE_PROFIT_PCT: MomentumConfig.EXIT.PROFIT_TARGET_PCT,
-    TRAILING_ACTIVATION_PCT: MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT,
-    TRAILING_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_DISTANCE_PCT,
-    TRAILING_WIDEN_AT_PCT: MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT,
-    TRAILING_WIDE_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT,
-    MAX_HOLD_BARS: 192, // 48h in 15m bars
+  // V5.27: Use getters to read MomentumConfig dynamically (for testing)
+  get EXIT() {
+    return {
+      STOP_LOSS_PCT: MomentumConfig.EXIT.STOP_LOSS_PCT,
+      TAKE_PROFIT_PCT: MomentumConfig.EXIT.PROFIT_TARGET_PCT,
+      TRAILING_ACTIVATION_PCT: MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT,
+      TRAILING_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_DISTANCE_PCT,
+      TRAILING_WIDEN_AT_PCT: MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT,
+      TRAILING_WIDE_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT,
+      MAX_HOLD_BARS: 192, // 48h in 15m bars
+    };
   },
-  REGIME_CHANGE_EXIT: MomentumConfig.REGIME_CHANGE_EXIT,
+  get REGIME_CHANGE_EXIT() {
+    return MomentumConfig.REGIME_CHANGE_EXIT;
+  },
   COSTS: {
     TRADING_FEE_PCT: 0.04, // Binance taker fee
     SLIPPAGE_PCT: 0.05, // Realistic slippage
