@@ -879,7 +879,39 @@ export class SimpleAgent {
       const trailingMode = (MomentumConfig.EXIT as any).REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
 
       // ----------------------------------------------------------------------
+      // 🚨 CRITICAL: Check REGIME_CHANGE and MOMENTUM_REVERSAL FIRST
+      // These are protective exits that should trigger BEFORE stop loss
+      // to save 5-10% of loss when regime flips
+      // ----------------------------------------------------------------------
+      try {
+        const symbolCandles = await this.fetchCandles();
+        const btcCandles = await this.fetchBtcCandles();
+        const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
+        
+        // Check if regime changed or momentum reversed
+        const regimeExitSignal = shouldExitPosition(this.position!, currentPrice, candles, {
+          nowMs: Date.now(),
+          priceHigh: currentPrice,
+          priceLow: currentPrice,
+          btcCandles: btcCandles, // ✅ Enable regime detection in RT
+        });
+
+        // If regime_change or momentum_reversal detected, exit IMMEDIATELY
+        if (regimeExitSignal.shouldExit && 
+            (regimeExitSignal.reason === 'regime_change' || regimeExitSignal.reason === 'momentum_reversal')) {
+          this.stopRealtimeExitMonitor();
+          logger.warn(`🚨 [${symbol}] CRITICAL EXIT (${regimeExitSignal.reason}) detected in RT | PnL=${regimeExitSignal.pnlPct?.toFixed(2)}% | Exiting BEFORE stop loss!`);
+          await this.closePosition(this.position!, currentPrice, regimeExitSignal.reason);
+          return;
+        }
+      } catch (err) {
+        logger.debug(`[${symbol}] Failed to check regime in RT: ${String((err as any)?.message || err)}`);
+        // Continue to stop loss check if regime check fails
+      }
+
+      // ----------------------------------------------------------------------
       // 1) STOPLOSS realtime (ticker-based, protective)
+      // Only trigger if regime_change didn't exit first
       // ----------------------------------------------------------------------
       if (rtStoplossEnabled) {
         const bufferPct = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_BUFFER_PCT ?? 0.05);
@@ -1965,6 +1997,11 @@ export class SimpleAgent {
         priceLow: latestClosedCandle.low,
         btcCandles: btcCandles,
       });
+
+      // 🔍 DEBUG: Log regime change detection for debugging timing issues
+      if (exitSignal.shouldExit && exitSignal.reason === 'regime_change') {
+        logger.warn(`🚨 [${symbol}] REGIME CHANGE DETECTED on 15m close | candle_ts=${new Date(latestClosedCandle.timestamp).toISOString()} | price=$${currentPrice.toFixed(4)} | PnL=${exitSignal.pnlPct?.toFixed(2)}%`);
+      }
 
       // V5.26: Persist trailing activation - once active, stays active
       if (exitSignal.trailingActivated) {

@@ -581,11 +581,13 @@ function calculatePnl(
   leverage: number,
   holdBars: number,
 ): { grossPnlPct: number; netPnlPct: number; netPnlUsd: number; feesUsd: number } {
+  // Calculate price change percentage
   const pricePct =
     side === 'long'
       ? ((exitPrice - entryPrice) / entryPrice) * 100
       : ((entryPrice - exitPrice) / entryPrice) * 100;
 
+  // PnL% on margin (ROE) = price change × leverage
   const grossPnlPct = pricePct * leverage;
 
   // Costs (on notional, so multiply by leverage to get impact on margin %)
@@ -597,8 +599,11 @@ function calculatePnl(
   const totalCostsPct = (tradingFees + slippage + funding) * leverage;
   const netPnlPct = grossPnlPct - totalCostsPct;
 
+  // 🐛 FIX: Calculate PnL$ on NOTIONAL, not margin
+  // PnL$ = price change $ × qty = price change % × notional
+  const notionalUsd = marginUsd * leverage;
   const feesUsd = (totalCostsPct / 100) * marginUsd;
-  const netPnlUsd = (netPnlPct / 100) * marginUsd;
+  const netPnlUsd = (pricePct / 100) * notionalUsd - feesUsd;
 
   return { grossPnlPct, netPnlPct, netPnlUsd, feesUsd };
 }
