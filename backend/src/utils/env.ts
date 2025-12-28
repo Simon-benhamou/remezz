@@ -418,7 +418,7 @@ export function getConfig(): Cfg {
   const tradeFrequencyHysteresis = Math.max(0, Math.min(0.3, Number(e.TRADE_FREQUENCY_HYSTERESIS || '0.05')));
 
   return {
-    EXCHANGE_ID: e.EXCHANGE_ID || "cryptocom",
+    EXCHANGE_ID: e.EXCHANGE_ID || "binance",
     SYMBOL: e.SYMBOL || "BTCUSDT",
     // REMOVED: API_KEY and API_SECRET - now using user-specific keys from database
     API_PASSWORD: e.API_PASSWORD || "",

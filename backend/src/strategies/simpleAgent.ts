@@ -888,25 +888,12 @@ export class SimpleAgent {
         const btcCandles = await this.fetchBtcCandles();
         const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
         
-        // Check if regime changed or momentum reversed
-        const regimeExitSignal = shouldExitPosition(this.position!, currentPrice, candles, {
-          nowMs: Date.now(),
-          priceHigh: currentPrice,
-          priceLow: currentPrice,
-          btcCandles: btcCandles, // ✅ Enable regime detection in RT
-        });
-
-        // If regime_change or momentum_reversal detected, exit IMMEDIATELY
-        if (regimeExitSignal.shouldExit && 
-            (regimeExitSignal.reason === 'regime_change' || regimeExitSignal.reason === 'momentum_reversal')) {
-          this.stopRealtimeExitMonitor();
-          logger.warn(`🚨 [${symbol}] CRITICAL EXIT (${regimeExitSignal.reason}) detected in RT | PnL=${regimeExitSignal.pnlPct?.toFixed(2)}% | Exiting BEFORE stop loss!`);
-          await this.closePosition(this.position!, currentPrice, regimeExitSignal.reason);
-          return;
-        }
+        // ⚠️  STRATEGIC EXITS ONLY ON 15M CLOSE
+        // Regime change and momentum reversal are checked in checkExit() on 15m candle close
+        // for 100% backtest parity. Ticker monitor focuses only on protective stops.
       } catch (err) {
-        logger.debug(`[${symbol}] Failed to check regime in RT: ${String((err as any)?.message || err)}`);
-        // Continue to stop loss check if regime check fails
+        logger.debug(`[${symbol}] Failed to monitor in RT: ${String((err as any)?.message || err)}`);
+        // Continue to stop loss check if monitoring fails
       }
 
       // ----------------------------------------------------------------------
