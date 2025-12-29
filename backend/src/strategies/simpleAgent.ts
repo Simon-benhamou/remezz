@@ -2425,18 +2425,17 @@ export class SimpleAgent {
       // WebSocket not ready, fall through to cache/wait
     }
     
-    // 3. Check local REST cache
+    // 3. Check local cache (from previous WS data)
     if (this.candleCache && Date.now() - this.candleCache.fetchedAt < this.CACHE_TTL_MS) {
       return this.candleCache.candles;
     }
     
-    // 4. REST API fallback (only when WebSocket doesn't have enough data)
-    // V5.24: Should rarely happen now that WebSocket is initialized before server starts
-    try {
-      logger.info(`🌐 [${symbol}] Fetching via REST API (WebSocket cache insufficient)`);
-      const ohlcv = await this.config.exchange.fetchOHLCV(symbol, '15m', undefined, 100);
-      
-      const candles: Candle[] = ohlcv.map(c => ({
+    // 4. NO REST FALLBACK - WebSocket only to avoid IP bans
+    // If WebSocket doesn't have enough data yet, use whatever we have
+    // V5.29: Removed REST fallback - caused IP bans from Binance
+    const wsKlinesPartial = getKlinesOhlcvFromWebSocket(binanceSymbol, '15m');
+    if (wsKlinesPartial && wsKlinesPartial.length > 0) {
+      const candles: Candle[] = wsKlinesPartial.map(c => ({
         timestamp: c[0] as number,
         open: c[1] as number,
         high: c[2] as number,
@@ -2444,18 +2443,12 @@ export class SimpleAgent {
         close: c[4] as number,
         volume: c[5] as number,
       }));
-      
-      // Seed WebSocket cache with REST data for future use
-      seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
-      
       this.candleCache = { candles, fetchedAt: Date.now() };
-      
       return candles;
-      
-    } catch (error) {
-      logger.error(`❌ [${symbol}] Failed to fetch candles:`, error);
-      return this.candleCache?.candles || [];
     }
+    
+    // No data - return cached or empty (agent will skip tick)
+    return this.candleCache?.candles || [];
   }
   
   private async fetchBtcCandles(): Promise<Candle[]> {
@@ -2497,55 +2490,29 @@ export class SimpleAgent {
       // WebSocket cache miss - continue to cached/wait
     }
     
-    // 3. Check global REST cache (shared between all agents)
+    // 3. Check global cache (from previous WS data)
     if (globalBtcCandleCache && Date.now() - globalBtcCandleCache.fetchedAt < GLOBAL_BTC_CACHE_TTL_MS) {
       return globalBtcCandleCache.candles;
     }
     
-    // 4. If another agent is already fetching via REST, wait for it
-    if (globalBtcCacheFetchingPromise) {
-      try {
-        return await globalBtcCacheFetchingPromise;
-      } catch {
-        // Fall through to fetch ourselves
-      }
+    // 4. NO REST FALLBACK - WebSocket only to avoid IP bans
+    // V5.29: Removed REST fallback - caused IP bans from Binance
+    const wsKlinesPartial = getKlinesOhlcvFromWebSocket(btcSymbol, '15m');
+    if (wsKlinesPartial && wsKlinesPartial.length > 0) {
+      const candles: Candle[] = wsKlinesPartial.map(c => ({
+        timestamp: c[0] as number,
+        open: c[1] as number,
+        high: c[2] as number,
+        low: c[3] as number,
+        close: c[4] as number,
+        volume: c[5] as number,
+      }));
+      globalBtcCandleCache = { candles, fetchedAt: Date.now() };
+      return candles;
     }
     
-    // 5. REST API fallback - set up promise so other agents wait
-    // V5.24: Should rarely happen now that WebSocket is initialized before server starts
-    const fetchPromise = (async () => {
-      try {
-        logger.info('🌐 [BTC] Fetching via REST API (WebSocket cache insufficient)');
-        // V5: Need 220 candles for SMA200 regime filter with some buffer
-        const ohlcv = await this.config.exchange.fetchOHLCV(btcSymbolCcxt, '15m', undefined, 220);
-        
-        const candles: Candle[] = ohlcv.map(c => ({
-          timestamp: c[0] as number,
-          open: c[1] as number,
-          high: c[2] as number,
-          low: c[3] as number,
-          close: c[4] as number,
-          volume: c[5] as number,
-        }));
-        
-        // Seed WebSocket cache with REST data for future use
-        seedKlinesFromWebSocket(btcSymbol, '15m', ohlcv);
-        
-        // Update global cache
-        globalBtcCandleCache = { candles, fetchedAt: Date.now() };
-        
-        return candles;
-        
-      } catch (error) {
-        logger.error(`❌ [BTC] Failed to fetch BTC candles via REST:`, error);
-        return globalBtcCandleCache?.candles || [];
-      } finally {
-        globalBtcCacheFetchingPromise = null;
-      }
-    })();
-    
-    globalBtcCacheFetchingPromise = fetchPromise;
-    return fetchPromise;
+    // No data - return cached or empty
+    return globalBtcCandleCache?.candles || [];
   }
   
   /**
