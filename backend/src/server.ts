@@ -3377,7 +3377,51 @@ async function restoreActiveSessions() {
               await new Promise(r => setTimeout(r, 1500));
             }
             
-            // 🚀 Try WebSocket cache FIRST (0 weight)
+            // � CRITICAL: Fetch existing positions from Binance to seed cache
+            // WebSocket user data stream only sends updates, not initial state!
+            try {
+              const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
+              if (globalRestCircuitBreaker.canMakeRequest() && !isIpBanned() && exchange.fetchPositions) {
+                logger.info(`📊 [LIVE] Fetching existing positions from Binance...`);
+                const positions = await exchange.fetchPositions();
+                let seededCount = 0;
+                
+                for (const pos of positions) {
+                  const symbol = pos?.symbol || pos?.info?.symbol;
+                  const positionAmt = parseFloat(pos?.contracts || pos?.info?.positionAmt || '0');
+                  const entryPrice = parseFloat(pos?.entryPrice || pos?.info?.entryPrice || '0');
+                  const unrealizedPnl = parseFloat(pos?.unrealizedPnl || pos?.info?.unRealizedProfit || '0');
+                  
+                  if (Math.abs(positionAmt) > 0.000001 && symbol) {
+                    // Convert to Binance symbol format (remove / and :)
+                    const binanceSymbol = symbol.replace(/[/:]/g, '').toUpperCase();
+                    const side = positionAmt > 0 ? 'long' : 'short';
+                    
+                    seedPositionCache(userId, binanceSymbol, {
+                      positionAmt: positionAmt,
+                      entryPrice: entryPrice,
+                      unrealizedPnl: unrealizedPnl,
+                      side: side,
+                      updateTime: Date.now(),
+                    });
+                    
+                    logger.info(`📊 [LIVE] Seeded position: ${binanceSymbol} ${side} ${Math.abs(positionAmt)} @ $${entryPrice}`);
+                    seededCount++;
+                  }
+                }
+                
+                if (seededCount > 0) {
+                  logger.info(`✅ [LIVE] Position cache seeded with ${seededCount} existing positions`);
+                }
+                
+                // Mark as seeded
+                markPositionCacheSeeded(userId);
+              }
+            } catch (posErr: any) {
+              logger.warn(`⚠️ [LIVE] Failed to fetch positions:`, posErr?.message);
+            }
+            
+            // �🚀 Try WebSocket cache FIRST (0 weight)
             const wsBalance = await getBalanceFromWebSocket(userId, 'USDT');
             if (wsBalance && wsBalance.total > 0) {
               currentCapitalUsd = wsBalance.total;
