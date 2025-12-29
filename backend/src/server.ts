@@ -567,11 +567,52 @@ app.post("/api/agent/start", async (req, res) => {
           });
         }
         
-        // 🔧 Position seeding: Try WebSocket first, REST fallback only if circuit breaker allows
-        // Position cache is populated automatically by user data stream
-        // Mark as seeded since WebSocket will handle updates
+        // 🔧 CRITICAL FIX: Fetch existing positions from Binance at startup
+        // WebSocket user data stream only sends ACCOUNT_UPDATE on changes, not initial state!
+        // Without this, agents won't know about positions opened before restart.
+        try {
+          const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
+          if (globalRestCircuitBreaker.canMakeRequest() && !isIpBanned() && exchange.fetchPositions) {
+            logger.info(`[Live] Fetching existing positions from Binance...`);
+            const positions = await exchange.fetchPositions();
+            let seededCount = 0;
+            
+            for (const pos of positions) {
+              const symbol = pos?.symbol || pos?.info?.symbol;
+              const positionAmt = parseFloat(pos?.contracts || pos?.info?.positionAmt || '0');
+              const entryPrice = parseFloat(pos?.entryPrice || pos?.info?.entryPrice || '0');
+              const unrealizedPnl = parseFloat(pos?.unrealizedPnl || pos?.info?.unRealizedProfit || '0');
+              
+              if (Math.abs(positionAmt) > 0.000001 && symbol) {
+                // Convert to Binance symbol format (remove / and :)
+                const binanceSymbol = symbol.replace(/[/:]/g, '').toUpperCase();
+                const side = positionAmt > 0 ? 'long' : 'short';
+                
+                seedPositionCache(userId, binanceSymbol, {
+                  positionAmt: positionAmt,
+                  entryPrice: entryPrice,
+                  unrealizedPnl: unrealizedPnl,
+                  side: side,
+                  updateTime: Date.now(),
+                });
+                
+                logger.info(`📊 [Live] Seeded position: ${binanceSymbol} ${side} ${Math.abs(positionAmt)} @ $${entryPrice}`);
+                seededCount++;
+              }
+            }
+            
+            logger.info(`✅ [Live] Position cache seeded with ${seededCount} existing positions`);
+          } else {
+            logger.warn(`⚠️ [Live] Cannot fetch positions (circuit breaker or no method) - agents may not detect existing positions!`);
+          }
+        } catch (posErr: any) {
+          logger.warn(`⚠️ [Live] Failed to fetch positions:`, posErr?.message);
+          // Continue anyway - positions will be detected on next ACCOUNT_UPDATE
+        }
+        
+        // Mark as seeded after attempting to fetch
         markPositionCacheSeeded(userId);
-        logger.info(`✅ [Live] Position cache initialized (WebSocket will provide updates)`);
+        logger.info(`✅ [Live] Position cache initialized`);
         
       } catch (err: any) {
         logger.error('[Live] Failed to initialize live session:', err?.message || err);
@@ -2220,6 +2261,46 @@ app.post("/api/agent/restart", async (req, res) => {
         logger.error('[Restart Live] Failed to fetch Binance balance:', err?.message || err);
         return res.status(500).json({ error: 'Failed to fetch Binance balance' });
       }
+      
+      // 🔧 CRITICAL FIX: Fetch existing positions from Binance at restart
+      // WebSocket user data stream only sends ACCOUNT_UPDATE on changes, not initial state!
+      try {
+        const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
+        if (globalRestCircuitBreaker.canMakeRequest() && !isIpBanned() && exchange.fetchPositions) {
+          logger.info(`[Restart Live] Fetching existing positions from Binance...`);
+          const positions = await exchange.fetchPositions();
+          let seededCount = 0;
+          
+          for (const pos of positions) {
+            const symbol = pos?.symbol || pos?.info?.symbol;
+            const positionAmt = parseFloat(pos?.contracts || pos?.info?.positionAmt || '0');
+            const entryPrice = parseFloat(pos?.entryPrice || pos?.info?.entryPrice || '0');
+            const unrealizedPnl = parseFloat(pos?.unrealizedPnl || pos?.info?.unRealizedProfit || '0');
+            
+            if (Math.abs(positionAmt) > 0.000001 && symbol) {
+              const binanceSymbol = symbol.replace(/[/:]/g, '').toUpperCase();
+              const side = positionAmt > 0 ? 'long' : 'short';
+              
+              seedPositionCache(userId, binanceSymbol, {
+                positionAmt: positionAmt,
+                entryPrice: entryPrice,
+                unrealizedPnl: unrealizedPnl,
+                side: side,
+                updateTime: Date.now(),
+              });
+              
+              logger.info(`📊 [Restart Live] Seeded position: ${binanceSymbol} ${side} ${Math.abs(positionAmt)} @ $${entryPrice}`);
+              seededCount++;
+            }
+          }
+          
+          logger.info(`✅ [Restart Live] Position cache seeded with ${seededCount} existing positions`);
+        }
+      } catch (posErr: any) {
+        logger.warn(`⚠️ [Restart Live] Failed to fetch positions:`, posErr?.message);
+      }
+      
+      markPositionCacheSeeded(userId);
     } else {
       // 🟢 PAPER MODE: Use capitalUsd + accumulated PnL
       try {

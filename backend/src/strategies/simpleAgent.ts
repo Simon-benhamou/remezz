@@ -2903,18 +2903,20 @@ export class SimpleAgent {
         entryPrice = wsPosition.entryPrice;
         unrealizedPnl = wsPosition.unrealizedPnl;
       } else if (this.config.exchange.fetchPositions) {
-        // 🔧 FIX: Only fall back to REST if:
-        //    - Position cache was NOT seeded at startup (server didn't fetch positions)
-        //    - AND (we have a local position OR this is the first sync)
-        // If cache was seeded, wsPosition=null means no position - no need for REST!
+        // 🔧 IMPROVED: Fall back to REST if:
+        //    1. Position cache was NOT seeded at startup
+        //    2. OR we have a local position but WS says no position (first sync only - catch missed closes)
+        //       This handles case where position was closed on Binance while app was down
         const cacheWasSeeded = isPositionCacheSeeded(this.config.userId);
-        const shouldFallbackToRest = !cacheWasSeeded && (this.position !== null || isFirstSync);
+        const hasLocalPositionButNoWs = this.position !== null && !wsPosition;
+        const shouldFallbackToRest = !cacheWasSeeded || (isFirstSync && hasLocalPositionButNoWs);
         
         if (!shouldFallbackToRest) {
-          // Cache was seeded or no local position - no REST needed
+          // Cache was seeded, WS is authoritative
           if (cacheWasSeeded && this.position !== null) {
-            // We have a local position but cache says no position - position was closed!
-            // Continue to handle the mismatch below
+            // We have a local position but cache says no position - position was closed on Binance!
+            logger.info(`🔄 [${symbol}] Cache seeded, WS has no position but local has one - position closed on exchange`);
+            // Continue to handle the mismatch below (exchangeQty stays 0)
           } else {
             return;
           }
