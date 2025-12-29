@@ -27,7 +27,7 @@ import portfolioRouter from "./routes/portfolio.js";
 import { router as backtestRouter } from "./routes/backtest.js";
 
 // Services
-import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket, seedKlinesFromWebSocket } from "./services/binanceWebSocket.js";
+import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket, seedKlinesFromWebSocket, toBinanceSymbolId } from "./services/binanceWebSocket.js";
 import { initNotificationService } from "./services/notificationService.js";
 
 // Strategy
@@ -3393,8 +3393,9 @@ async function restoreActiveSessions() {
                   const unrealizedPnl = parseFloat(pos?.unrealizedPnl || pos?.info?.unRealizedProfit || '0');
                   
                   if (Math.abs(positionAmt) > 0.000001 && symbol) {
-                    // Convert to Binance symbol format (remove / and :)
-                    const binanceSymbol = symbol.replace(/[/:]/g, '').toUpperCase();
+                    // Use toBinanceSymbolId for proper normalization
+                    // ETH/USDT:USDT → ETHUSDT (not ETHUSDTUSDT!)
+                    const binanceSymbol = toBinanceSymbolId(symbol);
                     const side = positionAmt > 0 ? 'long' : 'short';
                     
                     seedPositionCache(userId, binanceSymbol, {
