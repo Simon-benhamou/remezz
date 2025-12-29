@@ -677,7 +677,7 @@ export class SimpleAgent {
   
   // Position sync throttling (WebSocket is primary, REST is fallback)
   private lastPositionSync: number = 0;
-  private readonly POSITION_SYNC_INTERVAL_MS = 30_000; // 30 seconds (REST fallback, not WS)
+  private readonly POSITION_SYNC_INTERVAL_MS = 600_000; // 10 minutes - CRITICAL: Avoid REST spam causing IP bans
 
   // V5.13: Missing trade reconciliation throttling
   private lastMissingTradesCheck: number = 0;
@@ -2909,55 +2909,25 @@ export class SimpleAgent {
         exchangeSide = wsPosition.side === 'short' ? 'short' : 'long';
         entryPrice = wsPosition.entryPrice;
         unrealizedPnl = wsPosition.unrealizedPnl;
-      } else if (this.config.exchange.fetchPositions) {
-        // 🔧 IMPROVED: Fall back to REST if:
-        //    1. Position cache was NOT seeded at startup
-        //    2. OR we have a local position but WS says no position (first sync only - catch missed closes)
-        //       This handles case where position was closed on Binance while app was down
-        const cacheWasSeeded = isPositionCacheSeeded(this.config.userId);
-        const hasLocalPositionButNoWs = this.position !== null && !wsPosition;
-        const shouldFallbackToRest = !cacheWasSeeded || (isFirstSync && hasLocalPositionButNoWs);
-        
-        if (!shouldFallbackToRest) {
-          // Cache was seeded, WS is authoritative
-          if (cacheWasSeeded && this.position !== null) {
-            // We have a local position but cache says no position - position was closed on Binance!
-            logger.info(`🔄 [${symbol}] Cache seeded, WS has no position but local has one - position closed on exchange`);
-            // Continue to handle the mismatch below (exchangeQty stays 0)
-          } else {
-            return;
-          }
-        } else {
-          // REST API fallback - only when cache wasn't seeded and we need to check
-          try {
-            const fetchPosFn = this.config.exchange.fetchPositions.bind(this.config.exchange);
-            const exchangePositions = await fetchPosFn([symbol]);
-            
-            const exchangePos = exchangePositions.find((p: any) => 
-              p.symbol === symbol || 
-              p.info?.symbol === toBinanceSymbolId(symbol)
-            );
-            
-            const positionAmt = parseFloat(exchangePos?.info?.positionAmt || '0');
-            exchangeQty = Math.abs(parseFloat(exchangePos?.contracts || exchangePos?.info?.positionAmt || '0'));
-            exchangeSide = positionAmt > 0 ? 'long' : 'short';
-            entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
-            unrealizedPnl = parseFloat(exchangePos?.unrealizedPnl || exchangePos?.info?.unRealizedProfit || '0');
-            
-            // Note: We don't seed WS cache because userData stream is not connected
-            // REST is used only when needed, which is fine since it's throttled
-          } catch (restErr: any) {
-            // 🔧 FIX: Log rate limit errors more prominently
-            if (restErr.message?.includes('429') || restErr.message?.includes('banned') || restErr.message?.includes('Too Many')) {
-              logger.error(`⚠️ [${symbol}] ⚠️ REST API rate limited on position sync - user data stream may not be connected!`, restErr.message);
-            } else {
-              logger.warn(`⚠️ [${symbol}] REST position sync failed:`, restErr.message);
-            }
-            return;
-          }
-        }
       } else {
-        return; // No way to get positions
+        // NO REST FALLBACK - WebSocket only to prevent IP bans
+        // V5.29: Removed REST fallback completely - caused catastrophic IP bans
+        // Position sync via REST was being called by 20+ agents every 30s = instant ban
+        // 
+        // If WebSocket userData stream is not connected, positions will not sync.
+        // This is acceptable because:
+        // 1. server.ts calls fetchPositions() once at startup to seed cache
+        // 2. WebSocket userData stream should be active (listenKey refresh)
+        // 3. If WS disconnects, better to have stale data than IP ban
+        //
+        // If local position exists but WS says no position:
+        if (this.position !== null) {
+          logger.info(`🔄 [${symbol}] WS has no position but local has one - position may be closed`);
+          // Continue to handle the mismatch below (exchangeQty stays 0)
+        } else {
+          // No position in WS, no position locally - nothing to do
+          return;
+        }
       }
       
       // Case 1: We think we have a position but exchange says NO
