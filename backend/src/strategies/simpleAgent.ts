@@ -907,9 +907,19 @@ export class SimpleAgent {
         const now = Date.now();
 
         const slPct = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
-        const slPrice = this.position!.side === 'long'
+        
+        // V5.28 FIX: If trailing is active, use trailing stop instead of fixed SL
+        // This prevents the bug where trailing activates but SL still uses the fixed price
+        const trailingActive = this.position!.trailingActive && this.position!.appTrailingStop;
+        const fixedSlPrice = this.position!.side === 'long'
           ? this.position!.entryPrice * (1 - slPct / 100)
           : this.position!.entryPrice * (1 + slPct / 100);
+        
+        // When trailing is active, use the trailing stop as our protective stop
+        // For LONG: trailing stop is below current price (sell if price drops to it)
+        // For SHORT: trailing stop is above current price (buy if price rises to it)
+        const slPrice = trailingActive ? this.position!.appTrailingStop! : fixedSlPrice;
+        
         const slBreach = this.position!.side === 'long'
           ? currentPrice <= slPrice * (1 - bufferPct / 100)
           : currentPrice >= slPrice * (1 + bufferPct / 100);
@@ -929,10 +939,13 @@ export class SimpleAgent {
           const confirmed = elapsed >= confirmMs || this.rtBreachTicks >= confirmTicks;
           if (confirmed) {
             this.stopRealtimeExitMonitor();
+            // V5.28: Distinguish between trailing stop hit vs fixed SL hit
+            const exitReason = trailingActive ? 'trailing_rt' : 'stoploss_rt';
+            const stopType = trailingActive ? 'trailing' : 'fixed';
             logger.info(
-              `⚡ [${symbol}] REALTIME EXIT confirmed (stoploss_rt) price=$${currentPrice.toFixed(4)} sl=$${slPrice.toFixed(4)} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`,
+              `⚡ [${symbol}] REALTIME EXIT confirmed (${exitReason}) price=$${currentPrice.toFixed(4)} ${stopType}_sl=$${slPrice.toFixed(4)} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`,
             );
-            await this.closePosition(this.position, currentPrice, 'stoploss_rt');
+            await this.closePosition(this.position, currentPrice, exitReason);
             return;
           }
         }
