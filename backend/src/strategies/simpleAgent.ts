@@ -3046,6 +3046,31 @@ export class SimpleAgent {
         logger.info(`⚠️ [${symbol}] SYNC: Found unexpected position on exchange (${exchangeSide} ${exchangeQty})`);
         
         if (entryPrice > 0) {
+          // 🔧 V5.29: Check if position exists in DB to preserve entryTime and maxPnlPct
+          // This is critical for stagnant trade detection after restart
+          let dbEntryTime: number | undefined;
+          let dbMaxPnlPct: number | undefined;
+          
+          try {
+            const dbPosition = await this.config.prisma.position.findFirst({
+              where: {
+                sessionId: this.config.sessionId,
+                symbol: this.config.symbol,
+                exitPrice: null, // Only open positions
+              },
+              orderBy: { openedAt: 'desc' },
+            });
+            
+            if (dbPosition && dbPosition.openedAt) {
+              dbEntryTime = dbPosition.openedAt.getTime();
+              dbMaxPnlPct = dbPosition.maxPnlPct || undefined;
+              const ageMinutes = dbEntryTime ? Math.round((Date.now() - dbEntryTime) / 60000) : 0;
+              logger.info(`📊 [${symbol}] Restored position history from DB: age=${ageMinutes}min, maxPnl=${dbMaxPnlPct?.toFixed(2)}%`);
+            }
+          } catch (dbErr) {
+            logger.warn(`⚠️ [${symbol}] Failed to load DB position:`, dbErr);
+          }
+          
           // V5.6: Estimate margin - use asset-specific leverage or default to 5x
           const notionalUsd = exchangeQty * entryPrice;
           const estimatedLeverage = MomentumConfig.LEVERAGE[symbol] || 5;
@@ -3056,11 +3081,12 @@ export class SimpleAgent {
             side: exchangeSide,
             entryPrice,
             qty: exchangeQty,
-            entryTime: Date.now(),
-            leverage: estimatedLeverage,      // V5.6: Estimated
-            marginUsd: estimatedMargin,       // V5.6: Estimated
+            entryTime: dbEntryTime || Date.now(), // Use DB time if available
+            leverage: estimatedLeverage,
+            marginUsd: estimatedMargin,
             highWaterMark: exchangeSide === 'long' ? entryPrice : undefined,
             lowWaterMark: exchangeSide === 'short' ? entryPrice : undefined,
+            maxPnlPct: dbMaxPnlPct, // Preserve max PnL for stagnant detection
           };
           
           // Commit MARGIN (not notional) for this position
@@ -3069,10 +3095,12 @@ export class SimpleAgent {
           // Calculate entry fee for synced position (no order available, use 0.04%)
           const syncEntryFee = notionalUsd * 0.0004;
           
-          // Save to DB with calculated fee
-          await this.savePositionToDb(this.position, 'synced_from_exchange', syncEntryFee);
+          // Save to DB with calculated fee (only if not already saved)
+          if (!dbEntryTime) {
+            await this.savePositionToDb(this.position, 'synced_from_exchange', syncEntryFee);
+          }
           
-          logger.info(`✅ [${symbol}] Position synced from exchange: ${exchangeSide} @ $${entryPrice}`);
+          logger.info(`✅ [${symbol}] Position synced from exchange: ${exchangeSide} @ $${entryPrice} (age: ${Math.round((Date.now() - (dbEntryTime || Date.now())) / 60000)}min)`);
         }
       }
       
