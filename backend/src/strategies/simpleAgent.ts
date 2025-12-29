@@ -906,14 +906,31 @@ export class SimpleAgent {
         const confirmTicks = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_TICKS ?? 2);
         const now = Date.now();
 
-        const slPct = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
-        
         // V5.28 FIX: If trailing is active, use trailing stop instead of fixed SL
         // This prevents the bug where trailing activates but SL still uses the fixed price
         const trailingActive = this.position!.trailingActive && this.position!.appTrailingStop;
+        
+        // V5.28: STAGNANT TRADE - tighten SL if trade shows no momentum after X minutes
+        const stagnantConfig = MomentumConfig.EXIT as any;
+        const stagnantEnabled = stagnantConfig.STAGNANT_TRADE_EXIT_ENABLED ?? false;
+        const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 60;
+        const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.2;
+        const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 1.0;
+        
+        const holdMinutes = (now - this.position!.entryTime) / 60000;
+        const maxPnlRaw = this.position!.maxPnlPct ?? 0;
+        const isStagnant = stagnantEnabled && 
+                           holdMinutes >= stagnantTimeMinutes && 
+                           maxPnlRaw < stagnantMinProfitPct;
+        
+        // Use tightened SL if stagnant, otherwise use normal SL
+        const effectiveSlPct = isStagnant 
+          ? stagnantTightenSlPct 
+          : (this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT);
+        
         const fixedSlPrice = this.position!.side === 'long'
-          ? this.position!.entryPrice * (1 - slPct / 100)
-          : this.position!.entryPrice * (1 + slPct / 100);
+          ? this.position!.entryPrice * (1 - effectiveSlPct / 100)
+          : this.position!.entryPrice * (1 + effectiveSlPct / 100);
         
         // When trailing is active, use the trailing stop as our protective stop
         // For LONG: trailing stop is below current price (sell if price drops to it)
@@ -939,11 +956,21 @@ export class SimpleAgent {
           const confirmed = elapsed >= confirmMs || this.rtBreachTicks >= confirmTicks;
           if (confirmed) {
             this.stopRealtimeExitMonitor();
-            // V5.28: Distinguish between trailing stop hit vs fixed SL hit
-            const exitReason = trailingActive ? 'trailing_rt' : 'stoploss_rt';
-            const stopType = trailingActive ? 'trailing' : 'fixed';
+            // V5.28: Distinguish between trailing stop hit, stagnant trade, or fixed SL hit
+            let exitReason: string;
+            let stopType: string;
+            if (trailingActive) {
+              exitReason = 'trailing_rt';
+              stopType = 'trailing';
+            } else if (isStagnant) {
+              exitReason = 'stagnant_trade';
+              stopType = 'stagnant';
+            } else {
+              exitReason = 'stoploss_rt';
+              stopType = 'fixed';
+            }
             logger.info(
-              `⚡ [${symbol}] REALTIME EXIT confirmed (${exitReason}) price=$${currentPrice.toFixed(4)} ${stopType}_sl=$${slPrice.toFixed(4)} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`,
+              `⚡ [${symbol}] REALTIME EXIT confirmed (${exitReason}) price=$${currentPrice.toFixed(4)} ${stopType}_sl=$${slPrice.toFixed(4)} sl_pct=${effectiveSlPct.toFixed(1)}% | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks${isStagnant ? ` | STAGNANT: held ${Math.round(holdMinutes)}m, maxPnl=${(maxPnlRaw * 100).toFixed(1)}%` : ''}`,
             );
             await this.closePosition(this.position, currentPrice, exitReason);
             return;

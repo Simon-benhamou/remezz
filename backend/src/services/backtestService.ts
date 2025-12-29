@@ -57,6 +57,7 @@ interface BacktestSimPosition {
   appTrailingStop?: number;
   trailingBreachCandles?: number; // V5.18: Track consecutive 1m-simulated breaches (like prod)
   trailingActive?: boolean; // V5.26: Once trailing activates, it stays active
+  maxPnlPct?: number;  // V5.28: Track max raw PnL % for stagnant trade detection
 }
 
 export interface SignalOverrides {
@@ -760,6 +761,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         } else {
           pos.lowWaterMark = Math.min(pos.lowWaterMark ?? pos.entryPrice, current.low);
         }
+        
+        // V5.28: Track max raw PnL % for stagnant trade detection
+        pos.maxPnlPct = Math.max(pos.maxPnlPct ?? 0, pnlPct);
 
         // Get adaptive trailing params
         const { activation, distance } = calcAdaptiveTrailing(windowCandles);
@@ -844,16 +848,29 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           }
         }
 
-        const slPct = pos.stopLossPct;
+        // V5.28: STAGNANT TRADE - tighten SL if trade shows no momentum after X minutes
+        const stagnantConfig = CONFIG.EXIT as any;
+        const stagnantEnabled = stagnantConfig.STAGNANT_TRADE_EXIT_ENABLED ?? false;
+        const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 60;
+        const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.2;
+        const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 1.0;
+        
+        const holdMinutes = holdBars * 15; // Each candle is 15 minutes
+        const isStagnant = stagnantEnabled && 
+                           holdMinutes >= stagnantTimeMinutes && 
+                           (pos.maxPnlPct ?? 0) < stagnantMinProfitPct;
+        
+        // Use tightened SL if stagnant, otherwise use normal SL
+        const effectiveSlPct = isStagnant ? stagnantTightenSlPct : pos.stopLossPct;
 
         // Only check SL/Trailing if regime change or momentum reversal didn't trigger
         if (!shouldExit && pos.side === 'long') {
-          const slPrice = pos.entryPrice * (1 - slPct / 100);
+          const slPrice = pos.entryPrice * (1 - effectiveSlPct / 100);
 
           // SL hit? (wick went below stop)
           if (current.low <= slPrice) {
             shouldExit = true;
-            exitReason = 'SL';
+            exitReason = isStagnant ? 'STAGNANT_TRADE' : 'SL';
             exitPrice = slPrice;
           }
           // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
@@ -911,12 +928,12 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           }
         } else if (!shouldExit && pos.side === 'short') {
           // SHORT
-          const slPrice = pos.entryPrice * (1 + slPct / 100);
+          const slPrice = pos.entryPrice * (1 + effectiveSlPct / 100);
 
           // SL hit?
           if (current.high >= slPrice) {
             shouldExit = true;
-            exitReason = 'SL';
+            exitReason = isStagnant ? 'STAGNANT_TRADE' : 'SL';
             exitPrice = slPrice;
           }
           // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
