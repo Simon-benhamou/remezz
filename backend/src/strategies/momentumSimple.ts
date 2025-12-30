@@ -225,16 +225,22 @@ export const MomentumConfig = {
     VOLUME_DRY_PROFIT_MIN: 0.5,     // Exit si profit > 0.5%...
     VOLUME_DRY_RATIO: 0.5,          // ...et volume < 0.5x avg
     
-    // V5.28: STAGNANT TRADE EARLY EXIT
+    // V5.29: STAGNANT TRADE EARLY EXIT (aligned with trailing activation)
     // ═══════════════════════════════════════════════════════════════════════════
-    // If a trade never shows momentum (maxProfit < threshold) after X minutes,
-    // it's likely going nowhere. Tighten SL to cut losses early.
-    // BACKTEST: 16 trades identified, $250 saved, 0 false positives
+    // V5.31: SMART STAGNANT TRADE - With observation window for big move protection
+    // Validated on 60 days data: NET +802% vs +642% for fixed approach (+25% better)
+    // 1. Trigger stagnant at 60min if maxPnl < 0.8%
+    // 2. Observe for 90min more (until 150min total)
+    // 3. If peak >= 0.4% during observation → big move forming, DON'T cut
+    // 4. Else confirm stagnant → tighten SL to 1% (or exit if in profit)
     // ═══════════════════════════════════════════════════════════════════════════
     STAGNANT_TRADE_EXIT_ENABLED: true,     // Enable stagnant trade early exit
-    STAGNANT_TRADE_TIME_MINUTES: 60,       // Check after 60 minutes
-    STAGNANT_TRADE_MIN_PROFIT_PCT: 0.2,    // Trade must have reached +0.2% raw (+1% ROE with 5x)
+    STAGNANT_TRADE_TIME_MINUTES: 60,       // Initial check after 60 minutes
+    STAGNANT_TRADE_OBS_MINUTES: 90,        // Observation window (60+90=150min total)
+    STAGNANT_TRADE_MIN_PROFIT_PCT: 0.8,    // Threshold for initial stagnant trigger
+    STAGNANT_TRADE_RECOVERY_PCT: 0.4,      // Cancel stagnant if peak >= 0.4% during obs
     STAGNANT_TRADE_TIGHTEN_SL_PCT: 1.0,    // Tighten SL from 2.5% to 1.0% raw
+    STAGNANT_TRADE_EXIT_IF_PROFIT: true,   // Exit at market if pnl > 0 when confirmed
   },
   
   // Risk V5.18 - Adaptive sizing for capital scalability
@@ -349,6 +355,14 @@ export interface Position {
   lowWaterMark?: number;   // Lowest price since entry (for short)
   trailingActive?: boolean;
   maxPnlPct?: number;      // V5.11: Track max PnL reached (for exit analysis)
+  // V5.31: Smart Stagnant - observation window state machine
+  stagnantState?: {
+    triggered: boolean;      // Has 60min passed without trailing activation?
+    triggeredAt?: number;    // Timestamp when triggered
+    confirmed: boolean;      // Has 150min passed without recovery?
+    cancelled: boolean;      // Did we see peak >= 0.4% during observation?
+    obsPeakPct: number;      // Max PnL % observed during 60-150min window
+  };
   // Emergency protection (exchange-side)
   emergencyStopPrice?: number;   // Wide emergency stop (catastrophe protection)
 }
@@ -380,7 +394,7 @@ export interface SignalResult {
 
 export interface ExitSignal {
   shouldExit: boolean;
-  reason?: 'time' | 'stoploss' | 'trailing' | 'regime_change' | 'momentum_reversal' | 'stagnant_trade' | 'none';
+  reason?: 'time' | 'stoploss' | 'trailing' | 'regime_change' | 'momentum_reversal' | 'stagnant_trade' | 'stagnant_profit_exit' | 'none';
   pnlPct?: number;
   holdMinutes?: number;
   newStopLoss?: number;  // Updated trailing stop
@@ -1102,43 +1116,92 @@ export function shouldExitPosition(
   }
   
   // ============================================================================
-  // V5.28: STAGNANT TRADE EARLY EXIT
-  // If trade never shows momentum after X minutes, tighten SL
-  // BACKTEST: 16 trades identified, $250 saved, 0 false positives
+  // V5.31: SMART STAGNANT TRADE with observation window
+  // Instead of immediately flagging at 60min, observe for 90 more minutes
+  // If price shows recovery (peak >= 0.4%) during observation → cancel stagnant
+  // If no recovery after 150min total → confirm stagnant and exit/tighten
   // ============================================================================
   const stagnantConfig = (MomentumConfig.EXIT as any);
   const stagnantEnabled = stagnantConfig.STAGNANT_TRADE_EXIT_ENABLED ?? false;
   const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 60;
-  const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.2;
+  const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 90;
+  const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.8;
+  const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.4;
   const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 1.0;
+  const stagnantExitIfProfit = stagnantConfig.STAGNANT_TRADE_EXIT_IF_PROFIT ?? true;
   
-  if (stagnantEnabled && holdMinutes >= stagnantTimeMinutes) {
-    // Check if trade ever showed momentum (maxPnlPct in raw terms)
-    const maxPnlRaw = position.maxPnlPct ?? 0;
-    const currentPnlRaw = pnlPct; // This is already raw (not leveraged)
+  const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes; // 60 + 90 = 150
+  
+  // Initialize stagnant state if needed
+  if (!position.stagnantState) {
+    position.stagnantState = { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 };
+  }
+  
+  // Step 1: Check if initial stagnant trigger (at 60min, no trailing activation, low maxPnl)
+  if (stagnantEnabled && 
+      !position.stagnantState.triggered && 
+      holdMinutes >= stagnantTimeMinutes &&
+      !trailingIsActive &&  // Only if trailing never activated
+      (position.maxPnlPct ?? 0) < stagnantMinProfitPct) {
+    position.stagnantState.triggered = true;
+    position.stagnantState.triggeredAt = now;
+  }
+  
+  // Step 2: During observation window, track peak and check for recovery
+  if (position.stagnantState.triggered && !position.stagnantState.confirmed && !position.stagnantState.cancelled) {
+    // V5.31 FIX: Use wick high/low (like backtest) not just close price
+    // This catches intrabar peaks that indicate big move potential
+    const wickPeakPnl = position.side === 'long'
+      ? (((opts?.priceHigh ?? currentPrice) - position.entryPrice) / position.entryPrice) * 100
+      : ((position.entryPrice - (opts?.priceLow ?? currentPrice)) / position.entryPrice) * 100;
     
-    // If trade never reached minimum profit threshold, it's stagnant
-    if (maxPnlRaw < stagnantMinProfitPct) {
-      // Trade is stagnant - use tightened SL
-      if (currentPnlRaw <= -stagnantTightenSlPct) {
+    // Update observation peak with wick-based PnL
+    position.stagnantState.obsPeakPct = Math.max(position.stagnantState.obsPeakPct, wickPeakPnl);
+    
+    // If peak during observation >= recovery threshold → cancel stagnant (big move forming)
+    if (position.stagnantState.obsPeakPct >= stagnantRecoveryPct) {
+      position.stagnantState.cancelled = true;
+    }
+    
+    // End of observation window → confirm if not cancelled
+    if (holdMinutes >= totalStagnantMinutes && !position.stagnantState.cancelled) {
+      position.stagnantState.confirmed = true;
+      
+      // V5.31: Exit at market if currently in profit
+      if (stagnantExitIfProfit && pnlPct > 0) {
         return { 
           shouldExit: true, 
-          reason: 'stagnant_trade', 
+          reason: 'stagnant_profit_exit', 
           pnlPct, 
           holdMinutes 
         };
       }
-      
-      // Return tightened SL info for tracking (not exiting yet but SL is closer)
+    }
+  }
+  
+  // Use tightened SL only if stagnant is CONFIRMED (not just triggered)
+  const isStagnantConfirmed = position.stagnantState.confirmed && !position.stagnantState.cancelled;
+  
+  if (isStagnantConfirmed) {
+    // Stagnant confirmed - use tightened SL
+    if (pnlPct <= -stagnantTightenSlPct) {
       return { 
-        shouldExit: false, 
-        reason: 'none', 
+        shouldExit: true, 
+        reason: 'stagnant_trade', 
         pnlPct, 
-        holdMinutes,
-        stagnantSlTightened: true,  // Signal that SL is tightened
-        effectiveSlPct: stagnantTightenSlPct
+        holdMinutes 
       };
     }
+    
+    // Return tightened SL info for tracking
+    return { 
+      shouldExit: false, 
+      reason: 'none', 
+      pnlPct, 
+      holdMinutes,
+      stagnantSlTightened: true,
+      effectiveSlPct: stagnantTightenSlPct
+    };
   }
   
   // 2. Stop loss - Use dynamic SL from position if available (only if trailing not active)

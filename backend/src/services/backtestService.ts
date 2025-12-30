@@ -58,6 +58,14 @@ interface BacktestSimPosition {
   trailingBreachCandles?: number; // V5.18: Track consecutive 1m-simulated breaches (like prod)
   trailingActive?: boolean; // V5.26: Once trailing activates, it stays active
   maxPnlPct?: number;  // V5.28: Track max raw PnL % for stagnant trade detection
+  // V5.31: Smart Stagnant - observation window state machine
+  stagnantState: {
+    triggered: boolean;      // Has 60min passed without trailing activation?
+    triggeredIdx?: number;   // Candle index when triggered
+    confirmed: boolean;      // Has 150min passed without recovery?
+    cancelled: boolean;      // Did we see peak >= 0.4% during observation?
+    obsPeakPct: number;      // Max PnL % observed during 60-150min window
+  };
 }
 
 export interface SignalOverrides {
@@ -161,6 +169,14 @@ const CONFIG = {
       TRAILING_WIDEN_AT_PCT: MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT,
       TRAILING_WIDE_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT,
       MAX_HOLD_BARS: 192, // 48h in 15m bars
+      // V5.29: Stagnant trade parameters (dynamic for testing)
+      STAGNANT_TRADE_EXIT_ENABLED: MomentumConfig.EXIT.STAGNANT_TRADE_EXIT_ENABLED,
+      STAGNANT_TRADE_TIME_MINUTES: MomentumConfig.EXIT.STAGNANT_TRADE_TIME_MINUTES,
+      STAGNANT_TRADE_OBS_MINUTES: MomentumConfig.EXIT.STAGNANT_TRADE_OBS_MINUTES ?? 90,
+      STAGNANT_TRADE_MIN_PROFIT_PCT: MomentumConfig.EXIT.STAGNANT_TRADE_MIN_PROFIT_PCT,
+      STAGNANT_TRADE_RECOVERY_PCT: MomentumConfig.EXIT.STAGNANT_TRADE_RECOVERY_PCT ?? 0.4,
+      STAGNANT_TRADE_TIGHTEN_SL_PCT: MomentumConfig.EXIT.STAGNANT_TRADE_TIGHTEN_SL_PCT,
+      STAGNANT_TRADE_EXIT_IF_PROFIT: MomentumConfig.EXIT.STAGNANT_TRADE_EXIT_IF_PROFIT ?? true,
     };
   },
   get REGIME_CHANGE_EXIT() {
@@ -848,20 +864,72 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           }
         }
 
-        // V5.28: STAGNANT TRADE - tighten SL if trade shows no momentum after X minutes
+        // V5.31: SMART STAGNANT TRADE with observation window
+        // 1. Trigger at 60min if maxPnl < threshold
+        // 2. Observe for 90 more minutes (using candle highs as approximation of 1m peaks)
+        // 3. If any high >= recovery threshold → big move forming, cancel stagnant
+        // 4. Else confirm stagnant → tighten SL (or exit if in profit)
         const stagnantConfig = CONFIG.EXIT as any;
         const stagnantEnabled = stagnantConfig.STAGNANT_TRADE_EXIT_ENABLED ?? false;
         const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 60;
-        const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.2;
+        const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 90;
+        const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.8;
+        const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.4;
         const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 1.0;
+        const stagnantExitIfProfit = stagnantConfig.STAGNANT_TRADE_EXIT_IF_PROFIT ?? true;
         
         const holdMinutes = holdBars * 15; // Each candle is 15 minutes
-        const isStagnant = stagnantEnabled && 
-                           holdMinutes >= stagnantTimeMinutes && 
-                           (pos.maxPnlPct ?? 0) < stagnantMinProfitPct;
+        const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes; // 60 + 90 = 150
         
-        // Use tightened SL if stagnant, otherwise use normal SL
-        const effectiveSlPct = isStagnant ? stagnantTightenSlPct : pos.stopLossPct;
+        // Initialize stagnant tracking on position if not exists
+        if (!pos.stagnantState) {
+          pos.stagnantState = { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 };
+        }
+        
+        // Step 1: Check if initial stagnant trigger (at 60min)
+        if (stagnantEnabled && 
+            !pos.stagnantState.triggered && 
+            holdMinutes >= stagnantTimeMinutes && 
+            (pos.maxPnlPct ?? 0) < stagnantMinProfitPct) {
+          pos.stagnantState.triggered = true;
+        }
+        
+        // Step 2: During observation window (60-150min), track peak and check for recovery
+        if (pos.stagnantState.triggered && !pos.stagnantState.confirmed && !pos.stagnantState.cancelled) {
+          // Calculate current candle's peak PnL (using high for long, low for short)
+          const candlePeakPnl = pos.side === 'long'
+            ? ((current.high - pos.entryPrice) / pos.entryPrice) * 100
+            : ((pos.entryPrice - current.low) / pos.entryPrice) * 100;
+          
+          pos.stagnantState.obsPeakPct = Math.max(pos.stagnantState.obsPeakPct, candlePeakPnl);
+          
+          // If peak during observation >= recovery threshold → cancel stagnant (big move forming)
+          if (pos.stagnantState.obsPeakPct >= stagnantRecoveryPct) {
+            pos.stagnantState.cancelled = true;
+          }
+          
+          // End of observation window → confirm if not cancelled
+          if (holdMinutes >= totalStagnantMinutes && !pos.stagnantState.cancelled) {
+            pos.stagnantState.confirmed = true;
+            
+            // V5.31: Exit at market if in profit
+            if (stagnantExitIfProfit && !shouldExit) {
+              const currentPnl = pos.side === 'long'
+                ? ((current.close - pos.entryPrice) / pos.entryPrice) * 100
+                : ((pos.entryPrice - current.close) / pos.entryPrice) * 100;
+              
+              if (currentPnl > 0) {
+                shouldExit = true;
+                exitReason = 'STAGNANT_PROFIT_EXIT';
+                exitPrice = current.close;
+              }
+            }
+          }
+        }
+        
+        // Use tightened SL only if stagnant is CONFIRMED (not just triggered)
+        const isStagnantConfirmed = pos.stagnantState.confirmed && !pos.stagnantState.cancelled;
+        const effectiveSlPct = isStagnantConfirmed ? stagnantTightenSlPct : pos.stopLossPct;
 
         // Only check SL/Trailing if regime change or momentum reversal didn't trigger
         if (!shouldExit && pos.side === 'long') {
@@ -870,7 +938,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           // SL hit? (wick went below stop)
           if (current.low <= slPrice) {
             shouldExit = true;
-            exitReason = isStagnant ? 'STAGNANT_TRADE' : 'SL';
+            exitReason = isStagnantConfirmed ? 'STAGNANT_TRADE' : 'SL';
             exitPrice = slPrice;
           }
           // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
@@ -933,7 +1001,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           // SL hit?
           if (current.high >= slPrice) {
             shouldExit = true;
-            exitReason = isStagnant ? 'STAGNANT_TRADE' : 'SL';
+            exitReason = isStagnantConfirmed ? 'STAGNANT_TRADE' : 'SL';
             exitPrice = slPrice;
           }
           // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
@@ -1215,6 +1283,13 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             stopLossPct: slPct,
             highWaterMark: signal.side === 'long' ? current.close : undefined,
             lowWaterMark: signal.side === 'short' ? current.close : undefined,
+            // V5.31: Smart Stagnant state initialization
+            stagnantState: {
+              triggered: false,
+              confirmed: false,
+              cancelled: false,
+              obsPeakPct: 0
+            }
           };
         }
       }
