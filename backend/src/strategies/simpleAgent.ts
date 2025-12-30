@@ -912,27 +912,29 @@ export class SimpleAgent {
         
         // V5.31: SMART STAGNANT TRADE with observation window (aligned with backtest)
         // 1. Trigger at 60min if maxPnl < threshold AND trailing never activated
-        // 2. Observe for 90 more minutes (until 150min total)
-        // 3. If peak >= 0.4% during observation → cancel stagnant (big move forming)
-        // 4. Else confirm stagnant → tighten SL to 1%
+        // V5.34: Optimized stagnant trade detection
+        // 1. Trigger at 45min if maxPnl < 0.8% (faster detection)
+        // 2. Observe for 60 more minutes (until 105min total)
+        // 3. If peak >= 0.6% during observation → cancel stagnant (big move forming)
+        // 4. Else confirm stagnant → tighten SL to 0.8% (don't exit, let it run)
         const stagnantConfig = MomentumConfig.EXIT as any;
         const stagnantEnabled = stagnantConfig.STAGNANT_TRADE_EXIT_ENABLED ?? false;
-        const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 60;
-        const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 90;
+        const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 45;  // V5.34: 45 (was 60)
+        const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 60;    // V5.34: 60 (was 90)
         const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.8;
-        const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.4;
-        const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 1.0;
+        const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.6; // V5.34: 0.6 (was 0.4)
+        const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8; // V5.34: 0.8 (was 1.0)
         
         const holdMinutes = (now - this.position!.entryTime) / 60000;
         const maxPnlRaw = this.position!.maxPnlPct ?? 0;
-        const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes; // 60 + 90 = 150
+        const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes; // V5.34: 45 + 60 = 105
         
         // V5.31: Initialize stagnant state if not exists
         if (!this.position!.stagnantState) {
           this.position!.stagnantState = { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 };
         }
         
-        // Step 1: Initial stagnant trigger (at 60min, no trailing activation, low maxPnl)
+        // Step 1: Initial stagnant trigger (at 45min, no trailing activation, low maxPnl)
         if (stagnantEnabled && 
             !this.position!.stagnantState.triggered && 
             holdMinutes >= stagnantTimeMinutes &&

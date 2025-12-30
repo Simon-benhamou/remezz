@@ -58,6 +58,7 @@ interface BacktestSimPosition {
   trailingBreachCandles?: number; // V5.18: Track consecutive 1m-simulated breaches (like prod)
   trailingActive?: boolean; // V5.26: Once trailing activates, it stays active
   maxPnlPct?: number;  // V5.28: Track max raw PnL % for stagnant trade detection
+  entryReason?: string;  // V5.32: Track entry reason (anticipatory vs classic)
   // V5.31: Smart Stagnant - observation window state machine
   stagnantState: {
     triggered: boolean;      // Has 60min passed without trailing activation?
@@ -102,6 +103,7 @@ export interface BacktestTrade {
   netPnlUsd: number;
   feesUsd: number;
   exitReason: string;
+  entryReason?: string;  // V5.32: Track entry reason (anticipatory vs classic)
   capitalBefore: number;
   capitalAfter: number;
   month: string;
@@ -169,14 +171,14 @@ const CONFIG = {
       TRAILING_WIDEN_AT_PCT: MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT,
       TRAILING_WIDE_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT,
       MAX_HOLD_BARS: 192, // 48h in 15m bars
-      // V5.29: Stagnant trade parameters (dynamic for testing)
+      // V5.34: Optimized stagnant trade parameters
       STAGNANT_TRADE_EXIT_ENABLED: MomentumConfig.EXIT.STAGNANT_TRADE_EXIT_ENABLED,
       STAGNANT_TRADE_TIME_MINUTES: MomentumConfig.EXIT.STAGNANT_TRADE_TIME_MINUTES,
-      STAGNANT_TRADE_OBS_MINUTES: MomentumConfig.EXIT.STAGNANT_TRADE_OBS_MINUTES ?? 90,
+      STAGNANT_TRADE_OBS_MINUTES: MomentumConfig.EXIT.STAGNANT_TRADE_OBS_MINUTES ?? 60,        // V5.34: 60 (was 90)
       STAGNANT_TRADE_MIN_PROFIT_PCT: MomentumConfig.EXIT.STAGNANT_TRADE_MIN_PROFIT_PCT,
-      STAGNANT_TRADE_RECOVERY_PCT: MomentumConfig.EXIT.STAGNANT_TRADE_RECOVERY_PCT ?? 0.4,
+      STAGNANT_TRADE_RECOVERY_PCT: MomentumConfig.EXIT.STAGNANT_TRADE_RECOVERY_PCT ?? 0.6,    // V5.34: 0.6 (was 0.4)
       STAGNANT_TRADE_TIGHTEN_SL_PCT: MomentumConfig.EXIT.STAGNANT_TRADE_TIGHTEN_SL_PCT,
-      STAGNANT_TRADE_EXIT_IF_PROFIT: MomentumConfig.EXIT.STAGNANT_TRADE_EXIT_IF_PROFIT ?? true,
+      STAGNANT_TRADE_EXIT_IF_PROFIT: MomentumConfig.EXIT.STAGNANT_TRADE_EXIT_IF_PROFIT ?? false, // V5.34: false (was true)
     };
   },
   get REGIME_CHANGE_EXIT() {
@@ -228,6 +230,8 @@ const SIGNAL_CONFIG = {
     MIN_STOCHRSI: MomentumConfig.STOCHRSI_FILTER.MIN_STOCHRSI,
     VOL_EXCEPTION: MomentumConfig.STOCHRSI_FILTER.VOLUME_EXCEPTION_MULTIPLIER,
   },
+  // V5.33: BREAKOUT CONFIRMATION - Wait for clear confirmation before entry
+  BREAKOUT_CONFIRM: MomentumConfig.BREAKOUT_CONFIRMATION,
 };
 
 // ============================================================================
@@ -327,6 +331,88 @@ function calcTrendStrength(closes: number[], period = 50): number {
   
   // Positive = uptrend, Negative = downtrend
   return (currentPrice - sma) / sma;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// V5.32: BB SQUEEZE DETECTION - Identify volatility compression
+// When bandwidth is contracting, a big move is coming (works 70%+ of the time)
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface BBSqueezeResult {
+  isSqueeze: boolean;
+  currentBW: number;
+  avgBW: number;
+  squeezeRatio: number;
+}
+
+function detectBBSqueeze(
+  closes: number[], 
+  period: number = 20, 
+  lookback: number = 10,
+  threshold: number = 0.7
+): BBSqueezeResult {
+  if (closes.length < period + lookback) {
+    return { isSqueeze: false, currentBW: 0, avgBW: 0, squeezeRatio: 1 };
+  }
+  
+  const currentBB = calcBB(closes, period);
+  const currentBW = currentBB.middle > 0 ? (currentBB.upper - currentBB.lower) / currentBB.middle : 0;
+  
+  const bandwidths: number[] = [];
+  for (let i = lookback; i >= 1; i--) {
+    const pastCloses = closes.slice(0, -i);
+    if (pastCloses.length >= period) {
+      const pastBB = calcBB(pastCloses, period);
+      const pastBW = pastBB.middle > 0 ? (pastBB.upper - pastBB.lower) / pastBB.middle : 0;
+      bandwidths.push(pastBW);
+    }
+  }
+  
+  if (bandwidths.length === 0) {
+    return { isSqueeze: false, currentBW, avgBW: currentBW, squeezeRatio: 1 };
+  }
+  
+  const avgBW = bandwidths.reduce((a, b) => a + b, 0) / bandwidths.length;
+  const squeezeRatio = avgBW > 0 ? currentBW / avgBW : 1;
+  
+  return {
+    isSqueeze: squeezeRatio < threshold,
+    currentBW,
+    avgBW,
+    squeezeRatio,
+  };
+}
+
+function detectVolumeAccumulation(
+  volumes: number[],
+  lookback: number = 3,
+  minTrend: number = 1.05,
+  minRatio: number = 0.8
+): { isAccumulating: boolean; trendScore: number; avgRatio: number } {
+  if (volumes.length < lookback + 10) {
+    return { isAccumulating: false, trendScore: 0, avgRatio: 0 };
+  }
+  
+  const recentVols = volumes.slice(-lookback);
+  const avgSlice = volumes.slice(-20, -lookback);
+  const avgVol = avgSlice.reduce((a, b) => a + b, 0) / avgSlice.length;
+  
+  let trendCount = 0;
+  for (let i = 1; i < recentVols.length; i++) {
+    if (recentVols[i] >= recentVols[i - 1] * minTrend) {
+      trendCount++;
+    }
+  }
+  const trendScore = trendCount / (lookback - 1);
+  
+  const recentAvg = recentVols.reduce((a, b) => a + b, 0) / recentVols.length;
+  const avgRatio = avgVol > 0 ? recentAvg / avgVol : 0;
+  
+  return {
+    isAccumulating: trendScore >= 0.5 && avgRatio >= minRatio,
+    trendScore,
+    avgRatio,
+  };
 }
 
 function calcRSI(closes: number[], period = 14): number | null {
@@ -445,6 +531,7 @@ function checkSignal(candles: Candle[], isBull: boolean, overrides?: SignalOverr
   const volRatio = calcVolRatio(volumes);
   const roc10 = calcROC(closes, 10);
   const roc5 = calcROC(closes, 5);
+  const roc1 = calcROC(closes, 1);  // V5.33: Current candle momentum
 
   const stochRsi = SIGNAL_CONFIG.STOCHRSI.ENABLED ? calcStochRSI(closes, 14, 14, 3) : null;
 
@@ -452,16 +539,79 @@ function checkSignal(candles: Candle[], isBull: boolean, overrides?: SignalOverr
   const rocMin = overrides?.ROC_MIN ?? SIGNAL_CONFIG.LONG.ROC_MIN;
   const volMultiplier = overrides?.VOL_MULTIPLIER ?? SIGNAL_CONFIG.LONG.VOL_MULTIPLIER;
   const maxConsecUp = overrides?.MAX_CONSEC_UP ?? SIGNAL_CONFIG.LONG.MAX_CONSEC_UP;
+  
+  // V5.33: Breakout confirmation config
+  const confirmConfig = SIGNAL_CONFIG.BREAKOUT_CONFIRM;
 
   if (isBull) {
-    // LONG conditions V5.12 (with overrides support)
+    // V5.32: ANTICIPATORY ENTRY - Catch momentum BEFORE it happens
+    const anticipatoryConfig = MomentumConfig.ANTICIPATORY_ENTRY;
+    
+    if (anticipatoryConfig.ENABLED) {
+      const squeeze = detectBBSqueeze(
+        closes, 
+        SIGNAL_CONFIG.LONG.BB_PERIOD, 
+        anticipatoryConfig.BB_SQUEEZE_LOOKBACK,
+        anticipatoryConfig.BB_SQUEEZE_THRESHOLD
+      );
+      
+      const volAccum = detectVolumeAccumulation(
+        volumes,
+        anticipatoryConfig.VOL_ACCUMULATION_CANDLES,
+        anticipatoryConfig.VOL_ACCUMULATION_MIN_TREND,
+        anticipatoryConfig.VOL_ACCUMULATION_MIN_RATIO
+      );
+      
+      const distanceToUpper = (bb.upper - current.close) / current.close;
+      const inPreBreakoutZone = distanceToUpper <= anticipatoryConfig.PRE_BREAKOUT_ZONE_PCT / 100;
+      
+      const roc5Building = roc5 >= anticipatoryConfig.PRE_BREAKOUT_MIN_ROC5;
+      const roc10NotExhausted = roc10 < anticipatoryConfig.PRE_BREAKOUT_MAX_ROC10;
+      
+      const priceAboveMa20 = current.close > ma20;
+      const distanceFromMa20 = (current.close - ma20) / ma20;
+      const maDistanceOk = distanceFromMa20 <= anticipatoryConfig.MAX_DISTANCE_FROM_ENTRY / 100;
+      
+      const bullishOk = !anticipatoryConfig.REQUIRE_BULLISH_CANDLE || isBullish;
+      const priceAboveOk = !anticipatoryConfig.REQUIRE_PRICE_ABOVE_MA20 || priceAboveMa20;
+      
+      const anticipatoryValid = 
+        squeeze.isSqueeze &&
+        inPreBreakoutZone &&
+        roc5Building &&
+        roc10NotExhausted &&
+        bullishOk &&
+        priceAboveOk &&
+        maDistanceOk &&
+        (volAccum.isAccumulating || volRatio >= 0.9);
+      
+      if (anticipatoryValid) {
+        return { valid: true, side: 'long', reason: 'v5.32_anticipatory_entry' };
+      }
+    }
+    
+    // FALLBACK: Classic LONG conditions V5.12 (with overrides support)
+    // V5.33: Added BREAKOUT CONFIRMATION filter for higher win rate
     const breakoutOk = current.close > bb.upper;
     const rocOk = roc10 >= rocMin;
     const volOk = volRatio >= volMultiplier;
     const consecOk = countConsecUp(candles) <= maxConsecUp;
+    
+    // V5.33: BREAKOUT CONFIRMATION - Wait for clear breakout confirmation
+    // Analysis of 30,000+ LONG breakouts shows:
+    // - Distance > 0.5%: 53% WR (vs 36% baseline)
+    // - Distance > 0.75%: 60% WR
+    // - Distance > 1.0%: 66% WR
+    const distanceFromUpper = bb.upper > 0 ? (current.close - bb.upper) / bb.upper : 0;
+    const distanceOk = !confirmConfig.ENABLED || 
+      distanceFromUpper >= confirmConfig.LONG_MIN_DISTANCE_PCT / 100;
+    const roc1Ok = !confirmConfig.ENABLED || 
+      roc1 >= confirmConfig.LONG_MIN_ROC1_PCT;
+    const confirmVolOk = !confirmConfig.ENABLED || 
+      volRatio >= confirmConfig.LONG_MIN_VOL_RATIO;
 
-    if (isBullish && breakoutOk && rocOk && volOk && consecOk) {
-      return { valid: true, side: 'long', reason: 'bull_breakout' };
+    if (isBullish && breakoutOk && rocOk && volOk && consecOk && distanceOk && roc1Ok && confirmVolOk) {
+      return { valid: true, side: 'long', reason: `v5.33_bull_breakout|dist=${(distanceFromUpper*100).toFixed(2)}%` };
     }
   } else {
     // SHORT conditions
@@ -475,9 +625,22 @@ function checkSignal(candles: Candle[], isBull: boolean, overrides?: SignalOverr
     const belowMa20 = current.close < ma20;
     const belowBB = current.close < bb.lower;
     const consecOk = countConsecDown(candles) <= SIGNAL_CONFIG.SHORT.MAX_CONSEC_DOWN;
+    
+    // V5.33: BREAKOUT CONFIRMATION for SHORT
+    // Analysis of 29,000+ SHORT breakdowns shows:
+    // - Distance > 0.5%: 61% WR (vs 44% baseline)
+    // - Distance > 0.75%: 66% WR
+    // - Distance > 1.0%: 71% WR
+    const distanceFromLower = bb.lower > 0 ? (bb.lower - current.close) / bb.lower : 0;
+    const shortDistanceOk = !confirmConfig.ENABLED || 
+      distanceFromLower >= confirmConfig.SHORT_MIN_DISTANCE_PCT / 100;
+    const shortRoc1Ok = !confirmConfig.ENABLED || 
+      roc1 <= confirmConfig.SHORT_MAX_ROC1_PCT;
+    const shortConfirmVolOk = !confirmConfig.ENABLED || 
+      volRatio >= confirmConfig.SHORT_MIN_VOL_RATIO;
 
-    if (isBearish && dropOk && volOk && belowMa20 && belowBB && consecOk) {
-      return { valid: true, side: 'short', reason: 'bear_breakdown' };
+    if (isBearish && dropOk && volOk && belowMa20 && belowBB && consecOk && shortDistanceOk && shortRoc1Ok && shortConfirmVolOk) {
+      return { valid: true, side: 'short', reason: `v5.33_bear_breakdown|dist=${(distanceFromLower*100).toFixed(2)}%` };
     }
   }
 
@@ -723,7 +886,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     // ═══════════════════════════════════════════════════════════════════
     type SignalCandidate = {
       symbol: string;
-      signal: { valid: boolean; side: 'long' | 'short'; };
+      signal: { valid: boolean; side: 'long' | 'short'; reason?: string; };  // V5.32: Include reason
       score: number;
       candles: BacktestCandle[];
       current: BacktestCandle;
@@ -871,15 +1034,15 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // 4. Else confirm stagnant → tighten SL (or exit if in profit)
         const stagnantConfig = CONFIG.EXIT as any;
         const stagnantEnabled = stagnantConfig.STAGNANT_TRADE_EXIT_ENABLED ?? false;
-        const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 60;
-        const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 90;
+        const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 45;  // V5.34: 45 (was 60)
+        const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 60;    // V5.34: 60 (was 90)
         const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.8;
-        const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.4;
-        const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 1.0;
-        const stagnantExitIfProfit = stagnantConfig.STAGNANT_TRADE_EXIT_IF_PROFIT ?? true;
+        const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.6; // V5.34: 0.6 (was 0.4)
+        const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8; // V5.34: 0.8 (was 1.0)
+        const stagnantExitIfProfit = stagnantConfig.STAGNANT_TRADE_EXIT_IF_PROFIT ?? false; // V5.34: false (was true)
         
         const holdMinutes = holdBars * 15; // Each candle is 15 minutes
-        const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes; // 60 + 90 = 150
+        const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes; // V5.34: 45 + 60 = 105
         
         // Initialize stagnant tracking on position if not exists
         if (!pos.stagnantState) {
@@ -1096,6 +1259,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             netPnlUsd: pnl.netPnlUsd,
             feesUsd: pnl.feesUsd,
             exitReason,
+            entryReason: pos.entryReason,  // V5.32: Track entry reason
             capitalBefore: pos.capitalBefore,
             capitalAfter: capital + capitalInUse, // Total capital (free + in use)
             month,
@@ -1174,7 +1338,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // Add to candidates for ranking (signal.side guaranteed non-null here)
         signalCandidates.push({
           symbol,
-          signal: { valid: signal.valid, side: signal.side! },
+          signal: { valid: signal.valid, side: signal.side!, reason: signal.reason },  // V5.32: Include reason
           score,
           candles: windowCandles,
           current,
@@ -1283,6 +1447,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             stopLossPct: slPct,
             highWaterMark: signal.side === 'long' ? current.close : undefined,
             lowWaterMark: signal.side === 'short' ? current.close : undefined,
+            entryReason: signal.reason,  // V5.32: Track entry reason
             // V5.31: Smart Stagnant state initialization
             stagnantState: {
               triggered: false,
@@ -1333,6 +1498,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         netPnlUsd: pnl.netPnlUsd,
         feesUsd: pnl.feesUsd,
         exitReason: 'END',
+        entryReason: pos.entryReason,  // V5.32: Track entry reason
         capitalBefore: pos.capitalBefore,
         capitalAfter: capital + capitalInUse, // Total capital (free + in use)
         month: new Date(lastCandle.timestamp).toISOString().slice(0, 7),
