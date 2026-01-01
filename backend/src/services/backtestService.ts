@@ -15,6 +15,7 @@ import {
 
 import {
   MomentumConfig,
+  checkMomentumSignal,  // V5.36: Use shared signal function (includes MTF + BTC Vol filters)
 } from '../strategies/momentumSimple.js';
 
 // V5.25: Import cached exchange client to avoid loadMarkets on every backtest
@@ -508,7 +509,12 @@ function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance
 }
 
 // ============================================================================
-// SIGNAL CHECK V5.12
+// SIGNAL CHECK V5.12 (DEPRECATED - Kept for reference only)
+// ============================================================================
+// V5.36: This function is DEPRECATED and no longer used.
+// We now use the shared checkMomentumSignal() from momentumSimple.ts
+// to ensure 100% parity between backtest and production.
+// Keeping this code for historical reference only.
 // ============================================================================
 
 interface Signal {
@@ -517,7 +523,7 @@ interface Signal {
   reason?: string;
 }
 
-function checkSignal(candles: Candle[], isBull: boolean, overrides?: SignalOverrides): Signal {
+function checkSignal_DEPRECATED(candles: Candle[], isBull: boolean, overrides?: SignalOverrides): Signal {
   if (candles.length < 50) return { valid: false, reason: 'insufficient_data' };
 
   const closes = candles.map((c) => c.close);
@@ -749,6 +755,66 @@ async function fetchCandles(
   return mergeDedupCandles(parts);
 }
 
+// V5.36: Fetch 1h candles for Multi-Timeframe Confluence filter
+async function fetchCandles1h(
+  exchange: any,
+  symbol: string,
+  startDate: Date,
+  endDate: Date
+): Promise<Candle[]> {
+  const out: Candle[] = [];
+  const until = endDate.getTime();
+  const extraBarsMs = 50 * 60 * 60 * 1000; // 50 bars × 1h
+  let cursor = startDate.getTime() - extraBarsMs;
+
+  while (cursor < until) {
+    try {
+      if (!globalRestCircuitBreaker.canMakeRequest()) {
+        console.error(`[Backtest] 🚫 REST circuit breaker is OPEN - cannot fetch 1h ${symbol}`);
+        throw new Error('REST_CIRCUIT_BREAKER_OPEN');
+      }
+
+      const ohlcv = await exchange.fetchOHLCV(symbol, '1h', cursor, 1000);
+      if (!ohlcv || ohlcv.length === 0) break;
+
+      let progressed = false;
+      for (const c of ohlcv) {
+        const ts = c[0] as number;
+        if (!Number.isFinite(ts)) continue;
+        if (ts > until) break;
+        if (out.length && ts <= out[out.length - 1].timestamp) continue;
+        out.push({
+          timestamp: ts,
+          open: c[1] as number,
+          high: c[2] as number,
+          low: c[3] as number,
+          close: c[4] as number,
+          volume: c[5] as number,
+        });
+        progressed = true;
+      }
+
+      if (!progressed) break;
+      cursor = (ohlcv[ohlcv.length - 1][0] as number) + 1;
+      await new Promise((r) => setTimeout(r, 500));
+    } catch (e: any) {
+      if (e?.message?.includes('418') || e?.message?.includes('banned') || e?.message?.includes('-1003')) {
+        const match = e.message?.match(/banned until (\d+)/);
+        if (match) {
+          const banUntil = parseInt(match[1], 10);
+          globalRestCircuitBreaker.forceOpen(`Backtest 1h banned: ${symbol}`, banUntil);
+        } else {
+          globalRestCircuitBreaker.forceOpen(`Backtest 1h rate limited: ${symbol}`);
+        }
+      }
+      console.error(`Error fetching 1h ${symbol}:`, e);
+      break;
+    }
+  }
+
+  return out;
+}
+
 // ============================================================================
 // PNL CALCULATION
 // ============================================================================
@@ -814,7 +880,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   // Fetch BTC for regime detection
   const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', startDate, endDate);
   const btcCloses = btcCandles.map((c) => c.close);
-  console.log(`[Backtest] BTC: ${btcCandles.length} candles`);
+  console.log(`[Backtest] BTC 15m: ${btcCandles.length} candles`);
+
+  // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
+  const btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', startDate, endDate);
+  console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles`);
 
   // V5.25: Add delay between symbols to avoid rate limiting
   const allData: Record<string, Candle[]> = {};
@@ -1008,22 +1078,28 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         }
 
         // ═══════════════════════════════════════════════════════════════════
-        // 0b. MOMENTUM REVERSAL EXIT (V5.13)
+        // 0b. MOMENTUM REVERSAL EXIT (V5.13 + V5.35 2-candle confirmation)
+        // V5.35: Require 2 consecutive candles to reduce false exits
         // ═══════════════════════════════════════════════════════════════════
-        if (!shouldExit && windowCandles.length >= 6) {
+        if (!shouldExit && windowCandles.length >= 7) {  // V5.35: Need 7 for 2-candle check
           const closes = windowCandles.map(c => c.close);
-          const roc5 = calcROC(closes, 5);
+          const roc5Current = calcROC(closes, 5);
+          const roc5Previous = calcROC(closes.slice(0, -1), 5);
 
-          if (pos.side === 'long' && roc5 < -0.015) {
-            // LONG position but momentum turned bearish (-1.5%)
-            shouldExit = true;
-            exitReason = 'MOMENTUM_REVERSAL';
-            exitPrice = current.close;
-          } else if (pos.side === 'short' && roc5 > 0.015) {
-            // SHORT position but momentum turned bullish (+1.5%)
-            shouldExit = true;
-            exitReason = 'MOMENTUM_REVERSAL';
-            exitPrice = current.close;
+          if (pos.side === 'long') {
+            // V5.35: Require 2 consecutive candles below -1.5%
+            if (roc5Previous < -0.015 && roc5Current < -0.015) {
+              shouldExit = true;
+              exitReason = 'MOMENTUM_REVERSAL';
+              exitPrice = current.close;
+            }
+          } else if (pos.side === 'short') {
+            // V5.35: Require 2 consecutive candles above +1.5%
+            if (roc5Previous > 0.015 && roc5Current > 0.015) {
+              shouldExit = true;
+              exitReason = 'MOMENTUM_REVERSAL';
+              exitPrice = current.close;
+            }
           }
         }
 
@@ -1119,9 +1195,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             }
             
             if (pos.trailingActive) {
-              // V5.12: Smart trailing - widen distance at higher profits
+              // V5.35: Smart trailing - widen distance at higher profits (3% threshold)
               let trailDist = distance;
-              if (hwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {
+              if (hwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {  // V5.35: 3.0% (was 2.0%)
                 trailDist = CONFIG.EXIT.TRAILING_WIDE_DISTANCE_PCT;
               }
               
@@ -1182,8 +1258,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             }
             
             if (pos.trailingActive) {
+              // V5.35: Smart trailing - widen distance at higher profits (3% threshold)
               let trailDist = distance;
-              if (lwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {
+              if (lwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {  // V5.35: 3.0% (was 2.0%)
                 trailDist = CONFIG.EXIT.TRAILING_WIDE_DISTANCE_PCT;
               }
               
@@ -1308,8 +1385,20 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
         const isBullRegime = btcPriceForRegime > btcSma200;
 
-        // Use local checkSignal (V5.12 strategy) with optional overrides
-        const signal = checkSignal(windowCandles, isBullRegime, signalOverrides);
+        // V5.36: Get BTC 1h window for MTF filter (find matching 1h candles up to current time)
+        const btcCandles1hWindow = btcCandles1h.filter(c => c.timestamp <= btcCandle.timestamp);
+
+        // V5.36: Use shared checkMomentumSignal (includes MTF + BTC Vol filters)
+        // This ensures 100% parity with production signal logic
+        const signal = checkMomentumSignal(
+          symbol,
+          windowCandles,
+          btcCandles.slice(Math.max(0, btcIdx - 200), btcIdx + 1), // BTC 15m candles for volatility filter
+          {
+            nowMs: btcCandle.timestamp,
+            btcCandles1h: btcCandles1hWindow, // V5.36: Pass 1h candles for MTF filter
+          }
+        );
         if (!signal.valid || !signal.side) continue;
         
         // V5.23: Calculate enhanced signal quality score

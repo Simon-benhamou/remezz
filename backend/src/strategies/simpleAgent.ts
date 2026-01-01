@@ -1431,19 +1431,25 @@ export class SimpleAgent {
       
       // Fetch BTC candles pour corrélation (also use only closed candles)
       const allBtcCandles = await this.fetchBtcCandles();
-      
+
       // V5.13: Same logic for BTC candles - use timestamp age
       let btcLastClosedIdx = allBtcCandles.length - 1;
       const btcLastCandleAge = now - allBtcCandles[btcLastClosedIdx].timestamp;
-      
+
       if (btcLastCandleAge < CANDLE_INTERVAL_MS) {
         btcLastClosedIdx = allBtcCandles.length - 2;
       }
-      
+
       const btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
-      
-      // Check signal (returns side: 'long' or 'short')
-      const signal = checkMomentumSignal(symbol, candles, btcCandles);
+
+      // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
+      const btcCandles1h = await this.fetchBtcCandles1h();
+
+      // V5.36: Check signal with MTF + BTC Volatility filters
+      const signal = checkMomentumSignal(symbol, candles, btcCandles, {
+        nowMs: now,
+        btcCandles1h,  // V5.36: Pass 1h candles for MTF filter
+      });
       
       // Process signal features silently (no log)
       const f = signal.features;
@@ -2563,7 +2569,41 @@ export class SimpleAgent {
     // No data - return cached or empty
     return globalBtcCandleCache?.candles || [];
   }
-  
+
+  // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
+  private async fetchBtcCandles1h(): Promise<Candle[]> {
+    const btcSymbol = 'BTCUSDT'; // Binance format for WebSocket
+
+    // 1. Subscribe to BTC 1h WebSocket stream
+    try {
+      const ws = getBinanceWebSocket();
+      ws.subscribeToKline(btcSymbol, '1h');
+    } catch (error) {
+      // Silently fail - will try cache or fallback
+    }
+
+    // 2. Try WebSocket cache first (0 API weight!)
+    try {
+      const wsKlines = getKlinesOhlcvFromWebSocket(btcSymbol, '1h');
+      if (wsKlines && wsKlines.length >= 20) {  // Need at least 20 candles for MTF filter
+        const candles: Candle[] = wsKlines.map(c => ({
+          timestamp: c[0] as number,
+          open: c[1] as number,
+          high: c[2] as number,
+          low: c[3] as number,
+          close: c[4] as number,
+          volume: c[5] as number,
+        }));
+        return candles;
+      }
+    } catch (error) {
+      // WebSocket cache miss - return empty (MTF filter will pass-through)
+    }
+
+    // No data - return empty array (MTF filter will allow trade as fail-safe)
+    return [];
+  }
+
   /**
    * Cancel ALL orders on exchange (both regular AND algo orders)
    * This is a helper that calls cancelAllOrders twice - once for regular, once for algo

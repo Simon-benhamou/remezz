@@ -320,9 +320,20 @@ model Position {
   tpOrderId            String?
   lastProtectiveSyncAt DateTime?
   protectiveStatus     String?
+
+  // V5.34: State persistence for stagnant trade detection and trailing stops
+  maxPnlPct            Float?        // Max PnL % reached (for stagnant trigger)
+  stagnantState        Json?         // {triggered, triggeredAt, confirmed, cancelled, obsPeakPct}
+  trailingActive       Boolean       @default(false) // Trailing stop activation status
+  highWaterMark        Float?        // Highest price for LONG trailing
+  lowWaterMark         Float?        // Lowest price for SHORT trailing
+  entryTime            BigInt?       // Unix timestamp (ms) when opened
+  marginUsd            Float?        // Margin allocated (USD)
+
   session              AgentSession? @relation(fields: [sessionId], references: [id])
 
   @@index([sessionId])
+  @@index([stagnantState])
 }
 
 model AgentOpsTelemetry {
