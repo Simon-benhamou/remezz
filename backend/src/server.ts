@@ -1137,16 +1137,12 @@ app.delete("/api/agent/sessions/:id", async (req, res) => {
     await prisma.$transaction([
       prisma.sessionKpi.deleteMany({ where: { sessionId: id } }),
       prisma.triggerLog.deleteMany({ where: { sessionId: id } }),
-      prisma.alert.deleteMany({ where: { sessionId: id } }),
       prisma.dailyReport.deleteMany({ where: { sessionId: id } }),
-      prisma.agentOpsTelemetry.deleteMany({ where: { sessionId: id } }),
       prisma.agentActionIntent.deleteMany({ where: { sessionId: id } }),
       prisma.pendingIntent.deleteMany({ where: { sessionId: id } }),
-      prisma.agentPerformanceLedger.deleteMany({ where: { sessionId: id } }),
       prisma.position.deleteMany({ where: { sessionId: id } }),
       prisma.fill.deleteMany({ where: { sessionId: id } }),
       prisma.order.deleteMany({ where: { sessionId: id } }),
-      prisma.strategy.deleteMany({ where: { sessionId: id } }),
       // Finally delete the session itself
       prisma.agentSession.delete({ where: { id } }),
     ]);
