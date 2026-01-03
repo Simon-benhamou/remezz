@@ -8,26 +8,20 @@ datasource db {
 }
 
 model User {
-  id               String                  @id @default(cuid())
-  username         String                  @unique
-  email            String                  @unique
-  passwordHash     String
-  role             String                  @default("trader")
-  isActive         Boolean                 @default(true)
-  createdAt        DateTime                @default(now())
-  updatedAt        DateTime                @updatedAt
-  lastLoginAt      DateTime?
-  isLegacy         Boolean                 @default(false)
-  sessions         AgentSession[]
-  alerts           Alert[]
-  auditLogs        AuditLog[]
-  reports          DailyReport[]
-  diagnosticsCache DiagnosticsCache[]
-  improvements     ImprovementItem[]
-  learningStates   SubagentLearningState[]
-  tradeEvaluations TradeEvaluation[]
-  apiKeys          UserApiKey[]
-  settings         UserSetting[]
+  id          String          @id @default(cuid())
+  username    String          @unique
+  email       String          @unique
+  passwordHash String
+  role        String          @default("trader")
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  lastLoginAt DateTime?
+  isLegacy    Boolean         @default(false)
+  sessions    AgentSession[]
+  reports     DailyReport[]
+  apiKeys     UserApiKey[]
+  settings    UserSetting[]
 
   @@index([username])
   @@index([email])
@@ -87,17 +81,13 @@ model AgentSession {
   nextRescanAt       DateTime?
   smartHistory       Json?
   actionIntents      AgentActionIntent[]
-  opsTelemetry       AgentOpsTelemetry?
-  performanceLedger  AgentPerformanceLedger[]
   user               User?                    @relation(fields: [userId], references: [id])
-  alerts             Alert[]
   reports            DailyReport[]
   fills              Fill[]
   orders             Order[]
   pendingIntents     PendingIntent[]
   positions          Position[]
   SessionKpi         SessionKpi?              @relation("AgentSessionToSessionKpi")
-  strategies         Strategy[]
   trades             Trade[]
   triggers           TriggerLog[]
 
@@ -149,59 +139,6 @@ model PendingIntent {
   @@index([status, expiresAt])
 }
 
-model SchedulerJob {
-  id        String    @id @default(cuid())
-  type      String
-  payload   Json?
-  runAt     DateTime
-  status    String    @default("pending")
-  lockedBy  String?
-  lockedAt  DateTime?
-  attempts  Int       @default(0)
-  lastError String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  @@unique([type, runAt])
-  @@index([type, status, runAt])
-  @@index([status, runAt])
-}
-
-model AuditLog {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  action    String
-  userId    String?
-  username  String?
-  details   Json?
-  user      User?    @relation(fields: [userId], references: [id])
-
-  @@index([action, createdAt])
-  @@index([userId, createdAt])
-}
-
-model Strategy {
-  id           String        @id
-  sessionId    String?
-  symbol       String
-  bias         String
-  confidence   Float?
-  entryJson    Json
-  riskJson     Json
-  validityFrom DateTime?
-  validityTo   DateTime?
-  rationale    String?
-  rawPrompt    String?
-  rawResponse  Json?
-  trigger      String
-  createdAt    DateTime      @default(now())
-  orders       Order[]
-  session      AgentSession? @relation(fields: [sessionId], references: [id])
-
-  @@index([sessionId])
-  @@index([symbol, createdAt])
-}
-
 model Order {
   id                 String        @id @default(cuid())
   clientOrderId      String        @unique
@@ -234,7 +171,6 @@ model Order {
   strategyConfidence Float?
   fills              Fill[]
   session            AgentSession? @relation(fields: [sessionId], references: [id])
-  strategy           Strategy?     @relation(fields: [strategyId], references: [id])
 
   @@index([sessionId, createdAt])
   @@index([sessionId, status])
@@ -336,21 +272,6 @@ model Position {
   @@index([stagnantState])
 }
 
-model AgentOpsTelemetry {
-  sessionId       String       @id
-  tradeCount24h   Int          @default(0)
-  lastExecutionAt DateTime?
-  blockedByVos    Boolean      @default(false)
-  lastBlockedAt   DateTime?
-  circuitState    Json?
-  adaptiveState   Json?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  session         AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  @@index([blockedByVos, updatedAt])
-}
-
 model SessionKpi {
   sessionId        String       @id
   realizedPnlUsd   Float        @default(0)
@@ -383,22 +304,6 @@ model TriggerLog {
   @@index([createdAt])
 }
 
-model Alert {
-  id        String        @id @default(cuid())
-  userId    String?
-  sessionId String?
-  symbol    String?
-  kind      String
-  severity  String
-  details   Json?
-  createdAt DateTime      @default(now())
-  session   AgentSession? @relation(fields: [sessionId], references: [id])
-  user      User?         @relation(fields: [userId], references: [id])
-
-  @@index([userId, createdAt])
-  @@index([sessionId, createdAt])
-}
-
 model DailyReport {
   id        String        @id @default(cuid())
   userId    String?
@@ -415,137 +320,6 @@ model DailyReport {
   @@index([sessionId, day])
 }
 
-model ImprovementItem {
-  id          String   @id @default(cuid())
-  userId      String?
-  title       String
-  description String
-  severity    String   @default("medium")
-  status      String   @default("open")
-  context     Json?
-  tags        String[]
-  reporter    String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  user        User?    @relation(fields: [userId], references: [id])
-
-  @@index([userId, status])
-  @@index([status])
-  @@index([severity])
-}
-
-model DiagnosticsCache {
-  id        String   @id @default(cuid())
-  userId    String
-  symbol    String
-  data      Json
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, symbol, createdAt])
-  @@index([userId, createdAt])
-}
-
-model DecisionMemory {
-  id             String   @id @default(cuid())
-  sessionId      String?
-  symbol         String
-  family         String
-  timeframe      String   @default("15m")
-  bias           String?
-  score          Float?
-  confidence     Float?
-  biasConfidence Float?
-  features       Json
-  outcome        String?
-  realizedPnl    Float?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  @@index([symbol, createdAt])
-  @@index([family, createdAt])
-  @@index([sessionId, createdAt])
-}
-
-model AdaptiveThreshold {
-  id               String   @id @default(cuid())
-  family           String   @unique
-  momentumWeight   Float    @default(1)
-  volumeWeight     Float    @default(1)
-  volatilityWeight Float    @default(1)
-  confidence       Float    @default(0)
-  sampleSize       Int      @default(0)
-  lastWinRate      Float    @default(0)
-  updatedAt        DateTime @updatedAt
-  createdAt        DateTime @default(now())
-}
-
-model LeverageConstraint {
-  id                 String    @id @default(cuid())
-  symbol             String
-  category           String?
-  targetLeverage     Float?
-  hardCap            Float?
-  liquidityUsd       Float?
-  liquiditySampledAt DateTime?
-  atrPct             Float?
-  atrSampledAt       DateTime?
-  notes              String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-
-  @@unique([symbol, category])
-  @@index([symbol])
-  @@index([category])
-}
-
-model AutoUniverseSchedule {
-  id               String    @id @default("auto_universe_retry")
-  nextRetryAt      DateTime?
-  excludeSessionId String?
-  metadata         Json?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-
-  @@map("auto_universe_schedule")
-}
-
-model TradeEvaluation {
-  id               String   @id @default(cuid())
-  symbol           String
-  timestamp        DateTime @default(now())
-  decision         String
-  blockedReason    String?
-  confidenceScore  Float
-  inputMetrics     Json
-  marketOutcome    Json?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  regimeContext    Json?
-  userId           String?
-  eligibilityScore Float?
-  finalScore       Float?
-  strategyFamily   String?
-  strategyId       String?
-  user             User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, symbol, timestamp])
-  @@index([symbol, timestamp])
-  @@index([timestamp])
-  @@index([marketOutcome])
-  @@index([strategyFamily, decision])
-  @@index([strategyId, decision])
-}
-
-model CryptoPersonalityProfile {
-  symbol        String   @id
-  optimalParams Json
-  updatedAt     DateTime @updatedAt
-  createdAt     DateTime @default(now())
-
-  @@index([updatedAt])
-}
-
 model SystemSetting {
   key       String   @id
   value     String
@@ -553,78 +327,6 @@ model SystemSetting {
   createdAt DateTime @default(now())
 
   @@map("system_setting")
-}
-
-model PredictorDecision {
-  id               String   @id @default(cuid())
-  symbol           String
-  decision         String
-  previousDecision String?
-  probabilityLong  Float
-  probabilityShort Float
-  confidence       Float
-  entryWeight      Float?
-  riskMultiplier   Float?
-  price            Float
-  createdAt        DateTime @default(now())
-
-  @@index([symbol, createdAt])
-  @@index([createdAt])
-  @@map("predictor_decision")
-}
-
-model AgentPerformanceLedger {
-  id             String       @id @default(cuid())
-  sessionId      String
-  agentName      String
-  agentFamily    String?
-  symbol         String
-  mode           String
-  regime         String?
-  windowMinutes  Int          @default(1440)
-  bucketStart    DateTime
-  tradeCount     Int          @default(0)
-  winRate        Float        @default(0)
-  realizedPnlUsd Float        @default(0)
-  netPnlUsd      Float        @default(0)
-  feesUsd        Float        @default(0)
-  avgLatencyMs   Float?
-  avgSlippageBps Float?
-  avgHoldMinutes Float?
-  blockedCount   Int          @default(0)
-  complianceHits Int          @default(0)
-  score          Float?
-  volatilityPct  Float?
-  drawdownPct    Float?
-  stats          Json?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  session        AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  @@unique([sessionId, symbol, mode, regime, windowMinutes, bucketStart], name: "agent_performance_window_unique")
-  @@index([symbol, mode, bucketStart])
-  @@index([sessionId, windowMinutes, bucketStart])
-}
-
-model SubagentLearningState {
-  id          String   @id @default(cuid())
-  subagent    String
-  symbol      String
-  mode        String?
-  regime      String?
-  score       Float?
-  sampleCount Int      @default(0)
-  metrics     Json?
-  tuning      Json?
-  reason      String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  userId      String?
-  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, subagent, symbol, mode, regime], name: "subagent_learning_user_unique")
-  @@index([userId, symbol, subagent])
-  @@index([symbol, subagent])
 }
 
 enum AgentActionStatus {
