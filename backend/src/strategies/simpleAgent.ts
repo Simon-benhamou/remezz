@@ -73,6 +73,11 @@ let globalBtcCandleCache: { candles: Candle[]; fetchedAt: number } | null = null
 let globalBtcCacheFetchingPromise: Promise<Candle[]> | null = null;
 let btcWsSubscribed = false;
 
+// V5.36: Global cache for BTC 1h candles (shared across all agents)
+const GLOBAL_BTC_1H_CACHE_TTL_MS = 900_000; // 15 minutes (1h candles change less frequently)
+let globalBtc1hCandleCache: { candles: Candle[]; fetchedAt: number } | null = null;
+let globalBtc1hCacheFetchingPromise: Promise<Candle[]> | null = null;
+
 // Type for exchange (we avoid importing ccxt directly to reduce bundle size)
 type Exchange = {
   fetchOHLCV: (symbol: string, timeframe: string, since?: number, limit?: number) => Promise<number[][]>;
@@ -2574,34 +2579,83 @@ export class SimpleAgent {
   private async fetchBtcCandles1h(): Promise<Candle[]> {
     const btcSymbol = 'BTCUSDT'; // Binance format for WebSocket
 
-    // 1. Subscribe to BTC 1h WebSocket stream
-    try {
-      const ws = getBinanceWebSocket();
-      ws.subscribeToKline(btcSymbol, '1h');
-    } catch (error) {
-      // Silently fail - will try cache or fallback
+    // 0. Check global cache first (shared across all agents)
+    if (globalBtc1hCandleCache && Date.now() - globalBtc1hCandleCache.fetchedAt < GLOBAL_BTC_1H_CACHE_TTL_MS) {
+      return globalBtc1hCandleCache.candles;
     }
 
-    // 2. Try WebSocket cache first (0 API weight!)
-    try {
-      const wsKlines = getKlinesOhlcvFromWebSocket(btcSymbol, '1h');
-      if (wsKlines && wsKlines.length >= 20) {  // Need at least 20 candles for MTF filter
-        const candles: Candle[] = wsKlines.map(c => ({
-          timestamp: c[0] as number,
-          open: c[1] as number,
-          high: c[2] as number,
-          low: c[3] as number,
-          close: c[4] as number,
-          volume: c[5] as number,
-        }));
-        return candles;
+    // Prevent multiple concurrent fetches
+    if (globalBtc1hCacheFetchingPromise) {
+      return globalBtc1hCacheFetchingPromise;
+    }
+
+    // Create fetch promise
+    globalBtc1hCacheFetchingPromise = (async () => {
+      try {
+        // 1. Subscribe to BTC 1h WebSocket stream
+        try {
+          const ws = getBinanceWebSocket();
+          ws.subscribeToKline(btcSymbol, '1h');
+        } catch (error) {
+          // Silently fail - will try cache or fallback
+        }
+
+        // 2. Try WebSocket cache first (0 API weight!)
+        try {
+          const wsKlines = getKlinesOhlcvFromWebSocket(btcSymbol, '1h');
+          if (wsKlines && wsKlines.length >= 20) {  // Need at least 20 candles for MTF filter
+            const candles: Candle[] = wsKlines.map(c => ({
+              timestamp: c[0] as number,
+              open: c[1] as number,
+              high: c[2] as number,
+              low: c[3] as number,
+              close: c[4] as number,
+              volume: c[5] as number,
+            }));
+            globalBtc1hCandleCache = { candles, fetchedAt: Date.now() };
+            return candles;
+          }
+        } catch (error) {
+          // WebSocket cache miss - will try REST fallback
+        }
+
+        // 3. REST API fallback - fetch BTC 1h candles
+        // V5.36 FIX: MTF filter needs actual data to work properly
+        try {
+          if (this.config.exchange.fetchOHLCV) {
+            const ohlcv = await this.config.exchange.fetchOHLCV(
+              'BTC/USDT:USDT',
+              '1h',
+              undefined,
+              50  // Fetch 50 candles for MTF filter (need at least 11)
+            );
+
+            if (ohlcv && ohlcv.length >= 11) {
+              const candles: Candle[] = ohlcv.map(c => ({
+                timestamp: c[0] as number,
+                open: c[1] as number,
+                high: c[2] as number,
+                low: c[3] as number,
+                close: c[4] as number,
+                volume: c[5] as number,
+              }));
+              globalBtc1hCandleCache = { candles, fetchedAt: Date.now() };
+              return candles;
+            }
+          }
+        } catch (error: any) {
+          logger.warn(`[fetchBtcCandles1h] REST fallback failed: ${error.message}`);
+        }
+
+        // 4. No data - return empty array (MTF filter will pass-through as fail-safe)
+        logger.warn('[fetchBtcCandles1h] No BTC 1h data available - MTF filter will be bypassed');
+        return [];
+      } finally {
+        globalBtc1hCacheFetchingPromise = null;
       }
-    } catch (error) {
-      // WebSocket cache miss - return empty (MTF filter will pass-through)
-    }
+    })();
 
-    // No data - return empty array (MTF filter will allow trade as fail-safe)
-    return [];
+    return globalBtc1hCacheFetchingPromise;
   }
 
   /**
