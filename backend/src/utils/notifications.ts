@@ -92,6 +92,8 @@ Agent: ${order.agentId.substring(0, 8)}
 
 /**
  * Notify when an order is successfully executed
+ * NOTE: For entry orders, we skip this and let notifyPositionOpened handle it
+ * to avoid duplicate notifications. Only used for exit orders in orderQueue.
  */
 export async function notifyOrderFilled(order: {
   id: string;
@@ -101,8 +103,12 @@ export async function notifyOrderFilled(order: {
   average?: number;
   price?: number;
   status?: string;
+  isEntry?: boolean; // If true, skip notification (will be handled by notifyPositionOpened)
 }): Promise<void> {
   if (!isEnabled) return;
+  
+  // Skip entry order notifications - they'll be combined with position opened
+  if (order.isEntry) return;
 
   const executionPrice = order.average || order.price || 0;
   const priceStr = executionPrice > 0 ? `$${executionPrice.toFixed(2)}` : 'Market';
@@ -147,7 +153,7 @@ Retries: ${order.retriesUsed}
 }
 
 /**
- * Notify when agent opens a position
+ * Notify when agent opens a position (combines order filled + position opened)
  */
 export async function notifyPositionOpened(position: {
   agentId: string;
@@ -158,19 +164,27 @@ export async function notifyPositionOpened(position: {
   leverage?: number;
   stopLoss?: number;
   takeProfit?: number;
+  mode: 'paper' | 'live';
+  notionalUsd?: number;
+  marginUsd?: number;
 }): Promise<void> {
   if (!isEnabled) return;
 
-  const leverageInfo = position.leverage ? ` (${position.leverage}x)` : '';
-  const slInfo = position.stopLoss ? `\nSL: $${position.stopLoss.toFixed(2)}` : '';
-  const tpInfo = position.takeProfit ? `\nTP: $${position.takeProfit.toFixed(2)}` : '';
+  const modeTag = position.mode === 'live' ? '🔴 LIVE' : '📝 PAPER';
+  const leverageInfo = position.leverage ? `${position.leverage}x` : '';
+  const slInfo = position.stopLoss ? `\nSL: $${position.stopLoss.toFixed(4)}` : '';
+  const tpInfo = position.takeProfit ? `\nTP: $${position.takeProfit.toFixed(4)}` : '';
+  const notionalInfo = position.notionalUsd ? `\nNotional: $${position.notionalUsd.toFixed(0)}` : '';
+  const marginInfo = position.marginUsd ? `\nMargin: $${position.marginUsd.toFixed(0)}` : '';
 
   const message = `
-🚀 POSITION OPENED
+🚀 POSITION OPENED ${modeTag}
 
-${position.symbol} ${position.side.toUpperCase()}${leverageInfo}
-Entry: $${position.entryPrice.toFixed(2)}${slInfo}${tpInfo}
-Qty: ${position.quantity}
+${position.symbol} ${position.side.toUpperCase()} ${leverageInfo}
+Entry: $${position.entryPrice.toFixed(4)}
+Qty: ${position.quantity.toFixed(4)}${notionalInfo}${marginInfo}${slInfo}${tpInfo}
+
+⏰ ${new Date().toLocaleTimeString()}
   `.trim();
 
   await sendTelegramMessage(message);
@@ -189,19 +203,29 @@ export async function notifyPositionClosed(position: {
   pnl: number;
   pnlPct: number;
   reason: string;
+  mode: 'paper' | 'live';
+  balanceAfter?: number;
+  feesUsd?: number;
 }): Promise<void> {
   if (!isEnabled) return;
 
+  const modeTag = position.mode === 'live' ? '🔴 LIVE' : '📝 PAPER';
   const pnlEmoji = position.pnl > 0 ? '🟢' : '🔴';
   const pnlSign = position.pnl > 0 ? '+' : '';
+  const feeInfo = position.feesUsd ? `\nFees: $${position.feesUsd.toFixed(2)}` : '';
+  const balanceInfo = position.balanceAfter ? `\n💰 Balance: $${position.balanceAfter.toFixed(2)}` : '';
 
   const message = `
-${pnlEmoji} POSITION CLOSED
+${pnlEmoji} POSITION CLOSED ${modeTag}
 
 ${position.symbol} ${position.side.toUpperCase()}
-Entry: $${position.entryPrice.toFixed(2)} → Exit: $${position.exitPrice.toFixed(2)}
-PnL: ${pnlSign}$${position.pnl.toFixed(2)} (${pnlSign}${position.pnlPct.toFixed(2)}%)
-Reason: ${position.reason}
+Entry: $${position.entryPrice.toFixed(4)}
+Exit: $${position.exitPrice.toFixed(4)}
+
+PnL: ${pnlSign}$${position.pnl.toFixed(2)} (${pnlSign}${position.pnlPct.toFixed(2)}%)${feeInfo}
+Reason: ${position.reason}${balanceInfo}
+
+⏰ ${new Date().toLocaleTimeString()}
   `.trim();
 
   await sendTelegramMessage(message);

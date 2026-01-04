@@ -1857,6 +1857,9 @@ export class SimpleAgent {
         entryPrice: currentPrice,
         leverage: sizing.suggestedLeverage,
         stopLoss: position.stopLoss,
+        mode: 'paper',
+        notionalUsd: sizing.notionalUsd,
+        marginUsd: sizing.marginUsd,
       });
       
       // Old notification system (kept for compatibility)
@@ -2158,7 +2161,9 @@ export class SimpleAgent {
           entryPrice: filledPrice,
           leverage: sizing.suggestedLeverage,
           stopLoss: position.stopLoss,
-          takeProfit: undefined, // Calculé dynamiquement avec trailing
+          mode: 'live',
+          notionalUsd: sizing.notionalUsd,
+          marginUsd: sizing.marginUsd,
         });
         
         // Old notification system (kept for compatibility)
@@ -2508,7 +2513,8 @@ export class SimpleAgent {
       await this.saveExitToDb(position, currentPrice, reason, pnlPct, totalPnlUsd, undefined, paperFeeUsd);
       logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${totalPnlUsd.toFixed(2)}) | margin released=$${totalMarginReleased.toFixed(2)}`);
       
-      // 📢 Send Telegram notification for paper exit avec P&L
+      // 📢 Send Telegram notification for paper exit avec P&L et balance
+      const balanceAfterPaper = this.config.capitalPool.getTotalCapital();
       void notifyPositionClosed({
         agentId: this.config.sessionId,
         symbol,
@@ -2516,9 +2522,12 @@ export class SimpleAgent {
         quantity: position.qty,
         entryPrice: position.entryPrice,
         exitPrice: currentPrice,
-        pnl: pnlUsd,
+        pnl: totalPnlUsd,
         pnlPct: pnlPct,
         reason,
+        mode: 'paper',
+        balanceAfter: balanceAfterPaper,
+        feesUsd: paperFeeUsd,
       });
       
       // Old notification system (kept for compatibility)
@@ -2711,6 +2720,7 @@ export class SimpleAgent {
         logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | fee=$${liveFeeUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)} | orderId=${order.id}`)
         
         // 📢 Send Telegram notification for live exit avec tous les détails
+        const balanceAfterLive = this.config.capitalPool.getTotalCapital();
         void notifyPositionClosed({
           agentId: this.config.sessionId,
           symbol,
@@ -2721,6 +2731,9 @@ export class SimpleAgent {
           pnl: actualPnlUsd,
           pnlPct: actualPnlPct,
           reason,
+          mode: 'live',
+          balanceAfter: balanceAfterLive,
+          feesUsd: liveFeeUsd,
         });
         
         // Old notification system (kept for compatibility)

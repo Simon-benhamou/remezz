@@ -1571,16 +1571,19 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           const MULTI_POSITION_ENABLED = process.env.MULTI_POSITION_ENABLED === 'true';
           const MULTI_POSITION_MIN_CAPITAL = 30_000;
           
+          // V5.35: Use CURRENT capital, not initial capital (allows growing into multi-position)
+          const currentTotalCapital = capital + capitalInUse;
+          
           let totalPositions = 1;
           let totalMarginUsd = marginUsd;
           let totalNotionalUsd = notionalUsd;
           
-          if (wasCapped && MULTI_POSITION_ENABLED && initialCapital >= MULTI_POSITION_MIN_CAPITAL) {
+          if (wasCapped && MULTI_POSITION_ENABLED && currentTotalCapital >= MULTI_POSITION_MIN_CAPITAL) {
             // Calculate how many positions we need
             const targetNotional = marginUsd * posLev;
             const idealPositions = Math.ceil(targetNotional / cap);
             
-            // Cap by capital tier
+            // Cap by capital tier - use current capital, not initial
             const capitalTiers: { [minCap: number]: number } = {
               300_000: 5,
               150_000: 4,
@@ -1589,7 +1592,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             };
             let maxPositions = 1;
             for (const [minCap, positions] of Object.entries(capitalTiers).sort((a, b) => Number(b[0]) - Number(a[0]))) {
-              if (initialCapital >= Number(minCap)) {
+              if (currentTotalCapital >= Number(minCap)) {
                 maxPositions = positions;
                 break;
               }

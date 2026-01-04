@@ -75,7 +75,7 @@ export default function ExecutionLedgerPageNew() {
       // 🔧 FIX: Load ALL sessions (paper + live) to see all trades
       const sessionsList = await api.listSessions(); // No mode filter
       const loadedTrades: TradeRow[] = [];
-      for (const session of sessionsList.slice(0, 20)) {
+      for (const session of sessionsList.slice(0, 50)) {
         try {
           const res = await api.getTrades(session.id, { limit: 100 });
           const sessionTrades = Array.isArray(res) ? res : (res?.trades || []);

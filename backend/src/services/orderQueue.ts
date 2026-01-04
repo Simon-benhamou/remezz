@@ -491,7 +491,7 @@ export class OrderQueue {
         `executionTime=${executionTimeMs}ms`
       );
 
-      // Notify Telegram
+      // Notify Telegram (skip entry orders - they're combined with position opened notification)
       void notifyOrderFilled({
         id: order.id || id,
         symbol: symbol,
@@ -500,6 +500,7 @@ export class OrderQueue {
         average: order.average,
         price: order.price,
         status: order.status,
+        isEntry: request.isEntry, // Entry orders are skipped to avoid duplicate with notifyPositionOpened
       });
 
       resolve(result);
