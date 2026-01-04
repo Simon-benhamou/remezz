@@ -29,6 +29,8 @@ import { router as backtestRouter } from "./routes/backtest.js";
 // Services
 import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket, seedKlinesFromWebSocket, toBinanceSymbolId } from "./services/binanceWebSocket.js";
 import { initNotificationService } from "./services/notificationService.js";
+import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDeduplicator.js";
+import { orderQueue } from "./services/orderQueue.js";
 
 // Strategy
 import { 
@@ -574,9 +576,14 @@ app.post("/api/agent/start", async (req, res) => {
           const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
           if (globalRestCircuitBreaker.canMakeRequest() && !isIpBanned() && exchange.fetchPositions) {
             logger.info(`[Live] Fetching existing positions from Binance...`);
-            const positions = await exchange.fetchPositions();
+            const positions = await exchangeAPIDeduplicator.execute(
+              makeFetchPositionsKey(userId),
+              () => exchange.fetchPositions!(),
+              30_000,
+              `start_session_${userId}`
+            ) as any[];
             let seededCount = 0;
-            
+
             for (const pos of positions) {
               const symbol = pos?.symbol || pos?.info?.symbol;
               const positionAmt = parseFloat(pos?.contracts || pos?.info?.positionAmt || '0');
@@ -2264,9 +2271,14 @@ app.post("/api/agent/restart", async (req, res) => {
         const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
         if (globalRestCircuitBreaker.canMakeRequest() && !isIpBanned() && exchange.fetchPositions) {
           logger.info(`[Restart Live] Fetching existing positions from Binance...`);
-          const positions = await exchange.fetchPositions();
+          const positions = await exchangeAPIDeduplicator.execute(
+            makeFetchPositionsKey(userId),
+            () => exchange.fetchPositions!(),
+            30_000,
+            `restart_session_${userId}`
+          ) as any[];
           let seededCount = 0;
-          
+
           for (const pos of positions) {
             const symbol = pos?.symbol || pos?.info?.symbol;
             const positionAmt = parseFloat(pos?.contracts || pos?.info?.positionAmt || '0');
@@ -3379,9 +3391,14 @@ async function restoreActiveSessions() {
               const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
               if (globalRestCircuitBreaker.canMakeRequest() && !isIpBanned() && exchange.fetchPositions) {
                 logger.info(`📊 [LIVE] Fetching existing positions from Binance...`);
-                const positions = await exchange.fetchPositions();
+                const positions = await exchangeAPIDeduplicator.execute(
+                  makeFetchPositionsKey(userId),
+                  () => exchange.fetchPositions!(),
+                  30_000,
+                  `restore_session_${userId}`
+                ) as any[];
                 let seededCount = 0;
-                
+
                 for (const pos of positions) {
                   const symbol = pos?.symbol || pos?.info?.symbol;
                   const positionAmt = parseFloat(pos?.contracts || pos?.info?.positionAmt || '0');
@@ -3617,6 +3634,69 @@ async function runStartupSequence(): Promise<void> {
     logger.error('❌ Failed to initialize markets - this should not happen');
   }
 }
+
+// ============================================================================
+// MONITORING ENDPOINTS - Order Queue & API Deduplication
+// ============================================================================
+
+// Order Queue Monitoring
+app.get('/api/monitor/order-queue', authMiddleware, (req, res) => {
+  try {
+    const stats = orderQueue.getStats();
+    const priorityDist = orderQueue.getPriorityDistribution();
+
+    res.json({
+      success: true,
+      stats,
+      priorityDistribution: priorityDist,
+      timestamp: Date.now(),
+    });
+  } catch (error: any) {
+    logger.error('[Monitor] Order queue stats error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// API Deduplication Stats
+app.get('/api/monitor/api-dedup', authMiddleware, (req, res) => {
+  try {
+    const stats = exchangeAPIDeduplicator.getStats();
+
+    res.json({
+      success: true,
+      stats,
+      timestamp: Date.now(),
+    });
+  } catch (error: any) {
+    logger.error('[Monitor] API dedup stats error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Signal Broker Stats (when available)
+app.get('/api/monitor/signals', authMiddleware, (req, res) => {
+  try {
+    // Signal broker will be available once Signal System is implemented
+    res.json({
+      success: true,
+      status: 'not_implemented',
+      message: 'Signal System will be available in Phase 2',
+      timestamp: Date.now(),
+    });
+  } catch (error: any) {
+    logger.error('[Monitor] Signal stats error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
 
 // Run startup sequence
 runStartupSequence().catch(error => {

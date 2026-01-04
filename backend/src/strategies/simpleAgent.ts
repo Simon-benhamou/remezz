@@ -45,9 +45,9 @@ import {
 } from '../services/binanceWebSocket.js';
 import { globalRestCircuitBreaker } from '../services/globalRestCircuitBreaker.js';
 import { isIpBanned } from '../exchange/ccxtClient.js';
-import { 
-  notifyTradeEntry, 
-  notifyTradeExit, 
+import {
+  notifyTradeEntry,
+  notifyTradeExit,
   notifyOrderError,
   notifyDailyLossLimit,
   notifyTrailingActivated,
@@ -60,6 +60,9 @@ import {
   notifySyncFailure,
   notifySignalDetected,
 } from '../services/notificationService.js';
+import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
+import { calculateOrderPriority } from '../services/orderPriority.js';
+import { v4 as uuidv4 } from 'uuid';
 
 const logger = createLogger('agent');
 
@@ -1854,12 +1857,54 @@ export class SimpleAgent {
           this.config.capitalPool.cancelReservation(this.config.sessionId);
           return;
         }
-        
-        // Place market order with formatted quantity
-        const order = side === 'long'
-          ? await this.config.exchange.createMarketBuyOrder(symbol, formattedQty, { reduceOnly: false })
-          : await this.config.exchange.createMarketSellOrder(symbol, formattedQty, { reduceOnly: false });
-        
+
+        // ========================================================================
+        // ORDER QUEUE INTEGRATION - Submit order via global queue
+        // ========================================================================
+        const orderRequest: OrderRequest = {
+          id: uuidv4(),
+          agentId: this.config.sessionId,
+          userId: this.config.userId || 'unknown',
+          priority: calculateOrderPriority({
+            reason: 'signal_entry',
+            isEntry: true,
+            urgency: 'medium',
+          }),
+          symbol,
+          side: side === 'long' ? 'buy' : 'sell',
+          type: 'market',
+          quantity: formattedQty,
+          params: { reduceOnly: false },
+          isEntry: true,
+          reason: 'signal_entry',
+          priorityContext: {
+            isEntry: true,
+            reason: 'signal_entry',
+            urgency: 'medium',
+          },
+          submittedAt: Date.now(),
+          retries: 0,
+          timeoutMs: 30_000,
+        };
+
+        logger.info(`[${symbol}] Submitting ${side} entry order to queue | orderId=${orderRequest.id} | priority=${orderRequest.priority}`);
+
+        const result = await orderQueue.submitOrder(orderRequest);
+
+        if (!result.success) {
+          logger.error(`[${symbol}] Order FAILED: ${result.error} (${result.errorCode})`);
+          this.config.capitalPool.cancelReservation(this.config.sessionId);
+          notifyOrderError({
+            symbol,
+            side,
+            orderType: 'entry',
+            error: result.error || 'Unknown error',
+            mode: this.config.mode,
+          });
+          return;
+        }
+
+        const order = result.order!;
         const filledPrice = order.average || order.price || currentPrice;
         const filledQty = order.filled || formattedQty;
         const entryTimeMs = (order as any)?.timestamp ?? lastCandle.timestamp;
@@ -2279,15 +2324,65 @@ export class SimpleAgent {
         
         // FIRST: Cancel any open SL/TP orders to avoid orphaned orders
         await this.cancelStopLossOnExchange();
-        
+
         // Format quantity to exchange precision
         const formattedQty = this.formatQtyForExchange(symbol, position.qty);
-        
+
+        // ========================================================================
+        // ORDER QUEUE INTEGRATION - Submit exit order via global queue
+        // ========================================================================
+
+        // Calculate PnL for priority calculation
+        const pnlPct = position.side === 'long'
+          ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
+          : ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
+
+        const holdTimeMs = Date.now() - position.entryTime;
+
+        const orderRequest: OrderRequest = {
+          id: uuidv4(),
+          agentId: this.config.sessionId,
+          userId: this.config.userId || 'unknown',
+          priority: calculateOrderPriority({
+            reason: reason as any,
+            isEntry: false,
+            positionPnlPct: pnlPct,
+            positionHoldTimeMs: holdTimeMs,
+            positionLeverage: position.leverage,
+          }),
+          symbol,
+          side: position.side === 'long' ? 'sell' : 'buy',
+          type: 'market',
+          quantity: formattedQty,
+          params: { reduceOnly: true },
+          isEntry: false,
+          reason,
+          priorityContext: {
+            isEntry: false,
+            reason: reason as any,
+            positionPnlPct: pnlPct,
+            positionHoldTimeMs: holdTimeMs,
+          },
+          submittedAt: Date.now(),
+          retries: 0,
+          timeoutMs: 30_000,
+        };
+
+        logger.info(
+          `[${symbol}] Submitting ${position.side} exit order to queue | ` +
+          `reason=${reason} | orderId=${orderRequest.id} | priority=${orderRequest.priority}`
+        );
+
+        const result = await orderQueue.submitOrder(orderRequest);
+
+        if (!result.success) {
+          logger.error(`[${symbol}] Exit order FAILED: ${result.error} (${result.errorCode})`);
+          this.closingPosition = false;
+          return;
+        }
+
+        const order = result.order!;
         const closeSide = position.side === 'long' ? 'sell' : 'buy';
-        const order = position.side === 'long'
-          ? await this.config.exchange.createMarketSellOrder(symbol, formattedQty, { reduceOnly: true })
-          : await this.config.exchange.createMarketBuyOrder(symbol, formattedQty, { reduceOnly: true });
-        
         const exitPrice = order.average || order.price || currentPrice;
         
         // Recalculate actual PnL
