@@ -632,12 +632,22 @@ export class OrderQueue {
   }
 
   /**
-   * Get exchange instance for a user
+   * Get exchange instance for a user (with their API credentials)
    */
   private async getExchangeForUser(userId: string): Promise<any> {
     // Import dynamically to avoid circular dependencies
-    const { getCachedExchange } = await import('../exchange/ccxtClient.js');
-    return getCachedExchange();
+    const { getUserExchange } = await import('../exchange/ccxtClient.js');
+    const { getUserCredentials } = await import('./userCredentials.js');
+    
+    // Get user's API credentials
+    const credentials = await getUserCredentials(userId);
+    
+    if (!credentials || !credentials.apiKey || !credentials.apiSecret) {
+      throw new Error(`No API credentials found for user ${userId}. Please configure your Binance API keys.`);
+    }
+    
+    // Return authenticated exchange instance for this user
+    return getUserExchange(userId, credentials);
   }
 
   /**
