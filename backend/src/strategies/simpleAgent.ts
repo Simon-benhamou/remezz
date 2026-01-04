@@ -60,6 +60,7 @@ import {
   notifySyncFailure,
   notifySignalDetected,
 } from '../services/notificationService.js';
+import { notifyPositionOpened, notifyPositionClosed } from '../utils/notifications.js';
 import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
 import { calculateOrderPriority } from '../services/orderPriority.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -1783,7 +1784,18 @@ export class SimpleAgent {
       
       logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=${slPct.toFixed(2)}% ($${position.stopLoss?.toFixed(4)})`);
       
-      // 📢 Send notification for paper entry
+      // 📢 Send Telegram notification for paper entry
+      void notifyPositionOpened({
+        agentId: this.config.sessionId,
+        symbol,
+        side,
+        quantity: sizing.qty,
+        entryPrice: currentPrice,
+        leverage: sizing.suggestedLeverage,
+        stopLoss: position.stopLoss,
+      });
+      
+      // Old notification system (kept for compatibility)
       notifyTradeEntry({
         symbol,
         side,
@@ -1977,7 +1989,19 @@ export class SimpleAgent {
         
         logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
         
-        // 📢 Send notification for live entry
+        // 📢 Send Telegram notification for live entry avec détails complets
+        void notifyPositionOpened({
+          agentId: this.config.sessionId,
+          symbol,
+          side,
+          quantity: filledQty,
+          entryPrice: filledPrice,
+          leverage: sizing.suggestedLeverage,
+          stopLoss: position.stopLoss,
+          takeProfit: undefined, // Calculé dynamiquement avec trailing
+        });
+        
+        // Old notification system (kept for compatibility)
         notifyTradeEntry({
           symbol,
           side,
@@ -2295,7 +2319,20 @@ export class SimpleAgent {
       await this.saveExitToDb(position, currentPrice, reason, pnlPct, pnlUsd, undefined, paperFeeUsd);
       logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | notional=$${notionalUsd.toFixed(2)} | fee=$${paperFeeUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)}`);
       
-      // 📢 Send notification for paper exit
+      // 📢 Send Telegram notification for paper exit avec P&L
+      void notifyPositionClosed({
+        agentId: this.config.sessionId,
+        symbol,
+        side: position.side,
+        quantity: position.qty,
+        entryPrice: position.entryPrice,
+        exitPrice: currentPrice,
+        pnl: pnlUsd,
+        pnlPct: pnlPct,
+        reason,
+      });
+      
+      // Old notification system (kept for compatibility)
       notifyTradeExit({
         symbol,
         side: position.side,
@@ -2418,7 +2455,20 @@ export class SimpleAgent {
         
         logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | fee=$${liveFeeUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)} | orderId=${order.id}`)
         
-        // 📢 Send notification for live exit
+        // 📢 Send Telegram notification for live exit avec tous les détails
+        void notifyPositionClosed({
+          agentId: this.config.sessionId,
+          symbol,
+          side: position.side,
+          quantity: position.qty,
+          entryPrice: position.entryPrice,
+          exitPrice,
+          pnl: actualPnlUsd,
+          pnlPct: actualPnlPct,
+          reason,
+        });
+        
+        // Old notification system (kept for compatibility)
         notifyTradeExit({
           symbol,
           side: position.side,

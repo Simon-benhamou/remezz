@@ -30,6 +30,7 @@ import { createLogger } from '../utils/logger.js';
 import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
 import { calculateOrderPriority, getPriorityTier } from './orderPriority.js';
 import type { OrderPriorityContext } from './orderPriority.js';
+import { notifyOrderSubmitted, notifyOrderFilled, notifyOrderFailed } from '../utils/notifications.js';
 
 const logger = createLogger('order-queue');
 
@@ -234,6 +235,21 @@ export class OrderQueue {
         `reason=${request.reason} | ` +
         `queueSize=${this.queue.length}/${this.MAX_QUEUE_SIZE}`
       );
+
+      // Notify Telegram (only for high priority orders to avoid spam)
+      if (request.priority >= 70) {
+        void notifyOrderSubmitted({
+          id: request.id,
+          agentId: request.agentId,
+          symbol: request.symbol,
+          side: request.side,
+          type: request.type,
+          quantity: request.quantity,
+          price: request.price,
+          reason: request.reason,
+          priority: request.priority,
+        });
+      }
     });
   }
 
@@ -475,6 +491,17 @@ export class OrderQueue {
         `executionTime=${executionTimeMs}ms`
       );
 
+      // Notify Telegram
+      void notifyOrderFilled({
+        id: order.id || id,
+        symbol: symbol,
+        side: side,
+        filled: order.filled || quantity,
+        average: order.average,
+        price: order.price,
+        status: order.status,
+      });
+
       resolve(result);
 
     } catch (error: any) {
@@ -525,6 +552,16 @@ export class OrderQueue {
           waitTimeMs,
           retriesUsed: request.retries,
         };
+
+        // Notify Telegram about failure
+        void notifyOrderFailed({
+          id,
+          symbol,
+          side,
+          quantity,
+          error: error.message,
+          retriesUsed: request.retries,
+        });
 
         this.results.set(id, result);
         resolve(result); // Don't reject, return error result
