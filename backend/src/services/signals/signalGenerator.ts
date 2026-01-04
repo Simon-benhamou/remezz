@@ -17,9 +17,11 @@
  * 4. Agents subscribe via SignalBroker to receive updates
  */
 
-import { logger } from '../../utils/logger.js';
-import { signalBroker } from './signalBroker.js';
-import type { Candle } from '../../types/market.js';
+import { createLogger } from '../../utils/logger.js';
+import { signalBroker, type TradingSignal } from './signalBroker.js';
+import type { Candle, MarketConditions } from '../../strategies/momentumSimple.js';
+
+const logger = createLogger('signal-generator');
 
 export interface SignalContext {
   symbol: string;
@@ -104,15 +106,18 @@ export class SignalGenerator {
 
   /**
    * Update candle data (called by WebSocket manager)
+   * @param symbol - The symbol these candles belong to
+   * @param timeframe - The timeframe ('1h', '2h', etc.)
+   * @param candles - The candle data
    */
-  updateCandles(timeframe: string, candles: Candle[]): void {
+  updateCandles(symbol: string, timeframe: string, candles: Candle[]): void {
     if (timeframe === '1h') {
-      if (candles[0]?.symbol === this.symbol) {
+      if (symbol === this.symbol) {
         this.candles1h = candles;
-      } else if (candles[0]?.symbol === 'BTC/USDT:USDT' || candles[0]?.symbol === 'BTCUSDT') {
+      } else if (symbol === 'BTC/USDT:USDT' || symbol === 'BTCUSDT') {
         this.btcCandles1h = candles;
       }
-    } else if (timeframe === '2h' && candles[0]?.symbol === this.symbol) {
+    } else if (timeframe === '2h' && symbol === this.symbol) {
       this.candles2h = candles;
     }
 
@@ -134,8 +139,32 @@ export class SignalGenerator {
       if (signal) {
         this.lastSignal = signal;
 
+        // Convert SignalContext to TradingSignal for the broker
+        const tradingSignal: TradingSignal = {
+          symbol: signal.symbol,
+          timestamp: signal.calculatedAt,
+          bias: signal.signal === 'neutral' ? null : signal.signal,
+          entryPrice: signal.price,
+          stopLoss: signal.price * (signal.signal === 'long' ? 0.97 : 1.03), // 3% SL
+          takeProfit: signal.price * (signal.signal === 'long' ? 1.06 : 0.94), // 6% TP
+          marketConditions: {
+            isTradingDay: true,
+            dayOfWeek: new Date().getUTCDay(),
+            btcTrend: signal.btcTrend,
+            btcMomentum6h: signal.roc,
+            btcAboveMa50: signal.btcTrend === 'bullish',
+            overallStatus: signal.btcTrend === 'bullish' ? 'favorable_long' : signal.btcTrend === 'bearish' ? 'favorable_short' : 'neutral',
+            reason: `Signal generated with strength ${signal.strength}`,
+            checkedAt: signal.calculatedAt,
+          },
+          score: signal.strength,
+          confidence: signal.strength,
+          generatedAt: signal.calculatedAt,
+          generatorVersion: 'v5.36',
+        };
+
         // Broadcast to SignalBroker
-        signalBroker.broadcastSignal(this.symbol, signal);
+        signalBroker.publishSignal(tradingSignal);
 
         logger.debug(`[SignalGenerator] ${this.symbol} signal: ${signal.signal} (strength: ${signal.strength})`);
       }

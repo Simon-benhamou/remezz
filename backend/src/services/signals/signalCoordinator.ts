@@ -17,10 +17,12 @@
  * 4. When last agent unsubscribes, generator is stopped and cleaned up
  */
 
-import { logger } from '../../utils/logger.js';
+import { createLogger } from '../../utils/logger.js';
 import { SignalGenerator, type SignalGeneratorConfig } from './signalGenerator.js';
 import { signalBroker } from './signalBroker.js';
-import type { Candle } from '../../types/market.js';
+import type { Candle } from '../../strategies/momentumSimple.js';
+
+const logger = createLogger('signal-coordinator');
 
 export interface CoordinatorStats {
   totalGenerators: number;
@@ -35,6 +37,7 @@ export interface CoordinatorStats {
 export class SignalCoordinator {
   private generators: Map<string, SignalGenerator> = new Map();
   private subscriberCounts: Map<string, number> = new Map();
+  private unsubscribeFns: Map<string, () => void> = new Map(); // agentId:symbol -> unsubscribe fn
 
   private defaultConfig = {
     timeframe: '1h',
@@ -62,10 +65,11 @@ export class SignalCoordinator {
     }
 
     // Subscribe agent to signal broker
-    signalBroker.subscribe(symbol, agentId, (signal) => {
+    const unsubscribe = signalBroker.subscribeToSignal(symbol, (signal) => {
       // Signal will be delivered via signalBroker callback
-      logger.debug(`[SignalCoordinator] ${agentId} received signal for ${symbol}: ${signal.signal}`);
+      logger.debug(`[SignalCoordinator] ${agentId} received signal for ${symbol}: ${signal.bias}`);
     });
+    this.unsubscribeFns.set(`${agentId}:${symbol}`, unsubscribe);
   }
 
   /**
@@ -80,8 +84,13 @@ export class SignalCoordinator {
 
       logger.info(`[SignalCoordinator] ${agentId} unsubscribed from ${symbol} (subscribers: ${currentCount - 1})`);
 
-      // Unsubscribe from signal broker
-      signalBroker.unsubscribe(symbol, agentId);
+      // Unsubscribe from signal broker using stored function
+      const key = `${agentId}:${symbol}`;
+      const unsubscribe = this.unsubscribeFns.get(key);
+      if (unsubscribe) {
+        unsubscribe();
+        this.unsubscribeFns.delete(key);
+      }
 
       // Stop generator if no subscribers remain
       if (currentCount - 1 === 0) {
@@ -134,13 +143,13 @@ export class SignalCoordinator {
     const generator = this.generators.get(symbol);
 
     if (generator) {
-      generator.updateCandles(timeframe, candles);
+      generator.updateCandles(symbol, timeframe, candles);
     }
 
     // Also update BTC candles for all generators (needed for BTC trend filter)
     if (symbol === 'BTC/USDT:USDT' || symbol === 'BTCUSDT') {
       for (const [, gen] of this.generators) {
-        gen.updateCandles(timeframe, candles);
+        gen.updateCandles(symbol, timeframe, candles);
       }
     }
   }
