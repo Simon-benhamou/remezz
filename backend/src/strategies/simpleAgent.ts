@@ -2481,10 +2481,18 @@ export class SimpleAgent {
           addPnlUsd = addPos.qty * (addPos.entryPrice - currentPrice);
         }
         const addMargin = addPos.marginUsd ?? (addPos.leverage ? (addPos.qty * addPos.entryPrice) / addPos.leverage : addPos.qty * addPos.entryPrice);
+        const addPnlPct = addPos.side === 'long'
+          ? ((currentPrice - addPos.entryPrice) / addPos.entryPrice) * 100
+          : ((addPos.entryPrice - currentPrice) / addPos.entryPrice) * 100;
         
         this.config.capitalPool.release(`${this.config.sessionId}_multi_${addPos.entryIndex}`, addMargin, addPnlUsd);
         totalPnlUsd += addPnlUsd;
         totalMarginReleased += addMargin;
+        
+        // V5.30: Save additional position as separate trade in DB
+        const addNotional = addPos.qty * currentPrice;
+        const addFeeUsd = addNotional * 0.0004;
+        await this.saveExitToDb(addPos, currentPrice, `${reason}_MULTI${(addPos.entryIndex || 0) + 1}`, addPnlPct, addPnlUsd, undefined, addFeeUsd);
         
         logger.info(`📝 [${symbol}] PAPER MULTI-POS ${(addPos.entryIndex || 0) + 1} CLOSED | PnL=$${addPnlUsd.toFixed(2)}`);
       }
@@ -2658,11 +2666,19 @@ export class SimpleAgent {
               } else {
                 addPnlUsd = addPos.qty * (addPos.entryPrice - addExitPrice);
               }
+              const addPnlPct = addPos.side === 'long'
+                ? ((addExitPrice - addPos.entryPrice) / addPos.entryPrice) * 100
+                : ((addPos.entryPrice - addExitPrice) / addPos.entryPrice) * 100;
               const addMargin = addPos.marginUsd ?? 0;
               
               this.config.capitalPool.release(`${this.config.sessionId}_multi_${addPos.entryIndex}`, addMargin, addPnlUsd);
               totalPnlUsd += addPnlUsd;
               totalMarginReleased += addMargin;
+              
+              // V5.30: Save additional position as separate trade in DB
+              const addNotional = addPos.qty * addExitPrice;
+              const addFeeUsd = addResult.order.fee?.cost ?? (addNotional * 0.0004);
+              await this.saveExitToDb(addPos, addExitPrice, `${reason}_MULTI${(addPos.entryIndex || 0) + 1}`, addPnlPct, addPnlUsd, addResult.order.id, addFeeUsd);
               
               logger.info(`🔴 [${symbol}] LIVE MULTI-POS ${(addPos.entryIndex || 0) + 1} CLOSED @ $${addExitPrice.toFixed(4)} | PnL=$${addPnlUsd.toFixed(2)}`);
             } else {

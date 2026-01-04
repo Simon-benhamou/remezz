@@ -916,9 +916,12 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   let tradeId = 0;
 
   const positions: Record<string, BacktestSimPosition | null> = {};
+  // V5.30: Multi-position support - store additional positions per symbol
+  const multiPositions: Record<string, BacktestSimPosition[]> = {};
   const cooldowns: Record<string, number> = {};
   symbols.forEach((s) => {
     positions[s] = null;
+    multiPositions[s] = [];
     cooldowns[s] = 0;
   });
 
@@ -1012,6 +1015,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           pos.highWaterMark = Math.max(pos.highWaterMark ?? pos.entryPrice, current.high);
         } else {
           pos.lowWaterMark = Math.min(pos.lowWaterMark ?? pos.entryPrice, current.low);
+        }
+        
+        // V5.30: Update water marks for multi-positions too
+        for (const multiPos of multiPositions[symbol]) {
+          if (multiPos.side === 'long') {
+            multiPos.highWaterMark = Math.max(multiPos.highWaterMark ?? multiPos.entryPrice, current.high);
+          } else {
+            multiPos.lowWaterMark = Math.min(multiPos.lowWaterMark ?? multiPos.entryPrice, current.low);
+          }
+          multiPos.maxPnlPct = Math.max(multiPos.maxPnlPct ?? 0, pnlPct);
         }
         
         // V5.28: Track max raw PnL % for stagnant trade detection
@@ -1348,6 +1361,49 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
           });
 
+          // V5.30: Close and record multi-positions as separate trades
+          for (const multiPos of multiPositions[symbol]) {
+            const multiHoldBars = idx - multiPos.entryIdx;
+            const multiPnl = calculatePnl(
+              multiPos.entryPrice,
+              exitPrice,
+              multiPos.side,
+              multiPos.marginUsd,
+              multiPos.leverage,
+              multiHoldBars,
+            );
+            capital += multiPnl.netPnlUsd + multiPos.marginUsd;
+            capitalInUse -= multiPos.marginUsd;
+
+            trades.push({
+              id: `trade_${++tradeId}`,
+              symbol,
+              side: multiPos.side,
+              entryTime: new Date(multiPos.entryTime).toISOString(),
+              exitTime: new Date(current.timestamp).toISOString(),
+              entryPrice: multiPos.entryPrice,
+              exitPrice,
+              qty: multiPos.qty,
+              notionalUsd: multiPos.notionalUsd,
+              marginUsd: multiPos.marginUsd,
+              leverage: multiPos.leverage,
+              holdMinutes: multiHoldBars * 15,
+              grossPnlPct: multiPnl.grossPnlPct,
+              netPnlPct: multiPnl.netPnlPct,
+              netPnlUsd: multiPnl.netPnlUsd,
+              feesUsd: multiPnl.feesUsd,
+              exitReason: `${exitReason}_MULTI${multiPos.positionIndex}`,
+              entryReason: multiPos.entryReason,
+              capitalBefore: multiPos.capitalBefore,
+              capitalAfter: capital + capitalInUse,
+              month,
+              day: exitDay,
+              wasCapped: multiPos.wasCapped,
+              slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+            });
+          }
+          multiPositions[symbol] = []; // Clear multi-positions
+
           positions[symbol] = null;
           
           // V5.13: Adaptive cooldown based on exit reason
@@ -1542,22 +1598,49 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             totalPositions = Math.min(idealPositions, maxPositions);
             
             if (totalPositions > 1) {
-              // Each position uses max safe notional (cap)
-              totalNotionalUsd = cap * totalPositions;
-              totalMarginUsd = totalNotionalUsd / posLev;
+              // V5.30: Create SEPARATE positions instead of one big one
+              // Each position uses cap notional
+              const perPosNotional = cap;
+              const perPosMargin = perPosNotional / posLev;
               
-              // Make sure we have enough capital
-              if (totalMarginUsd > availableCapital * 0.95) {
-                totalMarginUsd = availableCapital * 0.95;
-                totalNotionalUsd = totalMarginUsd * posLev;
-                totalPositions = Math.floor(totalNotionalUsd / cap);
+              // Make sure we have enough capital for all positions
+              const totalNeededMargin = perPosMargin * totalPositions;
+              if (totalNeededMargin > availableCapital * 0.95) {
+                totalPositions = Math.floor((availableCapital * 0.95) / perPosMargin);
                 if (totalPositions < 1) totalPositions = 1;
-                totalNotionalUsd = cap * totalPositions;
-                totalMarginUsd = totalNotionalUsd / posLev;
               }
               
-              notionalUsd = totalNotionalUsd;
-              marginUsd = totalMarginUsd;
+              // Primary position uses cap
+              notionalUsd = perPosNotional;
+              marginUsd = perPosMargin;
+              
+              // Create additional positions (will be stored in multiPositions array)
+              for (let posIdx = 1; posIdx < totalPositions; posIdx++) {
+                const addQty = perPosNotional / current.close;
+                capitalInUse += perPosMargin;
+                capital -= perPosMargin;
+                
+                multiPositions[symbol].push({
+                  symbol,
+                  side: signal.side,
+                  entryPrice: current.close * (1 + (posIdx * 0.003 * (signal.side === 'long' ? -1 : 1))), // Slight price spread
+                  entryTime: current.timestamp,
+                  entryIdx: idx,
+                  qty: addQty,
+                  notionalUsd: perPosNotional,
+                  marginUsd: perPosMargin,
+                  leverage: posLev,
+                  capitalBefore: capital + perPosMargin,
+                  wasCapped: true,
+                  stopLossPct: CONFIG.EXIT.STOP_LOSS_PCT,
+                  highWaterMark: signal.side === 'long' ? current.close : undefined,
+                  lowWaterMark: signal.side === 'short' ? current.close : undefined,
+                  entryReason: `${signal.reason}_MULTI${posIdx}`,
+                  positionIndex: posIdx,
+                  totalPositions,
+                  stagnantState: { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 }
+                });
+              }
             }
           } else if (wasCapped) {
             notionalUsd = cap;
@@ -1656,6 +1739,49 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         wasCapped: pos.wasCapped,
         slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
       });
+
+      // V5.30: Close and record remaining multi-positions
+      for (const multiPos of multiPositions[symbol]) {
+        const multiHoldBars = candles.length - multiPos.entryIdx;
+        const multiPnl = calculatePnl(
+          multiPos.entryPrice,
+          lastCandle.close,
+          multiPos.side,
+          multiPos.marginUsd,
+          multiPos.leverage,
+          multiHoldBars,
+        );
+        capital += multiPnl.netPnlUsd + multiPos.marginUsd;
+        capitalInUse -= multiPos.marginUsd;
+
+        trades.push({
+          id: `trade_${++tradeId}`,
+          symbol,
+          side: multiPos.side,
+          entryTime: new Date(multiPos.entryTime).toISOString(),
+          exitTime: new Date(lastCandle.timestamp).toISOString(),
+          entryPrice: multiPos.entryPrice,
+          exitPrice: lastCandle.close,
+          qty: multiPos.qty,
+          notionalUsd: multiPos.notionalUsd,
+          marginUsd: multiPos.marginUsd,
+          leverage: multiPos.leverage,
+          holdMinutes: multiHoldBars * 15,
+          grossPnlPct: multiPnl.grossPnlPct,
+          netPnlPct: multiPnl.netPnlPct,
+          netPnlUsd: multiPnl.netPnlUsd,
+          feesUsd: multiPnl.feesUsd,
+          exitReason: `END_MULTI${multiPos.positionIndex}`,
+          entryReason: multiPos.entryReason,
+          capitalBefore: multiPos.capitalBefore,
+          capitalAfter: capital + capitalInUse,
+          month: new Date(lastCandle.timestamp).toISOString().slice(0, 7),
+          day: new Date(lastCandle.timestamp).toISOString().slice(0, 10),
+          wasCapped: multiPos.wasCapped,
+          slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+        });
+      }
+      multiPositions[symbol] = [];
     }
   }
 
