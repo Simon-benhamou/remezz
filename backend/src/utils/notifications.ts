@@ -26,18 +26,24 @@ if (!isEnabled) {
 /**
  * Send a message to Telegram
  */
-async function sendTelegramMessage(text: string, parseMode: 'Markdown' | 'HTML' = 'Markdown'): Promise<void> {
+async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' | 'HTML' | null = null): Promise<void> {
   if (!isEnabled) return;
 
   try {
+    const body: Record<string, unknown> = {
+      chat_id: TELEGRAM_CHAT_ID,
+      text,
+    };
+    
+    // Only add parse_mode if specified (plain text is safest)
+    if (parseMode) {
+      body.parse_mode = parseMode;
+    }
+
     const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text,
-        parse_mode: parseMode,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -69,17 +75,16 @@ export async function notifyOrderSubmitted(order: {
   const priorityEmoji = order.priority >= 90 ? '🔴' : order.priority >= 70 ? '🟠' : '🟡';
 
   const message = `
-📝 *ORDER QUEUED* ${priorityEmoji}
+📝 ORDER QUEUED ${priorityEmoji}
 
-Symbol: \`${order.symbol}\`
-Side: *${order.side.toUpperCase()}*
+Symbol: ${order.symbol}
+Side: ${order.side.toUpperCase()}
 Type: ${order.type}
 Qty: ${order.quantity}${priceInfo}
 Reason: ${order.reason}
 Priority: ${order.priority}
 
-Agent: \`${order.agentId}\`
-Order ID: \`${order.id.substring(0, 8)}\`
+Agent: ${order.agentId.substring(0, 8)}
   `.trim();
 
   await sendTelegramMessage(message);
@@ -103,14 +108,12 @@ export async function notifyOrderFilled(order: {
   const priceStr = executionPrice > 0 ? `$${executionPrice.toFixed(2)}` : 'Market';
 
   const message = `
-✅ *ORDER FILLED*
+✅ ORDER FILLED
 
-Symbol: \`${order.symbol}\`
-Side: *${order.side.toUpperCase()}*
+Symbol: ${order.symbol}
+Side: ${order.side.toUpperCase()}
 Qty: ${order.filled}
 Price: ${priceStr}
-
-Order ID: \`${order.id.substring(0, 8)}\`
 Time: ${new Date().toLocaleTimeString()}
   `.trim();
 
@@ -131,16 +134,13 @@ export async function notifyOrderFailed(order: {
   if (!isEnabled) return;
 
   const message = `
-❌ *ORDER FAILED*
+❌ ORDER FAILED
 
-Symbol: \`${order.symbol}\`
-Side: *${order.side.toUpperCase()}*
+Symbol: ${order.symbol}
+Side: ${order.side.toUpperCase()}
 Qty: ${order.quantity}
-
 Error: ${order.error}
 Retries: ${order.retriesUsed}
-
-Order ID: \`${order.id.substring(0, 8)}\`
   `.trim();
 
   await sendTelegramMessage(message);
@@ -161,20 +161,16 @@ export async function notifyPositionOpened(position: {
 }): Promise<void> {
   if (!isEnabled) return;
 
-  const leverageInfo = position.leverage ? `\nLeverage: ${position.leverage}x` : '';
-  const slInfo = position.stopLoss ? `\nStop Loss: $${position.stopLoss.toFixed(2)}` : '';
-  const tpInfo = position.takeProfit ? `\nTake Profit: $${position.takeProfit.toFixed(2)}` : '';
+  const leverageInfo = position.leverage ? ` (${position.leverage}x)` : '';
+  const slInfo = position.stopLoss ? `\nSL: $${position.stopLoss.toFixed(2)}` : '';
+  const tpInfo = position.takeProfit ? `\nTP: $${position.takeProfit.toFixed(2)}` : '';
 
   const message = `
-🚀 *POSITION OPENED*
+🚀 POSITION OPENED
 
-Symbol: \`${position.symbol}\`
-Side: *${position.side.toUpperCase()}*
+${position.symbol} ${position.side.toUpperCase()}${leverageInfo}
+Entry: $${position.entryPrice.toFixed(2)}${slInfo}${tpInfo}
 Qty: ${position.quantity}
-Entry: $${position.entryPrice.toFixed(2)}${leverageInfo}${slInfo}${tpInfo}
-
-Agent: \`${position.agentId}\`
-Time: ${new Date().toLocaleTimeString()}
   `.trim();
 
   await sendTelegramMessage(message);
@@ -200,18 +196,12 @@ export async function notifyPositionClosed(position: {
   const pnlSign = position.pnl > 0 ? '+' : '';
 
   const message = `
-🚪 *POSITION CLOSED* ${pnlEmoji}
+${pnlEmoji} POSITION CLOSED
 
-Symbol: \`${position.symbol}\`
-Side: *${position.side.toUpperCase()}*
-Entry: $${position.entryPrice.toFixed(2)}
-Exit: $${position.exitPrice.toFixed(2)}
-
-P&L: ${pnlSign}$${position.pnl.toFixed(2)} (${pnlSign}${position.pnlPct.toFixed(2)}%)
+${position.symbol} ${position.side.toUpperCase()}
+Entry: $${position.entryPrice.toFixed(2)} → Exit: $${position.exitPrice.toFixed(2)}
+PnL: ${pnlSign}$${position.pnl.toFixed(2)} (${pnlSign}${position.pnlPct.toFixed(2)}%)
 Reason: ${position.reason}
-
-Agent: \`${position.agentId}\`
-Time: ${new Date().toLocaleTimeString()}
   `.trim();
 
   await sendTelegramMessage(message);
@@ -230,13 +220,10 @@ export async function notifySystemAlert(alert: {
   const emoji = alert.level === 'critical' ? '🚨' : alert.level === 'error' ? '⚠️' : '⚡';
 
   const message = `
-${emoji} *SYSTEM ALERT*
+${emoji} SYSTEM ALERT
 
 ${alert.title}
-
 ${alert.message}
-
-Time: ${new Date().toLocaleString()}
   `.trim();
 
   await sendTelegramMessage(message);
