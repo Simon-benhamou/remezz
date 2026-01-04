@@ -3531,7 +3531,7 @@ async function restoreActiveSessions() {
         }
         
         const symbols = sessions.map((s: any) => s.symbol).join(', ');
-        logger.info(`♻️ Restored ${agents.length} agent(s) for ${userId}: ${symbols}`);
+        logger.info(`♻️ Restored ${agents.length} ${mode.toUpperCase()} agent(s) for ${userId}: ${symbols}`);
       } catch (error) {
         logger.warn(`Failed to restore sessions for ${userId}:`, error);
       }

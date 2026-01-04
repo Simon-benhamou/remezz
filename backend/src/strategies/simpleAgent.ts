@@ -550,6 +550,10 @@ export interface TradeEvent {
 export class SimpleAgent {
   private config: SimpleAgentConfig;
   private position: Position | null = null;
+  
+  // V5.30: Multi-position support - additional positions for large accounts
+  private additionalPositions: Position[] = [];
+  
   private running = false;
   private tickIntervalId: NodeJS.Timeout | null = null;
 
@@ -1739,6 +1743,13 @@ export class SimpleAgent {
     // V5.5: Include liquidity info in log
     const slippageInfo = sizing.estimatedSlippage ? ` | est.slip=${sizing.estimatedSlippage.toFixed(3)}%` : '';
     const liquidityInfo = sizing.liquidityTier ? ` | tier=${sizing.liquidityTier}` : '';
+    
+    // V5.30: Check for multi-position plan (only for large accounts with liquidity caps)
+    const multiPlan = sizing.multiPositionPlan;
+    if (multiPlan?.enabled && multiPlan.totalPositions > 1) {
+      logger.info(`📊 [${symbol}] MULTI-POSITION PLAN ACTIVE | positions=${multiPlan.totalPositions} | perPosition=$${multiPlan.positionSizeUsd.toFixed(0)} | total=$${multiPlan.totalNotionalUsd.toFixed(0)} | efficiency=${(multiPlan.efficiency * 100).toFixed(1)}%`);
+    }
+    
     logger.info(`🚀 [${symbol}] OPENING ${side.toUpperCase()} | price=$${currentPrice.toFixed(4)} | qty=${sizing.qty.toFixed(6)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x${liquidityInfo}${slippageInfo}`);
     
     // V5.7: Calculate dynamic stop-loss based on ATR
@@ -1764,13 +1775,66 @@ export class SimpleAgent {
         stopLossPct: slPct,                    // V5.7: Store SL percentage used
         highWaterMark: side === 'long' ? currentPrice : undefined,
         lowWaterMark: side === 'short' ? currentPrice : undefined,
+        // V5.30: Multi-position tracking
+        positionId: multiPlan?.enabled ? `${this.config.sessionId}_0` : undefined,
+        groupId: multiPlan?.enabled ? `group_${Date.now()}_${symbol}` : undefined,
+        entryIndex: multiPlan?.enabled ? 0 : undefined,
       };
       
       this.position = position;
+      this.additionalPositions = []; // Reset additional positions
       this.closingPosition = false;
       
       // Commit MARGIN (not notional)
       this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
+      
+      // V5.30: Open additional positions if multi-position plan is active
+      if (multiPlan?.enabled && multiPlan.totalPositions > 1) {
+        const groupId = position.groupId!;
+        let totalAdditionalMargin = 0;
+        
+        for (let i = 1; i < multiPlan.totalPositions; i++) {
+          const entryPrice = multiPlan.entryPrices[i];
+          const marginPerPosition = multiPlan.positionSizeUsd / sizing.suggestedLeverage;
+          const qtyPerPosition = multiPlan.positionSizeUsd / entryPrice;
+          
+          // Check if we have enough capital for this additional position
+          const poolStatus = this.config.capitalPool.getStatus();
+          if (poolStatus.availableUsd < marginPerPosition) {
+            logger.warn(`⚠️ [${symbol}] Multi-position ${i+1}/${multiPlan.totalPositions} skipped - insufficient capital ($${poolStatus.availableUsd.toFixed(2)} < $${marginPerPosition.toFixed(2)})`);
+            break;
+          }
+          
+          const additionalPosition: Position = {
+            symbol,
+            side,
+            entryPrice,
+            qty: qtyPerPosition,
+            entryTime: lastCandle.timestamp,
+            leverage: sizing.suggestedLeverage,
+            marginUsd: marginPerPosition,
+            stopLoss: side === 'long'
+              ? entryPrice * (1 - slPct / 100)
+              : entryPrice * (1 + slPct / 100),
+            stopLossPct: slPct,
+            highWaterMark: side === 'long' ? entryPrice : undefined,
+            lowWaterMark: side === 'short' ? entryPrice : undefined,
+            positionId: `${this.config.sessionId}_${i}`,
+            groupId,
+            entryIndex: i,
+          };
+          
+          this.additionalPositions.push(additionalPosition);
+          totalAdditionalMargin += marginPerPosition;
+          
+          // Reserve and commit margin for this additional position
+          this.config.capitalPool.commit(`${this.config.sessionId}_multi_${i}`, marginPerPosition);
+          
+          logger.info(`📝 [${symbol}] PAPER MULTI-POS ${i+1}/${multiPlan.totalPositions} @ $${entryPrice.toFixed(4)} | margin=$${marginPerPosition.toFixed(2)}`);
+        }
+        
+        logger.info(`✅ [${symbol}] Opened ${1 + this.additionalPositions.length} positions | totalMargin=$${(sizing.marginUsd + totalAdditionalMargin).toFixed(2)}`);
+      }
       
       // Log the updated capital state after commit
       const statusAfterCommit = this.config.capitalPool.getStatus();
@@ -1936,13 +2000,109 @@ export class SimpleAgent {
           orderId: order.id,
           highWaterMark: side === 'long' ? filledPrice : undefined,
           lowWaterMark: side === 'short' ? filledPrice : undefined,
+          // V5.30: Multi-position tracking
+          positionId: multiPlan?.enabled ? `${this.config.sessionId}_0` : undefined,
+          groupId: multiPlan?.enabled ? `group_${Date.now()}_${symbol}` : undefined,
+          entryIndex: multiPlan?.enabled ? 0 : undefined,
         };
         
         this.position = position;
+        this.additionalPositions = []; // Reset additional positions
         this.closingPosition = false;
         
         // Commit MARGIN (not notional)
         this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
+        
+        // V5.30: Open additional positions if multi-position plan is active (LIVE mode)
+        if (multiPlan?.enabled && multiPlan.totalPositions > 1) {
+          const groupId = position.groupId!;
+          
+          for (let i = 1; i < multiPlan.totalPositions; i++) {
+            const targetEntryPrice = multiPlan.entryPrices[i];
+            const marginPerPosition = multiPlan.positionSizeUsd / sizing.suggestedLeverage;
+            const qtyPerPosition = this.formatQtyForExchange(symbol, multiPlan.positionSizeUsd / targetEntryPrice);
+            
+            // Check if we have enough capital
+            const poolStatus = this.config.capitalPool.getStatus();
+            if (poolStatus.availableUsd < marginPerPosition) {
+              logger.warn(`⚠️ [${symbol}] LIVE multi-pos ${i+1}/${multiPlan.totalPositions} skipped - insufficient capital`);
+              break;
+            }
+            
+            // Submit additional order via queue
+            const additionalOrderRequest: OrderRequest = {
+              id: uuidv4(),
+              agentId: this.config.sessionId,
+              userId: this.config.userId || 'unknown',
+              priority: calculateOrderPriority({
+                reason: 'signal_entry',
+                isEntry: true,
+                urgency: 'medium',
+              }),
+              symbol,
+              side: side === 'long' ? 'buy' : 'sell',
+              type: 'market',
+              quantity: qtyPerPosition,
+              params: { reduceOnly: false },
+              isEntry: true,
+              reason: `multi_entry_${i+1}`,
+              priorityContext: {
+                isEntry: true,
+                reason: 'signal_entry',
+                urgency: 'medium',
+              },
+              submittedAt: Date.now(),
+              retries: 0,
+              timeoutMs: 30_000,
+            };
+            
+            logger.info(`[${symbol}] Submitting multi-pos ${i+1}/${multiPlan.totalPositions} | orderId=${additionalOrderRequest.id}`);
+            
+            const additionalResult = await orderQueue.submitOrder(additionalOrderRequest);
+            
+            if (!additionalResult.success) {
+              logger.error(`[${symbol}] Multi-pos ${i+1} FAILED: ${additionalResult.error}`);
+              continue;
+            }
+            
+            const addOrder = additionalResult.order!;
+            const addFilledPrice = addOrder.average || addOrder.price || targetEntryPrice;
+            const addFilledQty = addOrder.filled || qtyPerPosition;
+            
+            const additionalPosition: Position = {
+              symbol,
+              side,
+              entryPrice: addFilledPrice,
+              qty: addFilledQty,
+              entryTime: addOrder.timestamp || Date.now(),
+              leverage: sizing.suggestedLeverage,
+              marginUsd: marginPerPosition,
+              stopLoss: side === 'long'
+                ? addFilledPrice * (1 - slPct / 100)
+                : addFilledPrice * (1 + slPct / 100),
+              stopLossPct: slPct,
+              orderId: addOrder.id,
+              highWaterMark: side === 'long' ? addFilledPrice : undefined,
+              lowWaterMark: side === 'short' ? addFilledPrice : undefined,
+              positionId: `${this.config.sessionId}_${i}`,
+              groupId,
+              entryIndex: i,
+            };
+            
+            this.additionalPositions.push(additionalPosition);
+            this.config.capitalPool.commit(`${this.config.sessionId}_multi_${i}`, marginPerPosition);
+            
+            // Set SL for this position too
+            await this.setStopLossOnExchange(additionalPosition);
+            
+            logger.info(`🟢 [${symbol}] LIVE MULTI-POS ${i+1}/${multiPlan.totalPositions} @ $${addFilledPrice.toFixed(4)} | margin=$${marginPerPosition.toFixed(2)}`);
+            
+            // Delay between orders to avoid rate limits
+            await new Promise(r => setTimeout(r, 500));
+          }
+          
+          logger.info(`✅ [${symbol}] Opened ${1 + this.additionalPositions.length} LIVE positions`);
+        }
         
         // Log the updated capital state after commit
         const statusAfterCommit = this.config.capitalPool.getStatus();
@@ -2309,6 +2469,27 @@ export class SimpleAgent {
       // Paper close
       this.position = null;
       
+      // V5.30: Close additional positions too
+      let totalPnlUsd = pnlUsd;
+      let totalMarginReleased = marginToRelease;
+      
+      for (const addPos of this.additionalPositions) {
+        let addPnlUsd: number;
+        if (addPos.side === 'long') {
+          addPnlUsd = addPos.qty * (currentPrice - addPos.entryPrice);
+        } else {
+          addPnlUsd = addPos.qty * (addPos.entryPrice - currentPrice);
+        }
+        const addMargin = addPos.marginUsd ?? (addPos.leverage ? (addPos.qty * addPos.entryPrice) / addPos.leverage : addPos.qty * addPos.entryPrice);
+        
+        this.config.capitalPool.release(`${this.config.sessionId}_multi_${addPos.entryIndex}`, addMargin, addPnlUsd);
+        totalPnlUsd += addPnlUsd;
+        totalMarginReleased += addMargin;
+        
+        logger.info(`📝 [${symbol}] PAPER MULTI-POS ${(addPos.entryIndex || 0) + 1} CLOSED | PnL=$${addPnlUsd.toFixed(2)}`);
+      }
+      this.additionalPositions = [];
+      
       // Release MARGIN (not notional) with PnL
       this.config.capitalPool.release(this.config.sessionId, marginToRelease, pnlUsd);
       
@@ -2316,8 +2497,8 @@ export class SimpleAgent {
       const exitNotionalUsd = position.qty * currentPrice;
       const paperFeeUsd = exitNotionalUsd * 0.0004;
       
-      await this.saveExitToDb(position, currentPrice, reason, pnlPct, pnlUsd, undefined, paperFeeUsd);
-      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | notional=$${notionalUsd.toFixed(2)} | fee=$${paperFeeUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)}`);
+      await this.saveExitToDb(position, currentPrice, reason, pnlPct, totalPnlUsd, undefined, paperFeeUsd);
+      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${totalPnlUsd.toFixed(2)}) | margin released=$${totalMarginReleased.toFixed(2)}`);
       
       // 📢 Send Telegram notification for paper exit avec P&L
       void notifyPositionClosed({
@@ -2434,6 +2615,64 @@ export class SimpleAgent {
         }
         
         this.position = null;
+        
+        // V5.30: Close additional positions too (LIVE mode)
+        let totalPnlUsd = actualPnlUsd;
+        let totalMarginReleased = marginToRelease;
+        
+        for (const addPos of this.additionalPositions) {
+          try {
+            // Submit close order for each additional position
+            const addFormattedQty = this.formatQtyForExchange(symbol, addPos.qty);
+            
+            const addOrderRequest: OrderRequest = {
+              id: uuidv4(),
+              agentId: this.config.sessionId,
+              userId: this.config.userId || 'unknown',
+              priority: calculateOrderPriority({
+                reason: reason as any,
+                isEntry: false,
+                positionPnlPct: actualPnlPct,
+                positionHoldTimeMs: Date.now() - addPos.entryTime,
+              }),
+              symbol,
+              side: addPos.side === 'long' ? 'sell' : 'buy',
+              type: 'market',
+              quantity: addFormattedQty,
+              params: { reduceOnly: true },
+              isEntry: false,
+              reason: `multi_exit_${(addPos.entryIndex || 0) + 1}`,
+              priorityContext: { isEntry: false, reason: reason as any },
+              submittedAt: Date.now(),
+              retries: 0,
+              timeoutMs: 30_000,
+            };
+            
+            const addResult = await orderQueue.submitOrder(addOrderRequest);
+            
+            if (addResult.success && addResult.order) {
+              const addExitPrice = addResult.order.average || addResult.order.price || currentPrice;
+              let addPnlUsd: number;
+              if (addPos.side === 'long') {
+                addPnlUsd = addPos.qty * (addExitPrice - addPos.entryPrice);
+              } else {
+                addPnlUsd = addPos.qty * (addPos.entryPrice - addExitPrice);
+              }
+              const addMargin = addPos.marginUsd ?? 0;
+              
+              this.config.capitalPool.release(`${this.config.sessionId}_multi_${addPos.entryIndex}`, addMargin, addPnlUsd);
+              totalPnlUsd += addPnlUsd;
+              totalMarginReleased += addMargin;
+              
+              logger.info(`🔴 [${symbol}] LIVE MULTI-POS ${(addPos.entryIndex || 0) + 1} CLOSED @ $${addExitPrice.toFixed(4)} | PnL=$${addPnlUsd.toFixed(2)}`);
+            } else {
+              logger.error(`❌ [${symbol}] Multi-pos ${(addPos.entryIndex || 0) + 1} close FAILED: ${addResult.error}`);
+            }
+          } catch (addErr: any) {
+            logger.error(`❌ [${symbol}] Multi-pos ${(addPos.entryIndex || 0) + 1} close error:`, addErr?.message);
+          }
+        }
+        this.additionalPositions = [];
         
         // Release margin from our tracking (PnL is passed for logging but NOT added to totalCapitalUsd in live mode)
         this.config.capitalPool.release(this.config.sessionId, marginToRelease, actualPnlUsd);

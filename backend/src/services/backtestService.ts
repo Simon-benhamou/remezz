@@ -60,6 +60,9 @@ interface BacktestSimPosition {
   trailingActive?: boolean; // V5.26: Once trailing activates, it stays active
   maxPnlPct?: number;  // V5.28: Track max raw PnL % for stagnant trade detection
   entryReason?: string;  // V5.32: Track entry reason (anticipatory vs classic)
+  // V5.30: Multi-position tracking
+  positionIndex?: number;     // 0 = primary, 1+ = additional positions
+  totalPositions?: number;    // Total positions in this group
   // V5.31: Smart Stagnant - observation window state machine
   stagnantState: {
     triggered: boolean;      // Has 60min passed without trailing activation?
@@ -1506,7 +1509,57 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           };
           const cap = LIQUIDITY_CAPS[symbol] ?? Infinity;
           const wasCapped = Number.isFinite(cap) && notionalUsd > cap;
-          if (wasCapped) {
+          
+          // V5.30: Multi-position logic for large accounts hitting liquidity caps
+          // Only activate for accounts >= $30K with MULTI_POSITION_ENABLED=true
+          const MULTI_POSITION_ENABLED = process.env.MULTI_POSITION_ENABLED === 'true';
+          const MULTI_POSITION_MIN_CAPITAL = 30_000;
+          
+          let totalPositions = 1;
+          let totalMarginUsd = marginUsd;
+          let totalNotionalUsd = notionalUsd;
+          
+          if (wasCapped && MULTI_POSITION_ENABLED && initialCapital >= MULTI_POSITION_MIN_CAPITAL) {
+            // Calculate how many positions we need
+            const targetNotional = marginUsd * posLev;
+            const idealPositions = Math.ceil(targetNotional / cap);
+            
+            // Cap by capital tier
+            const capitalTiers: { [minCap: number]: number } = {
+              300_000: 5,
+              150_000: 4,
+              75_000: 3,
+              30_000: 2,
+            };
+            let maxPositions = 1;
+            for (const [minCap, positions] of Object.entries(capitalTiers).sort((a, b) => Number(b[0]) - Number(a[0]))) {
+              if (initialCapital >= Number(minCap)) {
+                maxPositions = positions;
+                break;
+              }
+            }
+            
+            totalPositions = Math.min(idealPositions, maxPositions);
+            
+            if (totalPositions > 1) {
+              // Each position uses max safe notional (cap)
+              totalNotionalUsd = cap * totalPositions;
+              totalMarginUsd = totalNotionalUsd / posLev;
+              
+              // Make sure we have enough capital
+              if (totalMarginUsd > availableCapital * 0.95) {
+                totalMarginUsd = availableCapital * 0.95;
+                totalNotionalUsd = totalMarginUsd * posLev;
+                totalPositions = Math.floor(totalNotionalUsd / cap);
+                if (totalPositions < 1) totalPositions = 1;
+                totalNotionalUsd = cap * totalPositions;
+                totalMarginUsd = totalNotionalUsd / posLev;
+              }
+              
+              notionalUsd = totalNotionalUsd;
+              marginUsd = totalMarginUsd;
+            }
+          } else if (wasCapped) {
             notionalUsd = cap;
             marginUsd = notionalUsd / posLev;
           }
@@ -1537,6 +1590,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             highWaterMark: signal.side === 'long' ? current.close : undefined,
             lowWaterMark: signal.side === 'short' ? current.close : undefined,
             entryReason: signal.reason,  // V5.32: Track entry reason
+            // V5.30: Multi-position tracking
+            positionIndex: 0,
+            totalPositions,
             // V5.31: Smart Stagnant state initialization
             stagnantState: {
               triggered: false,
@@ -1545,6 +1601,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
               obsPeakPct: 0
             }
           };
+          
+          // V5.30: Log multi-position if activated
+          if (totalPositions > 1) {
+            console.log(`📊 [BT] ${symbol} MULTI-POS: ${totalPositions}x positions | totalNotional=$${notionalUsd.toFixed(0)} | totalMargin=$${marginUsd.toFixed(0)}`);
+          }
         }
       }
     }

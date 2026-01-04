@@ -481,6 +481,10 @@ export interface Position {
   };
   // Emergency protection (exchange-side)
   emergencyStopPrice?: number;   // Wide emergency stop (catastrophe protection)
+  // V5.30: Multi-position support
+  positionId?: string;       // Unique ID for this position (for multi-position tracking)
+  groupId?: string;          // Group ID for related positions (same signal, staggered entries)
+  entryIndex?: number;       // Entry index (0, 1, 2...) for multi-position stagger
 }
 
 export interface SignalResult {
@@ -1961,15 +1965,24 @@ export const LIQUIDITY_CONFIG = {
       maxPositionUsd: 500_000,  // $500K max per position
       minVolume24h: 1_000_000_000,  // $1B minimum
     },
-    // Tier 2: Medium liquidity (XRP, SOL, DOGE, AVAX, LINK) - $500M-$5B daily volume
+    // Tier 2: Medium liquidity - $500M-$5B daily volume
     MEDIUM: {
-      symbols: ['XRP/USDT:USDT', 'SOL/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT', 'LINK/USDT:USDT', 'ADA/USDT:USDT'],
+      symbols: [
+        'XRP/USDT:USDT', 'SOL/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT', 'LINK/USDT:USDT', 'ADA/USDT:USDT',
+        // V5.30: Added missing cryptos from scanner
+        'BNB/USDT:USDT', 'MATIC/USDT:USDT', 'UNI/USDT:USDT', 'LTC/USDT:USDT', 'BCH/USDT:USDT', 'ATOM/USDT:USDT',
+        'TRX/USDT:USDT', 'NEAR/USDT:USDT', 'APT/USDT:USDT', 'ARB/USDT:USDT', 'OP/USDT:USDT', 'INJ/USDT:USDT', 'TIA/USDT:USDT',
+      ],
       maxPositionUsd: 100_000,  // $100K max
       minVolume24h: 500_000_000,
     },
-    // Tier 3: Low liquidity (SEI, IMX, SUI, DOT) - <$500M daily volume
+    // Tier 3: Low liquidity - <$500M daily volume
     LOW: {
-      symbols: ['SEI/USDT:USDT', 'IMX/USDT:USDT', 'DOT/USDT:USDT', 'SUI/USDT:USDT'],
+      symbols: [
+        'SEI/USDT:USDT', 'IMX/USDT:USDT', 'DOT/USDT:USDT', 'SUI/USDT:USDT',
+        // V5.30: Added missing low-liquidity cryptos from scanner
+        'FIL/USDT:USDT', 'ETC/USDT:USDT', 'WLD/USDT:USDT', 'ORDI/USDT:USDT', 'STX/USDT:USDT', 'JUP/USDT:USDT',
+      ],
       maxPositionUsd: 25_000,  // $25K max - beyond this, massive slippage
       minVolume24h: 50_000_000,
     },
@@ -2039,27 +2052,44 @@ export interface PositionSizeResult {
   maxSafePosition?: number;
   estimatedSlippage?: number;
   wasLiquidityCapped?: boolean;
+  // V5.30: Multi-position info
+  multiPositionPlan?: {
+    enabled: boolean;
+    totalPositions: number;
+    positionSizeUsd: number;
+    totalNotionalUsd: number;
+    totalMarginUsd: number;
+    entryPrices: number[];
+    efficiency: number;
+  };
 }
 
 /**
- * Calculate position size V5.18 - LIQUIDITY-AWARE + DYNAMIC LEVERAGE + ADAPTIVE SIZING
- * 
+ * Calculate position size V5.30 - MULTI-POSITION SCALING
+ *
  * This version caps position size based on:
  * 1. Available capital (40-55% rule based on account size) - this is the MARGIN we use
  * 2. Symbol liquidity tier
  * 3. Actual 24h volume (if provided)
  * 4. V5.6: Dynamic leverage based on ATR volatility
  * 5. V5.18: Adaptive sizing - bigger accounts use higher % to compensate for liquidity caps
- * 
+ * 6. V5.30: Multi-position support - allows multiple positions per symbol for large accounts
+ *
  * IMPORTANT: With leverage, the NOTIONAL = margin × leverage
  * - margin = what we block from capital pool
  * - notional = actual position size (what we trade on exchange)
- * 
+ *
+ * V5.30 MULTI-POSITION LOGIC:
+ * - If MULTI_POSITION_ENABLED=true and capital exceeds threshold ($30K+)
+ * - Calculate multi-position allocation plan
+ * - Return plan in multiPositionPlan field
+ * - Caller (SimpleAgent/Backtest) decides whether to use single or multi-position
+ *
  * V5.18 LOGIC:
  * - Small accounts (<$2k): 40% sizing - aggressive for growth
  * - Medium accounts ($2k-$10k): 40-46% - moderate scaling
  * - Large accounts (>$10k): up to 55% - compensate for liquidity caps
- * 
+ *
  * This ensures ROI scales better with capital while respecting liquidity limits
  */
 export function calculatePositionSize(input: PositionSizeInput): PositionSizeResult {
@@ -2138,12 +2168,80 @@ export function calculatePositionSize(input: PositionSizeInput): PositionSizeRes
   // V5.6: Calculate effective leverage (may be lower if capped)
   // This is informational - shows the "real" amplification we're getting
   const effectiveLeverage = actualMargin > 0 ? notional / actualMargin : leverage;
+
+  // V5.30: Calculate multi-position allocation plan (if enabled and large balance)
+  // This only kicks in for accounts >= $30K AND when position would be liquidity-capped
+  // Small accounts (<$30K) always use single position - no impact on them
+  let multiPositionPlan: PositionSizeResult['multiPositionPlan'] = undefined;
   
-  return { 
-    qty, 
+  const MULTI_POSITION_MIN_CAPITAL = 30_000;  // Minimum capital to enable multi-position
+  const MULTI_POSITION_ENABLED = process.env.MULTI_POSITION_ENABLED === 'true';
+  
+  if (MULTI_POSITION_ENABLED && accountCapital >= MULTI_POSITION_MIN_CAPITAL && wasLiquidityCapped) {
+    // Only use multi-position when:
+    // 1. Feature is enabled
+    // 2. Account is large enough ($30K+)
+    // 3. Position would be capped by liquidity (otherwise no benefit)
+    
+    // Calculate how many positions we need to deploy target capital
+    const idealPositions = Math.ceil(targetNotional / maxSafeNotional);
+    
+    // Cap by capital tier
+    const capitalTiers: { [minCap: number]: number } = {
+      300_000: 5,  // $300K+: 5 positions
+      150_000: 4,  // $150K-$300K: 4 positions
+      75_000: 3,   // $75K-$150K: 3 positions
+      30_000: 2,   // $30K-$75K: 2 positions
+    };
+    
+    let maxPositions = 1;
+    for (const [minCap, positions] of Object.entries(capitalTiers).sort((a, b) => Number(b[0]) - Number(a[0]))) {
+      if (accountCapital >= Number(minCap)) {
+        maxPositions = positions;
+        break;
+      }
+    }
+    
+    const totalPositions = Math.min(idealPositions, maxPositions);
+    
+    if (totalPositions > 1) {
+      // Each position uses max safe notional (liquidity cap)
+      const positionSizeUsd = maxSafeNotional;
+      const totalNotionalUsd = positionSizeUsd * totalPositions;
+      const marginPerPosition = positionSizeUsd / leverage;
+      const totalMarginUsd = marginPerPosition * totalPositions;
+      
+      // Generate staggered entry prices (0.3% to 1.5% spread)
+      const minSpreadPct = 0.3;
+      const maxSpreadPct = 1.5;
+      const spreadPct = minSpreadPct + (maxSpreadPct - minSpreadPct) * Math.min(1, (totalPositions - 1) / 4);
+      const spreadUsd = currentPrice * (spreadPct / 100);
+      
+      const entryPrices: number[] = [];
+      for (let i = 0; i < totalPositions; i++) {
+        const spreadFactor = totalPositions > 1 ? i / (totalPositions - 1) : 0;
+        entryPrices.push(currentPrice - (spreadUsd * spreadFactor));
+      }
+      
+      const efficiency = Math.min(1, totalNotionalUsd / targetNotional);
+      
+      multiPositionPlan = {
+        enabled: true,
+        totalPositions,
+        positionSizeUsd,
+        totalNotionalUsd,
+        totalMarginUsd,
+        entryPrices,
+        efficiency,
+      };
+    }
+  }
+
+  return {
+    qty,
     notionalUsd: notional,      // The actual position size
     marginUsd: actualMargin,    // What we block from capital pool
-    riskUsd, 
+    riskUsd,
     leverage,                   // The leverage we're USING
     suggestedLeverage: leverage,
     stopPrice,
@@ -2152,6 +2250,8 @@ export function calculatePositionSize(input: PositionSizeInput): PositionSizeRes
     maxSafePosition: maxSafeNotional,
     estimatedSlippage,
     wasLiquidityCapped,
+    // V5.30: Multi-position plan
+    multiPositionPlan,
   };
 }
 
