@@ -911,7 +911,9 @@ export class SimpleAgent {
 
       // ----------------------------------------------------------------------
       // 1) STOPLOSS realtime (ticker-based, protective)
-      // Only trigger if regime_change didn't exit first
+      // V5.36: Stagnant detection REMOVED from realtime - now only on 15m candle close
+      // to match paper/backtest behavior. This prevents premature stagnant exits.
+      // Stagnant detection is handled by shouldExitPosition() in checkExit().
       // ----------------------------------------------------------------------
       if (rtStoplossEnabled) {
         const bufferPct = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_BUFFER_PCT ?? 0.05);
@@ -923,70 +925,13 @@ export class SimpleAgent {
         // This prevents the bug where trailing activates but SL still uses the fixed price
         const trailingActive = this.position!.trailingActive && this.position!.appTrailingStop;
         
-        // V5.31: SMART STAGNANT TRADE with observation window (aligned with backtest)
-        // 1. Trigger at 60min if maxPnl < threshold AND trailing never activated
-        // V5.34: Optimized stagnant trade detection
-        // 1. Trigger at 45min if maxPnl < 0.8% (faster detection)
-        // 2. Observe for 60 more minutes (until 105min total)
-        // 3. If peak >= 0.6% during observation → cancel stagnant (big move forming)
-        // 4. Else confirm stagnant → tighten SL to 0.8% (don't exit, let it run)
-        const stagnantConfig = MomentumConfig.EXIT as any;
-        const stagnantEnabled = stagnantConfig.STAGNANT_TRADE_EXIT_ENABLED ?? false;
-        const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 45;  // V5.34: 45 (was 60)
-        const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 60;    // V5.34: 60 (was 90)
-        const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.8;
-        const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.6; // V5.34: 0.6 (was 0.4)
-        const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8; // V5.34: 0.8 (was 1.0)
+        // V5.36: Use stagnant state from position (set by shouldExitPosition on 15m close)
+        // Only check if stagnant is CONFIRMED - the detection itself happens on 15m close
+        const isStagnantConfirmed = this.position!.stagnantState?.confirmed && !this.position!.stagnantState?.cancelled;
+        const stagnantTightenSlPct = (MomentumConfig.EXIT as any).STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8;
         
-        const holdMinutes = (now - this.position!.entryTime) / 60000;
-        const maxPnlRaw = this.position!.maxPnlPct ?? 0;
-        const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes; // V5.34: 45 + 60 = 105
-        
-        // V5.31: Initialize stagnant state if not exists
-        if (!this.position!.stagnantState) {
-          this.position!.stagnantState = { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 };
-        }
-        
-        // Step 1: Initial stagnant trigger (at 45min, no trailing activation, low maxPnl)
-        if (stagnantEnabled && 
-            !this.position!.stagnantState.triggered && 
-            holdMinutes >= stagnantTimeMinutes &&
-            !trailingActive &&  // Only if trailing never activated
-            maxPnlRaw < stagnantMinProfitPct) {
-          this.position!.stagnantState.triggered = true;
-          this.position!.stagnantState.triggeredAt = now;
-          logger.info(`⏳ [${symbol}] STAGNANT TRIGGERED: held ${Math.round(holdMinutes)}min, maxPnl=${maxPnlRaw.toFixed(2)}% < ${stagnantMinProfitPct}% | Starting ${stagnantObsMinutes}min observation window`);
-        }
-        
-        // Step 2: During observation window, track peak and check for recovery
-        if (this.position!.stagnantState.triggered && !this.position!.stagnantState.confirmed && !this.position!.stagnantState.cancelled) {
-          // Calculate current PnL for observation peak tracking
-          const currentPnlPct = this.position!.side === 'long'
-            ? ((currentPrice - this.position!.entryPrice) / this.position!.entryPrice) * 100
-            : ((this.position!.entryPrice - currentPrice) / this.position!.entryPrice) * 100;
-          
-          // Update observation peak
-          this.position!.stagnantState.obsPeakPct = Math.max(this.position!.stagnantState.obsPeakPct, currentPnlPct);
-          
-          // If peak during observation >= recovery threshold → cancel stagnant (big move forming)
-          if (this.position!.stagnantState.obsPeakPct >= stagnantRecoveryPct) {
-            this.position!.stagnantState.cancelled = true;
-            logger.info(`✅ [${symbol}] STAGNANT CANCELLED: Peak ${this.position!.stagnantState.obsPeakPct.toFixed(2)}% >= ${stagnantRecoveryPct}% during observation | Trade continues normally`);
-          }
-          
-          // End of observation window → confirm if not cancelled
-          if (holdMinutes >= totalStagnantMinutes && !this.position!.stagnantState.cancelled) {
-            this.position!.stagnantState.confirmed = true;
-            logger.warn(`🚨 [${symbol}] STAGNANT CONFIRMED: held ${Math.round(holdMinutes)}min, obsPeak=${this.position!.stagnantState.obsPeakPct.toFixed(2)}% < ${stagnantRecoveryPct}% | SL tightened to ${stagnantTightenSlPct}%`);
-          }
-        }
-        
-        // V5.31: Use tightened SL only if stagnant is CONFIRMED (not just triggered)
-        const isStagnantConfirmed = this.position!.stagnantState.confirmed && !this.position!.stagnantState.cancelled;
-        const isStagnant = isStagnantConfirmed;
-        
-        // Use tightened SL if stagnant, otherwise use normal SL
-        const effectiveSlPct = isStagnant 
+        // Use tightened SL if stagnant confirmed (by 15m close logic), otherwise use normal SL
+        const effectiveSlPct = isStagnantConfirmed 
           ? stagnantTightenSlPct 
           : (this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT);
         
@@ -1024,15 +969,17 @@ export class SimpleAgent {
             if (trailingActive) {
               exitReason = 'trailing_rt';
               stopType = 'trailing';
-            } else if (isStagnant) {
+            } else if (isStagnantConfirmed) {
               exitReason = 'stagnant_trade';
               stopType = 'stagnant';
             } else {
               exitReason = 'stoploss_rt';
               stopType = 'fixed';
             }
+            const holdMinutes = (now - this.position!.entryTime) / 60000;
+            const maxPnlRaw = this.position!.maxPnlPct ?? 0;
             logger.info(
-              `⚡ [${symbol}] REALTIME EXIT confirmed (${exitReason}) price=$${currentPrice.toFixed(4)} ${stopType}_sl=$${slPrice.toFixed(4)} sl_pct=${effectiveSlPct.toFixed(1)}% | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks${isStagnant ? ` | STAGNANT: held ${Math.round(holdMinutes)}m, maxPnl=${(maxPnlRaw * 100).toFixed(1)}%` : ''}`,
+              `⚡ [${symbol}] REALTIME EXIT confirmed (${exitReason}) price=$${currentPrice.toFixed(4)} ${stopType}_sl=$${slPrice.toFixed(4)} sl_pct=${effectiveSlPct.toFixed(1)}% | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks${isStagnantConfirmed ? ` | STAGNANT: held ${Math.round(holdMinutes)}m, maxPnl=${maxPnlRaw.toFixed(2)}%` : ''}`,
             );
             await this.closePosition(this.position, currentPrice, exitReason);
             return;
