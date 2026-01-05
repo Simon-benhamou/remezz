@@ -300,9 +300,9 @@ export const MomentumConfig = {
     REALTIME_APP_EXIT_TRAILING_MODE: 'kline_1m_close' as const, // 'ticker' | 'kline_1m_close'
     REALTIME_APP_EXIT_KLINE_INTERVAL: '1m' as const,
     REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES: 2,
-    // If you want live to behave more like paper on exits, disable realtime trailing exits.
-    // You'll still be protected by the exchange emergency STOP_MARKET.
-    REALTIME_APP_EXIT_TRAILING_ENABLED: true,
+    // V5.36: Disable realtime trailing - live now behaves like paper/backtest (15m close)
+    // This prevents premature exits that reduce ROE. Emergency stop still protects crashes.
+    REALTIME_APP_EXIT_TRAILING_ENABLED: false,
     REALTIME_APP_EXIT_STOPLOSS_ENABLED: true,
     REALTIME_APP_EXIT_POLL_MS: 1000,          // How often we check WS price when in position
     REALTIME_APP_EXIT_CONFIRM_MS: 1800,       // Require breach to persist for at least this long
