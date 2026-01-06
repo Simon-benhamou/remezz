@@ -473,6 +473,7 @@ export interface Position {
   lowWaterMark?: number;   // Lowest price since entry (for short)
   trailingActive?: boolean;
   maxPnlPct?: number;      // V5.11: Track max PnL reached (for exit analysis)
+  trailingBreachCandles?: number;  // V5.38: Count consecutive candles that breached trailing stop
   // V5.31: Smart Stagnant - observation window state machine
   stagnantState?: {
     triggered: boolean;      // Has 60min passed without trailing activation?
@@ -516,11 +517,12 @@ export interface SignalResult {
 
 export interface ExitSignal {
   shouldExit: boolean;
-  reason?: 'time' | 'stoploss' | 'trailing' | 'regime_change' | 'momentum_reversal' | 'stagnant_trade' | 'stagnant_profit_exit' | 'none';
+  reason?: 'time' | 'stoploss' | 'trailing' | 'trailing_breach' | 'regime_change' | 'momentum_reversal' | 'stagnant_trade' | 'stagnant_profit_exit' | 'none';
   pnlPct?: number;
   holdMinutes?: number;
   newStopLoss?: number;  // Updated trailing stop
   trailingActivated?: boolean;  // V5.26: Flag to persist trailing activation
+  trailingBreached?: boolean;   // V5.38: Flag for 2-close confirmation (breach detected but not confirmed)
   stagnantSlTightened?: boolean;  // V5.28: Flag to indicate SL was tightened due to stagnant trade
   effectiveSlPct?: number;  // V5.28: The effective SL % after tightening
 }
@@ -1534,186 +1536,196 @@ export function shouldExitPosition(
     }
   }
   
-  // 1. V5.12 SMART TRAILING: Starts tight, WIDENS at higher profit
-  // This lets winners run while protecting early gains
+  // ============================================================================
+  // V5.38: Calculate trailing state and effective SL
+  // ============================================================================
   const trailingActivation = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;
-  
-  // V5.26 FIX: Once trailing activates, it STAYS active even if pnlPct drops!
-  // Check if trailing was previously activated OR should activate now
   const shouldActivateNow = pnlPct >= trailingActivation;
   const trailingIsActive = position.trailingActive === true || shouldActivateNow;
   
-  if (trailingIsActive) {
-    // Trailing is active or should activate
-    let trailingDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
-    
-    // V5.12: WIDEN callback at higher profits (opposite of old logic!)
-    // At 2%+ profit, give trade more room to breathe
-    if (pnlPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT) {
-      trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT;
-    }
-    
-    // Calculate trailing stop price
-    let trailingStopPrice: number;
-    
-    if (position.side === 'long') {
-      // For long: track highest price, stop is below it
-      const effectiveHigh = opts?.priceHigh ?? currentPrice;
-      const highWaterMark = position.highWaterMark
-        ? Math.max(position.highWaterMark, effectiveHigh)
-        : effectiveHigh;
-      
-      trailingStopPrice = highWaterMark * (1 - trailingDistance / 100);
-      
-      // Check if price dropped below trailing stop
-      const effectiveLow = opts?.priceLow ?? currentPrice;
-      if (effectiveLow <= trailingStopPrice) {
-        return { 
-          shouldExit: true, 
-          reason: 'trailing', 
-          pnlPct, 
-          holdMinutes,
-          newStopLoss: trailingStopPrice,
-          trailingActivated: true
-        };
-      }
-      
-      // Update stop loss for position tracking (trailing active but not triggered)
-      return { 
-        shouldExit: false, 
-        reason: 'none', 
-        pnlPct, 
-        holdMinutes,
-        newStopLoss: trailingStopPrice,
-        trailingActivated: true  // V5.26: Signal that trailing is now active
-      };
-      
-    } else {
-      // For short: track lowest price, stop is above it
-      const effectiveLow = opts?.priceLow ?? currentPrice;
-      const lowWaterMark = position.lowWaterMark
-        ? Math.min(position.lowWaterMark, effectiveLow)
-        : effectiveLow;
-      
-      trailingStopPrice = lowWaterMark * (1 + trailingDistance / 100);
-      
-      // Check if price rose above trailing stop
-      const effectiveHigh = opts?.priceHigh ?? currentPrice;
-      if (effectiveHigh >= trailingStopPrice) {
-        return { 
-          shouldExit: true, 
-          reason: 'trailing', 
-          pnlPct, 
-          holdMinutes,
-          newStopLoss: trailingStopPrice,
-          trailingActivated: true
-        };
-      }
-      
-      return { 
-        shouldExit: false, 
-        reason: 'none', 
-        pnlPct, 
-        holdMinutes,
-        newStopLoss: trailingStopPrice,
-        trailingActivated: true  // V5.26: Signal that trailing is now active
-      };
-    }
-  }
+  const effectiveLow = opts?.priceLow ?? currentPrice;
+  const effectiveHigh = opts?.priceHigh ?? currentPrice;
   
   // ============================================================================
-  // V5.31: SMART STAGNANT TRADE with observation window
-  // Instead of immediately flagging at 60min, observe for 90 more minutes
-  // If price shows recovery (peak >= 0.4%) during observation → cancel stagnant
-  // If no recovery after 150min total → confirm stagnant and exit/tighten
+  // V5.38: STAGNANT STATE MACHINE (only when trailing NOT active)
   // ============================================================================
-  const stagnantConfig = (MomentumConfig.EXIT as any);
+  const stagnantConfig = MomentumConfig.EXIT;
   const stagnantEnabled = stagnantConfig.STAGNANT_TRADE_EXIT_ENABLED ?? false;
-  const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 60;
-  const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 90;
+  const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 45;
+  const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 60;
   const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.8;
-  const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.4;
-  const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 1.0;
-  const stagnantExitIfProfit = stagnantConfig.STAGNANT_TRADE_EXIT_IF_PROFIT ?? true;
+  const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.6;
+  const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8;
+  const stagnantExitIfProfit = stagnantConfig.STAGNANT_TRADE_EXIT_IF_PROFIT ?? false;
   
-  const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes; // 60 + 90 = 150
+  const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes;
   
   // Initialize stagnant state if needed
   if (!position.stagnantState) {
     position.stagnantState = { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 };
   }
   
-  // Step 1: Check if initial stagnant trigger (at 60min, no trailing activation, low maxPnl)
-  if (stagnantEnabled && 
-      !position.stagnantState.triggered && 
-      holdMinutes >= stagnantTimeMinutes &&
-      !trailingIsActive &&  // Only if trailing never activated
-      (position.maxPnlPct ?? 0) < stagnantMinProfitPct) {
-    position.stagnantState.triggered = true;
-    position.stagnantState.triggeredAt = now;
-  }
-  
-  // Step 2: During observation window, track peak and check for recovery
-  if (position.stagnantState.triggered && !position.stagnantState.confirmed && !position.stagnantState.cancelled) {
-    // V5.31 FIX: Use wick high/low (like backtest) not just close price
-    // This catches intrabar peaks that indicate big move potential
-    const wickPeakPnl = position.side === 'long'
-      ? (((opts?.priceHigh ?? currentPrice) - position.entryPrice) / position.entryPrice) * 100
-      : ((position.entryPrice - (opts?.priceLow ?? currentPrice)) / position.entryPrice) * 100;
-    
-    // Update observation peak with wick-based PnL
-    position.stagnantState.obsPeakPct = Math.max(position.stagnantState.obsPeakPct, wickPeakPnl);
-    
-    // If peak during observation >= recovery threshold → cancel stagnant (big move forming)
-    if (position.stagnantState.obsPeakPct >= stagnantRecoveryPct) {
-      position.stagnantState.cancelled = true;
+  // Only process stagnant if trailing NOT active (like backtest)
+  if (!trailingIsActive) {
+    // Step 1: Check if initial stagnant trigger (at 45min, no trailing, low maxPnl)
+    if (stagnantEnabled && 
+        !position.stagnantState.triggered && 
+        holdMinutes >= stagnantTimeMinutes &&
+        (position.maxPnlPct ?? 0) < stagnantMinProfitPct) {
+      position.stagnantState.triggered = true;
+      position.stagnantState.triggeredAt = now;
     }
     
-    // End of observation window → confirm if not cancelled
-    if (holdMinutes >= totalStagnantMinutes && !position.stagnantState.cancelled) {
-      position.stagnantState.confirmed = true;
+    // Step 2: During observation window, track peak and check for recovery
+    if (position.stagnantState.triggered && !position.stagnantState.confirmed && !position.stagnantState.cancelled) {
+      // Use wick to detect peaks (like backtest)
+      const wickPeakPnl = position.side === 'long'
+        ? ((effectiveHigh - position.entryPrice) / position.entryPrice) * 100
+        : ((position.entryPrice - effectiveLow) / position.entryPrice) * 100;
       
-      // V5.31: Exit at market if currently in profit
-      if (stagnantExitIfProfit && pnlPct > 0) {
-        return { 
-          shouldExit: true, 
-          reason: 'stagnant_profit_exit', 
-          pnlPct, 
-          holdMinutes 
-        };
+      position.stagnantState.obsPeakPct = Math.max(position.stagnantState.obsPeakPct, wickPeakPnl);
+      
+      // If peak during observation >= recovery threshold → cancel stagnant
+      if (position.stagnantState.obsPeakPct >= stagnantRecoveryPct) {
+        position.stagnantState.cancelled = true;
+      }
+      
+      // End of observation window → confirm if not cancelled
+      if (holdMinutes >= totalStagnantMinutes && !position.stagnantState.cancelled) {
+        position.stagnantState.confirmed = true;
+        
+        // V5.31: Exit at market if currently in profit
+        if (stagnantExitIfProfit && pnlPct > 0) {
+          return { 
+            shouldExit: true, 
+            reason: 'stagnant_profit_exit', 
+            pnlPct, 
+            holdMinutes 
+          };
+        }
       }
     }
   }
   
-  // Use tightened SL only if stagnant is CONFIRMED (not just triggered)
-  const isStagnantConfirmed = position.stagnantState.confirmed && !position.stagnantState.cancelled;
+  // Calculate effective SL % (tightened if stagnant confirmed AND trailing not active)
+  const isStagnantConfirmed = !trailingIsActive && position.stagnantState.confirmed && !position.stagnantState.cancelled;
+  const baseSlPct = position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
+  const effectiveSlPct = isStagnantConfirmed ? stagnantTightenSlPct : baseSlPct;
   
-  if (isStagnantConfirmed) {
-    // Stagnant confirmed - use tightened SL
-    if (pnlPct <= -stagnantTightenSlPct) {
+  // ============================================================================
+  // V5.38: CHECK SL ON WICK FIRST (like backtest) - BEFORE trailing
+  // Even if trailing is active, check SL first (in case of violent crash)
+  // ============================================================================
+  if (position.side === 'long') {
+    const slPrice = position.entryPrice * (1 - effectiveSlPct / 100);
+    if (effectiveLow <= slPrice) {
       return { 
         shouldExit: true, 
-        reason: 'stagnant_trade', 
+        reason: isStagnantConfirmed ? 'stagnant_trade' : 'stoploss', 
         pnlPct, 
-        holdMinutes 
+        holdMinutes,
+        effectiveSlPct
       };
     }
+  } else {
+    const slPrice = position.entryPrice * (1 + effectiveSlPct / 100);
+    if (effectiveHigh >= slPrice) {
+      return { 
+        shouldExit: true, 
+        reason: isStagnantConfirmed ? 'stagnant_trade' : 'stoploss', 
+        pnlPct, 
+        holdMinutes,
+        effectiveSlPct
+      };
+    }
+  }
+  
+  // ============================================================================
+  // V5.38: CHECK TRAILING (only if SL not hit) - uses CLOSE for 2-candle confirm
+  // ============================================================================
+  if (trailingIsActive) {
+    let trailingDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
     
-    // Return tightened SL info for tracking
+    // V5.12: WIDEN callback at higher profits
+    if (pnlPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT) {
+      trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT;
+    }
+    
+    let trailingStopPrice: number;
+    
+    if (position.side === 'long') {
+      const highWaterMark = position.highWaterMark
+        ? Math.max(position.highWaterMark, effectiveHigh)
+        : effectiveHigh;
+      
+      trailingStopPrice = highWaterMark * (1 - trailingDistance / 100);
+      
+      // V5.38: Check CLOSE for trailing confirmation (2-candle rule)
+      const closeBreached = currentPrice <= trailingStopPrice;
+      
+      if (closeBreached) {
+        return { 
+          shouldExit: false,  // Caller handles 2-close confirmation
+          reason: 'trailing_breach', 
+          pnlPct, 
+          holdMinutes,
+          newStopLoss: trailingStopPrice,
+          trailingActivated: true,
+          trailingBreached: true
+        };
+      }
+      
+      return { 
+        shouldExit: false, 
+        reason: 'none', 
+        pnlPct, 
+        holdMinutes,
+        newStopLoss: trailingStopPrice,
+        trailingActivated: true
+      };
+      
+    } else {
+      const lowWaterMark = position.lowWaterMark
+        ? Math.min(position.lowWaterMark, effectiveLow)
+        : effectiveLow;
+      
+      trailingStopPrice = lowWaterMark * (1 + trailingDistance / 100);
+      
+      const closeBreached = currentPrice >= trailingStopPrice;
+      
+      if (closeBreached) {
+        return { 
+          shouldExit: false,
+          reason: 'trailing_breach', 
+          pnlPct, 
+          holdMinutes,
+          newStopLoss: trailingStopPrice,
+          trailingActivated: true,
+          trailingBreached: true
+        };
+      }
+      
+      return { 
+        shouldExit: false, 
+        reason: 'none', 
+        pnlPct, 
+        holdMinutes,
+        newStopLoss: trailingStopPrice,
+        trailingActivated: true
+      };
+    }
+  }
+  
+  // Return stagnant SL info if confirmed but not yet hit
+  if (isStagnantConfirmed) {
     return { 
       shouldExit: false, 
       reason: 'none', 
       pnlPct, 
       holdMinutes,
       stagnantSlTightened: true,
-      effectiveSlPct: stagnantTightenSlPct
+      effectiveSlPct
     };
-  }
-  
-  // 2. Stop loss - Use dynamic SL from position if available (only if trailing not active)
-  const slPct = position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
-  if (pnlPct <= -slPct) {
-    return { shouldExit: true, reason: 'stoploss', pnlPct, holdMinutes };
   }
   
   return { shouldExit: false, reason: 'none', pnlPct, holdMinutes };

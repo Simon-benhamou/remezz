@@ -87,6 +87,7 @@ export interface BacktestParams {
   leverage: number;
   mode?: 'legacy' | 'agent'; // Ignored - kept for API compatibility
   signalOverrides?: SignalOverrides; // V5.12.1: Allow testing different entry thresholds
+  trailingConfirmCandles?: number; // V5.38: How many consecutive closes to confirm trailing exit (default: 1 for live parity)
 }
 
 export interface BacktestTrade {
@@ -1233,8 +1234,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
                 if (closeBreached) {
                   pos.trailingBreachCandles += 1;
                   
-                  // Require 2 consecutive breaches (like production 1m confirmations)
-                  if (pos.trailingBreachCandles >= 2) {
+                  // V5.38: Configurable confirmation (default 2 for optimal performance)
+                  const confirmCandles = params.trailingConfirmCandles ?? 2;
+                  if (pos.trailingBreachCandles >= confirmCandles) {
                     shouldExit = true;
                     exitReason = 'TRAIL';
                     exitPrice = trailStop;
@@ -1294,8 +1296,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
                 if (closeBreached) {
                   pos.trailingBreachCandles += 1;
                   
-                  // Require 2 consecutive breaches (like production 1m confirmations)
-                  if (pos.trailingBreachCandles >= 2) {
+                  // V5.38: Configurable confirmation (default 2 for optimal performance)
+                  const confirmCandles = params.trailingConfirmCandles ?? 2;
+                  if (pos.trailingBreachCandles >= confirmCandles) {
                     shouldExit = true;
                     exitReason = 'TRAIL';
                     exitPrice = trailStop;

@@ -2278,6 +2278,38 @@ export class SimpleAgent {
         this.position!.trailingActive = true;
       }
 
+      // ════════════════════════════════════════════════════════════════════════
+      // V5.38: TRAILING STOP with 2-CLOSE CONFIRMATION (aligned with backtest)
+      // Requires 2 consecutive 15m candle closes beyond trailing stop to exit
+      // This filters out single-candle fakeouts and lets winners run longer
+      // ════════════════════════════════════════════════════════════════════════
+      if (exitSignal.trailingBreached) {
+        // Initialize breach counter if needed
+        if (!this.position!.trailingBreachCandles) {
+          this.position!.trailingBreachCandles = 0;
+        }
+        
+        this.position!.trailingBreachCandles += 1;
+        const breachCount = this.position!.trailingBreachCandles;
+        const REQUIRED_CONFIRMATIONS = 2;
+        
+        if (breachCount >= REQUIRED_CONFIRMATIONS) {
+          // Confirmed! 2 consecutive closes beyond trailing stop
+          logger.info(`🔴 [${symbol}] TRAILING CONFIRMED (${breachCount}/${REQUIRED_CONFIRMATIONS} closes) | price=$${currentPrice.toFixed(4)} | trail=$${exitSignal.newStopLoss?.toFixed(4)} | PnL=${exitSignal.pnlPct?.toFixed(2)}%`);
+          await this.closePosition(this.position!, currentPrice, 'trailing');
+          return;
+        } else {
+          // First breach - wait for confirmation
+          logger.warn(`⚠️ [${symbol}] TRAILING BREACH ${breachCount}/${REQUIRED_CONFIRMATIONS} | price=$${currentPrice.toFixed(4)} | trail=$${exitSignal.newStopLoss?.toFixed(4)} | Waiting for confirmation...`);
+        }
+      } else if (exitSignal.trailingActivated) {
+        // No breach this candle - reset counter
+        if (this.position!.trailingBreachCandles && this.position!.trailingBreachCandles > 0) {
+          logger.info(`✅ [${symbol}] Trailing breach CLEARED - price recovered above stop`);
+        }
+        this.position!.trailingBreachCandles = 0;
+      }
+
       // Emergency profit-protection (exchange-side): ratchet stop only after +2% PnL.
       // This is NOT the primary exit; trailing/app logic remains the priority.
       await this.updateEmergencyStopProfitProtectionIfNeeded(currentPrice, pnlPct);
@@ -2285,7 +2317,10 @@ export class SimpleAgent {
       if (exitSignal.shouldExit) {
         logger.info(`🔴 [${symbol}] EXIT SIGNAL: reason=${exitSignal.reason} | PnL=${exitSignal.pnlPct?.toFixed(2)}% | holdMin=${exitSignal.holdMinutes?.toFixed(0)}`);
         await this.closePosition(this.position!, currentPrice, exitSignal.reason || 'unknown');
-      } else if (exitSignal.newStopLoss && exitSignal.newStopLoss !== this.position?.stopLoss) {
+      } else if (exitSignal.newStopLoss && exitSignal.newStopLoss !== this.position?.appTrailingStop) {
+        // Update app trailing stop price
+        this.position!.appTrailingStop = exitSignal.newStopLoss;
+        
         // 📢 NOTIFICATION: Trailing stop activated (only notify once)
         if (!this.trailingNotified && exitSignal.pnlPct && exitSignal.pnlPct >= 1) {
           this.trailingNotified = true;
