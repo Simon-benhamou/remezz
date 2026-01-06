@@ -1590,8 +1590,11 @@ export function shouldExitPosition(
         position.stagnantState.cancelled = true;
       }
       
-      // End of observation window → confirm if not cancelled
-      if (holdMinutes >= totalStagnantMinutes && !position.stagnantState.cancelled) {
+      // V5.38 FIX: End of observation window = triggeredAt + obsMinutes (not entry + total)
+      // This ensures the observation window is exactly stagnantObsMinutes long
+      const triggeredAt = position.stagnantState.triggeredAt ?? position.entryTime;
+      const obsElapsedMinutes = (now - triggeredAt) / 60000;
+      if (obsElapsedMinutes >= stagnantObsMinutes && !position.stagnantState.cancelled) {
         position.stagnantState.confirmed = true;
         
         // V5.31: Exit at market if currently in profit

@@ -1393,6 +1393,16 @@ export class SimpleAgent {
       
       // Fetch BTC candles pour corrélation (also use only closed candles)
       const allBtcCandles = await this.fetchBtcCandles();
+      
+      // V5.38: Validate minimum BTC data for proper SMA200 and ATR calculations
+      // Without this, filters may silently bypass during startup
+      const MIN_BTC_CANDLES = 201; // Need 200 for SMA200 + 1 current
+      if (allBtcCandles.length < MIN_BTC_CANDLES) {
+        if (this.tickCount % 10 === 1) {
+          logger.info(`⚠️ [${shortSymbol}] Waiting for BTC data (${allBtcCandles.length}/${MIN_BTC_CANDLES})`);
+        }
+        return;
+      }
 
       // V5.13: Same logic for BTC candles - use timestamp age
       let btcLastClosedIdx = allBtcCandles.length - 1;
@@ -1405,7 +1415,21 @@ export class SimpleAgent {
       const btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
 
       // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
-      const btcCandles1h = await this.fetchBtcCandles1h();
+      const allBtcCandles1h = await this.fetchBtcCandles1h();
+      
+      // V5.38 FIX: Filter 1h candles to only closed ones (same as backtest)
+      // A 1h candle is closed when current time >= candle.timestamp + 1 hour
+      const CANDLE_1H_INTERVAL_MS = 60 * 60 * 1000;
+      const btcCandles1h = allBtcCandles1h.filter(c => c.timestamp + CANDLE_1H_INTERVAL_MS <= now);
+      
+      // V5.38: Validate minimum BTC 1h data for MTF filter (need at least 11 for 10-candle lookback)
+      const MIN_BTC_1H_CANDLES = 11;
+      if (btcCandles1h.length < MIN_BTC_1H_CANDLES) {
+        if (this.tickCount % 10 === 1) {
+          logger.info(`⚠️ [${shortSymbol}] Waiting for BTC 1h data (${btcCandles1h.length}/${MIN_BTC_1H_CANDLES})`);
+        }
+        return;
+      }
 
       // V5.36: Check signal with MTF + BTC Volatility filters
       const signal = checkMomentumSignal(symbol, candles, btcCandles, {

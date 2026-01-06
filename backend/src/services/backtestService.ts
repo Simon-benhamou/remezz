@@ -67,6 +67,7 @@ interface BacktestSimPosition {
   stagnantState: {
     triggered: boolean;      // Has 60min passed without trailing activation?
     triggeredIdx?: number;   // Candle index when triggered
+    triggeredAtMinutes?: number; // V5.38: Hold time in minutes when triggered
     confirmed: boolean;      // Has 150min passed without recovery?
     cancelled: boolean;      // Did we see peak >= 0.4% during observation?
     obsPeakPct: number;      // Max PnL % observed during 60-150min window
@@ -1148,6 +1149,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             holdMinutes >= stagnantTimeMinutes && 
             (pos.maxPnlPct ?? 0) < stagnantMinProfitPct) {
           pos.stagnantState.triggered = true;
+          pos.stagnantState.triggeredAtMinutes = holdMinutes;  // V5.38: Track trigger time
         }
         
         // Step 2: During observation window (60-150min), track peak and check for recovery
@@ -1164,8 +1166,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             pos.stagnantState.cancelled = true;
           }
           
-          // End of observation window → confirm if not cancelled
-          if (holdMinutes >= totalStagnantMinutes && !pos.stagnantState.cancelled) {
+          // V5.38 FIX: End of observation window = triggeredAtMinutes + obsMinutes
+          // This ensures the observation window is exactly stagnantObsMinutes long
+          const triggeredAtMin = pos.stagnantState.triggeredAtMinutes ?? stagnantTimeMinutes;
+          const obsElapsedMinutes = holdMinutes - triggeredAtMin;
+          if (obsElapsedMinutes >= stagnantObsMinutes && !pos.stagnantState.cancelled) {
             pos.stagnantState.confirmed = true;
             
             // V5.31: Exit at market if in profit

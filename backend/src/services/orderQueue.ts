@@ -104,6 +104,7 @@ export class OrderQueue {
   private readonly RESULT_CACHE_TTL_MS: number;        // Result cache lifetime
   private readonly MAX_QUEUE_SIZE: number;             // Max orders in queue
   private readonly DEFAULT_TIMEOUT_MS: number;         // Max wait time per order
+  private readonly EXECUTION_TIMEOUT_MS = 10_000;      // V5.38: Max time for exchange API call (10s)
 
   // Stats
   private stats = {
@@ -447,25 +448,44 @@ export class OrderQueue {
       // Get exchange instance for this user
       const exchange = await this.getExchangeForUser(userId);
 
-      // Execute order via CCXT
+      // V5.38: Execute order with timeout to prevent hanging
+      // If Binance doesn't respond within EXECUTION_TIMEOUT_MS, we fail gracefully
       let order: any;
+
+      const executeWithTimeout = async <T>(operation: Promise<T>): Promise<T> => {
+        return new Promise<T>((resolveOp, rejectOp) => {
+          const timeoutId = setTimeout(() => {
+            rejectOp(new Error(`Exchange API timeout after ${this.EXECUTION_TIMEOUT_MS}ms`));
+          }, this.EXECUTION_TIMEOUT_MS);
+          
+          operation
+            .then((result) => {
+              clearTimeout(timeoutId);
+              resolveOp(result);
+            })
+            .catch((err) => {
+              clearTimeout(timeoutId);
+              rejectOp(err);
+            });
+        });
+      };
 
       if (request.type === 'market') {
         if (side === 'buy') {
-          order = await exchange.createMarketBuyOrder(symbol, quantity, request.params);
+          order = await executeWithTimeout(exchange.createMarketBuyOrder(symbol, quantity, request.params));
         } else {
-          order = await exchange.createMarketSellOrder(symbol, quantity, request.params);
+          order = await executeWithTimeout(exchange.createMarketSellOrder(symbol, quantity, request.params));
         }
       } else {
         // Limit order
-        order = await exchange.createOrder(
+        order = await executeWithTimeout(exchange.createOrder(
           symbol,
           request.type,
           side,
           quantity,
           request.price,
           request.params
-        );
+        ));
       }
 
       const executionTimeMs = Date.now() - executionStartAt;
