@@ -329,6 +329,42 @@ model SystemSetting {
   @@map("system_setting")
 }
 
+// Backtest vs Live/Paper Parity Verification Results
+model TradeParityResult {
+  id              String   @id @default(cuid())
+  tradeId         String   @unique
+  symbol          String
+  side            String
+
+  // Live/Paper trade data (from Trade table)
+  liveEntryTs     DateTime
+  liveExitTs      DateTime
+  liveExitReason  String
+  livePnlPct      Float
+
+  // Backtest comparison results
+  btEntryTs       DateTime?
+  btExitTs        DateTime?
+  btExitReason    String?
+  btPnlPct        Float?
+
+  // Match results
+  entryMatch      Boolean  @default(false)  // Same 15m candle
+  exitMatch       Boolean  @default(false)  // Same exit reason
+  pnlMatch        Boolean  @default(false)  // Within 0.5%
+  overallMatch    Boolean  @default(false)  // All criteria met
+  mismatchDetails String?                    // JSON with detailed differences
+
+  // Metadata
+  verifiedAt      DateTime @default(now())
+  backtestDurationMs Int?                   // How long the backtest took
+
+  @@index([tradeId])
+  @@index([verifiedAt])
+  @@index([overallMatch])
+  @@index([symbol, verifiedAt])
+}
+
 enum AgentActionStatus {
   pending
   in_progress

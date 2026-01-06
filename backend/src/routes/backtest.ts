@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { runBacktest, BacktestParams, BacktestResult } from "../services/backtestService.js";
 import { authenticateUser, AuthenticatedRequest } from "../middleware/auth.js";
+import { verifyTrade, verifyAllTrades, getParityResults } from "../services/parityVerificationService.js";
 import crypto from 'node:crypto';
 
 export const router = Router();
@@ -209,4 +210,72 @@ router.get('/presets', authenticateUser, (req, res) => {
       { label: '24 Months', months: 24 },
     ],
   });
+});
+
+// ============================================================================
+// PARITY VERIFICATION ENDPOINTS
+// ============================================================================
+
+/**
+ * POST /api/backtest/verify-trade
+ * Verify a single trade against backtest
+ */
+router.post('/verify-trade', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { tradeId } = req.body;
+
+    if (!tradeId) {
+      return res.status(400).json({ error: 'tradeId is required' });
+    }
+
+    const result = await verifyTrade(tradeId);
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Parity] Error verifying trade:', error);
+    res.status(500).json({ error: error.message || 'Verification failed' });
+  }
+});
+
+/**
+ * POST /api/backtest/verify-all
+ * Verify all trades within a time range
+ */
+router.post('/verify-all', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { days = 30, sessionId, symbol } = req.body;
+
+    const result = await verifyAllTrades({
+      days: Number(days),
+      sessionId,
+      symbol,
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Parity] Error in bulk verification:', error);
+    res.status(500).json({ error: error.message || 'Bulk verification failed' });
+  }
+});
+
+/**
+ * GET /api/backtest/parity-results
+ * Get parity verification results for display
+ */
+router.get('/parity-results', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 100;
+    const offset = req.query.offset ? Number(req.query.offset) : 0;
+    const onlyMismatches = req.query.onlyMismatches === 'true';
+
+    const result = await getParityResults({
+      limit,
+      offset,
+      onlyMismatches,
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Parity] Error fetching results:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch results' });
+  }
 });

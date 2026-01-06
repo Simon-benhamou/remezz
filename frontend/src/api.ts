@@ -318,5 +318,45 @@ export const api = {
       (await client.get(`/api/backtest/runs/${id}`)).data,
     clearRuns: async () =>
       (await client.delete('/api/backtest/runs')).data,
+    // Parity Verification
+    verifyTrade: async (tradeId: string) =>
+      (await client.post('/api/backtest/verify-trade', { tradeId })).data,
+    verifyAll: async (opts: { days?: number; sessionId?: string; symbol?: string } = {}) =>
+      (await client.post('/api/backtest/verify-all', opts)).data as {
+        total: number;
+        matched: number;
+        mismatched: number;
+        failed: number;
+      },
+    getParityResults: async (opts: { limit?: number; offset?: number; onlyMismatches?: boolean } = {}) =>
+      (await client.get('/api/backtest/parity-results', { params: opts })).data as {
+        results: Array<{
+          id: string;
+          tradeId: string;
+          symbol: string;
+          side: string;
+          liveEntryTs: string;
+          liveExitTs: string;
+          liveExitReason: string;
+          livePnlPct: number;
+          btEntryTs: string | null;
+          btExitTs: string | null;
+          btExitReason: string | null;
+          btPnlPct: number | null;
+          entryMatch: boolean;
+          exitMatch: boolean;
+          pnlMatch: boolean;
+          overallMatch: boolean;
+          mismatchDetails: string | null;
+          verifiedAt: string;
+          backtestDurationMs: number | null;
+        }>;
+        summary: {
+          total: number;
+          matched: number;
+          mismatched: number;
+          matchRate: number;
+        };
+      },
   },
 };

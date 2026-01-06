@@ -4100,6 +4100,13 @@ export class SimpleAgent {
         });
 
         logger.info(`✅ [${this.config.symbol}] Trade created: ${position.side.toUpperCase()} ${position.qty} PnL=$${pnlUsd.toFixed(2)}`);
+
+        // V5.43: Trigger parity verification (async, non-blocking)
+        if (process.env.AUTO_VERIFY_PARITY === 'true') {
+          import('../services/parityVerificationService.js').then(({ triggerVerification }) => {
+            triggerVerification(order.id);
+          }).catch(() => {}); // Ignore import errors
+        }
       } catch (tradeError) {
         logger.error(`❌ [${this.config.symbol}] Failed to create Trade:`, tradeError);
         // Continue anyway - Fill was saved, Trade is optional for now

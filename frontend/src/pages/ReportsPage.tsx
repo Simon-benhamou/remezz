@@ -1,5 +1,6 @@
 import React from 'react';
-import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message, Tabs } from 'antd';
+import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message, Tabs, Tag, InputNumber, Tooltip } from 'antd';
+import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
@@ -8,6 +9,266 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieC
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 const { TabPane } = Tabs;
+
+// ============================================================================
+// PARITY VERIFICATION PANEL
+// ============================================================================
+
+function ParityVerificationPanel() {
+  const [results, setResults] = React.useState<any[]>([]);
+  const [summary, setSummary] = React.useState<{
+    total: number;
+    matched: number;
+    mismatched: number;
+    matchRate: number;
+  }>({ total: 0, matched: 0, mismatched: 0, matchRate: 0 });
+  const [loading, setLoading] = React.useState(false);
+  const [verifying, setVerifying] = React.useState(false);
+  const [days, setDays] = React.useState(30);
+
+  React.useEffect(() => {
+    loadResults();
+  }, []);
+
+  const loadResults = async () => {
+    setLoading(true);
+    try {
+      const data = await api.backtest.getParityResults({ limit: 100 });
+      setResults(data.results || []);
+      setSummary(data.summary || { total: 0, matched: 0, mismatched: 0, matchRate: 0 });
+    } catch (error) {
+      console.error('Failed to load parity results:', error);
+      message.error('Failed to load parity results');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshAll = async () => {
+    setVerifying(true);
+    try {
+      message.info(`Starting verification for last ${days} days...`);
+      const result = await api.backtest.verifyAll({ days });
+      message.success(`Verified ${result.total} trades: ${result.matched} matched, ${result.mismatched} mismatched`);
+      await loadResults();
+    } catch (error) {
+      console.error('Bulk verification failed:', error);
+      message.error('Bulk verification failed');
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const columns = [
+    {
+      title: 'Trade',
+      dataIndex: 'symbol',
+      key: 'symbol',
+      render: (symbol: string, record: any) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{symbol.replace('/USDT:USDT', '')}</Text>
+          <Text type="secondary" style={{ fontSize: '11px' }}>
+            {record.side.toUpperCase()}
+          </Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Entry Time',
+      dataIndex: 'liveEntryTs',
+      key: 'liveEntryTs',
+      render: (ts: string) => (
+        <Tooltip title={dayjs(ts).format('YYYY-MM-DD HH:mm:ss')}>
+          {dayjs(ts).format('MMM DD HH:mm')}
+        </Tooltip>
+      ),
+    },
+    {
+      title: 'Exit Reason',
+      key: 'exitReason',
+      render: (record: any) => (
+        <Space direction="vertical" size={0}>
+          <Text>Live: {record.liveExitReason}</Text>
+          <Text type="secondary" style={{ fontSize: '11px' }}>
+            BT: {record.btExitReason || 'N/A'}
+          </Text>
+          {record.exitMatch ? (
+            <Tag color="green" style={{ fontSize: '10px' }}>MATCH</Tag>
+          ) : (
+            <Tag color="red" style={{ fontSize: '10px' }}>MISMATCH</Tag>
+          )}
+        </Space>
+      ),
+    },
+    {
+      title: 'PnL',
+      key: 'pnl',
+      render: (record: any) => (
+        <Space direction="vertical" size={0}>
+          <Text style={{ color: record.livePnlPct >= 0 ? '#52c41a' : '#ff4d4f' }}>
+            Live: {record.livePnlPct.toFixed(2)}%
+          </Text>
+          <Text type="secondary" style={{ fontSize: '11px' }}>
+            BT: {record.btPnlPct != null ? `${record.btPnlPct.toFixed(2)}%` : 'N/A'}
+          </Text>
+          {record.pnlMatch ? (
+            <Tag color="green" style={{ fontSize: '10px' }}>MATCH</Tag>
+          ) : (
+            <Tag color="red" style={{ fontSize: '10px' }}>MISMATCH</Tag>
+          )}
+        </Space>
+      ),
+    },
+    {
+      title: 'Status',
+      dataIndex: 'overallMatch',
+      key: 'status',
+      render: (match: boolean) => (
+        match ? (
+          <Tag icon={<CheckCircleOutlined />} color="success">MATCH</Tag>
+        ) : (
+          <Tag icon={<CloseCircleOutlined />} color="error">MISMATCH</Tag>
+        )
+      ),
+    },
+    {
+      title: 'Verified',
+      dataIndex: 'verifiedAt',
+      key: 'verifiedAt',
+      render: (ts: string) => (
+        <Tooltip title={dayjs(ts).format('YYYY-MM-DD HH:mm:ss')}>
+          <Text type="secondary" style={{ fontSize: '11px' }}>
+            {dayjs(ts).fromNow()}
+          </Text>
+        </Tooltip>
+      ),
+    },
+  ];
+
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size="large">
+      <Card>
+        <Title level={3}>🔬 Backtest Parity Verification</Title>
+        <Text type="secondary">
+          Compare live/paper trades against backtest to ensure identical behavior
+        </Text>
+      </Card>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic
+              title="Total Verified"
+              value={summary.total}
+              valueStyle={{ color: '#1890ff' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic
+              title="Matched"
+              value={summary.matched}
+              valueStyle={{ color: '#52c41a' }}
+              suffix={<CheckCircleOutlined />}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic
+              title="Mismatched"
+              value={summary.mismatched}
+              valueStyle={{ color: summary.mismatched > 0 ? '#ff4d4f' : '#52c41a' }}
+              suffix={summary.mismatched > 0 ? <CloseCircleOutlined /> : <CheckCircleOutlined />}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic
+              title="Match Rate"
+              value={summary.matchRate}
+              precision={1}
+              suffix="%"
+              valueStyle={{ color: summary.matchRate >= 95 ? '#52c41a' : summary.matchRate >= 80 ? '#faad14' : '#ff4d4f' }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Card
+        title="Verification Results"
+        loading={loading}
+        extra={
+          <Space>
+            <Text type="secondary">Last</Text>
+            <InputNumber
+              min={1}
+              max={365}
+              value={days}
+              onChange={(v) => setDays(v || 30)}
+              style={{ width: 70 }}
+            />
+            <Text type="secondary">days</Text>
+            <Button
+              type="primary"
+              icon={verifying ? <SyncOutlined spin /> : <ReloadOutlined />}
+              onClick={refreshAll}
+              loading={verifying}
+            >
+              Verify All
+            </Button>
+            <Button onClick={loadResults} loading={loading}>
+              Refresh
+            </Button>
+          </Space>
+        }
+      >
+        {results.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <Text type="secondary">
+              No verification results yet. Click "Verify All" to compare trades against backtest.
+            </Text>
+          </div>
+        ) : (
+          <Table
+            dataSource={results}
+            columns={columns}
+            rowKey="id"
+            pagination={{ pageSize: 20 }}
+            size="small"
+            expandable={{
+              expandedRowRender: (record) => (
+                <div style={{ margin: 0, padding: '8px' }}>
+                  {record.mismatchDetails && (
+                    <Space direction="vertical" size={0}>
+                      <Text strong>Mismatch Details:</Text>
+                      {JSON.parse(record.mismatchDetails).map((detail: string, i: number) => (
+                        <Text type="secondary" key={i}>• {detail}</Text>
+                      ))}
+                    </Space>
+                  )}
+                  <Row gutter={16} style={{ marginTop: 8 }}>
+                    <Col span={12}>
+                      <Text type="secondary">Entry Match: </Text>
+                      {record.entryMatch ? <Tag color="green">YES</Tag> : <Tag color="red">NO</Tag>}
+                    </Col>
+                    <Col span={12}>
+                      <Text type="secondary">Backtest Duration: </Text>
+                      <Text>{record.backtestDurationMs ? `${record.backtestDurationMs}ms` : 'N/A'}</Text>
+                    </Col>
+                  </Row>
+                </div>
+              ),
+              rowExpandable: () => true,
+            }}
+          />
+        )}
+      </Card>
+    </Space>
+  );
+}
 
 function pct(val?: number | null, digits = 2) {
   if (val == null || Number.isNaN(Number(val))) return '-';
@@ -319,6 +580,10 @@ export default function ReportsPage() {
             </Row>
           </Card>
         </Space>
+      </TabPane>
+
+      <TabPane tab="🔬 Backtest Parity" key="parity">
+        <ParityVerificationPanel />
       </TabPane>
     </Tabs>
   );
