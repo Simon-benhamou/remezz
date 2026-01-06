@@ -16,6 +16,18 @@ import {
 import {
   MomentumConfig,
   checkMomentumSignal,  // V5.36: Use shared signal function (includes MTF + BTC Vol filters)
+  shouldExitPosition,   // V5.41: Use shared exit function (single source of truth)
+  updatePositionWaterMarks,  // V5.41: Use shared water mark update
+  // V5.41: Import shared indicator functions (single source of truth)
+  calcSMA,
+  calcBB,
+  calcROC,
+  calcVolRatio,
+  countConsecUp,
+  countConsecDown,
+  getCooldownBars,  // V5.41: Shared cooldown logic
+  type Position,
+  type ExitSignal,
 } from '../strategies/momentumSimple.js';
 
 // V5.25: Import cached exchange client to avoid loadMarkets on every backtest
@@ -241,57 +253,13 @@ const SIGNAL_CONFIG = {
 };
 
 // ============================================================================
-// INDICATORS
+// INDICATORS - V5.41: Now imported from momentumSimple.ts for single source of truth
+// calcSMA, calcBB, calcROC, calcVolRatio, countConsecUp, countConsecDown
+// are imported above and no longer duplicated here
 // ============================================================================
 
-function calcSMA(values: number[], period: number): number {
-  if (values.length < period) return values[values.length - 1] || 0;
-  const slice = values.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
-}
-
-function calcBB(closes: number[], period = 20, mult = 2) {
-  if (closes.length < period) return { upper: 0, middle: 0, lower: 0 };
-  const slice = closes.slice(-period);
-  const middle = slice.reduce((a, b) => a + b, 0) / period;
-  const variance = slice.reduce((sum, v) => sum + Math.pow(v - middle, 2), 0) / period;
-  const std = Math.sqrt(variance);
-  return { upper: middle + std * mult, middle, lower: middle - std * mult };
-}
-
-function calcROC(closes: number[], period: number): number {
-  if (closes.length < period + 1) return 0;
-  const current = closes[closes.length - 1];
-  const past = closes[closes.length - period - 1];
-  return past > 0 ? (current - past) / past : 0; // Returns ratio like production
-}
-
-function calcVolRatio(volumes: number[]): number {
-  if (volumes.length < 21) return 0;
-  const current = volumes[volumes.length - 1];
-  const avg = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
-  return avg > 0 ? current / avg : 0;
-}
-
-function countConsecUp(candles: Candle[]): number {
-  let count = 0;
-  for (let i = candles.length - 1; i >= 0; i--) {
-    if (candles[i].close > candles[i].open) count++;
-    else break;
-  }
-  return count;
-}
-
-function countConsecDown(candles: Candle[]): number {
-  let count = 0;
-  for (let i = candles.length - 1; i >= 0; i--) {
-    if (candles[i].close < candles[i].open) count++;
-    else break;
-  }
-  return count;
-}
-
 // V5.23: Calculate ATR (Average True Range) as % of price
+// NOTE: This returns % directly, different from momentumSimple.ts which returns absolute
 function calcATR(candles: Candle[], period = 14): number {
   if (candles.length < period + 1) return 0;
   
@@ -469,48 +437,124 @@ function calcStochRSI(closes: number[], rsiPeriod = 14, stochPeriod = 14, smooth
 }
 
 // Removed: Duplicate calcATR function - using V5.23 version below
+// V5.41: Removed calcAdaptiveTrailing() - dead code since exit logic now uses shouldExitPosition()
+// which has its own determineVolatilityRegime() for adaptive trailing
 
-// Adaptive trailing: tighter in low vol, wider in high vol
-function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance: number } {
-  // Check if adaptive trailing is enabled
-  if (!MomentumConfig.EXIT.ADAPTIVE_TRAILING) {
-    return {
-      activation: CONFIG.EXIT.TRAILING_ACTIVATION_PCT,
-      distance: CONFIG.EXIT.TRAILING_DISTANCE_PCT,
-    };
-  }
+// ============================================================================
+// V5.41: BACKTEST EXIT HELPER - Uses shared shouldExitPosition()
+// ============================================================================
+// This function wraps shouldExitPosition() for backtest use:
+// - Converts BacktestSimPosition to Position type
+// - Handles trailing breach counter (2-candle confirmation)
+// - Maps exit reason names to backtest format (TRAIL, SL, etc.)
+// ============================================================================
 
-  // V5.23: calcATR now returns % directly
-  const atrPct = calcATR(candles, 14);
+interface BacktestExitResult {
+  shouldExit: boolean;
+  exitReason: string;
+  exitPrice: number;
+}
+
+function checkBacktestExit(
+  pos: BacktestSimPosition,
+  current: BacktestCandle,
+  windowCandles: BacktestCandle[],
+  btcWindowCandles: Candle[],
+  idx: number,
+  params: BacktestParams
+): BacktestExitResult {
+  const holdBars = idx - pos.entryIdx;
+  const holdMinutes = holdBars * 15;
   
-  if (atrPct === 0 || candles.length === 0) {
-    return {
-      activation: CONFIG.EXIT.TRAILING_ACTIVATION_PCT,
-      distance: CONFIG.EXIT.TRAILING_DISTANCE_PCT,
-    };
-  }
-  
-  // Low volatility: tighter trailing (use production config)
-  if (atrPct < MomentumConfig.EXIT.LOW_VOL_ATR_MAX) {
-    return { 
-      activation: MomentumConfig.EXIT.LOW_VOL_ACTIVATION, 
-      distance: MomentumConfig.EXIT.LOW_VOL_DISTANCE,
-    };
-  }
-  
-  // High volatility: wider trailing (use production config)
-  if (atrPct > MomentumConfig.EXIT.HIGH_VOL_ATR_MIN) {
-    return { 
-      activation: MomentumConfig.EXIT.HIGH_VOL_ACTIVATION, 
-      distance: MomentumConfig.EXIT.HIGH_VOL_DISTANCE,
-    };
-  }
-  
-  // Medium: default
-  return {
-    activation: CONFIG.EXIT.TRAILING_ACTIVATION_PCT,
-    distance: CONFIG.EXIT.TRAILING_DISTANCE_PCT,
+  // Convert BacktestSimPosition to Position for shouldExitPosition()
+  const position: Position = {
+    symbol: pos.symbol,
+    side: pos.side,
+    entryPrice: pos.entryPrice,
+    entryTime: pos.entryTime,
+    qty: pos.qty,
+    stopLossPct: pos.stopLossPct,
+    highWaterMark: pos.highWaterMark,
+    lowWaterMark: pos.lowWaterMark,
+    appTrailingStop: pos.appTrailingStop,
+    trailingActive: pos.trailingActive,
+    trailingBreachCandles: pos.trailingBreachCandles,
+    maxPnlPct: pos.maxPnlPct,
+    stagnantState: pos.stagnantState,
   };
+  
+  // Call shared exit function with timestamp override for consistent time calculation
+  const exitSignal = shouldExitPosition(position, current.close, windowCandles as Candle[], {
+    nowMs: pos.entryTime + holdMinutes * 60000,  // Simulate correct time
+    priceHigh: current.high,
+    priceLow: current.low,
+    btcCandles: btcWindowCandles,
+  });
+  
+  // Sync state back to pos (stagnant, trailing, etc.)
+  if (position.stagnantState) {
+    pos.stagnantState = position.stagnantState;
+  }
+  pos.trailingActive = position.trailingActive ?? exitSignal.trailingActivated;
+  
+  // Handle trailing breach counter for 2-candle confirmation
+  if (exitSignal.reason === 'trailing_breach') {
+    // Close breached - increment counter
+    pos.trailingBreachCandles = (pos.trailingBreachCandles ?? 0) + 1;
+    const confirmCandles = params.trailingConfirmCandles ?? 2;
+    
+    if (pos.trailingBreachCandles >= confirmCandles) {
+      return {
+        shouldExit: true,
+        exitReason: 'TRAIL',
+        exitPrice: exitSignal.newStopLoss ?? current.close,
+      };
+    }
+    // Not yet confirmed - continue
+    return { shouldExit: false, exitReason: '', exitPrice: current.close };
+  } else if (exitSignal.trailingActivated && exitSignal.trailingBreached === false) {
+    // Wick hit but close didn't breach - reset counter
+    pos.trailingBreachCandles = 0;
+  } else if (exitSignal.trailingActivated && !exitSignal.trailingBreached) {
+    // Trailing active, no breach - reset counter
+    pos.trailingBreachCandles = 0;
+  }
+  
+  // Update trailing stop price if available
+  if (exitSignal.newStopLoss) {
+    pos.appTrailingStop = exitSignal.newStopLoss;
+  }
+  
+  // Handle other exit signals
+  if (exitSignal.shouldExit) {
+    // Map reason names to backtest format
+    const reasonMap: Record<string, string> = {
+      'time': 'TIME',
+      'regime_change': 'REGIME_CHANGE',
+      'momentum_reversal': 'MOMENTUM_REVERSAL',
+      'stoploss': 'SL',
+      'stagnant_trade': 'STAGNANT_TRADE',
+      'stagnant_profit_exit': 'STAGNANT_PROFIT_EXIT',
+      'trailing': 'TRAIL',
+    };
+    
+    const reason = exitSignal.reason ?? 'unknown';
+    const exitReason = reasonMap[reason] ?? reason.toUpperCase();
+    
+    // Calculate exit price based on reason
+    let exitPrice = current.close;
+    if (exitSignal.reason === 'stoploss' || exitSignal.reason === 'stagnant_trade') {
+      // Use actual stop price for SL exits
+      const effectiveSlPct = exitSignal.effectiveSlPct ?? pos.stopLossPct;
+      exitPrice = pos.side === 'long'
+        ? pos.entryPrice * (1 - effectiveSlPct / 100)
+        : pos.entryPrice * (1 + effectiveSlPct / 100);
+    }
+    
+    return { shouldExit: true, exitReason, exitPrice };
+  }
+  
+  return { shouldExit: false, exitReason: '', exitPrice: current.close };
 }
 
 // ============================================================================
@@ -1002,10 +1046,6 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const pos = positions[symbol]!;
         const holdBars = idx - pos.entryIdx;
 
-        let shouldExit = false;
-        let exitPrice = current.close;
-        let exitReason = 'UNKNOWN';
-
         // Calculate current PnL %
         const pnlPct =
           pos.side === 'long'
@@ -1032,305 +1072,23 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // V5.28: Track max raw PnL % for stagnant trade detection
         pos.maxPnlPct = Math.max(pos.maxPnlPct ?? 0, pnlPct);
 
-        // Get adaptive trailing params
-        const { activation, distance } = calcAdaptiveTrailing(windowCandles);
-
-        // V5.39 FIX: Check MAX_HOLD first (aligned with live shouldExitPosition)
-        // This ensures positions are closed at 48h regardless of other conditions
-        if (holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
-          shouldExit = true;
-          exitReason = 'TIME';
-          exitPrice = current.close;
-        }
-
-        // Check exits in priority order (skip if MAX_HOLD already triggered):
-        // 0. REGIME CHANGE (NEW V5.13) - Exit if BTC regime flips
-        // 0b. MOMENTUM REVERSAL (NEW V5.13) - Exit if momentum reverses
-        // 1. Stop Loss (intrabar - check if wick hit stop)
-        // 2. Take Profit (intrabar - check if wick hit TP)
-        // 3. Trailing Stop (intrabar - if activated, check if wick hit trail)
-
-        // ═══════════════════════════════════════════════════════════════════
-        // 0. REGIME CHANGE EXIT (V5.13 with confirmation filters)
-        // ═══════════════════════════════════════════════════════════════════
+        // V5.41: Use shared shouldExitPosition() via helper function
+        // This ensures 100% parity between backtest and production exit logic
         const btcWindowStart = Math.max(0, btcIdx - 200);
         const btcWindowCandles = btcCandles.slice(btcWindowStart, btcIdx + 1);
-        const btcSma200Current = calcSMA(btcWindowCandles.map(c => c.close), 200);
-        const btcPriceCurrent = btcCandles[btcIdx].close;
         
-        const distanceFromSma200Pct = ((btcPriceCurrent - btcSma200Current) / btcSma200Current) * 100;
-        const inBufferZone = Math.abs(distanceFromSma200Pct) <= CONFIG.REGIME_CHANGE_EXIT.BUFFER_ZONE_PCT;
+        const exitResult = checkBacktestExit(
+          pos, 
+          current, 
+          windowCandles, 
+          btcWindowCandles as Candle[], 
+          idx, 
+          params
+        );
         
-        const currentlyBullRegime = btcPriceCurrent > btcSma200Current;
-        const positionOpenedInBullRegime = pos.side === 'long';
-        const regimeChanged = (positionOpenedInBullRegime && !currentlyBullRegime) || 
-                              (!positionOpenedInBullRegime && currentlyBullRegime);
-
-        if (regimeChanged && !inBufferZone) {
-          let confirmed = true;
-          
-          // Volume confirmation
-          if (CONFIG.REGIME_CHANGE_EXIT.REQUIRE_VOLUME_CONFIRMATION && btcWindowCandles.length >= 20) {
-            const btcVolumes = btcWindowCandles.slice(-20).map(c => c.volume);
-            const avgVol = btcVolumes.slice(0, -1).reduce((a, b) => a + b, 0) / (btcVolumes.length - 1);
-            const currentVol = btcVolumes[btcVolumes.length - 1];
-            const volRatio = currentVol / avgVol;
-            
-            if (volRatio < CONFIG.REGIME_CHANGE_EXIT.MIN_VOLUME_MULTIPLIER) {
-              confirmed = false;
-            }
-          }
-          
-          // Momentum confirmation
-          if (confirmed && CONFIG.REGIME_CHANGE_EXIT.REQUIRE_MOMENTUM_CONFIRMATION) {
-            const btcCloseWindow = btcWindowCandles.map(c => c.close);
-            if (btcCloseWindow.length >= 6) {
-              const btcRoc5 = calcROC(btcCloseWindow, 5);
-              
-              if (currentlyBullRegime && btcRoc5 < CONFIG.REGIME_CHANGE_EXIT.MIN_ROC5_BULL) {
-                confirmed = false;
-              } else if (!currentlyBullRegime && btcRoc5 > CONFIG.REGIME_CHANGE_EXIT.MIN_ROC5_BEAR) {
-                confirmed = false;
-              }
-            }
-          }
-          
-          if (confirmed) {
-            shouldExit = true;
-            exitReason = 'REGIME_CHANGE';
-            exitPrice = current.close;
-          }
-        }
-
-        // ═══════════════════════════════════════════════════════════════════
-        // 0b. MOMENTUM REVERSAL EXIT (V5.13 + V5.35 2-candle confirmation)
-        // V5.35: Require 2 consecutive candles to reduce false exits
-        // ═══════════════════════════════════════════════════════════════════
-        if (!shouldExit && windowCandles.length >= 7) {  // V5.35: Need 7 for 2-candle check
-          const closes = windowCandles.map(c => c.close);
-          const roc5Current = calcROC(closes, 5);
-          const roc5Previous = calcROC(closes.slice(0, -1), 5);
-
-          if (pos.side === 'long') {
-            // V5.35: Require 2 consecutive candles below -1.5%
-            if (roc5Previous < -0.015 && roc5Current < -0.015) {
-              shouldExit = true;
-              exitReason = 'MOMENTUM_REVERSAL';
-              exitPrice = current.close;
-            }
-          } else if (pos.side === 'short') {
-            // V5.35: Require 2 consecutive candles above +1.5%
-            if (roc5Previous > 0.015 && roc5Current > 0.015) {
-              shouldExit = true;
-              exitReason = 'MOMENTUM_REVERSAL';
-              exitPrice = current.close;
-            }
-          }
-        }
-
-        // V5.31: SMART STAGNANT TRADE with observation window
-        // 1. Trigger at 60min if maxPnl < threshold
-        // 2. Observe for 90 more minutes (using candle highs as approximation of 1m peaks)
-        // 3. If any high >= recovery threshold → big move forming, cancel stagnant
-        // 4. Else confirm stagnant → tighten SL (or exit if in profit)
-        const stagnantConfig = CONFIG.EXIT as any;
-        const stagnantEnabled = stagnantConfig.STAGNANT_TRADE_EXIT_ENABLED ?? false;
-        const stagnantTimeMinutes = stagnantConfig.STAGNANT_TRADE_TIME_MINUTES ?? 45;  // V5.34: 45 (was 60)
-        const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 60;    // V5.34: 60 (was 90)
-        const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.8;
-        const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.6; // V5.34: 0.6 (was 0.4)
-        const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8; // V5.34: 0.8 (was 1.0)
-        const stagnantExitIfProfit = stagnantConfig.STAGNANT_TRADE_EXIT_IF_PROFIT ?? false; // V5.34: false (was true)
-        
-        const holdMinutes = holdBars * 15; // Each candle is 15 minutes
-        const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes; // V5.34: 45 + 60 = 105
-        
-        // Initialize stagnant tracking on position if not exists
-        if (!pos.stagnantState) {
-          pos.stagnantState = { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 };
-        }
-        
-        // Step 1: Check if initial stagnant trigger (at 60min)
-        if (stagnantEnabled && 
-            !pos.stagnantState.triggered && 
-            holdMinutes >= stagnantTimeMinutes && 
-            (pos.maxPnlPct ?? 0) < stagnantMinProfitPct) {
-          pos.stagnantState.triggered = true;
-          pos.stagnantState.triggeredAtMinutes = holdMinutes;  // V5.38: Track trigger time
-        }
-        
-        // Step 2: During observation window (60-150min), track peak and check for recovery
-        if (pos.stagnantState.triggered && !pos.stagnantState.confirmed && !pos.stagnantState.cancelled) {
-          // Calculate current candle's peak PnL (using high for long, low for short)
-          const candlePeakPnl = pos.side === 'long'
-            ? ((current.high - pos.entryPrice) / pos.entryPrice) * 100
-            : ((pos.entryPrice - current.low) / pos.entryPrice) * 100;
-          
-          pos.stagnantState.obsPeakPct = Math.max(pos.stagnantState.obsPeakPct, candlePeakPnl);
-          
-          // If peak during observation >= recovery threshold → cancel stagnant (big move forming)
-          if (pos.stagnantState.obsPeakPct >= stagnantRecoveryPct) {
-            pos.stagnantState.cancelled = true;
-          }
-          
-          // V5.38 FIX: End of observation window = triggeredAtMinutes + obsMinutes
-          // This ensures the observation window is exactly stagnantObsMinutes long
-          const triggeredAtMin = pos.stagnantState.triggeredAtMinutes ?? stagnantTimeMinutes;
-          const obsElapsedMinutes = holdMinutes - triggeredAtMin;
-          if (obsElapsedMinutes >= stagnantObsMinutes && !pos.stagnantState.cancelled) {
-            pos.stagnantState.confirmed = true;
-            
-            // V5.31: Exit at market if in profit
-            if (stagnantExitIfProfit && !shouldExit) {
-              const currentPnl = pos.side === 'long'
-                ? ((current.close - pos.entryPrice) / pos.entryPrice) * 100
-                : ((pos.entryPrice - current.close) / pos.entryPrice) * 100;
-              
-              if (currentPnl > 0) {
-                shouldExit = true;
-                exitReason = 'STAGNANT_PROFIT_EXIT';
-                exitPrice = current.close;
-              }
-            }
-          }
-        }
-        
-        // V5.39 FIX: Align with live - only use tightened SL if stagnant confirmed AND trailing NOT active
-        // If trailing is active, the trailing stop is the primary exit mechanism (not SL)
-        // This prevents interference between stagnant SL and trailing stop
-        const trailingIsActiveNow = pos.trailingActive === true;
-        const isStagnantConfirmed = !trailingIsActiveNow && pos.stagnantState.confirmed && !pos.stagnantState.cancelled;
-        const effectiveSlPct = isStagnantConfirmed ? stagnantTightenSlPct : pos.stopLossPct;
-
-        // Only check SL/Trailing if regime change or momentum reversal didn't trigger
-        if (!shouldExit && pos.side === 'long') {
-          const slPrice = pos.entryPrice * (1 - effectiveSlPct / 100);
-
-          // SL hit? (wick went below stop)
-          if (current.low <= slPrice) {
-            shouldExit = true;
-            exitReason = isStagnantConfirmed ? 'STAGNANT_TRADE' : 'SL';
-            exitPrice = slPrice;
-          }
-          // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
-          else {
-            const hwm = pos.highWaterMark!;
-            // V5.26 FIX: Use pnlPct (current close) for activation, not hwmPct (max)
-            // This aligns with production which uses current PnL for activation
-            const pnlPct = ((current.close - pos.entryPrice) / pos.entryPrice) * 100;
-            const hwmPct = ((hwm - pos.entryPrice) / pos.entryPrice) * 100;
-
-            // V5.26: Check if activation threshold reached NOW or was reached before
-            const shouldActivateNow = pnlPct >= activation;
-            if (shouldActivateNow) {
-              pos.trailingActive = true;
-            }
-            
-            if (pos.trailingActive) {
-              // V5.35: Smart trailing - widen distance at higher profits (3% threshold)
-              let trailDist = distance;
-              if (hwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {  // V5.35: 3.0% (was 2.0%)
-                trailDist = CONFIG.EXIT.TRAILING_WIDE_DISTANCE_PCT;
-              }
-              
-              const trailStop = hwm * (1 - trailDist / 100);
-              pos.appTrailingStop = trailStop;
-
-              // Simulate 1m candle confirmations (15 sub-candles per 15m bar)
-              // In production: require 2 consecutive 1m candle closes below trailing stop
-              if (!pos.trailingBreachCandles) pos.trailingBreachCandles = 0;
-
-              // Check if current candle low breached the stop
-              if (current.low <= trailStop) {
-                // Simulate: if wick hit the stop, assume at least 1 candle closed below it
-                // For realism: require price to close below stop (not just wick)
-                const closeBreached = current.close <= trailStop;
-                
-                if (closeBreached) {
-                  pos.trailingBreachCandles += 1;
-                  
-                  // V5.38: Configurable confirmation (default 2 for optimal performance)
-                  const confirmCandles = params.trailingConfirmCandles ?? 2;
-                  if (pos.trailingBreachCandles >= confirmCandles) {
-                    shouldExit = true;
-                    exitReason = 'TRAIL';
-                    exitPrice = trailStop;
-                  }
-                } else {
-                  // Wick hit but close didn't breach - reset counter
-                  pos.trailingBreachCandles = 0;
-                }
-              } else {
-                // No breach - reset counter
-                pos.trailingBreachCandles = 0;
-              }
-            }
-          }
-        } else if (!shouldExit && pos.side === 'short') {
-          // SHORT
-          const slPrice = pos.entryPrice * (1 + effectiveSlPct / 100);
-
-          // SL hit?
-          if (current.high >= slPrice) {
-            shouldExit = true;
-            exitReason = isStagnantConfirmed ? 'STAGNANT_TRADE' : 'SL';
-            exitPrice = slPrice;
-          }
-          // Trailing? (V5.18: Simulate 1m candles with 2-confirmation like production)
-          else {
-            const lwm = pos.lowWaterMark!;
-            // V5.26 FIX: Use pnlPct (current close) for activation, not lwmPct (max)
-            // This aligns with production which uses current PnL for activation
-            const pnlPct = ((pos.entryPrice - current.close) / pos.entryPrice) * 100;
-            const lwmPct = ((pos.entryPrice - lwm) / pos.entryPrice) * 100;
-
-            // V5.26: Check if activation threshold reached NOW or was reached before
-            const shouldActivateNow = pnlPct >= activation;
-            if (shouldActivateNow) {
-              pos.trailingActive = true;
-            }
-            
-            if (pos.trailingActive) {
-              // V5.35: Smart trailing - widen distance at higher profits (3% threshold)
-              let trailDist = distance;
-              if (lwmPct >= CONFIG.EXIT.TRAILING_WIDEN_AT_PCT) {  // V5.35: 3.0% (was 2.0%)
-                trailDist = CONFIG.EXIT.TRAILING_WIDE_DISTANCE_PCT;
-              }
-              
-              const trailStop = lwm * (1 + trailDist / 100);
-              pos.appTrailingStop = trailStop;
-
-              // Simulate 1m candle confirmations (15 sub-candles per 15m bar)
-              if (!pos.trailingBreachCandles) pos.trailingBreachCandles = 0;
-
-              // Check if current candle high breached the stop (SHORT)
-              if (current.high >= trailStop) {
-                // For realism: require close above stop, not just wick
-                const closeBreached = current.close >= trailStop;
-                
-                if (closeBreached) {
-                  pos.trailingBreachCandles += 1;
-                  
-                  // V5.38: Configurable confirmation (default 2 for optimal performance)
-                  const confirmCandles = params.trailingConfirmCandles ?? 2;
-                  if (pos.trailingBreachCandles >= confirmCandles) {
-                    shouldExit = true;
-                    exitReason = 'TRAIL';
-                    exitPrice = trailStop;
-                  }
-                } else {
-                  // Wick hit but close didn't breach - reset counter
-                  pos.trailingBreachCandles = 0;
-                }
-              } else {
-                // No breach - reset counter
-                pos.trailingBreachCandles = 0;
-              }
-            }
-          }
-        }
-
-        // V5.39: Max hold time check moved to FIRST position (line ~1040) for alignment with live
+        const shouldExit = exitResult.shouldExit;
+        const exitReason = exitResult.exitReason;
+        const exitPrice = exitResult.exitPrice;
 
         if (shouldExit) {
           const pnl = calculatePnl(
@@ -1419,23 +1177,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
           positions[symbol] = null;
           
-          // V5.13: Adaptive cooldown based on exit reason
-          // - Profitable exits (TRAILING) = short cooldown (momentum continues)
-          // - Loss exits (STOP_LOSS) = longer cooldown (bad signal)
-          // - Regime/Momentum change = medium/long cooldown (wait for confirmation)
-          let cooldownBars = 8; // Default: 2h
-          
-          if (exitReason.includes('trailing') || exitReason === 'take_profit') {
-            cooldownBars = 2; // 30 minutes - profitable exit
-          } else if (exitReason.includes('stop') || exitReason.includes('sl')) {
-            cooldownBars = 10; // 2h30 - stop loss
-          } else if (exitReason.includes('momentum')) {
-            cooldownBars = 8; // 2h - momentum reversal
-          } else if (exitReason.includes('regime')) {
-            cooldownBars = 12; // 3h - regime change
-          }
-          
-          cooldowns[symbol] = cooldownBars;
+          // V5.41: Use shared cooldown logic from momentumSimple.ts
+          cooldowns[symbol] = getCooldownBars(exitReason);
         }
       }
 

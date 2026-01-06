@@ -23,6 +23,7 @@ import {
   calcSafeLeverage,
   calcDynamicStopLoss,  // V5.7: Dynamic SL based on ATR
   determineVolatilityRegime,  // V5.14: Volatility-based trailing
+  getCooldownBars,  // V5.41: Shared cooldown logic
   LIQUIDATION_CONFIG,
   type Candle,
   type Position,
@@ -2473,31 +2474,10 @@ export class SimpleAgent {
     this.trailingNotified = false;
     this.trailingWidened = false;
 
-    // V5.13: Adaptive cooldown based on exit reason
-    // - Profitable exits (TRAILING) = short cooldown (momentum continues)
-    // - Loss exits (STOP_LOSS) = longer cooldown (bad signal)
-    // - Regime/Momentum change = medium/long cooldown (wait for confirmation)
-    let cooldownBars = this.ENTRY_COOLDOWN_BARS; // Default: 8 bars (2h)
-    
-    if (reason.includes('trailing') || reason === 'take_profit') {
-      // Profitable exit = momentum likely continues, short cooldown
-      cooldownBars = 2; // 30 minutes
-      logger.info(`⏱️ [${symbol}] Cooldown: 2 bars (30min) - profitable exit, quick re-entry allowed`);
-    } else if (reason.includes('stop') || reason.includes('sl')) {
-      // Stop loss = bad signal, wait longer
-      cooldownBars = 10; // 2h30
-      logger.info(`⏱️ [${symbol}] Cooldown: 10 bars (2h30) - stop loss, extended wait`);
-    } else if (reason.includes('momentum')) {
-      // Momentum reversal = wait for momentum to stabilize
-      cooldownBars = 8; // 2h
-      logger.info(`⏱️ [${symbol}] Cooldown: 8 bars (2h) - momentum reversal`);
-    } else if (reason.includes('regime')) {
-      // Regime change = major shift, wait longer
-      cooldownBars = 12; // 3h
-      logger.info(`⏱️ [${symbol}] Cooldown: 12 bars (3h) - regime change, wait for confirmation`);
-    }
-    
+    // V5.41: Use shared cooldown logic from momentumSimple.ts
+    const cooldownBars = getCooldownBars(reason, this.ENTRY_COOLDOWN_BARS);
     this.entryCooldownBarsRemaining = cooldownBars;
+    logger.info(`⏱️ [${symbol}] Cooldown: ${cooldownBars} bars (${cooldownBars * 15}min) - exit reason: ${reason}`);
     
     // Store exit info for frontend display
     this.lastExit = {
@@ -2544,12 +2524,25 @@ export class SimpleAgent {
       // Release MARGIN (not notional) with PnL
       this.config.capitalPool.release(this.config.sessionId, marginToRelease, pnlUsd);
       
-      // Calculate paper fee: 0.04% taker on exit notional
+      // V5.41: Paper mode realistic costs (aligned with backtest for fair comparison)
+      // Backtest uses: 0.04% × 2 (entry+exit) + 0.05% × 2 (slippage) + 0.01%/8h (funding)
       const exitNotionalUsd = position.qty * currentPrice;
-      const paperFeeUsd = exitNotionalUsd * 0.0004;
+      const entryNotionalUsd = position.qty * position.entryPrice;
+      const tradingFeeEntry = entryNotionalUsd * 0.0004;  // 0.04% on entry
+      const tradingFeeExit = exitNotionalUsd * 0.0004;    // 0.04% on exit
+      const slippageEntry = entryNotionalUsd * 0.0005;    // 0.05% slippage on entry
+      const slippageExit = exitNotionalUsd * 0.0005;      // 0.05% slippage on exit
+      
+      // Calculate funding: 0.01% per 8h period held
+      const holdMinutes = (Date.now() - position.entryTime) / 60000;
+      const holdBars = Math.floor(holdMinutes / 15);
+      const fundingPeriods = Math.floor(holdBars / 32); // 32 bars = 8 hours
+      const fundingFee = fundingPeriods * (entryNotionalUsd * 0.0001); // 0.01% per period
+      
+      const paperFeeUsd = tradingFeeEntry + tradingFeeExit + slippageEntry + slippageExit + fundingFee;
       
       await this.saveExitToDb(position, currentPrice, reason, pnlPct, totalPnlUsd, undefined, paperFeeUsd);
-      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${totalPnlUsd.toFixed(2)}) | margin released=$${totalMarginReleased.toFixed(2)}`);
+      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${totalPnlUsd.toFixed(2)}) | margin released=$${totalMarginReleased.toFixed(2)} | costs=$${paperFeeUsd.toFixed(2)}`);
       
       // 📢 Send Telegram notification for paper exit avec P&L et balance
       const balanceAfterPaper = this.config.capitalPool.getTotalCapital();

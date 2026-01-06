@@ -616,28 +616,28 @@ export function getMarketConditions(btcCandles: Candle[]): MarketConditions {
 }
 
 // ============================================================================
-// INDICATEURS
+// INDICATEURS - V5.41: Exported for shared use across backtest and live
 // ============================================================================
 
-function calcMA(values: number[], period: number): number {
+export function calcMA(values: number[], period: number): number {
   if (values.length < period) return values[values.length - 1] || 0;
   const slice = values.slice(-period);
   return slice.reduce((a, b) => a + b, 0) / period;
 }
 
-function calcSMA(values: number[], period: number): number {
+export function calcSMA(values: number[], period: number): number {
   return calcMA(values, period);
 }
 
-function calcVolRatio(volumes: number[]): number {
+export function calcVolRatio(volumes: number[]): number {
   if (volumes.length < 21) return 0;
   const current = volumes[volumes.length - 1];
   const avgVol = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
   return avgVol > 0 ? current / avgVol : 0;
 }
 
-// Bollinger Bands
-function calcBollingerBands(closes: number[], period: number = 20, stdMultiplier: number = 2): { upper: number; middle: number; lower: number } {
+// Bollinger Bands - V5.41: Unified function (alias for calcBB)
+export function calcBollingerBands(closes: number[], period: number = 20, stdMultiplier: number = 2): { upper: number; middle: number; lower: number } {
   if (closes.length < period) {
     const last = closes[closes.length - 1] || 0;
     return { upper: last, middle: last, lower: last };
@@ -653,6 +653,46 @@ function calcBollingerBands(closes: number[], period: number = 20, stdMultiplier
     middle,
     lower: middle - std * stdMultiplier,
   };
+}
+
+// V5.41: Alias for backwards compatibility with backtest (uses calcBB name)
+export function calcBB(closes: number[], period = 20, mult = 2): { upper: number; middle: number; lower: number } {
+  return calcBollingerBands(closes, period, mult);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// V5.41: SHARED COOLDOWN LOGIC - Single source of truth
+// Used by both backtest and live agent after position exit
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get cooldown bars based on exit reason
+ * - Profitable exits (TRAILING) = short cooldown (momentum continues)
+ * - Loss exits (STOP_LOSS) = longer cooldown (bad signal)
+ * - Regime/Momentum change = medium/long cooldown (wait for confirmation)
+ * 
+ * @param exitReason - The exit reason string (case insensitive)
+ * @param defaultCooldown - Default cooldown in bars (default 8 = 2h)
+ * @returns Number of 15m bars to wait before next entry
+ */
+export function getCooldownBars(exitReason: string, defaultCooldown: number = 8): number {
+  const reason = exitReason.toLowerCase();
+  
+  if (reason.includes('trailing') || reason.includes('trail') || reason === 'take_profit' || reason === 'tp') {
+    return 2; // 30 minutes - profitable exit, quick re-entry allowed
+  } else if (reason.includes('stop') || reason.includes('sl') || reason === 'stoploss') {
+    return 10; // 2h30 - stop loss, extended wait
+  } else if (reason.includes('stagnant')) {
+    return 8; // 2h - stagnant trade (tightened SL hit)
+  } else if (reason.includes('momentum')) {
+    return 8; // 2h - momentum reversal
+  } else if (reason.includes('regime')) {
+    return 12; // 3h - regime change, wait for confirmation
+  } else if (reason.includes('time') || reason === 'max_hold') {
+    return 4; // 1h - max hold time reached
+  }
+  
+  return defaultCooldown;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -840,16 +880,16 @@ export function checkBTCVolatility(btcCandles: any[]): boolean {
   return btcATRPct >= config.MIN_ATR_PCT;
 }
 
-// Rate of Change (ROC)
-function calcROC(closes: number[], period: number = 10): number {
+// Rate of Change (ROC) - V5.41: Exported for shared use
+export function calcROC(closes: number[], period: number = 10): number {
   if (closes.length < period + 1) return 0;
   const current = closes[closes.length - 1];
   const past = closes[closes.length - period - 1];
   return past > 0 ? (current - past) / past : 0;
 }
 
-// Count consecutive up candles
-function countConsecUp(candles: Candle[]): number {
+// Count consecutive up candles - V5.41: Exported for shared use
+export function countConsecUp(candles: Candle[]): number {
   let count = 0;
   for (let i = candles.length - 1; i >= 0; i--) {
     if (candles[i].close > candles[i].open) {
@@ -861,8 +901,8 @@ function countConsecUp(candles: Candle[]): number {
   return count;
 }
 
-// Count consecutive down candles (for SHORT)
-function countConsecDown(candles: Candle[]): number {
+// Count consecutive down candles (for SHORT) - V5.41: Exported for shared use
+export function countConsecDown(candles: Candle[]): number {
   let count = 0;
   for (let i = candles.length - 1; i >= 0; i--) {
     if (candles[i].close < candles[i].open) {
@@ -1433,6 +1473,16 @@ export function shouldExitPosition(
 ): ExitSignal {
   const now = opts?.nowMs ?? Date.now();
   const holdMinutes = (now - position.entryTime) / 60000;
+  
+  // ============================================================================
+  // V5.42 FIX: Skip exit checks if position opened AFTER the candle being checked
+  // This happens when entry occurs mid-candle and checkExit runs on the previous
+  // closed candle. We must NOT check SL/exit on candles before entry!
+  // Without this fix, the high/low of the pre-entry candle triggers false SL exits.
+  // ============================================================================
+  if (holdMinutes < 0) {
+    return { shouldExit: false };
+  }
   
   // Calculate PnL based on position side
   let pnlPct: number;
