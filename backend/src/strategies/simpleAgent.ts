@@ -1318,6 +1318,8 @@ export class SimpleAgent {
         if (this.tickCount % 10 === 1) {
           logger.info(`⚠️ [${shortSymbol}] Not enough candles (${allCandles.length}/61)`);
         }
+        // Set reject reason to suppress repeated "15m CHECK" logs in tick()
+        this.lastRejectReason = 'waiting_new_candle';
         return;
       }
       
@@ -1348,6 +1350,7 @@ export class SimpleAgent {
       
       if (lastClosedIdx < 0) {
         logger.warn(`⚠️ [${shortSymbol}] No closed candles available yet`);
+        this.lastRejectReason = 'waiting_new_candle';
         return;
       }
       
@@ -1401,6 +1404,7 @@ export class SimpleAgent {
         if (this.tickCount % 10 === 1) {
           logger.info(`⚠️ [${shortSymbol}] Waiting for BTC data (${allBtcCandles.length}/${MIN_BTC_CANDLES})`);
         }
+        this.lastRejectReason = 'waiting_new_candle';
         return;
       }
 
@@ -1428,6 +1432,7 @@ export class SimpleAgent {
         if (this.tickCount % 10 === 1) {
           logger.info(`⚠️ [${shortSymbol}] Waiting for BTC 1h data (${btcCandles1h.length}/${MIN_BTC_1H_CANDLES})`);
         }
+        this.lastRejectReason = 'waiting_new_candle';
         return;
       }
 
@@ -2197,7 +2202,7 @@ export class SimpleAgent {
       if (allCandles.length === 0) return;
 
       // Fetch BTC candles for regime detection (V5.13)
-      const btcCandles = await this.fetchBtcCandles();
+      const allBtcCandles = await this.fetchBtcCandles();
 
       // V5.13: Same fix as checkEntry - use timestamp age instead of slice(0,-1)
       const now = Date.now();
@@ -2216,6 +2221,19 @@ export class SimpleAgent {
       
       const candles = allCandles.slice(0, lastClosedIdx + 1);
       const latestClosedCandle = candles[candles.length - 1];
+      
+      // V5.40 FIX: Filter BTC candles to use only CLOSED candles (aligned with backtest)
+      // This ensures regime detection uses the same closed candle data as backtest
+      // Previously we passed all btcCandles including the candle in progress,
+      // which could cause false REGIME_CHANGE triggers when BTC price fluctuated
+      let lastClosedBtcIdx = allBtcCandles.length - 1;
+      if (allBtcCandles.length > 0) {
+        const lastBtcCandleAge = now - allBtcCandles[lastClosedBtcIdx].timestamp;
+        if (lastBtcCandleAge < CANDLE_INTERVAL_MS) {
+          lastClosedBtcIdx = allBtcCandles.length - 2;
+        }
+      }
+      const btcCandles = lastClosedBtcIdx >= 0 ? allBtcCandles.slice(0, lastClosedBtcIdx + 1) : [];
 
       // Only process exit once per newly-closed candle.
       if (latestClosedCandle.timestamp === this.lastProcessedExitCandleTs) {
