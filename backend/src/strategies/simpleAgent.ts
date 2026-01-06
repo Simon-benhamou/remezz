@@ -778,7 +778,9 @@ export class SimpleAgent {
   // ==========================================================================
 
   private startRealtimeExitMonitorIfNeeded(): void {
-    if (this.config.mode !== 'live') return;
+    // V5.37: Enable RT exit monitor for BOTH paper and live modes
+    // This ensures identical behavior between paper and live trading
+    // Previously only live had RT protection, causing divergent exit timing
     if (!this.running) return;
     if (!this.position) return;
     if (!MomentumConfig.EXIT.REALTIME_APP_EXIT_ENABLED) return;
