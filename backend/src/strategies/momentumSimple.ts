@@ -1560,9 +1560,18 @@ export function shouldExitPosition(
   }
   
   // ============================================================================
-  // V5.38: Calculate trailing state and effective SL
+  // V5.39 FIX: Calculate trailing state and effective SL with ADAPTIVE params
+  // Backtest uses calcAdaptiveTrailing() - live must use same logic for parity
   // ============================================================================
-  const trailingActivation = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;
+  
+  // V5.39: Use adaptive trailing params based on ATR (like backtest)
+  const volatilityRegime = candles && candles.length > 0 
+    ? determineVolatilityRegime(candles) 
+    : { trailingActivation: MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT, trailingDistance: MomentumConfig.EXIT.TRAILING_DISTANCE_PCT, regime: 'MEDIUM' as const, atrPct: null, reason: 'no_candles' };
+  
+  const trailingActivation = volatilityRegime.trailingActivation;
+  const baseTrailingDistance = volatilityRegime.trailingDistance;
+  
   const shouldActivateNow = pnlPct >= trailingActivation;
   const trailingIsActive = position.trailingActive === true || shouldActivateNow;
   
@@ -1674,10 +1683,21 @@ export function shouldExitPosition(
   // - Return trailingBreachReset=true when wick hit but close didn't breach
   // ============================================================================
   if (trailingIsActive) {
-    let trailingDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
+    // V5.39 FIX: Use adaptive trailing distance (from volatility regime)
+    // Then widen to WIDE_DISTANCE if hwmPct >= 3%
+    let trailingDistance = baseTrailingDistance;
     
-    // V5.12: WIDEN callback at higher profits
-    if (pnlPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT) {
+    // V5.39 FIX: Use hwmPct (max reached) for widen check, like backtest
+    // Previously used pnlPct (current) which could differ when price retraces
+    const hwmPct = position.side === 'long'
+      ? position.highWaterMark 
+        ? ((position.highWaterMark - position.entryPrice) / position.entryPrice) * 100
+        : pnlPct
+      : position.lowWaterMark
+        ? ((position.entryPrice - position.lowWaterMark) / position.entryPrice) * 100
+        : pnlPct;
+    
+    if (hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT) {
       trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT;
     }
     

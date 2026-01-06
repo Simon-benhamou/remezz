@@ -2399,6 +2399,10 @@ export class SimpleAgent {
         });
       }
       
+      // V5.39: Periodically save position state to DB (every check)
+      // This ensures HWM, maxPnl, trailing state survive restarts
+      await this.updatePositionStateInDb();
+      
     } catch (error) {
       logger.error(`❌ [${symbol}] Error checking exit:`, error);
     }
@@ -3414,6 +3418,8 @@ export class SimpleAgent {
         const leverage = dbPosition.leverage || MomentumConfig.LEVERAGE[this.config.symbol] || 4.5;
         const marginUsd = notional / leverage;
         
+        // V5.39 FIX: Restore ALL position tracking state from DB (not just basic fields)
+        // This ensures trailing/stagnant logic continues correctly after agent restart
         this.position = {
           symbol: dbPosition.symbol,
           side: (dbPosition.side as 'long' | 'short') || 'long',
@@ -3424,15 +3430,25 @@ export class SimpleAgent {
           orderId: dbPosition.slOrderId || undefined,
           leverage: leverage,
           marginUsd: marginUsd,
-          highWaterMark: dbPosition.side === 'long' ? dbPosition.entryPrice : undefined,
-          lowWaterMark: dbPosition.side === 'short' ? dbPosition.entryPrice : undefined,
+          // V5.39 FIX: Restore saved HWM/LWM or default to entry price
+          highWaterMark: (dbPosition.highWaterMark as number | null) ?? (dbPosition.side === 'long' ? dbPosition.entryPrice : undefined),
+          lowWaterMark: (dbPosition.lowWaterMark as number | null) ?? (dbPosition.side === 'short' ? dbPosition.entryPrice : undefined),
+          // V5.39 FIX: Restore trailing/stagnant tracking state
+          maxPnlPct: (dbPosition.maxPnlPct as number | null) ?? undefined,
+          trailingActive: (dbPosition.trailingActive as boolean) ?? false,
+          trailingBreachCandles: 0, // Reset breach counter on restart (conservative)
+          stagnantState: dbPosition.stagnantState 
+            ? (typeof dbPosition.stagnantState === 'string' 
+                ? JSON.parse(dbPosition.stagnantState) 
+                : dbPosition.stagnantState as { triggered: boolean; triggeredAtMinutes?: number; confirmed: boolean; cancelled: boolean; obsPeakPct: number })
+            : undefined,
         };
         
         // ⚠️ CRITICAL: Register margin in CapitalPool to prevent double-spending!
         // This is essential for live mode where exchange balance includes locked margin
         this.config.capitalPool.commit(this.config.sessionId, marginUsd);
         
-        logger.info(`📥 [${this.config.symbol}] Loaded existing position: ${this.position?.side} @ $${this.position?.entryPrice} | margin=$${marginUsd.toFixed(2)} registered in pool`);
+        logger.info(`📥 [${this.config.symbol}] Loaded existing position: ${this.position?.side} @ $${this.position?.entryPrice} | margin=$${marginUsd.toFixed(2)} | trailingActive=${this.position.trailingActive} | maxPnl=${this.position.maxPnlPct?.toFixed(2) ?? 'N/A'}% | hwm=$${this.position.highWaterMark?.toFixed(4) ?? 'N/A'}`);
       }
       
     } catch (error) {
@@ -3879,6 +3895,7 @@ export class SimpleAgent {
       logger.info(`💾 [${this.config.symbol}] Entry order logged: ${entrySide.toUpperCase()} @ $${position.entryPrice.toFixed(4)}, fee: $${calculatedFee.toFixed(2)}`);
       
       // Then create the position record
+      // V5.39 FIX: Save ALL position tracking state to DB for persistence across restarts
       await this.config.prisma.position.create({
         data: {
           sessionId: this.config.sessionId,
@@ -3889,10 +3906,48 @@ export class SimpleAgent {
           leverage: MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] || 3,
           stopPrice: position.stopLoss,
           openedAt: new Date(position.entryTime),
+          // V5.39 FIX: Initialize tracking state fields
+          highWaterMark: position.side === 'long' ? position.entryPrice : null,
+          lowWaterMark: position.side === 'short' ? position.entryPrice : null,
+          maxPnlPct: 0,
+          trailingActive: false,
+          stagnantState: null,
         },
       });
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Failed to save position to DB:`, error);
+    }
+  }
+  
+  /**
+   * V5.39: Update position tracking state in DB
+   * Called periodically during checkExit to persist HWM, maxPnl, trailing state
+   * This ensures position state survives agent restarts
+   */
+  private async updatePositionStateInDb(): Promise<void> {
+    if (!this.position) return;
+    
+    try {
+      await this.config.prisma.position.update({
+        where: {
+          sessionId_symbol: {
+            sessionId: this.config.sessionId,
+            symbol: this.config.symbol,
+          },
+        },
+        data: {
+          highWaterMark: this.position.highWaterMark ?? null,
+          lowWaterMark: this.position.lowWaterMark ?? null,
+          maxPnlPct: this.position.maxPnlPct ?? null,
+          trailingActive: this.position.trailingActive ?? false,
+          stagnantState: this.position.stagnantState ?? null,
+        },
+      });
+    } catch (error: any) {
+      // Don't log every failure (can happen during rapid updates)
+      if (!error.message?.includes('Record to update not found')) {
+        logger.debug(`⚠️ [${this.config.symbol}] Failed to update position state: ${error.message}`);
+      }
     }
   }
   

@@ -1035,13 +1035,20 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // Get adaptive trailing params
         const { activation, distance } = calcAdaptiveTrailing(windowCandles);
 
-        // Check exits in priority order:
+        // V5.39 FIX: Check MAX_HOLD first (aligned with live shouldExitPosition)
+        // This ensures positions are closed at 48h regardless of other conditions
+        if (holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
+          shouldExit = true;
+          exitReason = 'TIME';
+          exitPrice = current.close;
+        }
+
+        // Check exits in priority order (skip if MAX_HOLD already triggered):
         // 0. REGIME CHANGE (NEW V5.13) - Exit if BTC regime flips
         // 0b. MOMENTUM REVERSAL (NEW V5.13) - Exit if momentum reverses
         // 1. Stop Loss (intrabar - check if wick hit stop)
         // 2. Take Profit (intrabar - check if wick hit TP)
         // 3. Trailing Stop (intrabar - if activated, check if wick hit trail)
-        // 4. Max Hold Time
 
         // ═══════════════════════════════════════════════════════════════════
         // 0. REGIME CHANGE EXIT (V5.13 with confirmation filters)
@@ -1188,8 +1195,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           }
         }
         
-        // Use tightened SL only if stagnant is CONFIRMED (not just triggered)
-        const isStagnantConfirmed = pos.stagnantState.confirmed && !pos.stagnantState.cancelled;
+        // V5.39 FIX: Align with live - only use tightened SL if stagnant confirmed AND trailing NOT active
+        // If trailing is active, the trailing stop is the primary exit mechanism (not SL)
+        // This prevents interference between stagnant SL and trailing stop
+        const trailingIsActiveNow = pos.trailingActive === true;
+        const isStagnantConfirmed = !trailingIsActiveNow && pos.stagnantState.confirmed && !pos.stagnantState.cancelled;
         const effectiveSlPct = isStagnantConfirmed ? stagnantTightenSlPct : pos.stopLossPct;
 
         // Only check SL/Trailing if regime change or momentum reversal didn't trigger
@@ -1320,12 +1330,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           }
         }
 
-        // Max hold time
-        if (!shouldExit && holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
-          shouldExit = true;
-          exitReason = 'TIME';
-          exitPrice = current.close;
-        }
+        // V5.39: Max hold time check moved to FIRST position (line ~1040) for alignment with live
 
         if (shouldExit) {
           const pnl = calculatePnl(
@@ -1452,8 +1457,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
         const isBullRegime = btcPriceForRegime > btcSma200;
 
-        // V5.36: Get BTC 1h window for MTF filter (find matching 1h candles up to current time)
-        const btcCandles1hWindow = btcCandles1h.filter(c => c.timestamp <= btcCandle.timestamp);
+        // V5.39 FIX: Get BTC 1h window for MTF filter - only CLOSED candles (aligned with live)
+        // Previously included candle in progress, which could cause look-ahead bias
+        const CANDLE_1H_INTERVAL_MS = 60 * 60 * 1000;
+        const btcCandles1hWindow = btcCandles1h.filter(c => c.timestamp + CANDLE_1H_INTERVAL_MS <= btcCandle.timestamp);
 
         // V5.36: Use shared checkMomentumSignal (includes MTF + BTC Vol filters)
         // This ensures 100% parity with production signal logic
