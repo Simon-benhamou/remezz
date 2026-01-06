@@ -243,7 +243,8 @@ export const MomentumConfig = {
 
   BTC_VOLATILITY_FILTER: {
     ENABLED: true,                    // V5.36: Enable BTC volatility filter
-    MIN_ATR_PCT: 1.5,                 // Minimum BTC ATR required (1.5%)
+    MIN_ATR_PCT: 0.15,                // V5.39 FIX: Adjusted for 15m timeframe (was 1.5% which blocked all trades)
+                                      // 15m ATR typically ranges 0.08%-0.6%, so 0.15% filters only dead markets
     ATR_PERIOD: 14,                   // 14-period ATR (standard)
     TIMEFRAME: '15m',                 // Use 15m BTC candles for ATR calculation
   },
@@ -820,7 +821,7 @@ export function checkBTCVolatility(btcCandles: any[]): boolean {
     return true;
   }
 
-  // Calculate BTC ATR
+  // Calculate BTC ATR (returns absolute value in $)
   const btcATR = calcATR(btcCandles, config.ATR_PERIOD);
 
   // Handle null case (fail safe: allow trade)
@@ -828,8 +829,15 @@ export function checkBTCVolatility(btcCandles: any[]): boolean {
     return true;
   }
 
+  // V5.39 FIX: Convert ATR to percentage for comparison with MIN_ATR_PCT
+  // calcATR returns absolute value (e.g., $450 for BTC)
+  // MIN_ATR_PCT is in % (e.g., 1.5%)
+  // Without this fix, the filter ALWAYS passed because $450 >> 1.5!
+  const btcPrice = btcCandles[btcCandles.length - 1].close;
+  const btcATRPct = btcPrice > 0 ? (btcATR / btcPrice) * 100 : 0;
+
   // Check if volatility meets minimum threshold
-  return btcATR >= config.MIN_ATR_PCT;
+  return btcATRPct >= config.MIN_ATR_PCT;
 }
 
 // Rate of Change (ROC)
@@ -1432,6 +1440,21 @@ export function shouldExitPosition(
     pnlPct = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
   } else {
     pnlPct = ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
+  }
+  
+  // ============================================================================
+  // V5.39 FIX: MAX HOLD TIME EXIT (aligned with backtest)
+  // Backtest has MAX_HOLD_BARS = 192 (48h in 15m bars) = 2880 minutes
+  // Live was MISSING this exit - positions could stay open indefinitely!
+  // ============================================================================
+  const MAX_HOLD_MINUTES = MomentumConfig.EXIT.HOLD_PERIOD_MAX_MIN ?? 2880; // 48h default
+  if (holdMinutes >= MAX_HOLD_MINUTES) {
+    return { 
+      shouldExit: true, 
+      reason: 'time', 
+      pnlPct, 
+      holdMinutes 
+    };
   }
   
   // ============================================================================
