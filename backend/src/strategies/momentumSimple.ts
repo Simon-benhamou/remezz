@@ -1475,12 +1475,20 @@ export function shouldExitPosition(
   const holdMinutes = (now - position.entryTime) / 60000;
   
   // ============================================================================
-  // V5.42 FIX: Skip exit checks if position opened AFTER the candle being checked
-  // This happens when entry occurs mid-candle and checkExit runs on the previous
-  // closed candle. We must NOT check SL/exit on candles before entry!
-  // Without this fix, the high/low of the pre-entry candle triggers false SL exits.
+  // V5.42 FIX: Skip exit checks if candle is BEFORE or AT entry time
+  // This happens when:
+  // 1. Entry occurs mid-candle and checkExit runs on the previous closed candle
+  // 2. Entry and candle have the same timestamp (holdMinutes = 0)
+  // 
+  // We must NOT check SL/exit using high/low of candles before/at entry because
+  // those price extremes occurred BEFORE the position existed!
+  // 
+  // The check is holdMinutes <= 0 (not just < 0) because:
+  // - holdMinutes < 0: candle is BEFORE entry (obvious skip)
+  // - holdMinutes = 0: candle is AT entry time - we shouldn't use its high/low
+  //   for SL check since entry happens at candle CLOSE, not at its high/low
   // ============================================================================
-  if (holdMinutes < 0) {
+  if (holdMinutes <= 0) {
     return { shouldExit: false };
   }
   

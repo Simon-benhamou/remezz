@@ -1974,7 +1974,9 @@ export class SimpleAgent {
         const order = result.order!;
         const filledPrice = order.average || order.price || currentPrice;
         const filledQty = order.filled || formattedQty;
-        const entryTimeMs = (order as any)?.timestamp ?? lastCandle.timestamp;
+        // V5.42 FIX: Use order timestamp, or Date.now() as fallback (NOT candle timestamp!)
+        // Using candle timestamp causes holdMinutes=0 which skips first exit check
+        const entryTimeMs = (order as any)?.timestamp ?? Date.now();
         
         const position: Position = {
           symbol,
