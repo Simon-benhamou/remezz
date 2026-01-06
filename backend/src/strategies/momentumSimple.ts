@@ -476,11 +476,11 @@ export interface Position {
   trailingBreachCandles?: number;  // V5.38: Count consecutive candles that breached trailing stop
   // V5.31: Smart Stagnant - observation window state machine
   stagnantState?: {
-    triggered: boolean;      // Has 60min passed without trailing activation?
-    triggeredAt?: number;    // Timestamp when triggered
-    confirmed: boolean;      // Has 150min passed without recovery?
-    cancelled: boolean;      // Did we see peak >= 0.4% during observation?
-    obsPeakPct: number;      // Max PnL % observed during 60-150min window
+    triggered: boolean;      // Has 45min passed without trailing activation?
+    triggeredAtMinutes?: number;  // V5.38 FIX: holdMinutes when triggered (not timestamp)
+    confirmed: boolean;      // Has observation window passed without recovery?
+    cancelled: boolean;      // Did we see peak >= recovery threshold during observation?
+    obsPeakPct: number;      // Max PnL % observed during observation window
   };
   // Emergency protection (exchange-side)
   emergencyStopPrice?: number;   // Wide emergency stop (catastrophe protection)
@@ -1573,7 +1573,7 @@ export function shouldExitPosition(
         holdMinutes >= stagnantTimeMinutes &&
         (position.maxPnlPct ?? 0) < stagnantMinProfitPct) {
       position.stagnantState.triggered = true;
-      position.stagnantState.triggeredAt = now;
+      position.stagnantState.triggeredAtMinutes = holdMinutes;  // V5.38 FIX: Use minutes like backtest
     }
     
     // Step 2: During observation window, track peak and check for recovery
@@ -1590,10 +1590,11 @@ export function shouldExitPosition(
         position.stagnantState.cancelled = true;
       }
       
-      // V5.38 FIX: End of observation window = triggeredAt + obsMinutes (not entry + total)
-      // This ensures the observation window is exactly stagnantObsMinutes long
-      const triggeredAt = position.stagnantState.triggeredAt ?? position.entryTime;
-      const obsElapsedMinutes = (now - triggeredAt) / 60000;
+      // V5.38 FIX: End of observation window = triggered time + obsMinutes
+      // Use holdMinutes-based approach like backtest for consistency
+      // Store triggeredAtMinutes when triggered, then check if obsElapsed >= obsMinutes
+      const triggeredAtMinutes = position.stagnantState.triggeredAtMinutes ?? stagnantTimeMinutes;
+      const obsElapsedMinutes = holdMinutes - triggeredAtMinutes;
       if (obsElapsedMinutes >= stagnantObsMinutes && !position.stagnantState.cancelled) {
         position.stagnantState.confirmed = true;
         
@@ -1644,7 +1645,10 @@ export function shouldExitPosition(
   }
   
   // ============================================================================
-  // V5.38: CHECK TRAILING (only if SL not hit) - uses CLOSE for 2-candle confirm
+  // V5.38 FIX: CHECK TRAILING (aligned with backtest)
+  // - Check WICK first (like backtest does)
+  // - Only then check CLOSE for 2-candle confirmation
+  // - Return trailingBreachReset=true when wick hit but close didn't breach
   // ============================================================================
   if (trailingIsActive) {
     let trailingDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
@@ -1663,21 +1667,39 @@ export function shouldExitPosition(
       
       trailingStopPrice = highWaterMark * (1 - trailingDistance / 100);
       
-      // V5.38: Check CLOSE for trailing confirmation (2-candle rule)
-      const closeBreached = currentPrice <= trailingStopPrice;
+      // V5.38 FIX: Check WICK first (like backtest)
+      const wickBreached = effectiveLow <= trailingStopPrice;
       
-      if (closeBreached) {
-        return { 
-          shouldExit: false,  // Caller handles 2-close confirmation
-          reason: 'trailing_breach', 
-          pnlPct, 
-          holdMinutes,
-          newStopLoss: trailingStopPrice,
-          trailingActivated: true,
-          trailingBreached: true
-        };
+      if (wickBreached) {
+        // Wick touched the stop - now check if CLOSE also breached
+        const closeBreached = currentPrice <= trailingStopPrice;
+        
+        if (closeBreached) {
+          // Both wick AND close breached - signal for 2-candle confirmation
+          return { 
+            shouldExit: false,  // Caller handles 2-close confirmation
+            reason: 'trailing_breach', 
+            pnlPct, 
+            holdMinutes,
+            newStopLoss: trailingStopPrice,
+            trailingActivated: true,
+            trailingBreached: true
+          };
+        } else {
+          // Wick hit but close recovered - reset breach counter (like backtest)
+          return { 
+            shouldExit: false, 
+            reason: 'none', 
+            pnlPct, 
+            holdMinutes,
+            newStopLoss: trailingStopPrice,
+            trailingActivated: true,
+            trailingBreached: false  // Explicit false = reset counter
+          };
+        }
       }
       
+      // No wick breach - trailing active but not triggered
       return { 
         shouldExit: false, 
         reason: 'none', 
@@ -1694,20 +1716,39 @@ export function shouldExitPosition(
       
       trailingStopPrice = lowWaterMark * (1 + trailingDistance / 100);
       
-      const closeBreached = currentPrice >= trailingStopPrice;
+      // V5.38 FIX: Check WICK first (like backtest)
+      const wickBreached = effectiveHigh >= trailingStopPrice;
       
-      if (closeBreached) {
-        return { 
-          shouldExit: false,
-          reason: 'trailing_breach', 
-          pnlPct, 
-          holdMinutes,
-          newStopLoss: trailingStopPrice,
-          trailingActivated: true,
-          trailingBreached: true
-        };
+      if (wickBreached) {
+        // Wick touched the stop - now check if CLOSE also breached
+        const closeBreached = currentPrice >= trailingStopPrice;
+        
+        if (closeBreached) {
+          // Both wick AND close breached - signal for 2-candle confirmation
+          return { 
+            shouldExit: false,
+            reason: 'trailing_breach', 
+            pnlPct, 
+            holdMinutes,
+            newStopLoss: trailingStopPrice,
+            trailingActivated: true,
+            trailingBreached: true
+          };
+        } else {
+          // Wick hit but close recovered - reset breach counter (like backtest)
+          return { 
+            shouldExit: false, 
+            reason: 'none', 
+            pnlPct, 
+            holdMinutes,
+            newStopLoss: trailingStopPrice,
+            trailingActivated: true,
+            trailingBreached: false  // Explicit false = reset counter
+          };
+        }
       }
       
+      // No wick breach - trailing active but not triggered
       return { 
         shouldExit: false, 
         reason: 'none', 
