@@ -2307,7 +2307,7 @@ export class SimpleAgent {
       // Requires 2 consecutive 15m candle closes beyond trailing stop to exit
       // This filters out single-candle fakeouts and lets winners run longer
       // ════════════════════════════════════════════════════════════════════════
-      if (exitSignal.trailingBreached) {
+      if (exitSignal.trailingBreached === true) {
         // Initialize breach counter if needed
         if (!this.position!.trailingBreachCandles) {
           this.position!.trailingBreachCandles = 0;
@@ -2326,8 +2326,16 @@ export class SimpleAgent {
           // First breach - wait for confirmation
           logger.warn(`⚠️ [${symbol}] TRAILING BREACH ${breachCount}/${REQUIRED_CONFIRMATIONS} | price=$${currentPrice.toFixed(4)} | trail=$${exitSignal.newStopLoss?.toFixed(4)} | Waiting for confirmation...`);
         }
+      } else if (exitSignal.trailingBreached === false) {
+        // V5.39 FIX: Explicit reset when trailingBreached is false (wick hit but close recovered)
+        // This matches backtest behavior - breach counter resets when close recovers above stop
+        if (this.position!.trailingBreachCandles && this.position!.trailingBreachCandles > 0) {
+          logger.info(`✅ [${symbol}] Trailing breach CLEARED - wick hit but close recovered above stop`);
+        }
+        this.position!.trailingBreachCandles = 0;
       } else if (exitSignal.trailingActivated) {
-        // No breach this candle - reset counter
+        // trailingBreached is undefined - no wick breach at all, just trailing active
+        // Also reset counter to be safe
         if (this.position!.trailingBreachCandles && this.position!.trailingBreachCandles > 0) {
           logger.info(`✅ [${symbol}] Trailing breach CLEARED - price recovered above stop`);
         }
