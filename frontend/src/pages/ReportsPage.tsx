@@ -2,9 +2,12 @@ import React from 'react';
 import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message, Tabs, Tag, InputNumber, Tooltip } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+
+dayjs.extend(relativeTime);
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;

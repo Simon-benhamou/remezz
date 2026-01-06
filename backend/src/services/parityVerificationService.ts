@@ -6,11 +6,10 @@
  * or can be triggered manually via API.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../db/client.js';
 import { runBacktest, type BacktestResult } from './backtestService.js';
 import { createLogger } from '../utils/logger.js';
 
-const prisma = new PrismaClient();
 const logger = createLogger('parity');
 
 // ============================================================================
@@ -131,7 +130,9 @@ function findMatchingBacktestTrade(
     if (btSide !== liveSide) continue;
 
     // Check entry time is in same 15m candle
-    if (isSameCandle(liveTrade.entryTs, btTrade.entryTime)) {
+    // btTrade.entryTime is a string (ISO date) from backtest result
+    const btEntryTime = new Date(btTrade.entryTime);
+    if (isSameCandle(liveTrade.entryTs, btEntryTime)) {
       return btTrade;
     }
   }
