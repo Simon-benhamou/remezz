@@ -1740,12 +1740,15 @@ export class SimpleAgent {
     
     if (this.config.mode === 'paper') {
       // Paper trade
+      // V5.42 FIX: Use Date.now() for entryTime, not candle timestamp
+      // This ensures holdMinutes is calculated correctly and we don't check
+      // SL/exit on candles that closed BEFORE the position was opened
       const position: Position = {
         symbol,
         side,
         entryPrice: currentPrice,
         qty: sizing.qty,
-        entryTime: lastCandle.timestamp,
+        entryTime: Date.now(),
         leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
         marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
         stopLoss: side === 'long' 
@@ -1826,6 +1829,12 @@ export class SimpleAgent {
       await this.savePositionToDb(position, 'paper_entry', paperEntryFee);
       
       logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=${slPct.toFixed(2)}% ($${position.stopLoss?.toFixed(4)})`);
+      
+      // V5.42 FIX: Mark current candle as processed to prevent checkExit() from
+      // checking exit conditions on the same candle where we just entered.
+      // Without this, checkExit() would use the high/low of the entry candle
+      // which could trigger false SL exits.
+      this.lastProcessedExitCandleTs = lastCandle.timestamp;
       
       // 📢 Send Telegram notification for paper entry
       void notifyPositionOpened({
@@ -2130,6 +2139,10 @@ export class SimpleAgent {
         }
         
         logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
+        
+        // V5.42 FIX: Mark current candle as processed to prevent checkExit() from
+        // checking exit conditions on the same candle where we just entered.
+        this.lastProcessedExitCandleTs = lastCandle.timestamp;
         
         // 📢 Send Telegram notification for live entry avec détails complets
         void notifyPositionOpened({
