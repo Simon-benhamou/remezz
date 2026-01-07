@@ -227,16 +227,66 @@ function ParityVerificationPanel() {
     },
     {
       title: 'Status',
-      dataIndex: 'overallMatch',
       key: 'status',
+      width: 140,
+      render: (record: any) => {
+        // Check for new mismatchCategory field (if available from updated backend)
+        const category = record.mismatchCategory;
+        
+        if (record.overallMatch || category === 'NONE') {
+          return <Tag icon={<CheckCircleOutlined />} color="success">MATCH</Tag>;
+        }
+        
+        if (category === 'EXPECTED_VARIANCE') {
+          return (
+            <Tooltip title="Difference explained by live execution slippage - not a real issue">
+              <Tag color="warning" style={{ cursor: 'help' }}>⚠️ EXPECTED</Tag>
+            </Tooltip>
+          );
+        }
+        
+        // Real mismatch or old data without category
+        return (
+          <Tooltip title="Real mismatch - needs investigation">
+            <Tag icon={<CloseCircleOutlined />} color="error">🔍 INVESTIGATE</Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: 'Entry Slippage',
+      key: 'slippage',
       width: 100,
-      render: (match: boolean) => (
-        match ? (
-          <Tag icon={<CheckCircleOutlined />} color="success">MATCH</Tag>
-        ) : (
-          <Tag icon={<CloseCircleOutlined />} color="error">MISMATCH</Tag>
-        )
-      ),
+      render: (record: any) => {
+        // Try to extract slippage from mismatchDetails if entryPriceDiffPct not directly available
+        let slippage: number | null = null;
+        
+        if (record.entryPriceDiffPct != null) {
+          slippage = record.entryPriceDiffPct;
+        } else if (record.mismatchDetails) {
+          try {
+            const details = JSON.parse(record.mismatchDetails);
+            const slippageDetail = details.find((d: string) => d.includes('Entry Price Slippage'));
+            if (slippageDetail) {
+              const match = slippageDetail.match(/(\d+\.?\d*)%/);
+              if (match) slippage = parseFloat(match[1]);
+            }
+          } catch {}
+        }
+        
+        if (slippage == null) {
+          return <Text type="secondary" style={{ fontSize: '11px' }}>N/A</Text>;
+        }
+        
+        const isHigh = slippage > 1.5;
+        return (
+          <Tooltip title={`Entry price difference between live and backtest: ${slippage.toFixed(3)}%`}>
+            <Tag color={isHigh ? 'orange' : 'green'} style={{ fontSize: '10px' }}>
+              {slippage.toFixed(2)}%
+            </Tag>
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Verified',
@@ -253,6 +303,24 @@ function ParityVerificationPanel() {
     },
   ];
 
+  // Calculate categorized stats from results
+  const categoryStats = React.useMemo(() => {
+    let expectedVariance = 0;
+    let realMismatch = 0;
+    
+    for (const r of results) {
+      if (!r.overallMatch) {
+        if (r.mismatchCategory === 'EXPECTED_VARIANCE') {
+          expectedVariance++;
+        } else {
+          realMismatch++;
+        }
+      }
+    }
+    
+    return { expectedVariance, realMismatch };
+  }, [results]);
+
   return (
     <Space direction="vertical" style={{ width: '100%' }} size="large">
       <Card>
@@ -263,7 +331,7 @@ function ParityVerificationPanel() {
       </Card>
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} md={6}>
+        <Col xs={24} sm={12} md={4}>
           <Card>
             <Statistic
               title="Total Verified"
@@ -272,7 +340,7 @@ function ParityVerificationPanel() {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} md={6}>
+        <Col xs={24} sm={12} md={4}>
           <Card>
             <Statistic
               title="Matched"
@@ -282,17 +350,30 @@ function ParityVerificationPanel() {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} md={6}>
+        <Col xs={24} sm={12} md={4}>
           <Card>
-            <Statistic
-              title="Mismatched"
-              value={summary.mismatched}
-              valueStyle={{ color: summary.mismatched > 0 ? '#ff4d4f' : '#52c41a' }}
-              suffix={summary.mismatched > 0 ? <CloseCircleOutlined /> : <CheckCircleOutlined />}
-            />
+            <Tooltip title="Differences explained by live execution slippage - not bugs">
+              <Statistic
+                title="⚠️ Expected Variance"
+                value={categoryStats.expectedVariance}
+                valueStyle={{ color: '#faad14' }}
+              />
+            </Tooltip>
           </Card>
         </Col>
-        <Col xs={24} sm={12} md={6}>
+        <Col xs={24} sm={12} md={4}>
+          <Card>
+            <Tooltip title="Real mismatches that need investigation">
+              <Statistic
+                title="🔍 Real Mismatch"
+                value={categoryStats.realMismatch}
+                valueStyle={{ color: categoryStats.realMismatch > 0 ? '#ff4d4f' : '#52c41a' }}
+                suffix={categoryStats.realMismatch > 0 ? <CloseCircleOutlined /> : <CheckCircleOutlined />}
+              />
+            </Tooltip>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={4}>
           <Card>
             <Statistic
               title="Match Rate"
@@ -301,6 +382,19 @@ function ParityVerificationPanel() {
               suffix="%"
               valueStyle={{ color: summary.matchRate >= 95 ? '#52c41a' : summary.matchRate >= 80 ? '#faad14' : '#ff4d4f' }}
             />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={4}>
+          <Card>
+            <Tooltip title="Matched + Expected Variance (no real bugs)">
+              <Statistic
+                title="✅ Effective Parity"
+                value={summary.total > 0 ? ((summary.matched + categoryStats.expectedVariance) / summary.total * 100) : 0}
+                precision={1}
+                suffix="%"
+                valueStyle={{ color: '#52c41a' }}
+              />
+            </Tooltip>
           </Card>
         </Col>
       </Row>

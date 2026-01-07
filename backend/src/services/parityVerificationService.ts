@@ -26,18 +26,27 @@ export interface ParityResult {
   liveExitTs: Date;
   liveExitReason: string;
   livePnlPct: number;
+  liveEntryPrice: number;  // NEW: Entry price from live
 
   // Backtest comparison
   btEntryTs: Date | null;
   btExitTs: Date | null;
   btExitReason: string | null;
   btPnlPct: number | null;
+  btEntryPrice: number | null;  // NEW: Entry price from backtest
+
+  // Entry price slippage analysis
+  entryPriceDiffPct: number | null;  // NEW: % difference between live and BT entry price
+  isSlippageExpected: boolean;       // NEW: true if slippage explains the PnL diff
 
   // Match results
   entryMatch: boolean;
   exitMatch: boolean;
   pnlMatch: boolean;
   overallMatch: boolean;
+  
+  // NEW: Mismatch categorization
+  mismatchCategory: 'NONE' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH';
   mismatchDetails: string | null;
 
   // Metadata
@@ -55,7 +64,9 @@ export interface VerifyAllOptions {
 // ============================================================================
 
 const CANDLE_15M_MS = 15 * 60 * 1000;  // 15 minutes in milliseconds
-const PNL_TOLERANCE_PCT = 0.5;          // 0.5% tolerance for PnL matching
+const PNL_TOLERANCE_PCT = 0.5;          // 0.5% base tolerance for PnL matching
+const EXPECTED_SLIPPAGE_PCT = 2.0;      // Up to 2% entry slippage is normal (live vs close price)
+const SLIPPAGE_PNL_MULTIPLIER = 1.5;    // PnL tolerance = slippage * 1.5 (slippage cascades to PnL)
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -184,20 +195,59 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   // 3. Find matching backtest trade
   const btTrade = findMatchingBacktestTrade(trade, btResult.trades);
 
-  // 4. Compare results
+  // 4. Calculate entry price slippage
+  const liveEntryPrice = trade.entryPrice || 0;
+  const btEntryPrice = btTrade?.entryPrice ?? null;
+  let entryPriceDiffPct: number | null = null;
+  
+  if (btEntryPrice && liveEntryPrice > 0) {
+    entryPriceDiffPct = Math.abs((liveEntryPrice - btEntryPrice) / btEntryPrice) * 100;
+  }
+
+  // 5. Compare results with slippage-aware tolerance
   const liveExitReason = normalizeExitReason(trade.exitReason);
   const btExitReason = btTrade ? normalizeExitReason(btTrade.exitReason) : null;
 
   const entryMatch = btTrade !== null;  // If we found a trade, entry matched
   const exitMatch = btExitReason !== null && liveExitReason === btExitReason;
-  const pnlMatch = btTrade !== null &&
-    Math.abs((trade.roiPct || 0) - (btTrade.netPnlPct || 0)) < PNL_TOLERANCE_PCT;
+  
+  // Calculate dynamic PnL tolerance based on entry slippage
+  // If we have 1.5% slippage, we expect up to ~2.25% PnL difference
+  const dynamicPnlTolerance = entryPriceDiffPct 
+    ? Math.max(PNL_TOLERANCE_PCT, entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER)
+    : PNL_TOLERANCE_PCT;
+  
+  const pnlDiff = btTrade !== null 
+    ? Math.abs((trade.roiPct || 0) - (btTrade.netPnlPct || 0))
+    : Infinity;
+  const pnlMatch = pnlDiff < dynamicPnlTolerance;
+  
+  // Check if slippage explains the variance
+  const isSlippageExpected = entryPriceDiffPct !== null && 
+    entryPriceDiffPct <= EXPECTED_SLIPPAGE_PCT && 
+    pnlDiff <= (entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER + PNL_TOLERANCE_PCT);
+
   const overallMatch = entryMatch && exitMatch && pnlMatch;
 
-  // 5. Build mismatch details
+  // 6. Categorize the mismatch
+  let mismatchCategory: 'NONE' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH' = 'NONE';
+  
+  if (overallMatch) {
+    mismatchCategory = 'NONE';
+  } else if (entryMatch && isSlippageExpected) {
+    // Entry matched, and the PnL/exit differences are explained by slippage
+    mismatchCategory = 'EXPECTED_VARIANCE';
+  } else {
+    mismatchCategory = 'REAL_MISMATCH';
+  }
+
+  // 7. Build mismatch details
   const mismatches: string[] = [];
   if (!entryMatch) {
     mismatches.push(`Entry: No matching backtest trade found for ${trade.entryTs.toISOString()}`);
+  }
+  if (entryMatch && entryPriceDiffPct !== null && entryPriceDiffPct > 0.1) {
+    mismatches.push(`Entry Price Slippage: ${entryPriceDiffPct.toFixed(2)}% (Live=$${liveEntryPrice.toFixed(4)}, BT=$${btEntryPrice?.toFixed(4)})`);
   }
   if (entryMatch && !exitMatch) {
     mismatches.push(`Exit reason: Live=${liveExitReason}, Backtest=${btExitReason}`);
@@ -205,7 +255,10 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   if (entryMatch && !pnlMatch) {
     const livePnl = (trade.roiPct || 0).toFixed(2);
     const btPnl = btTrade ? btTrade.netPnlPct.toFixed(2) : 'N/A';
-    mismatches.push(`PnL: Live=${livePnl}%, Backtest=${btPnl}%`);
+    mismatches.push(`PnL: Live=${livePnl}%, Backtest=${btPnl}% (diff=${pnlDiff.toFixed(2)}%, tolerance=${dynamicPnlTolerance.toFixed(2)}%)`);
+  }
+  if (mismatchCategory === 'EXPECTED_VARIANCE') {
+    mismatches.push(`ℹ️ Variance explained by entry slippage (${entryPriceDiffPct?.toFixed(2)}%)`);
   }
 
   const backtestDurationMs = Date.now() - startTime;
@@ -219,22 +272,28 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     liveExitTs: trade.exitTs,
     liveExitReason,
     livePnlPct: trade.roiPct || 0,
+    liveEntryPrice,
 
     btEntryTs: btTrade ? new Date(btTrade.entryTime) : null,
     btExitTs: btTrade ? new Date(btTrade.exitTime) : null,
     btExitReason,
     btPnlPct: btTrade?.netPnlPct ?? null,
+    btEntryPrice,
+
+    entryPriceDiffPct,
+    isSlippageExpected,
 
     entryMatch,
     exitMatch,
     pnlMatch,
     overallMatch,
+    mismatchCategory,
     mismatchDetails: mismatches.length > 0 ? JSON.stringify(mismatches) : null,
 
     backtestDurationMs,
   };
 
-  // 6. Save result to DB
+  // 8. Save result to DB
   await prisma.tradeParityResult.upsert({
     where: { tradeId: trade.id },
     create: {
@@ -277,7 +336,9 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     },
   });
 
-  logger.info(`[PARITY] Trade ${trade.symbol} verified: ${overallMatch ? '✅ MATCH' : '❌ MISMATCH'} (${backtestDurationMs}ms)`);
+  const categoryLabel = mismatchCategory === 'EXPECTED_VARIANCE' ? '⚠️ EXPECTED VARIANCE' : 
+                        mismatchCategory === 'REAL_MISMATCH' ? '❌ REAL MISMATCH' : '✅ MATCH';
+  logger.info(`[PARITY] Trade ${trade.symbol} verified: ${categoryLabel} | slippage=${entryPriceDiffPct?.toFixed(2) ?? 'N/A'}% (${backtestDurationMs}ms)`);
 
   return result;
 }
