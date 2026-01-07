@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm install --no-audit --no-fund
 # IMPORTANT: déclarer l'ARG pour l'injecter au build
 ARG VITE_API_BASE
 ENV VITE_API_BASE=${VITE_API_BASE}
