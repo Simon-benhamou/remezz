@@ -89,6 +89,29 @@ function isSameCandle(ts1: Date | number, ts2: Date | number | null | undefined)
 }
 
 /**
+ * Check if two timestamps are within 1 candle of each other (±15 minutes)
+ * 
+ * This is needed because:
+ * - Backtest: enters at the CLOSE of a candle when signal is detected
+ * - Live: detects signal at CLOSE, but order executes on the NEXT candle
+ * 
+ * So a 1-candle offset is expected and normal.
+ */
+function isWithinOneCandle(ts1: Date | number, ts2: Date | number | null | undefined): boolean {
+  if (!ts2) return false;
+
+  const t1 = typeof ts1 === 'number' ? ts1 : ts1.getTime();
+  const t2 = typeof ts2 === 'number' ? ts2 : ts2.getTime();
+
+  // Round down to nearest 15-minute boundary
+  const candle1 = Math.floor(t1 / CANDLE_15M_MS);
+  const candle2 = Math.floor(t2 / CANDLE_15M_MS);
+
+  // Allow ±1 candle difference
+  return Math.abs(candle1 - candle2) <= 1;
+}
+
+/**
  * Normalize exit reason for comparison
  * DB and backtest may use slightly different formats
  */
@@ -120,7 +143,11 @@ function normalizeExitReason(reason: string | null | undefined): string {
 
 /**
  * Find a matching backtest trade for a live trade
- * Match by: same symbol, same side, same entry candle
+ * Match by: same symbol, same side, entry within ±1 candle
+ * 
+ * Note: We allow ±1 candle tolerance because:
+ * - Backtest enters at candle CLOSE when signal detected
+ * - Live enters on the NEXT candle after signal confirmation
  */
 function findMatchingBacktestTrade(
   liveTrade: { symbol: string; positionSide: string; entryTs: Date },
@@ -140,10 +167,11 @@ function findMatchingBacktestTrade(
     if (btSymbol !== liveSymbol) continue;
     if (btSide !== liveSide) continue;
 
-    // Check entry time is in same 15m candle
-    // btTrade.entryTime is a string (ISO date) from backtest result
+    // Check entry time is within 1 candle (±15 minutes)
+    // This handles the expected offset between backtest (enters at close)
+    // and live (enters on next candle)
     const btEntryTime = new Date(btTrade.entryTime);
-    if (isSameCandle(liveTrade.entryTs, btEntryTime)) {
+    if (isWithinOneCandle(liveTrade.entryTs, btEntryTime)) {
       return btTrade;
     }
   }
