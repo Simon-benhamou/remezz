@@ -243,21 +243,26 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   const entryMatch = btTrade !== null;  // If we found a trade, entry matched
   const exitMatch = btExitReason !== null && liveExitReason === btExitReason;
   
+  // Calculate live PnL as ROE (leveraged) to match backtest's netPnlPct calculation
+  // trade.roiPct is the price movement %, we need to multiply by leverage for ROE
+  const liveLeverage = trade.leverage || 5;
+  const liveRoePct = (trade.roiPct || 0) * liveLeverage;
+  
   // Calculate dynamic PnL tolerance based on entry slippage
-  // If we have 1.5% slippage, we expect up to ~2.25% PnL difference
+  // If we have 1.5% slippage, we expect up to ~2.25% PnL difference (on ROE)
   const dynamicPnlTolerance = entryPriceDiffPct 
-    ? Math.max(PNL_TOLERANCE_PCT, entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER)
-    : PNL_TOLERANCE_PCT;
+    ? Math.max(PNL_TOLERANCE_PCT * liveLeverage, entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER * liveLeverage)
+    : PNL_TOLERANCE_PCT * liveLeverage;
   
   const pnlDiff = btTrade !== null 
-    ? Math.abs((trade.roiPct || 0) - (btTrade.netPnlPct || 0))
+    ? Math.abs(liveRoePct - (btTrade.netPnlPct || 0))
     : Infinity;
   const pnlMatch = pnlDiff < dynamicPnlTolerance;
   
   // Check if slippage explains the variance
   const isSlippageExpected = entryPriceDiffPct !== null && 
     entryPriceDiffPct <= EXPECTED_SLIPPAGE_PCT && 
-    pnlDiff <= (entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER + PNL_TOLERANCE_PCT);
+    pnlDiff <= (entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER * liveLeverage + PNL_TOLERANCE_PCT * liveLeverage);
 
   const overallMatch = entryMatch && exitMatch && pnlMatch;
 
@@ -285,7 +290,7 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     mismatches.push(`Exit reason: Live=${liveExitReason}, Backtest=${btExitReason}`);
   }
   if (entryMatch && !pnlMatch) {
-    const livePnl = (trade.roiPct || 0).toFixed(2);
+    const livePnl = liveRoePct.toFixed(2);
     const btPnl = btTrade ? btTrade.netPnlPct.toFixed(2) : 'N/A';
     mismatches.push(`PnL: Live=${livePnl}%, Backtest=${btPnl}% (diff=${pnlDiff.toFixed(2)}%, tolerance=${dynamicPnlTolerance.toFixed(2)}%)`);
   }
@@ -303,7 +308,7 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     liveEntryTs: trade.entryTs,
     liveExitTs: trade.exitTs,
     liveExitReason,
-    livePnlPct: trade.roiPct || 0,
+    livePnlPct: liveRoePct,  // Use leveraged ROE to match backtest
     liveEntryPrice,
 
     btEntryTs: btTrade ? new Date(btTrade.entryTime) : null,
