@@ -173,9 +173,13 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
 
   logger.info(`[PARITY] Verifying trade ${trade.symbol} ${trade.positionSide} @ ${trade.entryTs.toISOString()}`);
 
+  // Note: Historical JSON data ends around 2025-12-27, but the backtest service
+  // automatically fetches missing data from Binance REST API, so we don't need
+  // to block verification for recent trades.
+
   // 2. Run backtest for the trade's time period
-  // We need a buffer before entry (to warm up indicators) and after exit
-  const btStartDate = new Date(trade.entryTs.getTime() - 24 * 60 * 60 * 1000);  // 1 day before
+  // We need a buffer before entry (to warm up indicators: 200 bars × 15min = 50 hours = ~3 days)
+  const btStartDate = new Date(trade.entryTs.getTime() - 3 * 24 * 60 * 60 * 1000);  // 3 days before (for 200-bar SMA)
   const btEndDate = new Date(trade.exitTs.getTime() + 2 * 60 * 60 * 1000);      // 2 hours after
 
   let btResult: BacktestResult;
