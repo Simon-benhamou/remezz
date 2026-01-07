@@ -101,6 +101,19 @@ function ParityVerificationPanel() {
     return c1 === c2;
   };
 
+  // Helper to check if times are within ±1 candle (15 minutes)
+  // This is the acceptable tolerance because:
+  // - Backtest enters at candle CLOSE (e.g., 14:15:00)
+  // - Live enters when order executes (e.g., 14:30:14) - on the NEXT candle
+  // So a 1-candle difference is expected and normal
+  const isWithinOneCandle = (ts1: string | null, ts2: string | null): boolean => {
+    if (!ts1 || !ts2) return false;
+    const CANDLE_MS = 15 * 60 * 1000;
+    const c1 = Math.floor(dayjs(ts1).valueOf() / CANDLE_MS);
+    const c2 = Math.floor(dayjs(ts2).valueOf() / CANDLE_MS);
+    return Math.abs(c1 - c2) <= 1;
+  };
+
   const PNL_TOLERANCE = 0.5; // 0.5% tolerance
 
   const columns = [
@@ -123,6 +136,7 @@ function ParityVerificationPanel() {
       key: 'entryTime',
       width: 180,
       render: (record: any) => {
+        const withinOneCandle = isWithinOneCandle(record.liveEntryTs, record.btEntryTs);
         const sameCandle = isSameCandle(record.liveEntryTs, record.btEntryTs);
         const diff = getTimeDiffMinutes(record.liveEntryTs, record.btEntryTs);
         return (
@@ -138,6 +152,8 @@ function ParityVerificationPanel() {
             <Space size={4}>
               {sameCandle ? (
                 <Tag color="green" style={{ fontSize: '10px' }}>Same candle</Tag>
+              ) : withinOneCandle ? (
+                <Tag color="green" style={{ fontSize: '10px' }}>Δ {diff} ✓</Tag>
               ) : record.btEntryTs ? (
                 <Tag color="orange" style={{ fontSize: '10px' }}>Δ {diff}</Tag>
               ) : (
@@ -153,6 +169,7 @@ function ParityVerificationPanel() {
       key: 'exitTime',
       width: 180,
       render: (record: any) => {
+        const withinOneCandle = isWithinOneCandle(record.liveExitTs, record.btExitTs);
         const sameCandle = isSameCandle(record.liveExitTs, record.btExitTs);
         const diff = getTimeDiffMinutes(record.liveExitTs, record.btExitTs);
         return (
@@ -168,6 +185,8 @@ function ParityVerificationPanel() {
             <Space size={4}>
               {sameCandle ? (
                 <Tag color="green" style={{ fontSize: '10px' }}>Same candle</Tag>
+              ) : withinOneCandle ? (
+                <Tag color="green" style={{ fontSize: '10px' }}>Δ {diff} ✓</Tag>
               ) : record.btExitTs ? (
                 <Tag color="orange" style={{ fontSize: '10px' }}>Δ {diff}</Tag>
               ) : (
@@ -514,10 +533,10 @@ function ParityVerificationPanel() {
                           </Row>
                           <div style={{ marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
                             <Space>
-                              <Tag color={isSameCandle(record.liveEntryTs, record.btEntryTs) ? 'green' : 'orange'}>
+                              <Tag color={isWithinOneCandle(record.liveEntryTs, record.btEntryTs) ? 'green' : 'orange'}>
                                 Entry Δ: {entryDiff}
                               </Tag>
-                              <Tag color={isSameCandle(record.liveExitTs, record.btExitTs) ? 'green' : 'orange'}>
+                              <Tag color={isWithinOneCandle(record.liveExitTs, record.btExitTs) ? 'green' : 'orange'}>
                                 Exit Δ: {exitDiff}
                               </Tag>
                             </Space>
