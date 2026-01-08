@@ -557,6 +557,7 @@ export class SimpleAgent {
   
   private running = false;
   private tickIntervalId: NodeJS.Timeout | null = null;
+  private tickAlignTimeoutId: NodeJS.Timeout | null = null; // V5.39: For synchronized tick alignment
 
   // Realtime app-side exits (WS-based) to react faster than 15m candle-close.
   private realtimeExitIntervalId: NodeJS.Timeout | null = null;
@@ -742,16 +743,46 @@ export class SimpleAgent {
     // Live mode: if we start with an existing position, enable realtime WS-based exits.
     this.startRealtimeExitMonitorIfNeeded();
     
-    // V5.13: Reduced tick interval from 60s to 15s for faster signal detection
-    // This ensures we check for new closed 15m candles within ~15-30s instead of up to 60s
-    this.tickIntervalId = setInterval(() => this.tick(), 15_000); // 15 seconds
+    // V5.39: SYNCHRONIZED TICK - All agents tick at the same wall-clock times
+    // This ensures all agents detect new candles simultaneously, so signals
+    // arrive in the same batch window for the signal ranker.
+    // 
+    // Strategy: Align to 15-second boundaries (:00, :15, :30, :45 of each minute)
+    // All agents will tick at exactly the same moments regardless of when they started.
+    const TICK_INTERVAL_MS = 15_000;
+    const now = Date.now();
+    const nextBoundary = Math.ceil(now / TICK_INTERVAL_MS) * TICK_INTERVAL_MS;
+    const delayToNextBoundary = nextBoundary - now;
     
-    // Premier tick immédiat
+    // V5.39: Add small jitter (0-500ms) to spread load across many agents
+    // This prevents CPU/DB spikes when 1000+ agents tick at exact same moment
+    // 500ms jitter is small enough that all agents still process the same candle
+    // but large enough to spread the load smoothly
+    const jitterMs = Math.floor(Math.random() * 500);
+    
+    // Premier tick immédiat pour initialiser l'état
     await this.tick();
+    
+    // Démarrer l'interval ALIGNÉ sur la prochaine borne de 15 secondes + jitter
+    // Agents tickeront ensemble (±500ms): 12:00:00-12:00:00.5, 12:00:15-12:00:15.5, etc.
+    this.tickAlignTimeoutId = setTimeout(() => {
+      this.tickAlignTimeoutId = null;
+      if (!this.running) return;
+      void this.tick();
+      this.tickIntervalId = setInterval(() => this.tick(), TICK_INTERVAL_MS);
+    }, delayToNextBoundary + jitterMs);
+    
+    logger.debug(`⏱️ [${this.config.symbol}] Tick synchronized to next ${TICK_INTERVAL_MS/1000}s boundary in ${delayToNextBoundary}ms (+${jitterMs}ms jitter)`);
   }
   
   async stop(): Promise<void> {
     this.running = false;
+    
+    // V5.39: Clear alignment timeout if still pending
+    if (this.tickAlignTimeoutId) {
+      clearTimeout(this.tickAlignTimeoutId);
+      this.tickAlignTimeoutId = null;
+    }
     
     if (this.tickIntervalId) {
       clearInterval(this.tickIntervalId);
