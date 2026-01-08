@@ -695,8 +695,8 @@ app.post("/api/agent/start", async (req, res) => {
     // Store and start all agents (keyed by userId_mode)
     userAgents.set(agentKey, { agents, capitalPool, mode: mode as 'paper' | 'live' });
     
+    // Configure tick broadcast callback for all agents first
     for (const agent of agents) {
-      // Configure tick broadcast callback
       agent.setOnTick((tick) => {
         broadcast('tick', {
           sessionId: agent.getStatus().sessionId,
@@ -710,8 +710,13 @@ app.post("/api/agent/start", async (req, res) => {
           timestamp: tick.timestamp.toISOString(),
         }, tick.symbol);
       });
-      await agent.start();
     }
+    
+    // V5.39: Start ALL agents in PARALLEL for synchronized signal detection
+    // This ensures Paper and Live agents receive signals at the same time
+    // Safe because: 1) WebSocket-only for candles (0 REST), 2) API deduplicator coalesces REST calls
+    // 3) Global circuit breaker protects against cascades
+    await Promise.all(agents.map(agent => agent.start()));
     
     logger.info(`✅ Started ${agents.length} agents for ${userId} with $${actualCapital.toFixed(2)} capital (${mode})`);
     res.status(201).json({ 
@@ -2364,7 +2369,7 @@ app.post("/api/agent/restart", async (req, res) => {
     
     userAgents.set(agentKey, { agents, capitalPool, mode: modeTyped });
     
-    // 6. Configure and start each agent
+    // 6. Configure tick broadcast for all agents
     for (const agent of agents) {
       agent.setOnTick((tick) => {
         broadcast('tick', {
@@ -2379,9 +2384,10 @@ app.post("/api/agent/restart", async (req, res) => {
           timestamp: tick.timestamp.toISOString(),
         }, tick.symbol);
       });
-      
-      await agent.start();
     }
+    
+    // V5.39: Start ALL agents in PARALLEL for synchronized signal detection
+    await Promise.all(agents.map(agent => agent.start()));
     
     logger.info(`✅ [Restart] ${modeTyped.toUpperCase()} agents restarted with $${actualCapital.toFixed(2)}`);
     
@@ -3512,8 +3518,8 @@ async function restoreActiveSessions() {
         const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
         userAgents.set(agentKey, { agents, capitalPool, mode: mode as 'paper' | 'live' });
         
+        // Configure tick broadcast callback for all agents first
         for (const agent of agents) {
-          // Configure tick broadcast callback
           agent.setOnTick((tick) => {
             broadcast('tick', {
               sessionId: agent.getStatus().sessionId,
@@ -3527,8 +3533,10 @@ async function restoreActiveSessions() {
               timestamp: tick.timestamp.toISOString(),
             }, tick.symbol);
           });
-          await agent.start();
         }
+        
+        // V5.39: Start ALL agents in PARALLEL for synchronized signal detection
+        await Promise.all(agents.map(agent => agent.start()));
         
         const symbols = sessions.map((s: any) => s.symbol).join(', ');
         logger.info(`♻️ Restored ${agents.length} ${mode.toUpperCase()} agent(s) for ${userId}: ${symbols}`);
