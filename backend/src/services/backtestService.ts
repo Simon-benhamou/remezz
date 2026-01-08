@@ -1186,7 +1186,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       // COLLECT ENTRY SIGNAL (V5.22: Don't enter yet, collect for ranking)
       // ═══════════════════════════════════════════════════════════════════
       if (!positions[symbol] && cooldowns[symbol] <= 0) {
-        const availableCapital = capital - capitalInUse;
+        // 🔧 FIX V5.43: availableCapital = capital (free capital)
+        // `capital` is already the free capital (total - inUse), no need to subtract again
+        const availableCapital = capital;
         
         // V5.17: Low minimum to maximize trade opportunities
         const minAvailableCapital = Math.max(
@@ -1278,7 +1280,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         
         for (const candidate of signalsToEnter) {
           const { symbol, signal, current, idx } = candidate;
-          const availableCapital = capital - capitalInUse;
+          // 🔧 FIX V5.43: availableCapital = capital (free capital)
+          // `capital` is already the free capital (total - inUse), no need to subtract again
+          const availableCapital = capital;
           
           // Double-check capital still available
           const minAvailableCapital = Math.max(
