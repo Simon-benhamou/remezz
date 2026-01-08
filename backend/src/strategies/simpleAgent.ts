@@ -761,7 +761,7 @@ export class SimpleAgent {
     this.stopRealtimeExitMonitor();
     
     // V5.22: Remove any pending signal for this agent from ranker
-    globalSignalRanker.removeSignal(this.config.symbol);
+    globalSignalRanker.removeSignal(this.config.symbol, this.config.mode);
     
     // 📢 NOTIFICATION: Agent stopped
     notifyAgentStopped({
@@ -1530,6 +1530,7 @@ export class SimpleAgent {
           roc5,
           volumeRatio,
           reason: signal.reason || 'momentum_signal',
+          mode: this.config.mode,  // CRITICAL: Separate batches for paper vs live
         });
         
         // 📢 NOTIFICATION: Signal detected
@@ -1570,7 +1571,7 @@ export class SimpleAgent {
         // have submitted their signals before we check ranking. This ensures the same
         // ranking behavior as backtest which collects all signals synchronously.
         logger.info(`⏳ [${shortSymbol}] Waiting for signal ranking batch...`);
-        await globalSignalRanker.waitForBatch();
+        await globalSignalRanker.waitForBatch(this.config.mode);
         
         this.lastRejectReason = ''; // Clear reject reason on signal
         await this.openPosition(signal.side, candles);
@@ -1613,11 +1614,11 @@ export class SimpleAgent {
     // V5.22: Check if this signal is ranked high enough to execute
     // Calculate how many position slots are available
     const availableSlots = maxPositions - openPositionCount;
-    const shouldExecute = globalSignalRanker.shouldExecuteSignal(symbol, availableSlots);
+    const shouldExecute = globalSignalRanker.shouldExecuteSignal(symbol, availableSlots, this.config.mode);
     
     if (!shouldExecute) {
       // This signal is not in the top N opportunities - defer it
-      const pendingSignals = globalSignalRanker.getPendingSignals();
+      const pendingSignals = globalSignalRanker.getPendingSignals(this.config.mode);
       const currentSignal = pendingSignals.find(s => s.symbol === symbol);
       if (currentSignal) {
         logger.info(`⏸️ [${symbol.replace('/USDT:USDT', '')}] Signal DEFERRED (score=${currentSignal.score.toFixed(2)}) - not in top ${availableSlots} opportunities`);
@@ -1626,7 +1627,7 @@ export class SimpleAgent {
     }
     
     // Signal approved for execution - remove from pending
-    globalSignalRanker.removeSignal(symbol);
+    globalSignalRanker.removeSignal(symbol, this.config.mode);
     logger.info(`🎯 [${symbol.replace('/USDT:USDT', '')}] Signal APPROVED for execution (top ${availableSlots} opportunity)`);
     
     // Get available capital from pool
