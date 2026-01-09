@@ -402,10 +402,20 @@ export class CapitalPool {
   /**
    * V5.18: Get number of currently open positions
    * Used for adaptive max positions based on capital
+   * 
+   * V5.44 FIX: Now includes RESERVED positions (pending entry orders)
+   * to prevent race conditions where multiple signals pass the max check
+   * before any of them commit.
    */
   getOpenPositionCount(): number {
     let count = 0;
+    // Count committed positions (already in position)
     this.inPositionByAgent.forEach((v) => {
+      if (v > 0) count++;
+    });
+    // V5.44: Also count reserved positions (entry order pending)
+    // This prevents race conditions where multiple agents pass the check simultaneously
+    this.reservedByAgent.forEach((v) => {
       if (v > 0) count++;
     });
     return count;
@@ -1795,6 +1805,20 @@ export class SimpleAgent {
         entryIndex: multiPlan?.enabled ? 0 : undefined,
       };
       
+      // Calculate entry fee: 0.04% taker on entry notional
+      const paperEntryFee = sizing.notionalUsd * 0.0004;
+      
+      // V5.44 FIX: Save to DB FIRST, before committing capital
+      // If DB save fails, cancel reservation and don't send notification
+      try {
+        await this.savePositionToDb(position, 'paper_entry', paperEntryFee);
+      } catch (dbError) {
+        logger.error(`❌ [${symbol}] PAPER position DB save failed - cancelling entry:`, dbError);
+        this.config.capitalPool.cancelReservation(this.config.sessionId);
+        return;
+      }
+      
+      // Only now that DB is confirmed, set position state and commit capital
       this.position = position;
       this.additionalPositions = []; // Reset additional positions
       this.closingPosition = false;
@@ -1854,12 +1878,6 @@ export class SimpleAgent {
       const statusAfterCommit = this.config.capitalPool.getStatus();
       logger.info(`💰 [${symbol}] Capital after PAPER entry: total=$${statusAfterCommit.totalUsd.toFixed(2)} | inPositions=$${statusAfterCommit.inPositionsUsd.toFixed(2)} | available=$${statusAfterCommit.availableUsd.toFixed(2)}`);
       
-      // Calculate entry fee: 0.04% taker on entry notional
-      const paperEntryFee = sizing.notionalUsd * 0.0004;
-      
-      // Save to DB with calculated fee
-      await this.savePositionToDb(position, 'paper_entry', paperEntryFee);
-      
       logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=${slPct.toFixed(2)}% ($${position.stopLoss?.toFixed(4)})`);
       
       // V5.42 FIX: Mark current candle as processed to prevent checkExit() from
@@ -1868,7 +1886,7 @@ export class SimpleAgent {
       // which could trigger false SL exits.
       this.lastProcessedExitCandleTs = lastCandle.timestamp;
       
-      // 📢 Send Telegram notification for paper entry
+      // 📢 Send Telegram notification for paper entry (only after DB confirm)
       void notifyPositionOpened({
         agentId: this.config.sessionId,
         symbol,
@@ -3982,6 +4000,9 @@ export class SimpleAgent {
       });
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Failed to save position to DB:`, error);
+      // V5.44 FIX: Rethrow error so caller knows save failed
+      // This prevents notification being sent when position wasn't actually saved
+      throw error;
     }
   }
   
