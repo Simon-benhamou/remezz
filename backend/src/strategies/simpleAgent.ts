@@ -3716,11 +3716,13 @@ export class SimpleAgent {
           let dbMaxPnlPct: number | undefined;
           
           try {
+            // V5.44 FIX: Position model doesn't have exitPrice field
+            // We find the most recent position for this session/symbol
+            // An "open" position is one that exists and hasn't been deleted
             const dbPosition = await this.config.prisma.position.findFirst({
               where: {
                 sessionId: this.config.sessionId,
                 symbol: this.config.symbol,
-                exitPrice: null, // Only open positions
               },
               orderBy: { openedAt: 'desc' },
             });
