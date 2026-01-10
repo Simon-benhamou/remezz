@@ -12,10 +12,10 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import { 
-  MomentumConfig, 
-  checkMomentumSignal, 
-  shouldExitPosition, 
+import {
+  MomentumConfig,
+  checkMomentumSignal,
+  shouldExitPosition,
   calculatePositionSize,
   updatePositionWaterMarks,
   getMarketConditions,
@@ -24,6 +24,7 @@ import {
   calcDynamicStopLoss,  // V5.7: Dynamic SL based on ATR
   determineVolatilityRegime,  // V5.14: Volatility-based trailing
   getCooldownBars,  // V5.41: Shared cooldown logic
+  calculateExitNowMs,  // V5.45: Shared exit time calculation for parity
   LIQUIDATION_CONFIG,
   type Candle,
   type Position,
@@ -1782,15 +1783,18 @@ export class SimpleAgent {
     
     if (this.config.mode === 'paper') {
       // Paper trade
-      // V5.42 FIX: Use Date.now() for entryTime, not candle timestamp
-      // This ensures holdMinutes is calculated correctly and we don't check
-      // SL/exit on candles that closed BEFORE the position was opened
+      // V5.46 FIX: Use candle.timestamp for entryTime (same as backtest)
+      // This ensures EXACT parity with backtest's holdMinutes calculation.
+      // Combined with calculateExitNowMs() in checkExit(), holdMinutes will be:
+      //   nowMs = candleTimestamp + 15min
+      //   entryTime = candleTimestamp (of entry candle)
+      //   holdMinutes = (nowMs - entryTime) / 60000 = holdBars * 15 (EXACT like backtest)
       const position: Position = {
         symbol,
         side,
         entryPrice: currentPrice,
         qty: sizing.qty,
-        entryTime: Date.now(),
+        entryTime: lastCandle.timestamp,  // V5.46: Use candle timestamp for backtest parity
         leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
         marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
         stopLoss: side === 'long' 
@@ -2024,16 +2028,20 @@ export class SimpleAgent {
         const order = result.order!;
         const filledPrice = order.average || order.price || currentPrice;
         const filledQty = order.filled || formattedQty;
-        // V5.42 FIX: Use order timestamp, or Date.now() as fallback (NOT candle timestamp!)
-        // Using candle timestamp causes holdMinutes=0 which skips first exit check
-        const entryTimeMs = (order as any)?.timestamp ?? Date.now();
+        // V5.46 FIX: Use candle.timestamp for entryTime (same as backtest)
+        // This ensures EXACT parity with backtest's holdMinutes calculation.
+        // Combined with calculateExitNowMs() in checkExit(), holdMinutes will be:
+        //   nowMs = candleTimestamp + 15min (next candle's open = current candle's close)
+        //   entryTime = candleTimestamp (of entry candle)
+        //   holdMinutes = (nowMs - entryTime) / 60000 = holdBars * 15 (EXACT like backtest)
+        const entryTimeMs = lastCandle.timestamp;  // V5.46: Use candle timestamp for backtest parity
         
         const position: Position = {
           symbol,
           side,
           entryPrice: filledPrice,
           qty: filledQty,
-          entryTime: entryTimeMs,
+          entryTime: entryTimeMs,  // V5.46: Aligned with backtest
           leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
           marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
           stopLoss: side === 'long'
@@ -2369,8 +2377,14 @@ export class SimpleAgent {
       }
       
       // V5.13: Pass BTC candles for regime detection and symbol candles for momentum reversal
+      // V5.46 PARITY FIX: Entry/Exit time alignment with backtest
+      // - entryTime = candle.timestamp (same as backtest)
+      // - nowMs = calculateExitNowMs(candleTimestamp) = candleTimestamp + 15min
+      // - holdMinutes = (nowMs - entryTime) / 60000 = holdBars * 15 (EXACT parity)
+      // This ensures trailing stops, stagnant detection, and all time-based exits
+      // behave identically between live and backtest.
       const exitSignal = shouldExitPosition(this.position!, currentPrice, candles, {
-        nowMs: latestClosedCandle.timestamp,
+        nowMs: calculateExitNowMs(latestClosedCandle.timestamp),
         priceHigh: latestClosedCandle.high,
         priceLow: latestClosedCandle.low,
         btcCandles: btcCandles,

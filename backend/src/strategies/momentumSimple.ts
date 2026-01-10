@@ -71,6 +71,41 @@
  */
 
 // ============================================================================
+// SHARED CONSTANTS FOR PARITY (used by both backtest and live)
+// ============================================================================
+
+/** 15-minute candle interval in milliseconds */
+export const CANDLE_15M_MS = 15 * 60 * 1000;
+
+/**
+ * V5.46: Calculate the correct `nowMs` for exit checks to ensure backtest/live parity.
+ *
+ * CRITICAL: This function ensures EXACT holdMinutes calculation parity between backtest and live.
+ *
+ * V5.46 PARITY FIX:
+ * Both backtest and live now use the SAME time calculation:
+ * 
+ * BACKTEST:
+ *   entryTime = candle.timestamp (candle START/OPEN time)
+ *   nowMs = entryTime + holdBars * 15 * 60000
+ *   holdMinutes = holdBars * 15
+ * 
+ * LIVE (V5.46):
+ *   entryTime = candle.timestamp (candle START/OPEN time) ← FIXED in V5.46
+ *   nowMs = calculateExitNowMs(nextCandle.timestamp) = nextCandle.timestamp + 15min
+ *   holdMinutes = (nowMs - entryTime) / 60000 = holdBars * 15
+ * 
+ * This ensures trailing stops, stagnant detection, and all time-based exits
+ * behave IDENTICALLY between live and backtest.
+ *
+ * @param candleTimestamp - The timestamp of the closed candle (its START time)
+ * @returns The correct nowMs to use for exit checks (candle END time = next candle START)
+ */
+export function calculateExitNowMs(candleTimestamp: number): number {
+  return candleTimestamp + CANDLE_15M_MS;
+}
+
+// ============================================================================
 // CONFIGURATION V5
 // ============================================================================
 

@@ -26,6 +26,11 @@ import {
   countConsecUp,
   countConsecDown,
   getCooldownBars,  // V5.41: Shared cooldown logic
+  // V5.46 PARITY: Both backtest and live now use the same time calculation:
+  // - entryTime = candle.timestamp (candle START/OPEN time)
+  // - nowMs = entryTime + holdBars * 15 * 60000 (backtest) 
+  //         = candleTimestamp + 15min via calculateExitNowMs() (live)
+  // - holdMinutes = (nowMs - entryTime) / 60000 = holdBars * 15 (EXACT parity)
   type Position,
   type ExitSignal,
 } from '../strategies/momentumSimple.js';
