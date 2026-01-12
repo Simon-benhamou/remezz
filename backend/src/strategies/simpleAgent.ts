@@ -2313,6 +2313,42 @@ export class SimpleAgent {
       if (latestClosedCandle.timestamp === this.lastProcessedExitCandleTs) {
         return;
       }
+      
+      // V5.48 FIX: Update HWM for ALL skipped candles, not just the latest!
+      // If agent tick was slow and multiple candles closed, we must update HWM
+      // with the HIGH of each skipped candle to ensure we don't miss a peak.
+      // 
+      // This fixes the 9% vs 1.9% trailing capture bug where a candle with
+      // a high peak was skipped and its HIGH was never used for the HWM.
+      const missedCandlesForHwm: { timestamp: number; high: number; low: number }[] = [];
+      if (this.lastProcessedExitCandleTs && this.lastProcessedExitCandleTs > 0) {
+        // Find all candles between lastProcessedExitCandleTs and current
+        for (const c of candles) {
+          if (c.timestamp > this.lastProcessedExitCandleTs && c.timestamp <= latestClosedCandle.timestamp) {
+            missedCandlesForHwm.push({ timestamp: c.timestamp, high: c.high, low: c.low });
+          }
+        }
+        
+        // Update HWM for each missed candle
+        if (missedCandlesForHwm.length > 1) {
+          logger.warn(`⚠️ [${symbol}] CATCH-UP: ${missedCandlesForHwm.length} candles since last check - updating HWM for all`);
+          for (const missed of missedCandlesForHwm) {
+            // Update position HWM with each missed candle's high/low
+            if (position.side === 'long') {
+              if (!this.position!.highWaterMark || missed.high > this.position!.highWaterMark) {
+                this.position!.highWaterMark = missed.high;
+                logger.info(`📈 [${symbol}] HWM updated from missed candle: $${missed.high.toFixed(4)} (ts=${new Date(missed.timestamp).toISOString().slice(11, 16)})`);
+              }
+            } else {
+              if (!this.position!.lowWaterMark || missed.low < this.position!.lowWaterMark) {
+                this.position!.lowWaterMark = missed.low;
+                logger.info(`📉 [${symbol}] LWM updated from missed candle: $${missed.low.toFixed(4)} (ts=${new Date(missed.timestamp).toISOString().slice(11, 16)})`);
+              }
+            }
+          }
+        }
+      }
+      
       this.lastProcessedExitCandleTs = latestClosedCandle.timestamp;
 
       const currentPrice = latestClosedCandle.close;
@@ -2335,7 +2371,7 @@ export class SimpleAgent {
         }
       }
       
-      // Update water marks for trailing stop
+      // Update water marks for trailing stop (this handles the current candle)
       this.position = updatePositionWaterMarks(position, currentPrice, latestClosedCandle.high, latestClosedCandle.low);
       
       // Log position status every tick when in position
