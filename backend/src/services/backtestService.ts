@@ -1080,11 +1080,25 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // V5.41: Use shared shouldExitPosition() via helper function
         // This ensures 100% parity between backtest and production exit logic
         
-        // V5.43 FIX: Find the BTC candle that matches the SONIC candle timestamp
-        // Previously we used btcIdx from the outer loop, which is 1 candle ahead
-        // This caused regime change detection to use future BTC data
+        // V5.44 FIX: Use PREVIOUS CLOSED candle for BTC data (like live does)
+        // 
+        // PROBLEM: Live at 15:15:02 uses candle 15:00 (last CLOSED) because 15:15 is still forming.
+        //          Backtest at 15:15 was using candle 15:15 (finalized historical data).
+        //          This caused volume confirmation to differ:
+        //          - Live @ 15:00: volRatio=1.39x < 1.5x → REGIME_CHANGE NOT confirmed → STAGNANT_TRADE
+        //          - Backtest @ 15:15: volRatio=2.62x >= 1.5x → REGIME_CHANGE confirmed
+        // 
+        // FIX: Backtest should use candles BEFORE the current timestamp, not INCLUDING it.
+        //      This simulates what live sees: only closed candles, not the one in progress.
+        //
+        // V5.43 logic found btcIdxForExit where timestamp <= current.timestamp
+        // V5.44 now uses btcIdxForExit - 1 to exclude the current candle (simulating "in progress")
         let btcIdxForExit = btcIdx;
         while (btcIdxForExit > 0 && btcCandles[btcIdxForExit].timestamp > current.timestamp) {
+          btcIdxForExit--;
+        }
+        // V5.44: Exclude current candle to match live behavior (use only CLOSED candles)
+        if (btcIdxForExit > 0 && btcCandles[btcIdxForExit].timestamp === current.timestamp) {
           btcIdxForExit--;
         }
         
