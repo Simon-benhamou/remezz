@@ -8,20 +8,20 @@ datasource db {
 }
 
 model User {
-  id          String          @id @default(cuid())
-  username    String          @unique
-  email       String          @unique
+  id           String         @id @default(cuid())
+  username     String         @unique
+  email        String         @unique
   passwordHash String
-  role        String          @default("trader")
-  isActive    Boolean         @default(true)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  lastLoginAt DateTime?
-  isLegacy    Boolean         @default(false)
-  sessions    AgentSession[]
-  reports     DailyReport[]
-  apiKeys     UserApiKey[]
-  settings    UserSetting[]
+  role         String         @default("trader")
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  lastLoginAt  DateTime?
+  isLegacy     Boolean        @default(false)
+  sessions     AgentSession[]
+  reports      DailyReport[]
+  apiKeys      UserApiKey[]
+  settings     UserSetting[]
 
   @@index([username])
   @@index([email])
@@ -58,36 +58,36 @@ model UserSetting {
 }
 
 model AgentSession {
-  id                 String                   @id @default(cuid())
+  id                 String              @id @default(cuid())
   userId             String?
-  needsAttention     Boolean                  @default(false)
+  needsAttention     Boolean             @default(false)
   symbol             String
   mode               String
-  startedAt          DateTime                 @default(now())
+  startedAt          DateTime            @default(now())
   stoppedAt          DateTime?
   haltedAt           DateTime?
   haltReason         String?
   startBalanceUsd    Float?
   profileJson        Json?
   planJson           Json?
-  rrFloor            Float                    @default(1.0)
-  rrCeil             Float                    @default(2.0)
-  rrBaseMin          Float                    @default(1.3)
-  rrExpectancy       Json?                    @default("{}")
-  isSmartAgent       Boolean                  @default(false)
+  rrFloor            Float               @default(1.0)
+  rrCeil             Float               @default(2.0)
+  rrBaseMin          Float               @default(1.3)
+  rrExpectancy       Json?               @default("{}")
+  isSmartAgent       Boolean             @default(false)
   smartConfig        Json?
   currentSymbol      String?
   lastSymbolSwitchAt DateTime?
   nextRescanAt       DateTime?
   smartHistory       Json?
   actionIntents      AgentActionIntent[]
-  user               User?                    @relation(fields: [userId], references: [id])
+  user               User?               @relation(fields: [userId], references: [id])
   reports            DailyReport[]
   fills              Fill[]
   orders             Order[]
   pendingIntents     PendingIntent[]
   positions          Position[]
-  SessionKpi         SessionKpi?              @relation("AgentSessionToSessionKpi")
+  SessionKpi         SessionKpi?         @relation("AgentSessionToSessionKpi")
   trades             Trade[]
   triggers           TriggerLog[]
 
@@ -144,7 +144,6 @@ model Order {
   clientOrderId      String        @unique
   exchangeOrderId    String?
   sessionId          String?
-  strategyId         String?
   symbol             String
   side               String
   type               String
@@ -169,6 +168,7 @@ model Order {
   updatedAt          DateTime      @updatedAt
   strategyUsed       String?
   strategyConfidence Float?
+  strategyId         String?
   fills              Fill[]
   session            AgentSession? @relation(fields: [sessionId], references: [id])
 
@@ -256,16 +256,13 @@ model Position {
   tpOrderId            String?
   lastProtectiveSyncAt DateTime?
   protectiveStatus     String?
-
-  // V5.34: State persistence for stagnant trade detection and trailing stops
-  maxPnlPct            Float?        // Max PnL % reached (for stagnant trigger)
-  stagnantState        Json?         // {triggered, triggeredAt, confirmed, cancelled, obsPeakPct}
-  trailingActive       Boolean       @default(false) // Trailing stop activation status
-  highWaterMark        Float?        // Highest price for LONG trailing
-  lowWaterMark         Float?        // Lowest price for SHORT trailing
-  entryTime            BigInt?       // Unix timestamp (ms) when opened
-  marginUsd            Float?        // Margin allocated (USD)
-
+  entryTime            BigInt?
+  highWaterMark        Float?
+  lowWaterMark         Float?
+  marginUsd            Float?
+  maxPnlPct            Float?
+  stagnantState        Json?
+  trailingActive       Boolean       @default(false)
   session              AgentSession? @relation(fields: [sessionId], references: [id])
 
   @@index([sessionId])
@@ -329,35 +326,26 @@ model SystemSetting {
   @@map("system_setting")
 }
 
-// Backtest vs Live/Paper Parity Verification Results
 model TradeParityResult {
-  id              String   @id @default(cuid())
-  tradeId         String   @unique
-  symbol          String
-  side            String
-
-  // Live/Paper trade data (from Trade table)
-  liveEntryTs     DateTime
-  liveExitTs      DateTime
-  liveExitReason  String
-  livePnlPct      Float
-
-  // Backtest comparison results
-  btEntryTs       DateTime?
-  btExitTs        DateTime?
-  btExitReason    String?
-  btPnlPct        Float?
-
-  // Match results
-  entryMatch      Boolean  @default(false)  // Same 15m candle
-  exitMatch       Boolean  @default(false)  // Same exit reason
-  pnlMatch        Boolean  @default(false)  // Within 0.5%
-  overallMatch    Boolean  @default(false)  // All criteria met
-  mismatchDetails String?                    // JSON with detailed differences
-
-  // Metadata
-  verifiedAt      DateTime @default(now())
-  backtestDurationMs Int?                   // How long the backtest took
+  id                 String    @id @default(cuid())
+  tradeId            String    @unique
+  symbol             String
+  side               String
+  liveEntryTs        DateTime
+  liveExitTs         DateTime
+  liveExitReason     String
+  livePnlPct         Float
+  btEntryTs          DateTime?
+  btExitTs           DateTime?
+  btExitReason       String?
+  btPnlPct           Float?
+  entryMatch         Boolean   @default(false)
+  exitMatch          Boolean   @default(false)
+  pnlMatch           Boolean   @default(false)
+  overallMatch       Boolean   @default(false)
+  mismatchDetails    String?
+  verifiedAt         DateTime  @default(now())
+  backtestDurationMs Int?
 
   @@index([tradeId])
   @@index([verifiedAt])

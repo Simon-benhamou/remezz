@@ -20,7 +20,7 @@ const __dirname = path.dirname(__filename);
 
 // Configuration
 const DATA_DIR = path.join(__dirname, '../data');
-const TARGET_DATE = new Date('2025-12-27T23:59:59Z'); // 27 décembre 2025 (today)
+const TARGET_DATE = new Date(); // Dynamically use current date
 const START_DATE = new Date('2024-01-01T00:00:00Z'); // Début 2024
 
 // Symbols to fetch (all symbols from backtest dropdown)
