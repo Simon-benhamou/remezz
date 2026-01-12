@@ -1079,8 +1079,17 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
         // V5.41: Use shared shouldExitPosition() via helper function
         // This ensures 100% parity between backtest and production exit logic
-        const btcWindowStart = Math.max(0, btcIdx - 200);
-        const btcWindowCandles = btcCandles.slice(btcWindowStart, btcIdx + 1);
+        
+        // V5.43 FIX: Find the BTC candle that matches the SONIC candle timestamp
+        // Previously we used btcIdx from the outer loop, which is 1 candle ahead
+        // This caused regime change detection to use future BTC data
+        let btcIdxForExit = btcIdx;
+        while (btcIdxForExit > 0 && btcCandles[btcIdxForExit].timestamp > current.timestamp) {
+          btcIdxForExit--;
+        }
+        
+        const btcWindowStart = Math.max(0, btcIdxForExit - 200);
+        const btcWindowCandles = btcCandles.slice(btcWindowStart, btcIdxForExit + 1);
         
         const exitResult = checkBacktestExit(
           pos, 
