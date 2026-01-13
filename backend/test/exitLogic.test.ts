@@ -656,3 +656,195 @@ describe('Edge Cases', () => {
     expect(result.reason).toBe('time');
   });
 });
+
+// ============================================================================
+// TESTS: V5.40 MOMENTUM EXHAUSTION
+// ============================================================================
+
+describe('shouldExitPosition - V5.40 MOMENTUM EXHAUSTION', () => {
+  it('should tighten trailing when momentum exhausted on profitable trade', () => {
+    // Scenario: LONG position with 15% profit, trailing active, but momentum exhausted
+    const position = createMockPosition({
+      side: 'long',
+      entryPrice: 0.10,
+      entryTime: Date.now() - 60 * 60 * 1000, // 1 hour ago
+      trailingActive: true,
+      highWaterMark: 0.115, // 15% profit peak
+    });
+    
+    // Create candles showing exhausted momentum (ROC near zero)
+    const candles: Candle[] = [];
+    const now = Date.now();
+    let price = 0.115; // At high water mark
+    
+    // Generate 15 candles with flat/weak momentum (ROC5 < 0.3%, ROC10 < 0.5%)
+    for (let i = 0; i < 15; i++) {
+      // Very small price changes (< 0.1% per candle)
+      const change = (Math.random() - 0.5) * 0.0001; // Tiny changes
+      price = price + change;
+      
+      candles.push({
+        timestamp: now - (15 - i) * 15 * 60 * 1000,
+        open: price - change / 2,
+        high: price + 0.0001,
+        low: price - 0.0001,
+        close: price,
+        volume: 1000000 * (0.5 + Math.random() * 0.3), // Low-ish volume
+      });
+    }
+    
+    // Current price at 15% profit
+    const currentPrice = 0.115;
+    
+    const result = shouldExitPosition(position, currentPrice, candles, {
+      priceHigh: currentPrice,
+      priceLow: currentPrice,
+    });
+    
+    // Should NOT exit (just tighten trailing)
+    expect(result.shouldExit).toBe(false);
+    
+    // Should detect momentum exhaustion
+    expect(result.momentumExhausted).toBe(true);
+    
+    // Should tighten trailing distance to 0.3% (from default 0.5% or 0.8%)
+    expect(result.trailingDistancePct).toBe(MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_TIGHTEN_DISTANCE_PCT);
+    expect(result.trailingDistancePct).toBe(0.3);
+    
+    // Should have trailing active
+    expect(result.trailingActivated).toBe(true);
+  });
+
+  it('should NOT tighten trailing when profit below threshold', () => {
+    // Position with only 3% profit (below 5% threshold)
+    const position = createMockPosition({
+      side: 'long',
+      entryPrice: 0.10,
+      entryTime: Date.now() - 60 * 60 * 1000,
+      trailingActive: true,
+      highWaterMark: 0.103, // Only 3% profit
+    });
+    
+    const candles = createMockCandles(15, 0.103, 'low');
+    const currentPrice = 0.103;
+    
+    const result = shouldExitPosition(position, currentPrice, candles, {
+      priceHigh: currentPrice,
+      priceLow: currentPrice,
+    });
+    
+    // Should NOT detect momentum exhaustion (profit too low)
+    expect(result.momentumExhausted).toBe(false);
+  });
+
+  it('should NOT tighten trailing when momentum still strong', () => {
+    // Position with 10% profit and  strong ongoing momentum
+    const entryPrice = 100;
+    const currentPrice = 110; // 10% profit
+    
+    const position = createMockPosition({
+      side: 'long',
+      entryPrice,
+      entryTime: Date.now() - 60 * 60 * 1000,
+      trailingActive: true,
+      highWaterMark: currentPrice,
+    });
+    
+    // Create candles with strong momentum: prices going from 105 to 110
+    // This should give ROC5 > 0.5% and ROC10 > 0.5%
+    const candles: Candle[] = [];
+    const now = Date.now();
+    
+    const prices = [105, 106, 107, 108, 109, 110, 110.2, 110.4, 110.6, 110.8, 111, 111.2, 111.4, 111.6, 111.8];
+    // ROC5 from 110 to 111.8 = (111.8-110)/110 = 1.6% >> 0.3%
+    // ROC10 from 109 to 111.8 = (111.8-109)/109 = 2.6% >> 0.5%
+    
+    for (let i = 0; i < 15; i++) {
+      const close = prices[i];
+      candles.push({
+        timestamp: now - (15 - i) * 15 * 60 * 1000,
+        open: close - 0.5,
+        high: close + 0.1,
+        low: close - 0.6,
+        close,
+        volume: 1000000 * 1.5,
+      });
+    }
+    
+    const result = shouldExitPosition(position, currentPrice, candles, {
+      priceHigh: currentPrice,
+      priceLow: currentPrice,
+    });
+    
+    // Should NOT detect momentum exhaustion because momentum is still strong
+    expect(result.momentumExhausted).toBe(false);
+  });
+
+  it('should work for SHORT positions with exhausted momentum', () => {
+    // SHORT position with 12% profit, trailing active, momentum exhausted
+    const position = createMockPosition({
+      side: 'short',
+      entryPrice: 0.10,
+      entryTime: Date.now() - 60 * 60 * 1000,
+      trailingActive: true,
+      lowWaterMark: 0.088, // 12% profit on SHORT
+    });
+    
+    // Create candles with flat momentum
+    const candles: Candle[] = [];
+    const now = Date.now();
+    let price = 0.088;
+    
+    for (let i = 0; i < 15; i++) {
+      const change = (Math.random() - 0.5) * 0.0001;
+      price = price + change;
+      
+      candles.push({
+        timestamp: now - (15 - i) * 15 * 60 * 1000,
+        open: price - change / 2,
+        high: price + 0.0001,
+        low: price - 0.0001,
+        close: price,
+        volume: 1000000 * 0.6,
+      });
+    }
+    
+    const currentPrice = 0.088;
+    
+    const result = shouldExitPosition(position, currentPrice, candles, {
+      priceHigh: currentPrice,
+      priceLow: currentPrice,
+    });
+    
+    // Should detect momentum exhaustion
+    expect(result.momentumExhausted).toBe(true);
+    expect(result.trailingDistancePct).toBe(0.3);
+  });
+
+  it('should handle case when MOMENTUM_EXHAUSTION_ENABLED is false', () => {
+    // Temporarily disable feature
+    const originalEnabled = MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_ENABLED;
+    (MomentumConfig.EXIT as any).MOMENTUM_EXHAUSTION_ENABLED = false;
+    
+    const position = createMockPosition({
+      side: 'long',
+      entryPrice: 0.10,
+      trailingActive: true,
+      highWaterMark: 0.115,
+    });
+    
+    const candles = createMockCandles(15, 0.115, 'low');
+    const currentPrice = 0.115;
+    
+    const result = shouldExitPosition(position, currentPrice, candles, {
+      priceHigh: currentPrice,
+      priceLow: currentPrice,
+    });
+    
+    // Should NOT detect momentum exhaustion when feature disabled
+    expect(result.momentumExhausted).toBe(false);
+    
+    // Restore original value
+    (MomentumConfig.EXIT as any).MOMENTUM_EXHAUSTION_ENABLED = originalEnabled;
+  });
+});

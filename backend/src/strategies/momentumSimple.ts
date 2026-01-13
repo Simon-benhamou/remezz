@@ -439,8 +439,8 @@ export const MomentumConfig = {
     // ═══════════════════════════════════════════════════════════════════════════
     MOMENTUM_EXHAUSTION_ENABLED: true,      // V5.40: Enable momentum exhaustion detection
     MOMENTUM_EXHAUSTION_MIN_PROFIT_PCT: 5.0, // Only check when profit > 5% (already successful)
-    MOMENTUM_EXHAUSTION_MAX_ROC5_PCT: 0.3,  // Consider exhausted if ROC5 < 0.3% (weak momentum)
-    MOMENTUM_EXHAUSTION_MAX_ROC10_PCT: 0.5, // And ROC10 < 0.5% (trend weakening)
+    MOMENTUM_EXHAUSTION_MAX_ROC5_PCT: 0.003,  // Consider exhausted if ROC5 < 0.3% (weak momentum) - as decimal
+    MOMENTUM_EXHAUSTION_MAX_ROC10_PCT: 0.005, // And ROC10 < 0.5% (trend weakening) - as decimal
     MOMENTUM_EXHAUSTION_MAX_VOLUME_RATIO: 0.8, // Optional: volume < 0.8x average (drying up)
     MOMENTUM_EXHAUSTION_TIGHTEN_DISTANCE_PCT: 0.3, // Tighten trailing to 0.3% (from 0.5-0.8%)
     MOMENTUM_EXHAUSTION_REQUIRE_VOLUME_CHECK: false, // V5.40: Don't require volume (momentum alone is enough)
