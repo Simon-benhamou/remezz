@@ -1,6 +1,30 @@
 /**
- * 🎯 STRATÉGIE V5.33 - BREAKOUT CONFIRMATION FILTER
+ * 🎯 STRATÉGIE V5.40 - MOMENTUM EXHAUSTION DETECTION
  * 
+ * V5.40 CHANGES (Jan 13, 2026):
+ * ═════════════════════════════════════════════════════════════
+ * NEW: MOMENTUM EXHAUSTION PROTECTION FOR SUCCESSFUL TRADES
+ * ═════════════════════════════════════════════════════════════
+ * Problem: Trade reaches significant profit (e.g., 15% ROI) with trailing
+ * active, but momentum exhausts and price stagnates without hitting trailing.
+ * The trailing stop is "waiting" but momentum has clearly stopped.
+ * 
+ * Solution: Detect momentum exhaustion on profitable trades and tighten trailing:
+ * - When: Profit > 5%, trailing active, ROC5 < 0.3%, ROC10 < 0.5%
+ * - Action: Tighten trailing distance from 0.5-0.8% to 0.3%
+ * - Result: Closer protection while still giving trade chance to resume
+ * 
+ * This complements existing stagnant trade logic which handles EARLY stagnation
+ * (before trailing activates). This handles LATE stagnation on successful trades.
+ * 
+ * Configuration:
+ * - MOMENTUM_EXHAUSTION_ENABLED: true
+ * - MOMENTUM_EXHAUSTION_MIN_PROFIT_PCT: 5.0% (only for successful trades)
+ * - MOMENTUM_EXHAUSTION_MAX_ROC5_PCT: 0.3% (weak short-term momentum)
+ * - MOMENTUM_EXHAUSTION_MAX_ROC10_PCT: 0.5% (weak medium-term trend)
+ * - MOMENTUM_EXHAUSTION_TIGHTEN_DISTANCE_PCT: 0.3% (tight protection)
+ * 
+ * ═════════════════════════════════════════════════════════════
  * V5.33 CHANGES (Dec 30, 2025):
  * ═════════════════════════════════════════════════════════════
  * BREAKTHROUGH DISCOVERY: Confirmation > Anticipation
@@ -62,10 +86,11 @@
  * - ConsecDown <= 4
  * - StochRSI >= 15 OR volRatio >= 4 (V5.9)
  * 
- * EXIT (V5.27):
- * - Stop Loss: 2.5% fixe
+ * EXIT (V5.40):
+ * - Stop Loss: 2.5% fixe (ou 0.8% si stagnant confirmé)
  * - Take Profit: 3%
- * - Trailing: activé à +0.8%, trail à 0.5%
+ * - Trailing: activé à +0.8%, trail à 0.5% (ou 0.3% si momentum épuisé)
+ * - Momentum Exhaustion: Tighten trailing si profit>5% et momentum faible
  * - Regime Change: Exit si BTC cross SMA200 AVEC volume 1.5x
  * - Max Hold: 48h
  */
@@ -395,6 +420,30 @@ export const MomentumConfig = {
     STAGNANT_TRADE_RECOVERY_PCT: 0.6,      // V5.34: Higher recovery threshold
     STAGNANT_TRADE_TIGHTEN_SL_PCT: 0.8,    // V5.34: Tighter SL from 2.5% to 0.8%
     STAGNANT_TRADE_EXIT_IF_PROFIT: false,  // V5.34: DON'T exit, let trade continue!
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // V5.40: MOMENTUM EXHAUSTION FOR SUCCESSFUL TRADES
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Problem: Trade reaches good profit (e.g. 15% ROI), trailing is active,
+    // but momentum exhausts and price stagnates without hitting trailing stop.
+    // Solution: Detect momentum exhaustion on profitable trades and tighten trailing.
+    // 
+    // When to trigger:
+    // 1. Position has significant profit (>5% ROI = 25% with 5x leverage)
+    // 2. Trailing stop is active (so we're protecting profits)
+    // 3. Momentum has weakened significantly (ROC indicators near zero or negative)
+    // 4. Optional: Volume has dried up
+    // 
+    // Action: Tighten trailing distance from 0.5-0.8% to 0.3% for closer protection
+    // This gives the trade a chance to resume momentum while protecting more profit
+    // ═══════════════════════════════════════════════════════════════════════════
+    MOMENTUM_EXHAUSTION_ENABLED: true,      // V5.40: Enable momentum exhaustion detection
+    MOMENTUM_EXHAUSTION_MIN_PROFIT_PCT: 5.0, // Only check when profit > 5% (already successful)
+    MOMENTUM_EXHAUSTION_MAX_ROC5_PCT: 0.3,  // Consider exhausted if ROC5 < 0.3% (weak momentum)
+    MOMENTUM_EXHAUSTION_MAX_ROC10_PCT: 0.5, // And ROC10 < 0.5% (trend weakening)
+    MOMENTUM_EXHAUSTION_MAX_VOLUME_RATIO: 0.8, // Optional: volume < 0.8x average (drying up)
+    MOMENTUM_EXHAUSTION_TIGHTEN_DISTANCE_PCT: 0.3, // Tighten trailing to 0.3% (from 0.5-0.8%)
+    MOMENTUM_EXHAUSTION_REQUIRE_VOLUME_CHECK: false, // V5.40: Don't require volume (momentum alone is enough)
   },
   
   // Risk V5.18 - Adaptive sizing for capital scalability
@@ -562,6 +611,8 @@ export interface ExitSignal {
   trailingBreached?: boolean;   // V5.38: Flag for 2-close confirmation (breach detected but not confirmed)
   stagnantSlTightened?: boolean;  // V5.28: Flag to indicate SL was tightened due to stagnant trade
   effectiveSlPct?: number;  // V5.28: The effective SL % after tightening
+  momentumExhausted?: boolean;  // V5.40: Flag to indicate trailing was tightened due to momentum exhaustion
+  trailingDistancePct?: number;  // V5.40: Current trailing distance % (for debugging/monitoring)
 }
 
 // ============================================================================
@@ -1795,6 +1846,54 @@ export function shouldExitPosition(
       trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT;
     }
     
+    // ============================================================================
+    // V5.40: MOMENTUM EXHAUSTION - Tighten trailing on successful but stagnating trades
+    // ============================================================================
+    // Check if momentum has exhausted on a profitable trade with trailing active
+    // This handles cases like: 15% profit, momentum stopped, but trailing not hit yet
+    let momentumExhausted = false;
+    
+    if (MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_ENABLED && 
+        pnlPct >= MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_MIN_PROFIT_PCT &&
+        candles && candles.length >= 11) {  // Need 11 candles for ROC10
+      
+      const closes = candles.map(c => c.close);
+      const volumes = candles.map(c => c.volume);
+      
+      // Calculate momentum indicators
+      const roc5 = calcROC(closes, 5);
+      const roc10 = calcROC(closes, 10);
+      const avgVolume = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+      const currentVolume = volumes[volumes.length - 1];
+      const volumeRatio = currentVolume / avgVolume;
+      
+      // Check if momentum exhausted based on configured thresholds
+      if (position.side === 'long') {
+        // For LONG: momentum exhausted if ROC5 and ROC10 near zero or negative
+        const roc5Weak = Math.abs(roc5) < MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_MAX_ROC5_PCT;
+        const roc10Weak = Math.abs(roc10) < MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_MAX_ROC10_PCT;
+        const volumeWeak = !MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_REQUIRE_VOLUME_CHECK || 
+                           volumeRatio < MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_MAX_VOLUME_RATIO;
+        
+        momentumExhausted = roc5Weak && roc10Weak && volumeWeak;
+      } else {
+        // For SHORT: momentum exhausted if ROC5 and ROC10 near zero or positive
+        const roc5Weak = Math.abs(roc5) < MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_MAX_ROC5_PCT;
+        const roc10Weak = Math.abs(roc10) < MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_MAX_ROC10_PCT;
+        const volumeWeak = !MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_REQUIRE_VOLUME_CHECK || 
+                           volumeRatio < MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_MAX_VOLUME_RATIO;
+        
+        momentumExhausted = roc5Weak && roc10Weak && volumeWeak;
+      }
+      
+      // If momentum exhausted, tighten trailing distance for closer protection
+      if (momentumExhausted) {
+        trailingDistance = MomentumConfig.EXIT.MOMENTUM_EXHAUSTION_TIGHTEN_DISTANCE_PCT;
+        // Note: This tightening is applied but doesn't immediately exit
+        // It just brings the trailing stop closer to protect more profit
+      }
+    }
+    
     let trailingStopPrice: number;
     
     if (position.side === 'long') {
@@ -1820,7 +1919,9 @@ export function shouldExitPosition(
             holdMinutes,
             newStopLoss: trailingStopPrice,
             trailingActivated: true,
-            trailingBreached: true
+            trailingBreached: true,
+            momentumExhausted,
+            trailingDistancePct: trailingDistance
           };
         } else {
           // Wick hit but close recovered - reset breach counter (like backtest)
@@ -1831,7 +1932,9 @@ export function shouldExitPosition(
             holdMinutes,
             newStopLoss: trailingStopPrice,
             trailingActivated: true,
-            trailingBreached: false  // Explicit false = reset counter
+            trailingBreached: false,  // Explicit false = reset counter
+            momentumExhausted,
+            trailingDistancePct: trailingDistance
           };
         }
       }
@@ -1843,7 +1946,9 @@ export function shouldExitPosition(
         pnlPct, 
         holdMinutes,
         newStopLoss: trailingStopPrice,
-        trailingActivated: true
+        trailingActivated: true,
+        momentumExhausted,
+        trailingDistancePct: trailingDistance
       };
       
     } else {
@@ -1869,7 +1974,9 @@ export function shouldExitPosition(
             holdMinutes,
             newStopLoss: trailingStopPrice,
             trailingActivated: true,
-            trailingBreached: true
+            trailingBreached: true,
+            momentumExhausted,
+            trailingDistancePct: trailingDistance
           };
         } else {
           // Wick hit but close recovered - reset breach counter (like backtest)
@@ -1880,7 +1987,9 @@ export function shouldExitPosition(
             holdMinutes,
             newStopLoss: trailingStopPrice,
             trailingActivated: true,
-            trailingBreached: false  // Explicit false = reset counter
+            trailingBreached: false,  // Explicit false = reset counter
+            momentumExhausted,
+            trailingDistancePct: trailingDistance
           };
         }
       }
@@ -1892,7 +2001,9 @@ export function shouldExitPosition(
         pnlPct, 
         holdMinutes,
         newStopLoss: trailingStopPrice,
-        trailingActivated: true
+        trailingActivated: true,
+        momentumExhausted,
+        trailingDistancePct: trailingDistance
       };
     }
   }
