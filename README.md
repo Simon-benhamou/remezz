@@ -1,4 +1,4 @@
-# 🤖 QuantAI Trading Agent V5.34
+# 🤖 QuantAI Trading Agent V5.40
 
 **An intelligent, momentum-based cryptocurrency trading system with regime-adaptive strategy and shared architecture design**
 
@@ -37,7 +37,7 @@ See [Architecture](#-architecture) section for detailed explanation.
 
 - [Overview](#-overview)
 - [Performance](#-performance)
-- [Trading Strategy V5.34](#-trading-strategy-v534)
+- [Trading Strategy V5.40](#-trading-strategy-v540)
 - [Entry Conditions](#-entry-conditions)
 - [Exit Management](#-exit-management)
 - [Capital Management](#-capital-management)
@@ -61,6 +61,7 @@ QuantAI Trading Agent is a sophisticated algorithmic trading platform for crypto
 - **Regime-Adaptive Strategy**: LONG only in Bull markets (BTC > SMA200), SHORT only in Bear markets
 - **Bollinger Band Breakouts**: Entry on volatility expansion with volume confirmation
 - **Smart Stagnant Trade Detection**: V5.34 optimized exit for stuck positions (+31% improvement)
+- **Momentum Exhaustion Protection**: V5.40 tightens trailing on successful but stagnating trades (NEW)
 - **Adaptive Trailing Stop**: Volatility-based trailing distance (0.3-0.8%)
 - **Enhanced Signal Ranking**: Multi-factor scoring when capital is limited
 - **Shared Capital Pool**: Multiple agents share capital for efficient allocation
@@ -110,13 +111,14 @@ QuantAI Trading Agent is a sophisticated algorithmic trading platform for crypto
 
 ---
 
-## 📊 Trading Strategy V5.34
+## 📊 Trading Strategy V5.40
 
 ### Strategy Evolution
 
+- **V5.40**: **NEW** Momentum exhaustion protection for successful trades (tightens trailing when momentum fades)
+- **V5.34**: Optimized stagnant trade detection (+31% total PnL improvement)
 - **V5.33**: Breakout confirmation filter (DISABLED - reduced trades without WR improvement)
 - **V5.32**: Anticipatory entry (DISABLED - underperformed classic breakout by 27x)
-- **V5.34**: Optimized stagnant trade detection (+31% total PnL improvement)
 
 ### Regime Filter: BTC vs SMA200
 
@@ -183,10 +185,38 @@ Only the **top N signals** (where N = available position slots) are executed.
 1. **Regime Change Exit** (V5.13 + V5.27 volume confirmation)
 2. **Momentum Reversal** (ROC5 flips against position)
 3. **Stop Loss** (Fixed 2.5% or stagnant-tightened 0.8%)
-4. **Trailing Stop** (Adaptive 0.3-0.8% distance)
+4. **Trailing Stop** (Adaptive 0.3-0.8% distance, with V5.40 momentum exhaustion tightening)
 5. **Take Profit** (+3.0%)
 6. **Max Hold Time** (48 hours)
 7. **Smart Stagnant Trade** (V5.34 optimized)
+
+### V5.40 Momentum Exhaustion (NEW)
+
+**Problem**: Trade reaches significant profit (e.g., 15% ROI) with trailing active, but momentum exhausts and price stagnates without hitting the trailing stop yet.
+
+**Solution**: Detect momentum exhaustion and tighten trailing stop:
+
+```
+When:
+  ✓ Position has profit > 5% (successful trade)
+  ✓ Trailing stop is already active
+  ✓ ROC5 < 0.3% (short-term momentum weak)
+  ✓ ROC10 < 0.5% (medium-term trend weakening)
+
+Action:
+  → Tighten trailing distance from 0.5-0.8% to 0.3%
+  → Brings trailing stop closer to current price
+  → Protects more profit while still giving trade a chance
+```
+
+**Example**: 
+- Trade at 15% profit with trailing at 0.5% distance
+- Trailing stop at ~14.5% (15% - 0.5%)
+- Momentum exhausts → distance tightens to 0.3%
+- New trailing stop at ~14.7% (15% - 0.3%)
+- More profit protected, but trade can still continue if momentum resumes
+
+**Key Insight**: This complements V5.34 stagnant trade logic. V5.34 handles EARLY stagnation (before trailing activates), while V5.40 handles LATE stagnation (on already successful trades).
 
 ### V5.34 Smart Stagnant Trade Detection
 
