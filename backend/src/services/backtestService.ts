@@ -106,6 +106,10 @@ export interface BacktestParams {
   mode?: 'legacy' | 'agent'; // Ignored - kept for API compatibility
   signalOverrides?: SignalOverrides; // V5.12.1: Allow testing different entry thresholds
   trailingConfirmCandles?: number; // V5.38: How many consecutive closes to confirm trailing exit (default: 1 for live parity)
+  // V5.51: Parity mode - ignores position limits to test pure signal logic
+  // When true, enters on EVERY valid signal regardless of open positions
+  // Used by parity verification to match exact live trade signals
+  parityMode?: boolean;
 }
 
 export interface BacktestTrade {
@@ -177,6 +181,15 @@ export interface BacktestResult {
   monthlyStats: MonthlyStats[];
   equityCurve: { date: string; equity: number }[];
   drawdownCurve: { date: string; drawdown: number }[];
+  // V5.51: Valid signals detected (for parity mode)
+  // In parity mode, this includes ALL valid signals regardless of position limits
+  validSignals?: {
+    symbol: string;
+    side: 'long' | 'short';
+    timestamp: number;
+    price: number;
+    reason?: string;  // May be undefined
+  }[];
 }
 
 // ============================================================================
@@ -916,7 +929,7 @@ function calculatePnl(
 // ============================================================================
 
 export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
-  const { startDate, endDate, initialCapital, symbols, leverage, signalOverrides } = params;
+  const { startDate, endDate, initialCapital, symbols, leverage, signalOverrides, parityMode } = params;
 
   console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
 
@@ -982,6 +995,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   if (startIdx < 200) startIdx = 200;
 
   console.log(`[Backtest] Starting simulation at index ${startIdx}...`);
+
+  // V5.51: In parity mode, collect ALL valid signals for matching with live trades
+  // This captures signals even when position is already open on same symbol
+  type ValidSignal = NonNullable<BacktestResult['validSignals']>[number];
+  const allValidSignals: ValidSignal[] = [];
 
   // Main loop - iterate over BTC candles
   for (let btcIdx = startIdx; btcIdx < btcCandles.length; btcIdx++) {
@@ -1213,17 +1231,24 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       // ═══════════════════════════════════════════════════════════════════
       // COLLECT ENTRY SIGNAL (V5.22: Don't enter yet, collect for ranking)
       // ═══════════════════════════════════════════════════════════════════
-      if (!positions[symbol] && cooldowns[symbol] <= 0) {
+      // V5.51: In parity mode, collect signals even if position is open
+      // This allows finding all valid signals to match live trades that entered later
+      const canCollectSignal = parityMode || (!positions[symbol] && cooldowns[symbol] <= 0);
+      
+      if (canCollectSignal) {
         // 🔧 FIX V5.43: availableCapital = capital (free capital)
         // `capital` is already the free capital (total - inUse), no need to subtract again
         const availableCapital = capital;
         
-        // V5.17: Low minimum to maximize trade opportunities
-        const minAvailableCapital = Math.max(
-          initialCapital * CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_PCT,
-          CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_FLOOR
-        );
-        if (availableCapital < minAvailableCapital) continue;
+        // V5.51: In parity mode, skip capital check - testing pure signal logic
+        if (!parityMode) {
+          // V5.17: Low minimum to maximize trade opportunities
+          const minAvailableCapital = Math.max(
+            initialCapital * CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_PCT,
+            CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_FLOOR
+          );
+          if (availableCapital < minAvailableCapital) continue;
+        }
 
         // BTC regime: use PRIOR BTC close for regime (avoid look-ahead)
         const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
@@ -1247,6 +1272,18 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           }
         );
         if (!signal.valid || !signal.side) continue;
+        
+        // V5.51: In parity mode, collect ALL valid signals for matching with live trades
+        // This allows finding the exact signal that matched a live trade entry time
+        if (parityMode) {
+          allValidSignals.push({
+            symbol,
+            side: signal.side!,
+            timestamp: current.timestamp,
+            price: current.close,
+            reason: signal.reason,
+          });
+        }
         
         // V5.23: Calculate enhanced signal quality score
         const closes = windowCandles.map(c => c.close);
@@ -1291,13 +1328,23 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       // Count current open positions
       const openPositionCount = Object.values(positions).filter(p => p !== null).length;
       
-      // V5.18: Dynamic max positions
-      const maxPositions = Math.min(
-        CONFIG.SIZING.MAX_POSITIONS_BASE + Math.floor(initialCapital / 1500) * CONFIG.SIZING.POSITIONS_PER_1500,
-        CONFIG.SIZING.MAX_POSITIONS_CAP
-      );
+      // V5.51: In parity mode, ignore global position limits
+      // We only care about per-symbol limits (1 position per symbol at a time)
+      // This allows testing pure signal logic without capital/slot constraints
+      let availableSlots: number;
       
-      const availableSlots = maxPositions - openPositionCount;
+      if (parityMode) {
+        // In parity mode, allow unlimited concurrent positions across symbols
+        // But still respect per-symbol limit (handled below by checking positions[symbol])
+        availableSlots = signalCandidates.length; // Allow all signals
+      } else {
+        // V5.18: Dynamic max positions
+        const maxPositions = Math.min(
+          CONFIG.SIZING.MAX_POSITIONS_BASE + Math.floor(initialCapital / 1500) * CONFIG.SIZING.POSITIONS_PER_1500,
+          CONFIG.SIZING.MAX_POSITIONS_CAP
+        );
+        availableSlots = maxPositions - openPositionCount;
+      }
       
       if (availableSlots > 0) {
         // RANK by score (highest first)
@@ -1312,12 +1359,15 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           // `capital` is already the free capital (total - inUse), no need to subtract again
           const availableCapital = capital;
           
-          // Double-check capital still available
-          const minAvailableCapital = Math.max(
-            initialCapital * CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_PCT,
-            CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_FLOOR
-          );
-          if (availableCapital < minAvailableCapital) break;
+          // V5.51: In parity mode, skip capital checks - we're testing pure signal logic
+          if (!parityMode) {
+            // Double-check capital still available
+            const minAvailableCapital = Math.max(
+              initialCapital * CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_PCT,
+              CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_FLOOR
+            );
+            if (availableCapital < minAvailableCapital) break;
+          }
 
           // V5.18: Keep leverage high for all accounts
           const posLev = leverage || 5;
@@ -1671,6 +1721,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     monthlyStats,
     equityCurve,
     drawdownCurve,
+    validSignals: parityMode ? allValidSignals : undefined,  // V5.51: Include all valid signals in parity mode
   };
 
   console.log(

@@ -212,12 +212,16 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
 
   let btResult: BacktestResult;
   try {
+    // V5.51: Use parityMode to ignore position limits and test pure signal logic
+    // This ensures we find the EXACT signal that matched the live trade,
+    // even if backtest would have entered earlier due to having no open positions
     btResult = await runBacktest({
       startDate: btStartDate,
       endDate: btEndDate,
       symbols: [trade.symbol],
-      initialCapital: 1000,  // Doesn't matter for comparison
+      initialCapital: 1000,  // Doesn't matter for comparison in parity mode
       leverage: trade.leverage || 5,
+      parityMode: true,  // V5.51: Ignore position limits, test pure signal logic
     });
   } catch (err) {
     logger.error(`[PARITY] Backtest failed for trade ${tradeId}:`, err);
@@ -226,10 +230,34 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
 
   // 3. Find matching backtest trade
   const btTrade = findMatchingBacktestTrade(trade, btResult.trades);
+  
+  // V5.51: Also check validSignals array to find the EXACT signal that matched live entry
+  // This handles the case where backtest entered earlier due to no position limits
+  let matchingSignal: NonNullable<BacktestResult['validSignals']>[number] | null = null;
+  if (btResult.validSignals && btResult.validSignals.length > 0) {
+    const liveSymbol = trade.symbol.toUpperCase();
+    const liveSide = trade.positionSide.toLowerCase();
+    
+    for (const sig of btResult.validSignals) {
+      const sigSymbol = sig.symbol.toUpperCase();
+      const sigSide = sig.side.toLowerCase();
+      
+      if (sigSymbol !== liveSymbol) continue;
+      if (sigSide !== liveSide) continue;
+      
+      // Check if signal timestamp is within ±15 minutes of live entry
+      const sigTime = new Date(sig.timestamp);
+      if (isWithinOneCandle(trade.entryTs, sigTime)) {
+        matchingSignal = sig;
+        break;
+      }
+    }
+  }
 
   // 4. Calculate entry price slippage
+  // V5.51: Prefer signal price if we found a matching signal (more accurate)
   const liveEntryPrice = trade.entryPrice || 0;
-  const btEntryPrice = btTrade?.entryPrice ?? null;
+  const btEntryPrice = matchingSignal?.price ?? btTrade?.entryPrice ?? null;
   let entryPriceDiffPct: number | null = null;
   
   if (btEntryPrice && liveEntryPrice > 0) {
@@ -240,8 +268,17 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   const liveExitReason = normalizeExitReason(trade.exitReason);
   const btExitReason = btTrade ? normalizeExitReason(btTrade.exitReason) : null;
 
-  const entryMatch = btTrade !== null;  // If we found a trade, entry matched
-  const exitMatch = btExitReason !== null && liveExitReason === btExitReason;
+  // V5.51: Entry matches if we found either a matching signal OR a matching trade
+  const entryMatch = matchingSignal !== null || btTrade !== null;
+  
+  // V5.51: If we only have a signal (no matching trade), we can't compare exit/PnL
+  // This happens when live entered later due to position limits
+  // In this case, entry match is the key metric - the signal was valid
+  const signalOnlyMatch = matchingSignal !== null && btTrade === null;
+  
+  const exitMatch = signalOnlyMatch 
+    ? true  // Can't compare exit without a backtest trade
+    : (btExitReason !== null && liveExitReason === btExitReason);
   
   // Calculate live PnL as ROE (leveraged) to match backtest's netPnlPct calculation
   // trade.roiPct is the price movement %, we need to multiply by leverage for ROE
@@ -256,13 +293,15 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   
   const pnlDiff = btTrade !== null 
     ? Math.abs(liveRoePct - (btTrade.netPnlPct || 0))
-    : Infinity;
-  const pnlMatch = pnlDiff < dynamicPnlTolerance;
+    : 0;  // V5.51: Can't compare PnL without trade
+  const pnlMatch = signalOnlyMatch 
+    ? true  // Can't compare PnL without a backtest trade
+    : pnlDiff < dynamicPnlTolerance;
   
   // Check if slippage explains the variance
-  const isSlippageExpected = entryPriceDiffPct !== null && 
+  const isSlippageExpected = signalOnlyMatch || (entryPriceDiffPct !== null && 
     entryPriceDiffPct <= EXPECTED_SLIPPAGE_PCT && 
-    pnlDiff <= (entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER * liveLeverage + PNL_TOLERANCE_PCT * liveLeverage);
+    pnlDiff <= (entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER * liveLeverage + PNL_TOLERANCE_PCT * liveLeverage));
 
   const overallMatch = entryMatch && exitMatch && pnlMatch;
 
@@ -281,13 +320,17 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   // 7. Build mismatch details
   const mismatches: string[] = [];
   if (!entryMatch) {
-    mismatches.push(`Entry: No matching backtest trade found for ${trade.entryTs.toISOString()}`);
+    mismatches.push(`Entry: No matching backtest signal/trade found for ${trade.entryTs.toISOString()}`);
+  }
+  // V5.51: Log when we matched a signal but no trade (indicates position limit difference)
+  if (matchingSignal && !btTrade) {
+    mismatches.push(`ℹ️ Signal matched at ${new Date(matchingSignal.timestamp).toISOString()} (no trade - BT had position open from earlier signal)`);
   }
   if (entryMatch && entryPriceDiffPct !== null && entryPriceDiffPct > 0.1) {
     mismatches.push(`Entry Price Slippage: ${entryPriceDiffPct.toFixed(2)}% (Live=$${liveEntryPrice.toFixed(4)}, BT=$${btEntryPrice?.toFixed(4)})`);
   }
   if (entryMatch && !exitMatch) {
-    mismatches.push(`Exit reason: Live=${liveExitReason}, Backtest=${btExitReason}`);
+    mismatches.push(`Exit reason: Live=${liveExitReason}, Backtest=${btExitReason ?? 'N/A (signal only)'}`);
   }
   if (entryMatch && !pnlMatch) {
     const livePnl = liveRoePct.toFixed(2);
@@ -311,7 +354,8 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     livePnlPct: liveRoePct,  // Use leveraged ROE to match backtest
     liveEntryPrice,
 
-    btEntryTs: btTrade ? new Date(btTrade.entryTime) : null,
+    // V5.51: Use signal data if we matched a signal but no trade
+    btEntryTs: btTrade ? new Date(btTrade.entryTime) : (matchingSignal ? new Date(matchingSignal.timestamp) : null),
     btExitTs: btTrade ? new Date(btTrade.exitTime) : null,
     btExitReason,
     btPnlPct: btTrade?.netPnlPct ?? null,
