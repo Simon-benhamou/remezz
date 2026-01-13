@@ -46,7 +46,8 @@ export interface ParityResult {
   overallMatch: boolean;
   
   // NEW: Mismatch categorization
-  mismatchCategory: 'NONE' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH';
+  // V5.51: Added SIGNAL_ONLY for when we match signal but BT had earlier position
+  mismatchCategory: 'NONE' | 'SIGNAL_ONLY' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH';
   mismatchDetails: string | null;
 
   // Metadata
@@ -229,7 +230,7 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   }
 
   // 3. Find matching backtest trade
-  const btTrade = findMatchingBacktestTrade(trade, btResult.trades);
+  let btTrade = findMatchingBacktestTrade(trade, btResult.trades);
   
   // V5.51: Also check validSignals array to find the EXACT signal that matched live entry
   // This handles the case where backtest entered earlier due to no position limits
@@ -254,6 +255,45 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     }
   }
 
+  // V5.51: If we found a signal but no trade, re-run backtest starting just before the signal
+  // This ensures the backtest enters at the SAME time as live (not earlier)
+  if (matchingSignal && !btTrade) {
+    logger.info(`[PARITY] Signal found at ${new Date(matchingSignal.timestamp).toISOString()} but no trade - re-running backtest from signal time`);
+    
+    // Start just 30 minutes before the signal - close enough to not catch earlier signals
+    // The backtest will have indicator data from the original data fetch
+    const signalTime = matchingSignal.timestamp;
+    const rerunStartDate = new Date(signalTime - 30 * 60 * 1000);  // 30 min before signal
+    
+    try {
+      const rerunResult = await runBacktest({
+        startDate: rerunStartDate,
+        endDate: btEndDate,
+        symbols: [trade.symbol],
+        initialCapital: 1000,
+        leverage: trade.leverage || 5,
+        parityMode: false,  // Normal mode - we want actual trades now
+      });
+      
+      // Log rerun trades for debugging
+      logger.info(`[PARITY] Re-run produced ${rerunResult.trades.length} trades:`);
+      for (const t of rerunResult.trades) {
+        logger.info(`[PARITY]   - ${t.symbol} ${t.side} @ ${new Date(t.entryTime).toISOString()}`);
+      }
+      
+      // Now find the trade that should match
+      btTrade = findMatchingBacktestTrade(trade, rerunResult.trades);
+      
+      if (btTrade) {
+        logger.info(`[PARITY] Re-run successful: found trade at ${new Date(btTrade.entryTime).toISOString()}`);
+      } else {
+        logger.warn(`[PARITY] Re-run produced trades but none matched live entry ${trade.entryTs.toISOString()}`);
+      }
+    } catch (err) {
+      logger.warn(`[PARITY] Re-run backtest failed:`, err);
+    }
+  }
+
   // 4. Calculate entry price slippage
   // V5.51: Prefer signal price if we found a matching signal (more accurate)
   const liveEntryPrice = trade.entryPrice || 0;
@@ -273,12 +313,13 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   
   // V5.51: If we only have a signal (no matching trade), we can't compare exit/PnL
   // This happens when live entered later due to position limits
-  // In this case, entry match is the key metric - the signal was valid
+  // This is NOT a full match - we need a special category for this
   const signalOnlyMatch = matchingSignal !== null && btTrade === null;
   
-  const exitMatch = signalOnlyMatch 
-    ? true  // Can't compare exit without a backtest trade
-    : (btExitReason !== null && liveExitReason === btExitReason);
+  // Exit and PnL can only be compared if we have a backtest trade
+  const exitMatch = btTrade !== null 
+    ? (btExitReason !== null && liveExitReason === btExitReason)
+    : false;  // Can't match exit without a trade
   
   // Calculate live PnL as ROE (leveraged) to match backtest's netPnlPct calculation
   // trade.roiPct is the price movement %, we need to multiply by leverage for ROE
@@ -293,22 +334,28 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   
   const pnlDiff = btTrade !== null 
     ? Math.abs(liveRoePct - (btTrade.netPnlPct || 0))
-    : 0;  // V5.51: Can't compare PnL without trade
-  const pnlMatch = signalOnlyMatch 
-    ? true  // Can't compare PnL without a backtest trade
-    : pnlDiff < dynamicPnlTolerance;
+    : Infinity;  // Can't compare PnL without trade
+  const pnlMatch = btTrade !== null 
+    ? pnlDiff < dynamicPnlTolerance
+    : false;  // Can't match PnL without a trade
   
   // Check if slippage explains the variance
-  const isSlippageExpected = signalOnlyMatch || (entryPriceDiffPct !== null && 
+  const isSlippageExpected = entryPriceDiffPct !== null && 
     entryPriceDiffPct <= EXPECTED_SLIPPAGE_PCT && 
-    pnlDiff <= (entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER * liveLeverage + PNL_TOLERANCE_PCT * liveLeverage));
+    pnlDiff <= (entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER * liveLeverage + PNL_TOLERANCE_PCT * liveLeverage);
 
-  const overallMatch = entryMatch && exitMatch && pnlMatch;
+  // V5.51: Overall match only if we have a full trade comparison
+  // Signal-only is a partial match (entry validated, but can't verify exit/PnL)
+  const overallMatch = entryMatch && exitMatch && pnlMatch && !signalOnlyMatch;
 
   // 6. Categorize the mismatch
-  let mismatchCategory: 'NONE' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH' = 'NONE';
+  // V5.51: Add SIGNAL_ONLY category for when we match the signal but not a trade
+  let mismatchCategory: 'NONE' | 'SIGNAL_ONLY' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH' = 'NONE';
   
-  if (overallMatch) {
+  if (signalOnlyMatch) {
+    // We found the signal but BT had position from earlier - entry is validated
+    mismatchCategory = 'SIGNAL_ONLY';
+  } else if (overallMatch) {
     mismatchCategory = 'NONE';
   } else if (entryMatch && isSlippageExpected) {
     // Entry matched, and the PnL/exit differences are explained by slippage
@@ -417,7 +464,8 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     },
   });
 
-  const categoryLabel = mismatchCategory === 'EXPECTED_VARIANCE' ? '⚠️ EXPECTED VARIANCE' : 
+  const categoryLabel = mismatchCategory === 'SIGNAL_ONLY' ? '🔶 SIGNAL ONLY' :
+                        mismatchCategory === 'EXPECTED_VARIANCE' ? '⚠️ EXPECTED VARIANCE' : 
                         mismatchCategory === 'REAL_MISMATCH' ? '❌ REAL MISMATCH' : '✅ MATCH';
   logger.info(`[PARITY] Trade ${trade.symbol} verified: ${categoryLabel} | slippage=${entryPriceDiffPct?.toFixed(2) ?? 'N/A'}% (${backtestDurationMs}ms)`);
 
