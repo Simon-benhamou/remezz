@@ -35,6 +35,7 @@ import { globalSignalRanker } from './signalRanker.js';
 import {
   getBinanceWebSocket,
   getKlinesOhlcvFromWebSocket,
+  getKlinesWithMeta,  // V5.50: Added for accurate candle close detection using isFinal flag
   seedKlinesFromWebSocket,
   getBalanceFromWebSocket,
   getTickerFromWebSocket,
@@ -1403,16 +1404,18 @@ export class SimpleAgent {
       const currentPrice = allCandles[allCandles.length - 1].close;
       this.lastPrice = currentPrice;
       
-      // Find the last CLOSED candle (15min old or more)
+      // V5.50 FIX: Use isFinal flag from WebSocket instead of time-based heuristic
+      // This ensures live trading detects candle close at the EXACT same moment as backtest
+      // Previously: used (now - timestamp < 15min) which caused 15-min delay
+      // Now: use isFinal flag directly from Binance WebSocket
       const now = Date.now();
-      const CANDLE_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+      const CANDLE_INTERVAL_MS = 15 * 60 * 1000; // Still needed for delay calculations
       
-      // The last candle is closed if its timestamp is at least 15min old
       let lastClosedIdx = allCandles.length - 1;
-      const lastCandleAge = now - allCandles[lastClosedIdx].timestamp;
+      const lastCandle = allCandles[lastClosedIdx];
       
-      if (lastCandleAge < CANDLE_INTERVAL_MS) {
-        // Last candle is still in progress, use the previous one
+      // If the last candle is not final (still in progress), use the previous one
+      if (lastCandle.isFinal === false) {
         lastClosedIdx = allCandles.length - 2;
       }
       
@@ -1476,12 +1479,13 @@ export class SimpleAgent {
         return;
       }
 
-      // V5.13: Same logic for BTC candles - use timestamp age
+      // V5.50: Use isFinal for BTC candles too (aligned with backtest)
       let btcLastClosedIdx = allBtcCandles.length - 1;
-      const btcLastCandleAge = now - allBtcCandles[btcLastClosedIdx].timestamp;
-
-      if (btcLastCandleAge < CANDLE_INTERVAL_MS) {
-        btcLastClosedIdx = allBtcCandles.length - 2;
+      if (allBtcCandles.length > 0) {
+        const btcLastCandle = allBtcCandles[btcLastClosedIdx];
+        if (btcLastCandle.isFinal === false) {
+          btcLastClosedIdx = allBtcCandles.length - 2;
+        }
       }
 
       const btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
@@ -1489,10 +1493,9 @@ export class SimpleAgent {
       // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
       const allBtcCandles1h = await this.fetchBtcCandles1h();
       
-      // V5.38 FIX: Filter 1h candles to only closed ones (same as backtest)
-      // A 1h candle is closed when current time >= candle.timestamp + 1 hour
-      const CANDLE_1H_INTERVAL_MS = 60 * 60 * 1000;
-      const btcCandles1h = allBtcCandles1h.filter(c => c.timestamp + CANDLE_1H_INTERVAL_MS <= now);
+      // V5.50: Use isFinal for 1h candles (aligned with backtest)
+      // Filter to only include closed 1h candles
+      const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
       
       // V5.38: Validate minimum BTC 1h data for MTF filter (need at least 11 for 10-candle lookback)
       const MIN_BTC_1H_CANDLES = 11;
@@ -2303,14 +2306,15 @@ export class SimpleAgent {
       // Fetch BTC candles for regime detection (V5.13)
       const allBtcCandles = await this.fetchBtcCandles();
 
-      // V5.13: Same fix as checkEntry - use timestamp age instead of slice(0,-1)
-      const now = Date.now();
-      const CANDLE_INTERVAL_MS = 15 * 60 * 1000;
-      
+      // V5.50 FIX: Use isFinal flag from WebSocket instead of time-based heuristic
+      // This ensures live trading detects candle close at the EXACT same moment as backtest
+      // Previously: used (now - timestamp < 15min) which caused 15-min delay
+      // Now: use isFinal flag directly from Binance WebSocket
       let lastClosedIdx = allCandles.length - 1;
-      const lastCandleAge = now - allCandles[lastClosedIdx].timestamp;
+      const lastCandle = allCandles[lastClosedIdx];
       
-      if (lastCandleAge < CANDLE_INTERVAL_MS) {
+      // If the last candle is not final (still in progress), use the previous one
+      if (lastCandle.isFinal === false) {
         lastClosedIdx = allCandles.length - 2;
       }
       
@@ -2321,14 +2325,12 @@ export class SimpleAgent {
       const candles = allCandles.slice(0, lastClosedIdx + 1);
       const latestClosedCandle = candles[candles.length - 1];
       
-      // V5.40 FIX: Filter BTC candles to use only CLOSED candles (aligned with backtest)
+      // V5.50 FIX: Use isFinal for BTC candles too (aligned with backtest)
       // This ensures regime detection uses the same closed candle data as backtest
-      // Previously we passed all btcCandles including the candle in progress,
-      // which could cause false REGIME_CHANGE triggers when BTC price fluctuated
       let lastClosedBtcIdx = allBtcCandles.length - 1;
       if (allBtcCandles.length > 0) {
-        const lastBtcCandleAge = now - allBtcCandles[lastClosedBtcIdx].timestamp;
-        if (lastBtcCandleAge < CANDLE_INTERVAL_MS) {
+        const lastBtcCandle = allBtcCandles[lastClosedBtcIdx];
+        if (lastBtcCandle.isFinal === false) {
           lastClosedBtcIdx = allBtcCandles.length - 2;
         }
       }
@@ -3049,16 +3051,18 @@ export class SimpleAgent {
     }
     
     // 2. Try WebSocket cache first (0 API weight!)
+    // V5.50: Use getKlinesWithMeta to preserve isFinal flag for accurate candle close detection
     try {
-      const wsKlines = getKlinesOhlcvFromWebSocket(binanceSymbol, '15m');
+      const wsKlines = getKlinesWithMeta(binanceSymbol, '15m');
       if (wsKlines && wsKlines.length >= 50) {
         const candles: Candle[] = wsKlines.map(c => ({
-          timestamp: c[0] as number,
-          open: c[1] as number,
-          high: c[2] as number,
-          low: c[3] as number,
-          close: c[4] as number,
-          volume: c[5] as number,
+          timestamp: c.timestamp,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+          isFinal: c.isFinal,
         }));
         
         // Update local cache with WS data
@@ -3077,15 +3081,17 @@ export class SimpleAgent {
     // 4. NO REST FALLBACK - WebSocket only to avoid IP bans
     // If WebSocket doesn't have enough data yet, use whatever we have
     // V5.29: Removed REST fallback - caused IP bans from Binance
-    const wsKlinesPartial = getKlinesOhlcvFromWebSocket(binanceSymbol, '15m');
+    // V5.50: Use getKlinesWithMeta to preserve isFinal flag
+    const wsKlinesPartial = getKlinesWithMeta(binanceSymbol, '15m');
     if (wsKlinesPartial && wsKlinesPartial.length > 0) {
       const candles: Candle[] = wsKlinesPartial.map(c => ({
-        timestamp: c[0] as number,
-        open: c[1] as number,
-        high: c[2] as number,
-        low: c[3] as number,
-        close: c[4] as number,
-        volume: c[5] as number,
+        timestamp: c.timestamp,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume,
+        isFinal: c.isFinal,
       }));
       this.candleCache = { candles, fetchedAt: Date.now() };
       return candles;
@@ -3114,16 +3120,18 @@ export class SimpleAgent {
     }
     
     // 2. Try WebSocket cache first (0 API weight!) 
+    // V5.50: Use getKlinesWithMeta to preserve isFinal flag for accurate candle close detection
     try {
-      const wsKlines = getKlinesOhlcvFromWebSocket(btcSymbol, '15m');
+      const wsKlines = getKlinesWithMeta(btcSymbol, '15m');
       if (wsKlines && wsKlines.length >= 200) {
         const candles: Candle[] = wsKlines.map(c => ({
-          timestamp: c[0] as number,
-          open: c[1] as number,
-          high: c[2] as number,
-          low: c[3] as number,
-          close: c[4] as number,
-          volume: c[5] as number,
+          timestamp: c.timestamp,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+          isFinal: c.isFinal,
         }));
         
         // Update global cache with WS data
@@ -3141,15 +3149,17 @@ export class SimpleAgent {
     
     // 4. NO REST FALLBACK - WebSocket only to avoid IP bans
     // V5.29: Removed REST fallback - caused IP bans from Binance
-    const wsKlinesPartial = getKlinesOhlcvFromWebSocket(btcSymbol, '15m');
+    // V5.50: Use getKlinesWithMeta to preserve isFinal flag
+    const wsKlinesPartial = getKlinesWithMeta(btcSymbol, '15m');
     if (wsKlinesPartial && wsKlinesPartial.length > 0) {
       const candles: Candle[] = wsKlinesPartial.map(c => ({
-        timestamp: c[0] as number,
-        open: c[1] as number,
-        high: c[2] as number,
-        low: c[3] as number,
-        close: c[4] as number,
-        volume: c[5] as number,
+        timestamp: c.timestamp,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume,
+        isFinal: c.isFinal,
       }));
       globalBtcCandleCache = { candles, fetchedAt: Date.now() };
       return candles;
@@ -3185,16 +3195,18 @@ export class SimpleAgent {
         }
 
         // 2. Try WebSocket cache first (0 API weight!)
+        // V5.50: Use getKlinesWithMeta to preserve isFinal flag
         try {
-          const wsKlines = getKlinesOhlcvFromWebSocket(btcSymbol, '1h');
+          const wsKlines = getKlinesWithMeta(btcSymbol, '1h');
           if (wsKlines && wsKlines.length >= 20) {  // Need at least 20 candles for MTF filter
             const candles: Candle[] = wsKlines.map(c => ({
-              timestamp: c[0] as number,
-              open: c[1] as number,
-              high: c[2] as number,
-              low: c[3] as number,
-              close: c[4] as number,
-              volume: c[5] as number,
+              timestamp: c.timestamp,
+              open: c.open,
+              high: c.high,
+              low: c.low,
+              close: c.close,
+              volume: c.volume,
+              isFinal: c.isFinal,
             }));
             globalBtc1hCandleCache = { candles, fetchedAt: Date.now() };
             return candles;

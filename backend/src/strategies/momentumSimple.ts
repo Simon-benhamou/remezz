@@ -487,6 +487,7 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  isFinal?: boolean;  // V5.50: Added for accurate candle close detection (from WebSocket)
 }
 
 export interface Position {

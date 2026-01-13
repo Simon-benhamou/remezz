@@ -3449,6 +3449,46 @@ export function seedKlinesFromWebSocket(symbol: string, interval: string, ohlcv:
   ws.seedKlines(symbol, interval, ohlcv);
 }
 
+/**
+ * V5.50: Get klines with metadata (including isFinal) for accurate candle close detection
+ * This preserves the isFinal flag from WebSocket which is essential for matching backtest timing
+ */
+export function getKlinesWithMeta(symbol: string, interval: string): { timestamp: number; open: number; high: number; low: number; close: number; volume: number; isFinal: boolean }[] | null {
+  const ws = getBinanceWebSocket();
+  const klines = ws.getKlines(symbol, interval);
+  if (!klines?.length) return null;
+  
+  // Same staleness check as getKlinesOhlcvFromWebSocket
+  const lastKline = klines[klines.length - 1];
+  const lastBarAge = Date.now() - lastKline.timestamp;
+  const intervalToMaxAge: Record<string, number> = {
+    '1m': 5 * 60_000,
+    '3m': 12 * 60_000,
+    '5m': 20 * 60_000,
+    '15m': 45 * 60_000,
+    '30m': 90 * 60_000,
+    '1h': 150 * 60_000,
+    '2h': 5 * 60 * 60_000,
+    '4h': 10 * 60 * 60_000,
+    '1d': 48 * 60 * 60_000,
+  };
+  const MAX_STALE_MS = intervalToMaxAge[interval] || 5 * 60_000;
+  if (lastBarAge > MAX_STALE_MS) {
+    console.warn(`[WS][STALE_CACHE] ${symbol} ${interval}: Last bar is ${Math.round(lastBarAge / 60_000)}min old (max: ${Math.round(MAX_STALE_MS / 60_000)}min), cache stale`);
+    return null;
+  }
+  
+  return klines.map(k => ({
+    timestamp: k.timestamp,
+    open: k.open,
+    high: k.high,
+    low: k.low,
+    close: k.close,
+    volume: k.volume,
+    isFinal: k.isFinal ?? true, // Historical candles are always final
+  }));
+}
+
 export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): number[][] | null {
   const ws = getBinanceWebSocket();
   const klines = ws.getKlines(symbol, interval);
