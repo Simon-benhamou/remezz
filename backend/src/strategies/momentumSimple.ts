@@ -439,8 +439,8 @@ export const MomentumConfig = {
     // ═══════════════════════════════════════════════════════════════════════════
     MOMENTUM_EXHAUSTION_ENABLED: true,      // V5.40: Enable momentum exhaustion detection
     MOMENTUM_EXHAUSTION_MIN_PROFIT_PCT: 5.0, // Only check when profit > 5% (already successful)
-    MOMENTUM_EXHAUSTION_MAX_ROC5_PCT: 0.003,  // Consider exhausted if ROC5 < 0.3% (weak momentum) - as decimal
-    MOMENTUM_EXHAUSTION_MAX_ROC10_PCT: 0.005, // And ROC10 < 0.5% (trend weakening) - as decimal
+    MOMENTUM_EXHAUSTION_MAX_ROC5_PCT: 0.003,  // ROC5 < 0.003 decimal (0.3%) - weak momentum
+    MOMENTUM_EXHAUSTION_MAX_ROC10_PCT: 0.005, // ROC10 < 0.005 decimal (0.5%) - trend weakening
     MOMENTUM_EXHAUSTION_MAX_VOLUME_RATIO: 0.8, // Optional: volume < 0.8x average (drying up)
     MOMENTUM_EXHAUSTION_TIGHTEN_DISTANCE_PCT: 0.3, // Tighten trailing to 0.3% (from 0.5-0.8%)
     MOMENTUM_EXHAUSTION_REQUIRE_VOLUME_CHECK: false, // V5.40: Don't require volume (momentum alone is enough)
@@ -1863,9 +1863,12 @@ export function shouldExitPosition(
       // Calculate momentum indicators
       const roc5 = calcROC(closes, 5);
       const roc10 = calcROC(closes, 10);
-      const avgVolume = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+      
+      // Calculate average volume safely
+      const volumeSlice = volumes.slice(-20);
+      const avgVolume = volumeSlice.reduce((a, b) => a + b, 0) / volumeSlice.length;
       const currentVolume = volumes[volumes.length - 1];
-      const volumeRatio = currentVolume / avgVolume;
+      const volumeRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
       
       // Check if momentum exhausted based on configured thresholds
       if (position.side === 'long') {
