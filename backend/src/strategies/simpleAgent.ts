@@ -44,6 +44,7 @@ import {
   seedPositionCache,
   toBinanceSymbolId,
   isPositionCacheSeeded,
+  type BinanceKlineData,
 } from '../services/binanceWebSocket.js';
 import { globalRestCircuitBreaker } from '../services/globalRestCircuitBreaker.js';
 import { isIpBanned } from '../exchange/ccxtClient.js';
@@ -569,6 +570,7 @@ export class SimpleAgent {
   private running = false;
   private tickIntervalId: NodeJS.Timeout | null = null;
   private tickAlignTimeoutId: NodeJS.Timeout | null = null; // V5.39: For synchronized tick alignment
+  private finalKlineUnsubscribe: (() => void) | null = null; // V5.50: Instant candle close detection
 
   // Realtime app-side exits (WS-based) to react faster than 15m candle-close.
   private realtimeExitIntervalId: NodeJS.Timeout | null = null;
@@ -784,10 +786,33 @@ export class SimpleAgent {
     }, delayToNextBoundary + jitterMs);
     
     logger.debug(`⏱️ [${this.config.symbol}] Tick synchronized to next ${TICK_INTERVAL_MS/1000}s boundary in ${delayToNextBoundary}ms (+${jitterMs}ms jitter)`);
+    
+    // V5.50: Subscribe to WebSocket final kline events for instant candle close detection
+    // This reduces detection latency from ~8s (polling) to ~1s (WS event-driven)
+    const binanceSymbol = this.config.symbol.split('/')[0] + 'USDT';
+    try {
+      const ws = getBinanceWebSocket();
+      this.finalKlineUnsubscribe = ws.onFinalKline((kline: BinanceKlineData) => {
+        // Only trigger for our symbol and 15m timeframe
+        if (kline.symbol === binanceSymbol && kline.timeframe === '15m') {
+          // Trigger immediate tick (but don't await - fire and forget)
+          void this.tick();
+        }
+      });
+      logger.debug(`⚡ [${this.config.symbol}] Subscribed to instant candle close events`);
+    } catch (error) {
+      logger.warn(`⚠️ [${this.config.symbol}] Failed to subscribe to instant candle events, using polling`);
+    }
   }
   
   async stop(): Promise<void> {
     this.running = false;
+    
+    // V5.50: Unsubscribe from final kline events
+    if (this.finalKlineUnsubscribe) {
+      this.finalKlineUnsubscribe();
+      this.finalKlineUnsubscribe = null;
+    }
     
     // V5.39: Clear alignment timeout if still pending
     if (this.tickAlignTimeoutId) {

@@ -1990,6 +1990,26 @@ class BinanceWebSocketManager {
   }
 
   /**
+   * Subscribe to FINAL kline updates only (when candle closes).
+   * Returns an unsubscribe function.
+   * Used by agents to trigger immediate tick when candle closes (~1s latency vs 8s polling).
+   */
+  onFinalKline(callback: (kline: BinanceKlineData) => void): () => void {
+    const wrapper = (kline: BinanceKlineData) => {
+      if (kline.isFinal) {
+        callback(kline);
+      }
+    };
+    this.klineCallbacks.push(wrapper);
+    return () => {
+      const idx = this.klineCallbacks.indexOf(wrapper);
+      if (idx !== -1) {
+        this.klineCallbacks.splice(idx, 1);
+      }
+    };
+  }
+
+  /**
    * Check si le WebSocket est connecté et le cache est frais.
    * This is a "strict" health check - returns true only if we have recent accepted frames.
    * For a more lenient check (connected + has data), use isConnectedAndReceiving().
