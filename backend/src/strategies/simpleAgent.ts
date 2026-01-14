@@ -1342,7 +1342,11 @@ export class SimpleAgent {
         const shortSymbol = symbol.replace('/USDT:USDT', '');
         logger.debug(`🔄 [${shortSymbol}] #${this.tickCount} IN_${this.position.side.toUpperCase()}@$${this.position.entryPrice.toFixed(2)} | $${currentPrice.toFixed(2)} | ${this.config.mode}`);
         await this.checkExit(this.position);
-        return; // Don't look for new entries while in position
+        // Note: If position was closed, the slot is freed via capitalPool.release()
+        // Other agents will see the freed slot when they calculate availableSlots
+        // in openPosition() AFTER waitForBatch(). No need to checkEntry() here
+        // because this agent has a cooldown anyway.
+        return;
       }
       
       // 2. Sinon, chercher une entrée (this sets lastRejectReason)
