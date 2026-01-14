@@ -211,7 +211,9 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   // Starting 5 min before ensures we catch the signal candle without capturing earlier signals
   const dataStartDate = new Date(trade.entryTs.getTime() - 3 * 24 * 60 * 60 * 1000);  // 3 days before for warmup
   const btStartDate = new Date(trade.entryTs.getTime() - 5 * 60 * 1000);  // Start 5 min before live entry
-  const btEndDate = new Date(trade.exitTs.getTime() + 2 * 60 * 60 * 1000);      // 2 hours after
+  // V5.52 FIX: Extended from 2h to 4h to ensure backtest captures all exit conditions
+  // This prevents "END" exit reason when BT entry timing differs slightly from live
+  const btEndDate = new Date(trade.exitTs.getTime() + 4 * 60 * 60 * 1000);      // 4 hours after
 
   let btResult: BacktestResult;
   try {

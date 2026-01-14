@@ -523,10 +523,13 @@ function checkBacktestExit(
     const confirmCandles = params.trailingConfirmCandles ?? 2;
     
     if (pos.trailingBreachCandles >= confirmCandles) {
+      // V5.52 FIX: Use current.close (actual market price) instead of newStopLoss (theoretical stop)
+      // In reality, trailing stops execute at market price when triggered, not at the exact stop level
+      // This ensures backtest PnL matches live execution more accurately
       return {
         shouldExit: true,
         exitReason: 'TRAIL',
-        exitPrice: exitSignal.newStopLoss ?? current.close,
+        exitPrice: current.close,
       };
     }
     // Not yet confirmed - continue
