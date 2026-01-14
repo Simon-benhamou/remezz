@@ -110,6 +110,7 @@ export interface BacktestParams {
   // When true, enters on EVERY valid signal regardless of open positions
   // Used by parity verification to match exact live trade signals
   parityMode?: boolean;
+  dataStartDate?: Date; // V5.47: Load data from this date (for indicator warmup) but start simulation at startDate
 }
 
 export interface BacktestTrade {
@@ -929,7 +930,7 @@ function calculatePnl(
 // ============================================================================
 
 export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
-  const { startDate, endDate, initialCapital, symbols, leverage, signalOverrides, parityMode } = params;
+  const { startDate, endDate, initialCapital, symbols, leverage, signalOverrides, dataStartDate ,parityMode} = params;
 
   console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
 
@@ -944,13 +945,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   
   console.log(`[Backtest] Exchange ready (using cached markets - 0 API weight)`);
 
+  // V5.47: Use dataStartDate for loading data (indicator warmup) if provided, otherwise startDate
+  const dataLoadStart = dataStartDate || startDate;
+
   // Fetch BTC for regime detection
-  const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', startDate, endDate);
+  const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
   const btcCloses = btcCandles.map((c) => c.close);
   console.log(`[Backtest] BTC 15m: ${btcCandles.length} candles`);
 
   // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
-  const btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', startDate, endDate);
+  const btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
   console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles`);
 
   // V5.25: Add delay between symbols to avoid rate limiting
@@ -961,7 +965,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     if (i > 0) {
       await new Promise(r => setTimeout(r, 1000));
     }
-    allData[symbol] = await fetchCandles(exchange, symbol, startDate, endDate);
+    allData[symbol] = await fetchCandles(exchange, symbol, dataLoadStart, endDate);
     console.log(`[Backtest] ${symbol}: ${allData[symbol].length} candles`);
   }
 

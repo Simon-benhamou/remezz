@@ -207,8 +207,10 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   // to block verification for recent trades.
 
   // 2. Run backtest for the trade's time period
-  // We need a buffer before entry (to warm up indicators: 200 bars × 15min = 50 hours = ~3 days)
-  const btStartDate = new Date(trade.entryTs.getTime() - 3 * 24 * 60 * 60 * 1000);  // 3 days before (for 200-bar SMA)
+  // V5.47: Use dataStartDate for indicator warmup, but start simulation AT the live entry candle
+  // This ensures backtest evaluates the same candle as live and prevents earlier signals
+  const dataStartDate = new Date(trade.entryTs.getTime() - 3 * 24 * 60 * 60 * 1000);  // 3 days before (for 200-bar SMA warmup)
+  const btStartDate = new Date(trade.entryTs.getTime());  // Start exactly at live entry time
   const btEndDate = new Date(trade.exitTs.getTime() + 2 * 60 * 60 * 1000);      // 2 hours after
 
   let btResult: BacktestResult;
@@ -219,6 +221,7 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     btResult = await runBacktest({
       startDate: btStartDate,
       endDate: btEndDate,
+      dataStartDate,  // V5.47: Load data earlier for warmup
       symbols: [trade.symbol],
       initialCapital: 1000,  // Doesn't matter for comparison in parity mode
       leverage: trade.leverage || 5,
