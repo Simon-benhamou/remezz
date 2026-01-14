@@ -1684,21 +1684,30 @@ export class SimpleAgent {
     // V5.22: Check if this signal is ranked high enough to execute
     // Calculate how many position slots are available
     const availableSlots = maxPositions - openPositionCount;
+    
+    // V5.58: Log ranking state for paper/live parity debugging
+    const allPendingSignals = globalSignalRanker.getPendingSignals(this.config.mode);
+    const slotsConsumed = globalSignalRanker.getSlotsConsumedInBatch(this.config.mode);
+    if (allPendingSignals.length > 0) {
+      const sortedByScore = [...allPendingSignals].sort((a, b) => b.score - a.score);
+      const rankingLog = sortedByScore.map((s, i) => `${i + 1}.${s.symbol.replace('/USDT:USDT', '')}(${s.score.toFixed(1)})`).join(' ');
+      const effectiveSlots = Math.max(0, availableSlots - slotsConsumed);
+      logger.info(`📊 [${symbol.replace('/USDT:USDT', '')}] RANKING CHECK | mode=${this.config.mode} | slots=${effectiveSlots}/${maxPositions} (${slotsConsumed} consumed) | signals: ${rankingLog}`);
+    }
+    
     const shouldExecute = globalSignalRanker.shouldExecuteSignal(symbol, availableSlots, this.config.mode);
     
     if (!shouldExecute) {
-      // This signal is not in the top N opportunities - defer it
-      const pendingSignals = globalSignalRanker.getPendingSignals(this.config.mode);
-      const currentSignal = pendingSignals.find(s => s.symbol === symbol);
-      if (currentSignal) {
-        logger.info(`⏸️ [${symbol.replace('/USDT:USDT', '')}] Signal DEFERRED (score=${currentSignal.score.toFixed(2)}) - not in top ${availableSlots} opportunities`);
-      }
+      // V5.58 FIX: Remove deferred signal from pool to prevent stale signals
+      // polluting future batches and causing paper/live mismatch
+      // (Note: ranker already logged the deferral reason)
+      globalSignalRanker.removeSignal(symbol, this.config.mode);
       return;
     }
     
     // Signal approved for execution - remove from pending
+    // (Note: ranker already logged the approval)
     globalSignalRanker.removeSignal(symbol, this.config.mode);
-    logger.info(`🎯 [${symbol.replace('/USDT:USDT', '')}] Signal APPROVED for execution (top ${availableSlots} opportunity)`);
     
     // Get available capital from pool
     const availableCapital = this.config.capitalPool.getAvailableCapital();

@@ -116,6 +116,14 @@ class SignalRanker {
     ['live', new Map()],
   ]);
   
+  // V5.58: Track slots consumed in current batch to prevent race conditions
+  // When an agent's signal is approved, we increment this counter BEFORE
+  // they actually reserve capital. This ensures other agents see fewer slots.
+  private slotsConsumedInBatch: Map<string, number> = new Map([
+    ['paper', 0],
+    ['live', 0],
+  ]);
+  
   // Timeout to batch signals (ms) - wait for all agents to report
   // CRITICAL: This must allow enough time for all agents to submit their signals
   // before any agent checks shouldExecuteSignal()
@@ -150,6 +158,9 @@ class SignalRanker {
     
     // Create a new batch promise if one doesn't exist for this mode
     if (!this.batchCompletePromises.get(mode)) {
+      // V5.58: Reset slots consumed counter at start of new batch
+      this.slotsConsumedInBatch.set(mode, 0);
+      
       this.batchCompletePromises.set(mode, new Promise<void>((resolve) => {
         this.batchCompleteResolvers.set(mode, resolve);
       }));
@@ -221,19 +232,45 @@ class SignalRanker {
   }
   
   /**
+   * V5.58: Get number of slots already consumed in current batch
+   * This prevents race conditions where multiple agents think they have slots
+   */
+  getSlotsConsumedInBatch(mode: 'live' | 'paper' = 'paper'): number {
+    return this.slotsConsumedInBatch.get(mode) || 0;
+  }
+  
+  /**
    * Check if a signal should be executed
    * Returns true if this signal is in the top N best opportunities
+   * 
+   * V5.58: Now accounts for slots already consumed by other signals in this batch
+   * to prevent race conditions where multiple agents all pass the ranking check
    */
   shouldExecuteSignal(symbol: string, availableSlots: number, mode: 'live' | 'paper' = 'paper'): boolean {
-    const topSignals = this.getTopSignals(availableSlots, mode);
+    // V5.58: Subtract slots already consumed in this batch
+    const consumed = this.slotsConsumedInBatch.get(mode) || 0;
+    const effectiveSlots = Math.max(0, availableSlots - consumed);
+    
+    if (effectiveSlots === 0) {
+      logger.info(`⏸️ [${symbol.replace('/USDT:USDT', '')}] Signal DEFERRED - all ${availableSlots} slots consumed by higher-ranked signals in this batch`);
+      return false;
+    }
+    
+    const topSignals = this.getTopSignals(effectiveSlots, mode);
     const isTopSignal = topSignals.some(s => s.symbol === symbol);
     
     const modeSignals = this.pendingSignals.get(mode)!;
     if (!isTopSignal && modeSignals.size > 0) {
       const currentSignal = modeSignals.get(symbol);
       if (currentSignal) {
-        logger.info(`⏸️ [${symbol.replace('/USDT:USDT', '')}] Signal DEFERRED (score=${currentSignal.score.toFixed(2)}) - not in top ${availableSlots} opportunities`);
+        logger.info(`⏸️ [${symbol.replace('/USDT:USDT', '')}] Signal DEFERRED (score=${currentSignal.score.toFixed(2)}) - not in top ${effectiveSlots} opportunities (${consumed} slots already consumed)`);
       }
+    }
+    
+    // V5.58: If approved, consume a slot to prevent other agents from using it
+    if (isTopSignal) {
+      this.slotsConsumedInBatch.set(mode, consumed + 1);
+      logger.info(`🎯 [${symbol.replace('/USDT:USDT', '')}] Signal APPROVED - consuming slot ${consumed + 1}/${availableSlots} for ${mode}`);
     }
     
     return isTopSignal;
