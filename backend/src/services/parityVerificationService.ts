@@ -207,10 +207,10 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   // to block verification for recent trades.
 
   // 2. Run backtest for the trade's time period
-  // V5.47: Use dataStartDate for indicator warmup, but start simulation shortly before live entry
-  // V5.51: parityMode will collect ALL valid signals, then re-run if needed
-  const dataStartDate = new Date(trade.entryTs.getTime() - 3 * 24 * 60 * 60 * 1000);  // 3 days before (for 200-bar SMA warmup)
-  const btStartDate = new Date(trade.entryTs.getTime() - 3 * 24 * 60 * 60 * 1000);  // Same as dataStartDate for now (V5.51 re-run handles precision)
+  // V5.47: Use dataStartDate for indicator warmup (3 days for 200-SMA), but start simulation very close to live entry
+  // Starting 5 min before ensures we catch the signal candle without capturing earlier signals
+  const dataStartDate = new Date(trade.entryTs.getTime() - 3 * 24 * 60 * 60 * 1000);  // 3 days before for warmup
+  const btStartDate = new Date(trade.entryTs.getTime() - 5 * 60 * 1000);  // Start 5 min before live entry
   const btEndDate = new Date(trade.exitTs.getTime() + 2 * 60 * 60 * 1000);      // 2 hours after
 
   let btResult: BacktestResult;
@@ -263,15 +263,15 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   if (matchingSignal && !btTrade) {
     logger.info(`[PARITY] Signal found at ${new Date(matchingSignal.timestamp).toISOString()} but no trade - re-running backtest from signal time`);
     
-    // Start just 30 minutes before the signal - close enough to not catch earlier signals
-    // The backtest will have indicator data from the original data fetch
+    // Start 5 min before the signal to catch it without earlier signals
     const signalTime = matchingSignal.timestamp;
-    const rerunStartDate = new Date(signalTime - 30 * 60 * 1000);  // 30 min before signal
+    const rerunStartDate = new Date(signalTime - 5 * 60 * 1000);  // 5 min before signal
     
     try {
       const rerunResult = await runBacktest({
         startDate: rerunStartDate,
         endDate: btEndDate,
+        dataStartDate,  // V5.47: Use same dataStartDate for consistent warmup without earlier signals
         symbols: [trade.symbol],
         initialCapital: 1000,
         leverage: trade.leverage || 5,
