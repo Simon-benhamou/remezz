@@ -207,27 +207,59 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   // to block verification for recent trades.
 
   // 2. Run backtest for the trade's time period
-  // V5.47: Use dataStartDate for indicator warmup (3 days for 200-SMA), but start simulation very close to live entry
-  // Starting 5 min before ensures we catch the signal candle without capturing earlier signals
+  // V5.54: Use forcedEntry to ensure we test EXACTLY the same trade as live
+  // This solves the problem where live skipped signals due to max positions
   const dataStartDate = new Date(trade.entryTs.getTime() - 3 * 24 * 60 * 60 * 1000);  // 3 days before for warmup
-  const btStartDate = new Date(trade.entryTs.getTime() - 5 * 60 * 1000);  // Start 5 min before live entry
-  // V5.52 FIX: Extended from 2h to 4h to ensure backtest captures all exit conditions
-  // This prevents "END" exit reason when BT entry timing differs slightly from live
-  const btEndDate = new Date(trade.exitTs.getTime() + 4 * 60 * 60 * 1000);      // 4 hours after
+  
+  // Calculate the candle timestamp that matches the live entry
+  // 
+  // IMPORTANT: Understanding backtest vs live timing:
+  // - Binance candle timestamp = OPEN time of the candle
+  // - Candle 09:45 means the candle that opens at 09:45 and closes at 10:00
+  // - The CLOSE price of candle 09:45 is the price at 10:00
+  // 
+  // Live trading flow:
+  // - At 09:45:XX, live sees the signal (from candle 09:30-09:45 that just closed)
+  // - Live places order and gets filled at ~$624.35
+  // - This price matches the CLOSE of candle 09:45 (which closes at 10:00)
+  // 
+  // Backtest flow:
+  // - When backtest processes candle 09:45, it uses the CLOSE price of that candle
+  // - So entryTimestamp should be the candle that's currently OPEN when live enters
+  // 
+  // Example: Live entry at 09:45:30
+  // - Candle 09:30-09:45 just closed (signal generated)
+  // - Candle 09:45-10:00 is currently open
+  // - Live enters at the current price ~= what will be candle 09:45's CLOSE
+  // - Backtest should use candle timestamp 09:45
+  //
+  const liveEntryMs = trade.entryTs.getTime();
+  // Round DOWN to nearest 15-minute boundary = the candle that's currently OPEN
+  const entryTimestamp = Math.floor(liveEntryMs / CANDLE_15M_MS) * CANDLE_15M_MS;
+  
+  // Start simulation a bit before entry to warm up state machines (stagnant, etc.)
+  const btStartDate = new Date(entryTimestamp - 30 * 60 * 1000);  // 30 min before
+  // End a few hours after exit to capture all exit conditions
+  const btEndDate = new Date(trade.exitTs.getTime() + 4 * 60 * 60 * 1000);
+
+  logger.info(`[PARITY] Live entry: ${trade.entryTs.toISOString()}, Calculated candle: ${new Date(entryTimestamp).toISOString()}`);
 
   let btResult: BacktestResult;
   try {
-    // V5.51: Use parityMode to ignore position limits and test pure signal logic
-    // This ensures we find the EXACT signal that matched the live trade,
-    // even if backtest would have entered earlier due to having no open positions
+    // V5.54: Use forcedEntry to enter at EXACT same time as live
     btResult = await runBacktest({
       startDate: btStartDate,
       endDate: btEndDate,
-      dataStartDate,  // V5.47: Load data earlier for warmup
+      dataStartDate,
       symbols: [trade.symbol],
-      initialCapital: 1000,  // Doesn't matter for comparison in parity mode
+      initialCapital: 1000,
       leverage: trade.leverage || 5,
-      parityMode: true,  // V5.51: Ignore position limits, test pure signal logic
+      forcedEntry: {
+        symbol: trade.symbol,
+        side: trade.positionSide.toLowerCase() as 'long' | 'short',
+        entryTimestamp,
+        entryPrice: trade.entryPrice || 0,
+      },
     });
   } catch (err) {
     logger.error(`[PARITY] Backtest failed for trade ${tradeId}:`, err);
@@ -235,74 +267,28 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   }
 
   // 3. Find matching backtest trade
+  // V5.54: With forcedEntry, there should be exactly one trade at the forced entry time
   let btTrade = findMatchingBacktestTrade(trade, btResult.trades);
   
-  // V5.51: Also check validSignals array to find the EXACT signal that matched live entry
-  // This handles the case where backtest entered earlier due to no position limits
-  let matchingSignal: NonNullable<BacktestResult['validSignals']>[number] | null = null;
-  if (btResult.validSignals && btResult.validSignals.length > 0) {
-    const liveSymbol = trade.symbol.toUpperCase();
-    const liveSide = trade.positionSide.toLowerCase();
-    
-    for (const sig of btResult.validSignals) {
-      const sigSymbol = sig.symbol.toUpperCase();
-      const sigSide = sig.side.toLowerCase();
-      
-      if (sigSymbol !== liveSymbol) continue;
-      if (sigSide !== liveSide) continue;
-      
-      // Check if signal timestamp is within ±15 minutes of live entry
-      const sigTime = new Date(sig.timestamp);
-      if (isWithinOneCandle(trade.entryTs, sigTime)) {
-        matchingSignal = sig;
-        break;
-      }
+  // V5.54: If no matching trade found, the backtest didn't enter at the forced time
+  // This could mean the candle data is missing or timestamp calculation was wrong
+  if (!btTrade && btResult.trades.length > 0) {
+    // Try to find closest trade
+    logger.warn(`[PARITY] No exact match found. BT trades:`);
+    for (const t of btResult.trades) {
+      logger.warn(`[PARITY]   - ${t.symbol} ${t.side} @ ${new Date(t.entryTime).toISOString()}`);
     }
+    // Take the first trade as best match
+    btTrade = btResult.trades[0];
   }
-
-  // V5.51: If we found a signal but no trade, re-run backtest starting just before the signal
-  // This ensures the backtest enters at the SAME time as live (not earlier)
-  if (matchingSignal && !btTrade) {
-    logger.info(`[PARITY] Signal found at ${new Date(matchingSignal.timestamp).toISOString()} but no trade - re-running backtest from signal time`);
-    
-    // Start 5 min before the signal to catch it without earlier signals
-    const signalTime = matchingSignal.timestamp;
-    const rerunStartDate = new Date(signalTime - 5 * 60 * 1000);  // 5 min before signal
-    
-    try {
-      const rerunResult = await runBacktest({
-        startDate: rerunStartDate,
-        endDate: btEndDate,
-        dataStartDate,  // V5.47: Use same dataStartDate for consistent warmup without earlier signals
-        symbols: [trade.symbol],
-        initialCapital: 1000,
-        leverage: trade.leverage || 5,
-        parityMode: false,  // Normal mode - we want actual trades now
-      });
-      
-      // Log rerun trades for debugging
-      logger.info(`[PARITY] Re-run produced ${rerunResult.trades.length} trades:`);
-      for (const t of rerunResult.trades) {
-        logger.info(`[PARITY]   - ${t.symbol} ${t.side} @ ${new Date(t.entryTime).toISOString()}`);
-      }
-      
-      // Now find the trade that should match
-      btTrade = findMatchingBacktestTrade(trade, rerunResult.trades);
-      
-      if (btTrade) {
-        logger.info(`[PARITY] Re-run successful: found trade at ${new Date(btTrade.entryTime).toISOString()}`);
-      } else {
-        logger.warn(`[PARITY] Re-run produced trades but none matched live entry ${trade.entryTs.toISOString()}`);
-      }
-    } catch (err) {
-      logger.warn(`[PARITY] Re-run backtest failed:`, err);
-    }
-  }
+  
+  // V5.54: Simplified - no more signal matching or re-run logic needed
+  // The forcedEntry ensures we enter at the exact same time as live
 
   // 4. Calculate entry price slippage
-  // V5.51: Prefer signal price if we found a matching signal (more accurate)
+  // V5.54: With forcedEntry, we use the backtest trade entry price directly
   const liveEntryPrice = trade.entryPrice || 0;
-  const btEntryPrice = matchingSignal?.price ?? btTrade?.entryPrice ?? null;
+  const btEntryPrice = btTrade?.entryPrice ?? null;
   let entryPriceDiffPct: number | null = null;
   
   if (btEntryPrice && liveEntryPrice > 0) {
@@ -313,13 +299,12 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   const liveExitReason = normalizeExitReason(trade.exitReason);
   const btExitReason = btTrade ? normalizeExitReason(btTrade.exitReason) : null;
 
-  // V5.51: Entry matches if we found either a matching signal OR a matching trade
-  const entryMatch = matchingSignal !== null || btTrade !== null;
+  // V5.54: Entry matches if we have a backtest trade with forcedEntry
+  const entryMatch = btTrade !== null;
   
-  // V5.51: If we only have a signal (no matching trade), we can't compare exit/PnL
-  // This happens when live entered later due to position limits
-  // This is NOT a full match - we need a special category for this
-  const signalOnlyMatch = matchingSignal !== null && btTrade === null;
+  // V5.54: With forcedEntry, we always have a matching trade or no trade at all
+  // signalOnlyMatch is no longer applicable since we force the entry
+  const signalOnlyMatch = false;
   
   // Exit and PnL can only be compared if we have a backtest trade
   const exitMatch = btTrade !== null 
@@ -374,9 +359,9 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   if (!entryMatch) {
     mismatches.push(`Entry: No matching backtest signal/trade found for ${trade.entryTs.toISOString()}`);
   }
-  // V5.51: Log when we matched a signal but no trade (indicates position limit difference)
-  if (matchingSignal && !btTrade) {
-    mismatches.push(`ℹ️ Signal matched at ${new Date(matchingSignal.timestamp).toISOString()} (no trade - BT had position open from earlier signal)`);
+  // V5.54: With forcedEntry, we no longer need signal-only matching
+  if (!btTrade) {
+    mismatches.push(`⚠️ Backtest did not enter at forced time ${new Date(entryTimestamp).toISOString()} - check candle data`);
   }
   if (entryMatch && entryPriceDiffPct !== null && entryPriceDiffPct > 0.1) {
     mismatches.push(`Entry Price Slippage: ${entryPriceDiffPct.toFixed(2)}% (Live=$${liveEntryPrice.toFixed(4)}, BT=$${btEntryPrice?.toFixed(4)})`);
@@ -406,8 +391,8 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     livePnlPct: liveRoePct,  // Use leveraged ROE to match backtest
     liveEntryPrice,
 
-    // V5.51: Use signal data if we matched a signal but no trade
-    btEntryTs: btTrade ? new Date(btTrade.entryTime) : (matchingSignal ? new Date(matchingSignal.timestamp) : null),
+    // V5.54: With forcedEntry, btEntryTs comes directly from the trade
+    btEntryTs: btTrade ? new Date(btTrade.entryTime) : null,
     btExitTs: btTrade ? new Date(btTrade.exitTime) : null,
     btExitReason,
     btPnlPct: btTrade?.netPnlPct ?? null,

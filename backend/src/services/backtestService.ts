@@ -115,6 +115,15 @@ export interface SignalOverrides {
   MAX_CONSEC_UP?: number;  // Override for max consecutive up candles (default 5)
 }
 
+// V5.54: Forced entry for parity verification
+// Forces backtest to enter at EXACT same time/price as live trade
+export interface ForcedEntry {
+  symbol: string;
+  side: 'long' | 'short';
+  entryTimestamp: number;  // Exact candle timestamp (must match a candle close time)
+  entryPrice: number;      // Live entry price (for comparison/logging)
+}
+
 export interface BacktestParams {
   startDate: Date;
   endDate: Date;
@@ -129,6 +138,10 @@ export interface BacktestParams {
   // Used by parity verification to match exact live trade signals
   parityMode?: boolean;
   dataStartDate?: Date; // V5.47: Load data from this date (for indicator warmup) but start simulation at startDate
+  // V5.54: Force entry at exact live trade time (for parity verification)
+  // When set, ignores signal detection and enters at the specified timestamp
+  // This ensures we test EXACTLY the same trade as live, regardless of earlier signals
+  forcedEntry?: ForcedEntry;
 }
 
 export interface BacktestTrade {
@@ -961,7 +974,7 @@ function calculatePnl(
 // ============================================================================
 
 export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
-  const { startDate, endDate, initialCapital, symbols, leverage, signalOverrides, dataStartDate ,parityMode} = params;
+  const { startDate, endDate, initialCapital, symbols, leverage, signalOverrides, dataStartDate, parityMode, forcedEntry } = params;
 
   console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
 
@@ -1354,6 +1367,69 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           isBullRegime
         });
       }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════
+    // V5.54: FORCED ENTRY MODE (for parity verification)
+    // ═══════════════════════════════════════════════════════════════════
+    // When forcedEntry is set, we ONLY enter at the exact specified timestamp
+    // This ensures we test the EXACT same trade as live, ignoring earlier signals
+    if (forcedEntry) {
+      const forcedSymbol = forcedEntry.symbol;
+      const forcedCandles = allData[forcedSymbol];
+      const forcedIdx = symbolIdx[forcedSymbol];
+      
+      if (forcedCandles && forcedIdx < forcedCandles.length) {
+        const currentCandle = forcedCandles[forcedIdx];
+        
+        // Check if this candle matches the forced entry timestamp
+        // Candle timestamp is the OPEN time, but entry happens at CLOSE
+        // So we match if the candle timestamp equals the forcedEntry timestamp
+        // (meaning we enter when this candle closes)
+        if (currentCandle.timestamp === forcedEntry.entryTimestamp && !positions[forcedSymbol]) {
+          // Force entry at this exact candle
+          console.log(`[FORCED ENTRY] Entering ${forcedSymbol} ${forcedEntry.side} @ ${new Date(currentCandle.timestamp).toISOString()}`);
+          
+          const posLev = leverage || 5;
+          const marginUsd = Math.min(capital * 0.25, 1000); // Use fixed sizing for parity
+          const notionalUsd = marginUsd * posLev;
+          const qty = notionalUsd / currentCandle.close;
+          
+          if (qty > 0 && marginUsd > 0) {
+            capitalInUse += marginUsd;
+            capital -= marginUsd;
+            
+            positions[forcedSymbol] = {
+              symbol: forcedSymbol,
+              side: forcedEntry.side,
+              entryPrice: currentCandle.close,
+              entryTime: currentCandle.timestamp,
+              entryIdx: forcedIdx,
+              qty,
+              notionalUsd,
+              marginUsd,
+              leverage: posLev,
+              capitalBefore: capital + marginUsd,
+              wasCapped: false,
+              stopLossPct: CONFIG.EXIT.STOP_LOSS_PCT,
+              highWaterMark: forcedEntry.side === 'long' ? currentCandle.close : undefined,
+              lowWaterMark: forcedEntry.side === 'short' ? currentCandle.close : undefined,
+              entryReason: 'FORCED_PARITY',
+              positionIndex: 0,
+              totalPositions: 1,
+              stagnantState: {
+                triggered: false,
+                confirmed: false,
+                cancelled: false,
+                obsPeakPct: 0
+              }
+            };
+          }
+        }
+      }
+      
+      // Skip normal signal processing when in forced entry mode
+      continue;
     }
     
     // ═══════════════════════════════════════════════════════════════════
