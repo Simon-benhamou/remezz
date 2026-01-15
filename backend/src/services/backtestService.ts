@@ -1373,7 +1373,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     // V5.54: FORCED ENTRY MODE (for parity verification)
     // ═══════════════════════════════════════════════════════════════════
     // When forcedEntry is set, we ONLY enter at the exact specified timestamp
-    // This ensures we test the EXACT same trade as live, ignoring earlier signals
+    // BUT we also verify that a valid signal exists at that time
+    // If no signal, it means the live trade didn't follow the strategy!
     if (forcedEntry) {
       const forcedSymbol = forcedEntry.symbol;
       const forcedCandles = allData[forcedSymbol];
@@ -1383,15 +1384,35 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const currentCandle = forcedCandles[forcedIdx];
         
         // Check if this candle matches the forced entry timestamp
-        // Candle timestamp is the OPEN time, but entry happens at CLOSE
-        // So we match if the candle timestamp equals the forcedEntry timestamp
-        // (meaning we enter when this candle closes)
         if (currentCandle.timestamp === forcedEntry.entryTimestamp && !positions[forcedSymbol]) {
-          // Force entry at this exact candle
-          console.log(`[FORCED ENTRY] Entering ${forcedSymbol} ${forcedEntry.side} @ ${new Date(currentCandle.timestamp).toISOString()}`);
+          // V5.55: Check if there's a valid signal for this symbol at this time
+          const hasValidSignal = signalCandidates.some(
+            c => c.symbol === forcedSymbol && 
+                 c.signal.valid && 
+                 c.signal.side === forcedEntry.side
+          );
           
+          if (hasValidSignal) {
+            // Signal is valid - enter the trade
+            console.log(`[FORCED ENTRY] ✅ Valid signal found. Entering ${forcedSymbol} ${forcedEntry.side} @ ${new Date(currentCandle.timestamp).toISOString()}`);
+          } else {
+            // No valid signal - log warning but still enter for comparison
+            // This allows us to see what would have happened even if signal was different
+            console.log(`[FORCED ENTRY] ⚠️ NO VALID SIGNAL at ${new Date(currentCandle.timestamp).toISOString()} for ${forcedSymbol} ${forcedEntry.side}`);
+            console.log(`[FORCED ENTRY] ⚠️ Live may have entered on different conditions or timing`);
+            // Store this info for the parity result
+            allValidSignals.push({
+              symbol: forcedSymbol,
+              side: forcedEntry.side,
+              timestamp: currentCandle.timestamp,
+              price: currentCandle.close,
+              reason: 'NO_SIGNAL_AT_FORCED_TIME',
+            });
+          }
+          
+          // Enter the trade regardless (to compare exit behavior)
           const posLev = leverage || 5;
-          const marginUsd = Math.min(capital * 0.25, 1000); // Use fixed sizing for parity
+          const marginUsd = Math.min(capital * 0.25, 1000);
           const notionalUsd = marginUsd * posLev;
           const qty = notionalUsd / currentCandle.close;
           

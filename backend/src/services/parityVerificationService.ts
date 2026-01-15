@@ -284,6 +284,17 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   
   // V5.54: Simplified - no more signal matching or re-run logic needed
   // The forcedEntry ensures we enter at the exact same time as live
+  
+  // V5.55: Check if backtest found a valid signal at the forced entry time
+  // If not, the live trade may have entered on different/outdated conditions
+  const noSignalAtForcedTime = btResult.validSignals?.some(
+    s => s.reason === 'NO_SIGNAL_AT_FORCED_TIME' && s.symbol === trade.symbol
+  ) ?? false;
+  
+  if (noSignalAtForcedTime) {
+    logger.warn(`[PARITY] ⚠️ NO VALID SIGNAL at forced entry time for ${trade.symbol}`);
+    logger.warn(`[PARITY] This means live entered when backtest strategy would NOT have entered`);
+  }
 
   // 4. Calculate entry price slippage
   // V5.54: With forcedEntry, we use the backtest trade entry price directly
