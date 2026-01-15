@@ -1167,9 +1167,13 @@ export class SimpleAgent {
         }
 
         this.stopRealtimeExitMonitor();
-        const execPx = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : closePx;
+        // V5.57 FIX: Use candidateStop (newStopLoss calculated NOW) as primary exit price
+        // This matches backtest - use the trailing stop calculated at this moment
+        // candidateStop = exitSignal.newStopLoss from shouldExitPosition()
+        const trailingStopPx = candidateStop ?? this.position!.appTrailingStop ?? this.lastAppTrailingStop;
+        const execPx = trailingStopPx && Number.isFinite(trailingStopPx) ? trailingStopPx : (Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : closePx);
         logger.info(
-          `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (trailing_rt, 1m close) | exec=${execPx.toFixed(4)} | close=${closePx.toFixed(4)} | stop=${stopPrice} | confirmCandles=${confirmCandles}`,
+          `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (trailing_rt, 1m close) | exec=${execPx.toFixed(4)} | trailStop=${trailingStopPx?.toFixed(4) ?? 'n/a'} | close=${closePx.toFixed(4)} | confirmCandles=${confirmCandles}`,
         );
         await this.closePosition(this.position!, execPx, 'trailing_rt');
         return;
@@ -1239,8 +1243,10 @@ export class SimpleAgent {
       if (!confirmed) return;
 
       this.stopRealtimeExitMonitor();
-      logger.info(`⚡ [${symbol}] REALTIME EXIT confirmed (trailing_rt) price=$${currentPrice.toFixed(4)} stop=$${stopPrice.toFixed(4)} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`);
-      await this.closePosition(this.position!, currentPrice, 'trailing_rt');
+      // V5.55 FIX: Use trailing stop price for exit, not current market price
+      const trailingStopPx = this.position!.appTrailingStop ?? this.lastAppTrailingStop ?? stopPrice;
+      logger.info(`⚡ [${symbol}] REALTIME EXIT confirmed (trailing_rt) price=$${currentPrice.toFixed(4)} exitAt=$${trailingStopPx.toFixed(4)} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`);
+      await this.closePosition(this.position!, trailingStopPx, 'trailing_rt');
     } finally {
       this.realtimeExitInProgress = false;
     }
@@ -2493,8 +2499,13 @@ export class SimpleAgent {
         
         if (breachCount >= REQUIRED_CONFIRMATIONS) {
           // Confirmed! 2 consecutive closes beyond trailing stop
-          logger.info(`🔴 [${symbol}] TRAILING CONFIRMED (${breachCount}/${REQUIRED_CONFIRMATIONS} closes) | price=$${currentPrice.toFixed(4)} | trail=$${exitSignal.newStopLoss?.toFixed(4)} | PnL=${exitSignal.pnlPct?.toFixed(2)}%`);
-          await this.closePosition(this.position!, currentPrice, 'trailing');
+          // V5.57 FIX: Use newStopLoss (calculated NOW with current HWM) as primary exit price
+          // This matches backtest exactly - the backtest uses exitSignal.newStopLoss
+          // which is HWM × (1 - TRAILING_DISTANCE_PCT) calculated at this moment
+          // NOT appTrailingStop which is the stored value from previous update
+          const trailingExitPrice = exitSignal.newStopLoss ?? this.position!.appTrailingStop ?? currentPrice;
+          logger.info(`🔴 [${symbol}] TRAILING CONFIRMED (${breachCount}/${REQUIRED_CONFIRMATIONS} closes) | price=$${currentPrice.toFixed(4)} | exitAt=$${trailingExitPrice.toFixed(4)} | PnL=${exitSignal.pnlPct?.toFixed(2)}%`);
+          await this.closePosition(this.position!, trailingExitPrice, 'trailing');
           return;
         } else {
           // First breach - wait for confirmation

@@ -1,8 +1,25 @@
 /**
- * 🔬 Backtest Service - Unified Realistic Backtest Engine
+ * 🔬 Backtest Service - Unified Backtest Engine
  *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 🎯 OBJECTIF DU BACKTEST (NE PAS MODIFIER)
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 
+ * Le backtest représente le POTENTIEL IDÉAL de la stratégie:
+ * - EXIT PARFAITE: Sortir exactement au trailing stop quand il est touché
+ * - Le trailing stop = HWM × (1 - TRAILING_DISTANCE_PCT)
+ * - Pas de slippage, pas de latence, exécution instantanée
+ * 
+ * C'est l'OBJECTIF que le live doit essayer d'atteindre avec:
+ * - WebSocket pour mettre à jour le trailing en temps réel
+ * - Ordres LIMIT au niveau du trailing stop
+ * 
+ * Le live devrait s'approcher à ±20% du backtest.
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 
  * Uses momentumSimple strategy helpers for entries.
- * Uses intrabar execution for stops/trailing/TP (realistic).
+ * Uses intrabar execution for stops/trailing/TP.
  * Single mode - no legacy/agent split.
  */
 
@@ -523,13 +540,23 @@ function checkBacktestExit(
     const confirmCandles = params.trailingConfirmCandles ?? 2;
     
     if (pos.trailingBreachCandles >= confirmCandles) {
-      // V5.52 FIX: Use current.close (actual market price) instead of newStopLoss (theoretical stop)
-      // In reality, trailing stops execute at market price when triggered, not at the exact stop level
-      // This ensures backtest PnL matches live execution more accurately
+      // ═══════════════════════════════════════════════════════════════════════
+      // 🎯 EXIT PARFAITE - Sortir exactement au trailing stop (NE PAS MODIFIER)
+      // ═══════════════════════════════════════════════════════════════════════
+      // 
+      // Le backtest représente l'IDÉAL: sortir au niveau exact du trailing stop
+      // exitPrice = newStopLoss = HWM × (1 - TRAILING_DISTANCE_PCT)
+      // 
+      // C'est l'objectif que le live doit atteindre avec:
+      // - WebSocket pour mettre à jour le trailing en temps réel
+      // - Ordres LIMIT au niveau du trailing stop
+      //
+      const exitPrice = exitSignal.newStopLoss ?? current.close;
+      
       return {
         shouldExit: true,
         exitReason: 'TRAIL',
-        exitPrice: current.close,
+        exitPrice,
       };
     }
     // Not yet confirmed - continue
