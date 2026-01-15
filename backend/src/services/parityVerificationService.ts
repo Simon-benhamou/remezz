@@ -345,9 +345,11 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
     entryPriceDiffPct <= EXPECTED_SLIPPAGE_PCT && 
     pnlDiff <= (entryPriceDiffPct * SLIPPAGE_PNL_MULTIPLIER * liveLeverage + PNL_TOLERANCE_PCT * liveLeverage);
 
-  // V5.51: Overall match only if we have a full trade comparison
-  // Signal-only is a partial match (entry validated, but can't verify exit/PnL)
-  const overallMatch = entryMatch && exitMatch && pnlMatch && !signalOnlyMatch;
+  // V5.55: Overall match requires:
+  // 1. A valid signal at the forced time (live followed strategy correctly)
+  // 2. Entry, exit, and PnL all match within tolerance
+  // If there's no valid signal, it's NOT a match even if exit/PnL are similar
+  const overallMatch = !noSignalAtForcedTime && entryMatch && exitMatch && pnlMatch && !signalOnlyMatch;
 
   // 6. Categorize the mismatch
   // V5.55: Add NO_SIGNAL category for when live entered but backtest had no signal
