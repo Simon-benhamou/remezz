@@ -74,6 +74,7 @@ interface Candle {
   volume: number;
 }
 
+
 interface BacktestSimPosition {
   symbol: string;
   side: 'long' | 'short';
