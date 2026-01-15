@@ -1382,8 +1382,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       }
       
       if (availableSlots > 0) {
-        // RANK by score (highest first)
-        signalCandidates.sort((a, b) => b.score - a.score);
+        // V5.52: In parity mode, enter on FIRST signal chronologically (like live does)
+        // In normal mode, rank by score and enter best opportunities
+        if (parityMode) {
+          // PARITY: Sort by candle index (chronological order) - first signal wins
+          // This matches live behavior where first valid signal triggers entry
+          signalCandidates.sort((a, b) => a.idx - b.idx);
+        } else {
+          // NORMAL: RANK by score (highest first) for optimal entries
+          signalCandidates.sort((a, b) => b.score - a.score);
+        }
         
         // Take top N signals that fit available slots
         const signalsToEnter = signalCandidates.slice(0, availableSlots);
