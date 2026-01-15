@@ -47,7 +47,7 @@ export interface ParityResult {
   
   // NEW: Mismatch categorization
   // V5.51: Added SIGNAL_ONLY for when we match signal but BT had earlier position
-  mismatchCategory: 'NONE' | 'SIGNAL_ONLY' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH';
+  mismatchCategory: 'NONE' | 'NO_SIGNAL' | 'SIGNAL_ONLY' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH';
   mismatchDetails: string | null;
 
   // Metadata
