@@ -1861,7 +1861,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     monthlyStats,
     equityCurve,
     drawdownCurve,
-    validSignals: parityMode ? allValidSignals : undefined,  // V5.51: Include all valid signals in parity mode
+    // V5.55: Include validSignals for both parityMode and forcedEntry (for signal validation)
+    validSignals: (parityMode || forcedEntry) ? allValidSignals : undefined,
   };
 
   console.log(
