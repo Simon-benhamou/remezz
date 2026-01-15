@@ -350,10 +350,14 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   const overallMatch = entryMatch && exitMatch && pnlMatch && !signalOnlyMatch;
 
   // 6. Categorize the mismatch
-  // V5.51: Add SIGNAL_ONLY category for when we match the signal but not a trade
-  let mismatchCategory: 'NONE' | 'SIGNAL_ONLY' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH' = 'NONE';
+  // V5.55: Add NO_SIGNAL category for when live entered but backtest had no signal
+  let mismatchCategory: 'NONE' | 'NO_SIGNAL' | 'SIGNAL_ONLY' | 'EXPECTED_VARIANCE' | 'REAL_MISMATCH' = 'NONE';
   
-  if (signalOnlyMatch) {
+  if (noSignalAtForcedTime) {
+    // Live entered when backtest strategy would NOT have entered
+    // This is a potential issue with the live system
+    mismatchCategory = 'NO_SIGNAL';
+  } else if (signalOnlyMatch) {
     // We found the signal but BT had position from earlier - entry is validated
     mismatchCategory = 'SIGNAL_ONLY';
   } else if (overallMatch) {
@@ -367,6 +371,10 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
 
   // 7. Build mismatch details
   const mismatches: string[] = [];
+  // V5.55: Report when live entered without valid backtest signal
+  if (noSignalAtForcedTime) {
+    mismatches.push(`🚨 NO VALID SIGNAL: Live entered but backtest strategy had no signal at ${new Date(entryTimestamp).toISOString()}`);
+  }
   if (!entryMatch) {
     mismatches.push(`Entry: No matching backtest signal/trade found for ${trade.entryTs.toISOString()}`);
   }
