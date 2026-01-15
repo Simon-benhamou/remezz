@@ -1571,7 +1571,11 @@ export class SimpleAgent {
       }
       
       if (signal.valid && signal.side) {
-        logger.info(`✅ [${shortSymbol}] SIGNAL ${signal.side.toUpperCase()} | $${currentPrice.toFixed(2)} | ${signal.reason}`);
+        // V5.56 DEBUG: Log BTC regime state for parity debugging
+        // This helps identify cases where live enters but backtest wouldn't
+        const btcPrice = btcCandles[btcCandles.length - 1]?.close || 0;
+        const btcRegime = signal.features?.btcInBullRegime ? 'BULL' : (signal.features?.btcInBearRegime ? 'BEAR' : 'NEUTRAL');
+        logger.info(`✅ [${shortSymbol}] SIGNAL ${signal.side.toUpperCase()} | $${currentPrice.toFixed(2)} | ${signal.reason} | BTC=${btcPrice.toFixed(0)} regime=${btcRegime} btcCandles=${btcCandles.length}`);
         
         // V5.23: Calculate enhanced signal quality score
         const closes = candles.map(c => c.close);
@@ -1669,6 +1673,33 @@ export class SimpleAgent {
     const symbol = this.config.symbol;
     const lastCandle = candles[candles.length - 1];
     const currentPrice = lastCandle.close;
+    
+    // V5.56 FIX: Re-validate BTC regime before entering position
+    // This catches cases where signal was generated with stale BTC data
+    try {
+      const btcCandlesForValidation = await this.fetchBtcCandles();
+      if (btcCandlesForValidation.length >= 201) {
+        const btcCloses = btcCandlesForValidation.map(c => c.close);
+        const btcSma200 = btcCloses.slice(-200).reduce((a, b) => a + b, 0) / 200;
+        const btcNow = btcCloses[btcCloses.length - 1];
+        const btcInBullRegime = btcNow > btcSma200;
+        const btcInBearRegime = btcNow < btcSma200;
+        
+        // Block SHORT in BULL regime and LONG in BEAR regime
+        if (side === 'short' && btcInBullRegime) {
+          logger.error(`🚫 [${symbol}] BLOCKED: SHORT in BULL regime! BTC=${btcNow.toFixed(0)} > SMA200=${btcSma200.toFixed(0)}`);
+          return;
+        }
+        if (side === 'long' && btcInBearRegime) {
+          logger.error(`🚫 [${symbol}] BLOCKED: LONG in BEAR regime! BTC=${btcNow.toFixed(0)} < SMA200=${btcSma200.toFixed(0)}`);
+          return;
+        }
+      } else {
+        logger.warn(`⚠️ [${symbol}] Not enough BTC candles for regime validation (${btcCandlesForValidation.length}/201)`);
+      }
+    } catch (err) {
+      logger.warn(`⚠️ [${symbol}] Failed to validate BTC regime:`, err);
+    }
     
     // Sync with exchange balance before checking capital (live mode)
     // For live mode, force sync on first position attempt to ensure we have real balance

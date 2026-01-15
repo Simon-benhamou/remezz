@@ -213,40 +213,40 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
   
   // Calculate the candle timestamp that matches the live entry
   // 
-  // IMPORTANT: Understanding backtest vs live timing:
-  // - Binance candle timestamp = OPEN time of the candle
-  // - Candle 09:45 means the candle that opens at 09:45 and closes at 10:00
-  // - The CLOSE price of candle 09:45 is the price at 10:00
+  // V5.58 FIX: Corrected timing understanding:
+  // - trade.entryTs in DB = the SIGNAL candle timestamp (e.g., 09:45)
+  // - This is the candle whose CLOSE triggered the signal
+  // - The signal is DETECTED when this candle closes (e.g., at 10:00:02)
   // 
   // Live trading flow:
-  // - At 09:45:XX, live sees the signal (from candle 09:30-09:45 that just closed)
-  // - Live places order and gets filled at ~$624.35
-  // - This price matches the CLOSE of candle 09:45 (which closes at 10:00)
+  // - At ~10:00:02, the candle 09:45-10:00 just CLOSED
+  // - Live detects signal based on candle 09:45's CLOSE price
+  // - Live records trade with entryTs = 09:45 (signal candle timestamp)
   // 
   // Backtest flow:
-  // - When backtest processes candle 09:45, it uses the CLOSE price of that candle
-  // - So entryTimestamp should be the candle that's currently OPEN when live enters
+  // - When btcCandle.timestamp = 10:00, the last CLOSED candle is 09:45
+  // - signalCandidates is populated with signals from candle 09:45
+  // - To match, forcedEntry.entryTimestamp must be 10:00 (detection time)
   // 
-  // Example: Live entry at 09:45:30
-  // - Candle 09:30-09:45 just closed (signal generated)
-  // - Candle 09:45-10:00 is currently open
-  // - Live enters at the current price ~= what will be candle 09:45's CLOSE
-  // - Backtest should use candle timestamp 09:45
+  // Fix: Add 15 minutes to entryTs to get the detection time
   //
   const liveEntryMs = trade.entryTs.getTime();
-  // Round DOWN to nearest 15-minute boundary = the candle that's currently OPEN
-  const entryTimestamp = Math.floor(liveEntryMs / CANDLE_15M_MS) * CANDLE_15M_MS;
+  // Round DOWN to nearest 15-minute boundary = the SIGNAL candle
+  const signalCandleTs = Math.floor(liveEntryMs / CANDLE_15M_MS) * CANDLE_15M_MS;
+  // V5.58 FIX: Detection time = signal candle timestamp + 15 minutes
+  const entryTimestamp = signalCandleTs + CANDLE_15M_MS;
   
   // Start simulation a bit before entry to warm up state machines (stagnant, etc.)
-  const btStartDate = new Date(entryTimestamp - 30 * 60 * 1000);  // 30 min before
+  const btStartDate = new Date(signalCandleTs - 30 * 60 * 1000);  // 30 min before signal candle
   // End a few hours after exit to capture all exit conditions
   const btEndDate = new Date(trade.exitTs.getTime() + 4 * 60 * 60 * 1000);
 
-  logger.info(`[PARITY] Live entry: ${trade.entryTs.toISOString()}, Calculated candle: ${new Date(entryTimestamp).toISOString()}`);
+  logger.info(`[PARITY] Live entry: ${trade.entryTs.toISOString()}, Signal candle: ${new Date(signalCandleTs).toISOString()}, Detection time: ${new Date(entryTimestamp).toISOString()}`);
 
   let btResult: BacktestResult;
   try {
     // V5.54: Use forcedEntry to enter at EXACT same time as live
+    // V5.58 FIX: Add parityMode: true to collect ALL valid signals
     btResult = await runBacktest({
       startDate: btStartDate,
       endDate: btEndDate,
@@ -254,6 +254,7 @@ export async function verifyTrade(tradeId: string): Promise<ParityResult> {
       symbols: [trade.symbol],
       initialCapital: 1000,
       leverage: trade.leverage || 5,
+      parityMode: true,  // V5.58: Required to collect signals even with forcedEntry
       forcedEntry: {
         symbol: trade.symbol,
         side: trade.positionSide.toLowerCase() as 'long' | 'short',

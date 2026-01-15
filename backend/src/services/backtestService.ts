@@ -1383,8 +1383,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       if (forcedCandles && forcedIdx < forcedCandles.length) {
         const currentCandle = forcedCandles[forcedIdx];
         
-        // Check if this candle matches the forced entry timestamp
-        if (currentCandle.timestamp === forcedEntry.entryTimestamp && !positions[forcedSymbol]) {
+        // V5.56 FIX: Check if BTC candle matches the forced entry timestamp
+        // Previously compared currentCandle.timestamp but that's the SIGNAL candle (15:00)
+        // when forcedEntry.entryTimestamp is the ENTRY time (15:15).
+        // 
+        // The correct logic is: when btcCandle.timestamp === forcedEntry.entryTimestamp,
+        // we're processing the moment when live entered. At this moment:
+        // - currentCandle is the last CLOSED candle (e.g., 15:00) that generated the signal
+        // - signalCandidates contains signals from that closed candle
+        // - This is exactly when the signal would have been detected
+        if (btcCandle.timestamp === forcedEntry.entryTimestamp && !positions[forcedSymbol]) {
           // V5.55: Check if there's a valid signal for this symbol at this time
           const hasValidSignal = signalCandidates.some(
             c => c.symbol === forcedSymbol && 
