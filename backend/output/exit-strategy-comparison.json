@@ -1,0 +1,297 @@
+{
+  "config": {
+    "SYMBOLS": [
+      "BTC_USDT",
+      "ETH_USDT",
+      "SOL_USDT",
+      "DOGE_USDT",
+      "XRP_USDT",
+      "ADA_USDT",
+      "AVAX_USDT",
+      "LINK_USDT"
+    ],
+    "START_DATE": "2024-06-01T00:00:00.000Z",
+    "END_DATE": "2025-01-10T00:00:00.000Z",
+    "DATA_DIR": "/Users/simon-davidbenhamou/Desktop/QuantAILabs/backend/data",
+    "TRAILING_ACTIVATION_PCT": 0.8,
+    "TRAILING_DISTANCE_PCT": 0.5,
+    "TRAILING_WIDEN_AT_PCT": 3,
+    "TRAILING_WIDE_DISTANCE_PCT": 0.8,
+    "STOP_LOSS_PCT": 2.5,
+    "MAX_HOLD_BARS": 192,
+    "ENTRY": {
+      "ROC_MIN_LONG": 1.75,
+      "ROC_MAX_SHORT": -1.5,
+      "VOLUME_MIN": 1.15
+    },
+    "NFS": {
+      "BREACH_ATR_THRESHOLD": 0.4,
+      "BREACH_DEPTH_THRESHOLD": 0.25,
+      "VOLUME_THRESHOLD": 1.2,
+      "HIGH_CONFIDENCE_SCORE": 70
+    },
+    "SLIPPAGE_PCT": 0.05
+  },
+  "results": {
+    "BASELINE_2CLOSE": {
+      "aggregate": {
+        "totalTrades": 2748,
+        "totalPnlPct": 2094.5413789562967,
+        "avgWinRate": 78.91517683533087
+      },
+      "bySymbol": [
+        {
+          "totalPnlPct": 79.20110200162601,
+          "trades": 163,
+          "winRate": 80.3680981595092,
+          "trailExits": 131,
+          "slExits": 29
+        },
+        {
+          "totalPnlPct": 111.11754702804252,
+          "trades": 229,
+          "winRate": 75.9825327510917,
+          "trailExits": 174,
+          "slExits": 55
+        },
+        {
+          "totalPnlPct": 203.4530896253806,
+          "trades": 376,
+          "winRate": 78.72340425531915,
+          "trailExits": 296,
+          "slExits": 80
+        },
+        {
+          "totalPnlPct": 441.15637833206097,
+          "trades": 457,
+          "winRate": 80.96280087527352,
+          "trailExits": 370,
+          "slExits": 87
+        },
+        {
+          "totalPnlPct": 330.7786563452201,
+          "trades": 330,
+          "winRate": 78.18181818181819,
+          "trailExits": 257,
+          "slExits": 71
+        },
+        {
+          "totalPnlPct": 343.1731439291787,
+          "trades": 382,
+          "winRate": 78.53403141361257,
+          "trailExits": 299,
+          "slExits": 82
+        },
+        {
+          "totalPnlPct": 298.67960135342554,
+          "trades": 425,
+          "winRate": 79.29411764705883,
+          "trailExits": 337,
+          "slExits": 88
+        },
+        {
+          "totalPnlPct": 286.9818603413622,
+          "trades": 386,
+          "winRate": 79.27461139896373,
+          "trailExits": 306,
+          "slExits": 80
+        }
+      ]
+    },
+    "NFS_HYBRID": {
+      "aggregate": {
+        "totalTrades": 2895,
+        "totalPnlPct": 226.5991725919006,
+        "avgWinRate": 61.10441660521569
+      },
+      "bySymbol": [
+        {
+          "totalPnlPct": 10.497104777674611,
+          "trades": 169,
+          "winRate": 65.68047337278107,
+          "trailExits": 136,
+          "slExits": 30
+        },
+        {
+          "totalPnlPct": -14.226212834947535,
+          "trades": 242,
+          "winRate": 63.22314049586777,
+          "trailExits": 185,
+          "slExits": 57
+        },
+        {
+          "totalPnlPct": -0.30101642816628904,
+          "trades": 394,
+          "winRate": 60.15228426395939,
+          "trailExits": 317,
+          "slExits": 77
+        },
+        {
+          "totalPnlPct": 48.93262197341455,
+          "trades": 485,
+          "winRate": 58.14432989690722,
+          "trailExits": 398,
+          "slExits": 87
+        },
+        {
+          "totalPnlPct": 49.65859685449998,
+          "trades": 356,
+          "winRate": 57.865168539325836,
+          "trailExits": 286,
+          "slExits": 68
+        },
+        {
+          "totalPnlPct": 70.45406698030754,
+          "trades": 393,
+          "winRate": 63.358778625954194,
+          "trailExits": 317,
+          "slExits": 75
+        },
+        {
+          "totalPnlPct": 36.010063996903206,
+          "trades": 451,
+          "winRate": 59.42350332594235,
+          "trailExits": 368,
+          "slExits": 83
+        },
+        {
+          "totalPnlPct": 25.57394727221455,
+          "trades": 405,
+          "winRate": 60.98765432098765,
+          "trailExits": 322,
+          "slExits": 83
+        }
+      ]
+    },
+    "NFS_REALTIME": {
+      "aggregate": {
+        "totalTrades": 2895,
+        "totalPnlPct": 1698.1063745161223,
+        "avgWinRate": 80.23165824685833
+      },
+      "bySymbol": [
+        {
+          "totalPnlPct": 66.17799107039815,
+          "trades": 169,
+          "winRate": 80.4733727810651,
+          "trailExits": 136,
+          "slExits": 30
+        },
+        {
+          "totalPnlPct": 78.44385308356573,
+          "trades": 242,
+          "winRate": 76.44628099173553,
+          "trailExits": 185,
+          "slExits": 57
+        },
+        {
+          "totalPnlPct": 167.93710020805523,
+          "trades": 394,
+          "winRate": 80.45685279187818,
+          "trailExits": 317,
+          "slExits": 77
+        },
+        {
+          "totalPnlPct": 337.8988835193905,
+          "trades": 485,
+          "winRate": 82.06185567010309,
+          "trailExits": 398,
+          "slExits": 87
+        },
+        {
+          "totalPnlPct": 273.9728480714181,
+          "trades": 356,
+          "winRate": 80.6179775280899,
+          "trailExits": 286,
+          "slExits": 68
+        },
+        {
+          "totalPnlPct": 294.90683711394166,
+          "trades": 393,
+          "winRate": 80.91603053435115,
+          "trailExits": 317,
+          "slExits": 75
+        },
+        {
+          "totalPnlPct": 262.70112330969744,
+          "trades": 451,
+          "winRate": 81.37472283813747,
+          "trailExits": 368,
+          "slExits": 83
+        },
+        {
+          "totalPnlPct": 216.0677381396555,
+          "trades": 405,
+          "winRate": 79.50617283950618,
+          "trailExits": 322,
+          "slExits": 83
+        }
+      ]
+    },
+    "REALTIME_NAIVE": {
+      "aggregate": {
+        "totalTrades": 3211,
+        "totalPnlPct": 848.7327643334224,
+        "avgWinRate": 80.77487250204548
+      },
+      "bySymbol": [
+        {
+          "totalPnlPct": 31.157357046569384,
+          "trades": 188,
+          "winRate": 81.91489361702128,
+          "trailExits": 154,
+          "slExits": 30
+        },
+        {
+          "totalPnlPct": 9.910816071927249,
+          "trades": 262,
+          "winRate": 75.95419847328245,
+          "trailExits": 199,
+          "slExits": 63
+        },
+        {
+          "totalPnlPct": 78.48034287356012,
+          "trades": 431,
+          "winRate": 81.4385150812065,
+          "trailExits": 351,
+          "slExits": 80
+        },
+        {
+          "totalPnlPct": 196.65863586968857,
+          "trades": 534,
+          "winRate": 81.83520599250936,
+          "trailExits": 437,
+          "slExits": 97
+        },
+        {
+          "totalPnlPct": 162.36523525612736,
+          "trades": 383,
+          "winRate": 81.72323759791122,
+          "trailExits": 312,
+          "slExits": 69
+        },
+        {
+          "totalPnlPct": 157.66642983745396,
+          "trades": 447,
+          "winRate": 81.4317673378076,
+          "trailExits": 363,
+          "slExits": 83
+        },
+        {
+          "totalPnlPct": 106.10124603373308,
+          "trades": 505,
+          "winRate": 80.990099009901,
+          "trailExits": 409,
+          "slExits": 96
+        },
+        {
+          "totalPnlPct": 106.39270134436265,
+          "trades": 461,
+          "winRate": 80.91106290672451,
+          "trailExits": 373,
+          "slExits": 88
+        }
+      ]
+    }
+  }
+}

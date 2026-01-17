@@ -348,6 +348,44 @@ export const MomentumConfig = {
     REALTIME_APP_EXIT_BUFFER_PCT: 0.05,       // Extra buffer beyond stop to avoid spread/mark noise
     REALTIME_APP_EXIT_USE_MID_PRICE: true,    // Use (bid+ask)/2 when available
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NFS (Noise Filter Score) - Smart Exit System
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Goal: Exit reactively on REAL signals while filtering noise/wicks
+    // Based on statistical analysis: 80.6% of breaches are TRUE signals
+    // NFS score >= 70: High confidence exit (LIMIT order)
+    // NFS score 40-69: Medium confidence (wait more or use confirmation)
+    // NFS score < 40: Low confidence (likely noise, use 2-candle confirmation)
+    NFS_ENABLED: true,                        // Master switch for NFS system
+    NFS_HIGH_SCORE_THRESHOLD: 70,             // Score >= this = immediate LIMIT exit
+    NFS_MEDIUM_SCORE_THRESHOLD: 40,           // Score >= this = monitor closely
+
+    // NFS Component Weights (sum = 100)
+    // Based on analysis: Breach/ATR ratio is most discriminative (Cohen's d = 0.687)
+    NFS_WEIGHT_BREACH_ATR: 35,                // Breach depth vs ATR (most important)
+    NFS_WEIGHT_BREACH_DEPTH: 25,              // Raw breach depth %
+    NFS_WEIGHT_VOLUME: 20,                    // Volume confirmation
+    NFS_WEIGHT_CANDLE_BODY: 10,               // Candle body vs range ratio
+    NFS_WEIGHT_MOMENTUM: 10,                  // ROC5 momentum
+
+    // NFS Component Thresholds (from statistical analysis)
+    NFS_BREACH_ATR_THRESHOLD: 0.40,           // P50 of true signals
+    NFS_BREACH_DEPTH_THRESHOLD: 0.25,         // Between P25-P50 of true signals
+    NFS_VOLUME_RATIO_THRESHOLD: 1.5,          // ~P50 of true signals
+    NFS_CANDLE_BODY_RATIO_THRESHOLD: 0.5,     // Body >= 50% of candle range
+    NFS_MOMENTUM_ROC5_THRESHOLD: 0.5,         // |ROC5| >= 0.5%
+
+    // NFS Order Execution
+    NFS_USE_LIMIT_ORDER: true,                // Use LIMIT order for exits (vs market)
+    NFS_LIMIT_ORDER_TIMEOUT_MS: 3000,         // Max wait for LIMIT fill
+    NFS_MARKET_FALLBACK_ENABLED: true,        // Fall back to market if LIMIT fails
+    NFS_PARTIAL_FILL_MIN_RATIO: 0.7,          // Accept partial if >= 70% filled
+    NFS_MAX_SLIPPAGE_PCT: 0.5,                // Alert if slippage exceeds this
+
+    // NFS 2-Close Fallback (for low confidence breaches)
+    NFS_2CLOSE_TIMEOUT_MS: 180000,            // 3 minutes max wait for 2nd close
+    NFS_2CLOSE_FALLBACK_TO_MARKET: true,      // Market exit if 2nd close not received
+
     // Profit-protection (Exchange, ratcheting)
     // Starts only after sufficient profit to avoid wick/mark noise.
     // Example long:

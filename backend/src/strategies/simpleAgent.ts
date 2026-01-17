@@ -68,6 +68,17 @@ import { notifyPositionOpened, notifyPositionClosed } from '../utils/notificatio
 import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
 import { calculateOrderPriority } from '../services/orderPriority.js';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  NfsCalculator,
+  NfsExitStateMachine,
+  createNfsExitSystem,
+  type NfsConfig,
+  type NfsResult,
+  type NfsEvaluationResult,
+  type NfsExitState,
+  type Candle as NfsCandle,
+  DEFAULT_NFS_CONFIG,
+} from '../services/nfsRealtimeExit.js';
 
 const logger = createLogger('agent');
 
@@ -587,6 +598,12 @@ export class SimpleAgent {
   private lastWsUnhealthyWarnTs = 0;
   private static readonly WS_UNHEALTHY_WARN_THROTTLE_MS = 30_000;
 
+  // NFS (Noise Filter Score) Exit System
+  private nfsStateMachine: NfsExitStateMachine | null = null;
+  private nfsCalculator: NfsCalculator | null = null;
+  private lastNfsResult: NfsResult | null = null;
+  private nfsBreachCount = 0;
+
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
   private lastTickAt: number = 0;
@@ -714,6 +731,63 @@ export class SimpleAgent {
   
   constructor(config: SimpleAgentConfig) {
     this.config = config;
+
+    // Initialize NFS system if enabled
+    this.initializeNfsSystem();
+  }
+
+  /**
+   * Initialize NFS (Noise Filter Score) exit system
+   */
+  private initializeNfsSystem(): void {
+    const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
+    if (!nfsEnabled) {
+      logger.debug(`[${this.config.symbol}] NFS system disabled`);
+      return;
+    }
+
+    // Build NFS config from MomentumConfig
+    const exitConfig = MomentumConfig.EXIT as any;
+    const nfsConfig: Partial<NfsConfig> = {
+      HIGH_CONFIDENCE_THRESHOLD: exitConfig.NFS_HIGH_SCORE_THRESHOLD ?? 70,
+      MEDIUM_CONFIDENCE_THRESHOLD: exitConfig.NFS_MEDIUM_SCORE_THRESHOLD ?? 40,
+      LIMIT_ORDER_TIMEOUT_MS: exitConfig.NFS_LIMIT_ORDER_TIMEOUT_MS ?? 3000,
+      MAX_SLIPPAGE_PCT: exitConfig.NFS_MAX_SLIPPAGE_PCT ?? 0.5,
+      PARTIAL_FILL_MIN_RATIO: exitConfig.NFS_PARTIAL_FILL_MIN_RATIO ?? 0.7,
+      WEIGHTS: {
+        breachATR: {
+          threshold: exitConfig.NFS_BREACH_ATR_THRESHOLD ?? 0.40,
+          weight: exitConfig.NFS_WEIGHT_BREACH_ATR ?? 35
+        },
+        breachDepth: {
+          threshold: exitConfig.NFS_BREACH_DEPTH_THRESHOLD ?? 0.25,
+          weight: exitConfig.NFS_WEIGHT_BREACH_DEPTH ?? 25
+        },
+        volumeRatio: {
+          threshold: exitConfig.NFS_VOLUME_RATIO_THRESHOLD ?? 1.5,
+          weight: exitConfig.NFS_WEIGHT_VOLUME ?? 20
+        },
+        candleBody: {
+          threshold: exitConfig.NFS_CANDLE_BODY_RATIO_THRESHOLD ?? 0.5,
+          weight: exitConfig.NFS_WEIGHT_CANDLE_BODY ?? 10
+        },
+        momentum: {
+          threshold: exitConfig.NFS_MOMENTUM_ROC5_THRESHOLD ?? 0.5,
+          weight: exitConfig.NFS_WEIGHT_MOMENTUM ?? 10
+        },
+      },
+    };
+
+    const { calculator, stateMachine } = createNfsExitSystem(
+      nfsConfig,
+      (oldState, newState) => {
+        logger.info(`[${this.config.symbol}] NFS state: ${oldState} → ${newState}`);
+      }
+    );
+
+    this.nfsCalculator = calculator;
+    this.nfsStateMachine = stateMachine;
+    logger.info(`[${this.config.symbol}] NFS system initialized | high=${nfsConfig.HIGH_CONFIDENCE_THRESHOLD} medium=${nfsConfig.MEDIUM_CONFIDENCE_THRESHOLD}`);
   }
   
   // ==========================================================================
@@ -1147,20 +1221,107 @@ export class SimpleAgent {
         // ONLY react to trailing exits in realtime - regime_change and momentum_reversal
         // are handled in checkExit() on 15m candle close for backtest parity
         if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
-          if (this.rtTrailingBreachCandles > 0) {
-            logger.info(`✅ [${symbol}] Trailing breach CLEARED (was ${this.rtTrailingBreachCandles}/${confirmCandles}) | close=${closePx.toFixed(4)} | stop=${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'}`);
+          if (this.rtTrailingBreachCandles > 0 || this.nfsBreachCount > 0) {
+            logger.info(`✅ [${symbol}] Trailing breach CLEARED (was ${this.rtTrailingBreachCandles}/${confirmCandles}, nfs=${this.nfsBreachCount}) | close=${closePx.toFixed(4)} | stop=${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'}`);
           }
           this.rtTrailingBreachCandles = 0;
+          this.nfsBreachCount = 0;
+          this.lastNfsResult = null;
+          if (this.nfsStateMachine) {
+            this.nfsStateMachine.reset();
+          }
           return;
         }
 
-        // Confirm by consecutive 1m candle closes beyond the trailing stop.
+        // ═══════════════════════════════════════════════════════════════════════
+        // NFS INTEGRATION: Use Noise Filter Score for smarter exit decisions
+        // ═══════════════════════════════════════════════════════════════════════
+        const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
+        const trailingStopPrice = candidateStop as number;
+
+        if (nfsEnabled && this.nfsCalculator && trailingStopPrice && klines && klines.length > 0) {
+          // Convert candles to NFS format
+          const nfsCandles: NfsCandle[] = klines.slice(-25).map(k => ({
+            timestamp: k.timestamp,
+            open: k.open,
+            high: k.high,
+            low: k.low,
+            close: k.close,
+            volume: k.volume || 0,
+            isFinal: k.isFinal,
+          }));
+
+          const currentNfsCandle: NfsCandle = {
+            timestamp: last.timestamp,
+            open: last.open,
+            high: last.high,
+            low: last.low,
+            close: last.close,
+            volume: last.volume || 0,
+            isFinal: true,
+          };
+
+          // Calculate NFS score
+          const nfsResult = this.nfsCalculator.calculate(
+            currentNfsCandle,
+            nfsCandles.slice(0, -1), // Previous candles
+            this.position!.side,
+            trailingStopPrice
+          );
+          this.lastNfsResult = nfsResult;
+          this.nfsBreachCount++;
+
+          const stopPrice = trailingStopPrice.toFixed(4);
+          logger.warn(
+            `🚨 [${symbol}] NFS TRAILING BREACH (${this.nfsBreachCount}/${confirmCandles}) | NFS=${nfsResult.score.toFixed(0)} (${nfsResult.confidence}) | close=${closePx.toFixed(4)} | stop=${stopPrice} | action=${nfsResult.recommendation}`,
+          );
+
+          // Log NFS components for debugging
+          logger.debug(
+            `[${symbol}] NFS components: breachATR=${nfsResult.components.breachATRRatio.toFixed(3)} breachDepth=${nfsResult.components.breachDepthPct.toFixed(3)}% vol=${nfsResult.components.volumeRatio.toFixed(2)}x body=${nfsResult.components.candleBodyRatio.toFixed(2)} roc5=${nfsResult.components.momentumROC5.toFixed(3)}%`
+          );
+
+          // Decision based on NFS score
+          if (nfsResult.shouldExitImmediately) {
+            // HIGH confidence - exit immediately at trailing stop price
+            this.stopRealtimeExitMonitor();
+            const execPx = trailingStopPrice;
+            logger.info(
+              `⚡⚡⚡ [${symbol}] NFS HIGH EXIT (score=${nfsResult.score.toFixed(0)}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | reason=high_confidence_breach`,
+            );
+            await this.closePosition(this.position!, execPx, 'trailing_nfs_high');
+            return;
+          } else if (nfsResult.confidence === 'MEDIUM' && this.nfsBreachCount >= 1) {
+            // MEDIUM confidence with 1+ breach - exit with slight delay to confirm
+            // Use 1 candle confirmation instead of 2
+            this.stopRealtimeExitMonitor();
+            const execPx = trailingStopPrice;
+            logger.info(
+              `⚡⚡ [${symbol}] NFS MEDIUM EXIT (score=${nfsResult.score.toFixed(0)}, breaches=${this.nfsBreachCount}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | reason=medium_confidence_confirmed`,
+            );
+            await this.closePosition(this.position!, execPx, 'trailing_nfs_medium');
+            return;
+          } else {
+            // LOW confidence - use standard 2-close confirmation
+            logger.info(
+              `⏳ [${symbol}] NFS LOW (score=${nfsResult.score.toFixed(0)}) - using 2-close confirmation (${this.nfsBreachCount}/${confirmCandles})`,
+            );
+            // Fall through to standard confirmation logic below
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // STANDARD 2-CLOSE CONFIRMATION (when NFS disabled or LOW confidence)
+        // ═══════════════════════════════════════════════════════════════════════
         this.rtTrailingBreachCandles += 1;
         const stopPrice = (candidateStop as number | undefined)?.toFixed(4) || 'n/a';
-        logger.warn(
-          `🚨 [${symbol}] TRAILING BREACH detected! (${this.rtTrailingBreachCandles}/${confirmCandles}) | close=${closePx.toFixed(4)} | stop=${stopPrice} | side=${this.position!.side}`,
-        );
-        
+
+        if (!nfsEnabled) {
+          logger.warn(
+            `🚨 [${symbol}] TRAILING BREACH detected! (${this.rtTrailingBreachCandles}/${confirmCandles}) | close=${closePx.toFixed(4)} | stop=${stopPrice} | side=${this.position!.side}`,
+          );
+        }
+
         if (this.rtTrailingBreachCandles < confirmCandles) {
           logger.info(`⏳ [${symbol}] Waiting for confirmation... (need ${confirmCandles - this.rtTrailingBreachCandles} more candle${confirmCandles - this.rtTrailingBreachCandles > 1 ? 's' : ''})`);
           return;
@@ -1172,10 +1333,11 @@ export class SimpleAgent {
         // candidateStop = exitSignal.newStopLoss from shouldExitPosition()
         const trailingStopPx = candidateStop ?? this.position!.appTrailingStop ?? this.lastAppTrailingStop;
         const execPx = trailingStopPx && Number.isFinite(trailingStopPx) ? trailingStopPx : (Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : closePx);
+        const exitReason = nfsEnabled && this.lastNfsResult ? 'trailing_nfs_2close' : 'trailing_rt';
         logger.info(
-          `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (trailing_rt, 1m close) | exec=${execPx.toFixed(4)} | trailStop=${trailingStopPx?.toFixed(4) ?? 'n/a'} | close=${closePx.toFixed(4)} | confirmCandles=${confirmCandles}`,
+          `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (${exitReason}, 1m close) | exec=${execPx.toFixed(4)} | trailStop=${trailingStopPx?.toFixed(4) ?? 'n/a'} | close=${closePx.toFixed(4)} | confirmCandles=${confirmCandles}${this.lastNfsResult ? ` | nfs=${this.lastNfsResult.score.toFixed(0)}` : ''}`,
         );
-        await this.closePosition(this.position!, execPx, 'trailing_rt');
+        await this.closePosition(this.position!, execPx, exitReason);
         return;
       }
 
@@ -2670,6 +2832,13 @@ export class SimpleAgent {
     // Reset trailing flags for next position
     this.trailingNotified = false;
     this.trailingWidened = false;
+
+    // Reset NFS state
+    this.nfsBreachCount = 0;
+    this.lastNfsResult = null;
+    if (this.nfsStateMachine) {
+      this.nfsStateMachine.reset();
+    }
 
     // V5.41: Use shared cooldown logic from momentumSimple.ts
     const cooldownBars = getCooldownBars(reason, this.ENTRY_COOLDOWN_BARS);
