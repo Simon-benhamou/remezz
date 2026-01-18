@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { runBacktest, BacktestParams, BacktestResult } from "../services/backtestService.js";
 import { authenticateUser, AuthenticatedRequest } from "../middleware/auth.js";
-import { verifyTrade, verifyAllTrades, getParityResults } from "../services/parityVerificationService.js";
+// V2 parity verification with fixed regime detection
+import { verifyTradeV2, verifyAllTradesV2, getParityResultsV2 } from "../services/parityVerificationServiceV2.js";
 import crypto from 'node:crypto';
 
 export const router = Router();
@@ -228,7 +229,7 @@ router.post('/verify-trade', authenticateUser, async (req: AuthenticatedRequest,
       return res.status(400).json({ error: 'tradeId is required' });
     }
 
-    const result = await verifyTrade(tradeId);
+    const result = await verifyTradeV2(tradeId);
     res.json(result);
   } catch (error: any) {
     console.error('[Parity] Error verifying trade:', error);
@@ -244,7 +245,7 @@ router.post('/verify-all', authenticateUser, async (req: AuthenticatedRequest, r
   try {
     const { days = 30, sessionId, symbol } = req.body;
 
-    const result = await verifyAllTrades({
+    const result = await verifyAllTradesV2({
       days: Number(days),
       sessionId,
       symbol,
@@ -267,7 +268,7 @@ router.get('/parity-results', authenticateUser, async (req: AuthenticatedRequest
     const offset = req.query.offset ? Number(req.query.offset) : 0;
     const onlyMismatches = req.query.onlyMismatches === 'true';
 
-    const result = await getParityResults({
+    const result = await getParityResultsV2({
       limit,
       offset,
       onlyMismatches,

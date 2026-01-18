@@ -4467,10 +4467,11 @@ export class SimpleAgent {
 
         logger.info(`✅ [${this.config.symbol}] Trade created: ${position.side.toUpperCase()} ${position.qty} PnL=$${pnlUsd.toFixed(2)}`);
 
-        // V5.43: Trigger parity verification (async, non-blocking)
+        // V5.60: Trigger parity verification V2 (async, non-blocking)
+        // V2 has fixed regime detection alignment between live and backtest
         if (process.env.AUTO_VERIFY_PARITY === 'true') {
-          import('../services/parityVerificationService.js').then(({ triggerVerification }) => {
-            triggerVerification(order.id);
+          import('../services/parityVerificationServiceV2.js').then(({ triggerVerificationV2 }) => {
+            triggerVerificationV2(order.id);
           }).catch(() => {}); // Ignore import errors
         }
       } catch (tradeError) {

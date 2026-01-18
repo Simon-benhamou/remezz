@@ -203,7 +203,21 @@ function checkSignalAtEntry(
 
   // Get window of candles up to (not including) entry candle
   const windowCandles = candles.slice(0, entryIdx);
-  const btcWindow = btcCandles.filter(c => c.timestamp < entryTs);
+
+  // V5.60 FIX: Align BTC candle selection with live behavior
+  // Live uses isFinal flag to exclude the "in-progress" candle.
+  // For parity, we need to find the candle that was forming at entry time
+  // and exclude it (since live would have excluded it via isFinal=false).
+  //
+  // Example: If trade entered at 10:15:01, the 10:15 candle was "in progress"
+  // so live used candles up to 10:00 (the last CLOSED candle).
+  // We replicate this by finding the candle boundary.
+  const CANDLE_MS = 15 * 60 * 1000; // 15-minute candles
+  const inProgressCandleTs = Math.floor(entryTs / CANDLE_MS) * CANDLE_MS;
+  const lastClosedCandleTs = inProgressCandleTs - CANDLE_MS;
+
+  // Use candles with timestamp <= lastClosedCandleTs (matches live's isFinal logic)
+  const btcWindow = btcCandles.filter(c => c.timestamp <= lastClosedCandleTs);
 
   if (windowCandles.length < 50 || btcWindow.length < 50) {
     return { wouldEnter: false, strength: null, reason: 'Insufficient candle data' };
@@ -627,9 +641,13 @@ async function saveParityResultV2(result: ParityResultV2): Promise<void> {
 export async function verifyAllTradesV2(opts: {
   days?: number;
   symbol?: string;
+  sessionId?: string;
   limit?: number;
 } = {}): Promise<{
   total: number;
+  matched: number;
+  mismatched: number;
+  failed: number;
   results: { category: ParityCategory; count: number }[];
 }> {
   const days = opts.days ?? 30;
@@ -639,6 +657,7 @@ export async function verifyAllTradesV2(opts: {
     where: {
       exitTs: { gte: since },
       ...(opts.symbol ? { symbol: opts.symbol } : {}),
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
     },
     orderBy: { exitTs: 'desc' },
     take: opts.limit ?? 100,
@@ -669,9 +688,81 @@ export async function verifyAllTradesV2(opts: {
 
   return {
     total: trades.length,
+    matched: categories.MATCH,
+    mismatched: categories.EXIT_MISMATCH + categories.NO_SIGNAL,
+    failed: categories.DATA_ERROR,
     results: Object.entries(categories).map(([category, count]) => ({
       category: category as ParityCategory,
       count,
     })),
+  };
+}
+
+// ============================================================================
+// AUTO-VERIFICATION TRIGGER (called after each trade closes)
+// ============================================================================
+
+/**
+ * Trigger verification for a trade (non-blocking, for use after trade exit)
+ * This is the V2 version that uses the improved parity logic.
+ */
+export function triggerVerificationV2(tradeId: string): void {
+  if (process.env.AUTO_VERIFY_PARITY !== 'true') {
+    return;
+  }
+
+  setImmediate(async () => {
+    try {
+      logger.info(`[PARITY-V2] Auto-verifying trade ${tradeId}`);
+      await verifyTradeV2(tradeId);
+      logger.info(`[PARITY-V2] Auto-verification complete for ${tradeId}`);
+    } catch (err: any) {
+      logger.warn(`[PARITY-V2] Background verification failed for ${tradeId}: ${err.message}`);
+    }
+  });
+}
+
+/**
+ * Get parity results for display (compatible with V1 API format)
+ */
+export async function getParityResultsV2(opts: {
+  limit?: number;
+  offset?: number;
+  onlyMismatches?: boolean;
+} = {}): Promise<{
+  results: any[];
+  summary: {
+    total: number;
+    matched: number;
+    mismatched: number;
+    matchRate: number;
+  };
+}> {
+  const limit = opts.limit || 100;
+  const offset = opts.offset || 0;
+
+  // Build where clause
+  const where = opts.onlyMismatches ? { overallMatch: false } : {};
+
+  // Fetch results
+  const [results, totalCount, matchedCount] = await Promise.all([
+    prisma.tradeParityResult.findMany({
+      where,
+      orderBy: { verifiedAt: 'desc' },
+      take: limit,
+      skip: offset,
+    }),
+    prisma.tradeParityResult.count(),
+    prisma.tradeParityResult.count({ where: { overallMatch: true } }),
+  ]);
+
+  return {
+    results,
+    summary: {
+      total: totalCount,
+      matched: matchedCount,
+      mismatched: totalCount - matchedCount,
+      matchRate: totalCount > 0 ? (matchedCount / totalCount) * 100 : 0,
+    },
   };
 }

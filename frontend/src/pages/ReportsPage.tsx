@@ -1,25 +1,101 @@
 import React from 'react';
-import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message, Tabs, Tag, InputNumber, Tooltip, Select } from 'antd';
-import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, ReloadOutlined, FilterOutlined } from '@ant-design/icons';
+import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message, Tabs, Tag, InputNumber, Tooltip, Select, Badge, Divider, Progress } from 'antd';
+import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, ReloadOutlined, FilterOutlined, ExclamationCircleOutlined, WarningOutlined, InfoCircleOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
+import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
 
 dayjs.extend(relativeTime);
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
 const { TabPane } = Tabs;
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+type ParityCategory = 'MATCH' | 'EXIT_MISMATCH' | 'NO_SIGNAL' | 'PNL_VARIANCE' | 'DATA_ERROR';
+
+interface ParityResult {
+  id: string;
+  tradeId: string;
+  symbol: string;
+  side: 'long' | 'short';
+  liveEntryTs: string;
+  liveExitTs: string;
+  liveExitReason: string;
+  livePnlPct: number;
+  btEntryTs: string | null;
+  btExitTs: string | null;
+  btExitReason: string | null;
+  btPnlPct: number | null;
+  entryMatch: boolean;
+  exitMatch: boolean;
+  pnlMatch: boolean;
+  overallMatch: boolean;
+  mismatchDetails: string | null;
+  verifiedAt: string;
+  backtestDurationMs: number | null;
+}
+
+interface ParsedMismatchDetails {
+  category: ParityCategory;
+  details: string;
+  signalCheck?: {
+    wouldBacktestEnter: boolean;
+    signalStrength: number | null;
+    signalReason: string | null;
+  };
+}
+
+// ============================================================================
+// CATEGORY STYLING
+// ============================================================================
+
+const categoryConfig: Record<ParityCategory, { color: string; icon: React.ReactNode; label: string; description: string }> = {
+  MATCH: {
+    color: 'success',
+    icon: <CheckCircleOutlined />,
+    label: 'Match',
+    description: 'Live and backtest behavior are identical'
+  },
+  EXIT_MISMATCH: {
+    color: 'error',
+    icon: <CloseCircleOutlined />,
+    label: 'Exit Mismatch',
+    description: 'Same entry, but different exit reason - needs investigation'
+  },
+  NO_SIGNAL: {
+    color: 'warning',
+    icon: <ExclamationCircleOutlined />,
+    label: 'No Signal',
+    description: 'Live entered but backtest would not have - potential regime bug'
+  },
+  PNL_VARIANCE: {
+    color: 'processing',
+    icon: <InfoCircleOutlined />,
+    label: 'PnL Variance',
+    description: 'Same exit reason but PnL differs - usually acceptable slippage'
+  },
+  DATA_ERROR: {
+    color: 'default',
+    icon: <WarningOutlined />,
+    label: 'Data Error',
+    description: 'Could not verify due to missing data'
+  },
+};
 
 // ============================================================================
 // PARITY VERIFICATION PANEL
 // ============================================================================
 
 function ParityVerificationPanel() {
-  const [results, setResults] = React.useState<any[]>([]);
-  const [filteredResults, setFilteredResults] = React.useState<any[]>([]);
+  const [results, setResults] = React.useState<ParityResult[]>([]);
+  const [filteredResults, setFilteredResults] = React.useState<ParityResult[]>([]);
   const [summary, setSummary] = React.useState<{
     total: number;
     matched: number;
@@ -30,23 +106,71 @@ function ParityVerificationPanel() {
   const [verifying, setVerifying] = React.useState(false);
   const [days, setDays] = React.useState(30);
   const [symbolFilter, setSymbolFilter] = React.useState<string[]>([]);
+  const [categoryFilter, setCategoryFilter] = React.useState<ParityCategory[]>([]);
+  const [sideFilter, setSideFilter] = React.useState<string[]>([]);
+  const [expandedRowKeys, setExpandedRowKeys] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     loadResults();
   }, []);
 
-  // Apply filters when results or symbolFilter changes
+  // Parse mismatch details from V2 format
+  const parseDetails = React.useCallback((record: ParityResult): ParsedMismatchDetails | null => {
+    if (!record.mismatchDetails) {
+      return record.overallMatch
+        ? { category: 'MATCH', details: 'Fully matched' }
+        : null;
+    }
+    try {
+      const parsed = JSON.parse(record.mismatchDetails);
+      // V2 format: { category, details, signalCheck }
+      if (parsed.category) {
+        return parsed as ParsedMismatchDetails;
+      }
+      // V1 format: array of strings
+      if (Array.isArray(parsed)) {
+        return {
+          category: record.overallMatch ? 'MATCH' : 'EXIT_MISMATCH',
+          details: parsed.join('; '),
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Get category for a result
+  const getCategory = React.useCallback((record: ParityResult): ParityCategory => {
+    if (record.overallMatch) return 'MATCH';
+    const parsed = parseDetails(record);
+    return parsed?.category || 'EXIT_MISMATCH';
+  }, [parseDetails]);
+
+  // Apply filters when results or filters change
   React.useEffect(() => {
-    if (symbolFilter.length === 0) {
-      setFilteredResults(results);
-    } else {
-      const filtered = results.filter(r => {
+    let filtered = [...results];
+
+    // Symbol filter
+    if (symbolFilter.length > 0) {
+      filtered = filtered.filter(r => {
         const sym = r.symbol.replace('/USDT:USDT', '').toUpperCase();
         return symbolFilter.some(f => sym.includes(f.toUpperCase()));
       });
-      setFilteredResults(filtered);
     }
-  }, [results, symbolFilter]);
+
+    // Category filter
+    if (categoryFilter.length > 0) {
+      filtered = filtered.filter(r => categoryFilter.includes(getCategory(r)));
+    }
+
+    // Side filter
+    if (sideFilter.length > 0) {
+      filtered = filtered.filter(r => sideFilter.includes(r.side));
+    }
+
+    setFilteredResults(filtered);
+  }, [results, symbolFilter, categoryFilter, sideFilter, getCategory]);
 
   // Get unique symbols from results
   const availableSymbols = React.useMemo(() => {
@@ -54,11 +178,31 @@ function ParityVerificationPanel() {
     return Array.from(symbols).sort();
   }, [results]);
 
+  // Category statistics
+  const categoryStats = React.useMemo(() => {
+    const stats: Record<ParityCategory, number> = {
+      MATCH: 0,
+      EXIT_MISMATCH: 0,
+      NO_SIGNAL: 0,
+      PNL_VARIANCE: 0,
+      DATA_ERROR: 0,
+    };
+    for (const r of results) {
+      stats[getCategory(r)]++;
+    }
+    return stats;
+  }, [results, getCategory]);
+
   const loadResults = async () => {
     setLoading(true);
     try {
-      const data = await api.backtest.getParityResults({ limit: 100 });
-      setResults(data.results || []);
+      const data = await api.backtest.getParityResults({ limit: 200 });
+      // Cast side to proper type since API returns string
+      const typedResults = (data.results || []).map((r: any) => ({
+        ...r,
+        side: r.side as 'long' | 'short',
+      })) as ParityResult[];
+      setResults(typedResults);
       setSummary(data.summary || { total: 0, matched: 0, mismatched: 0, matchRate: 0 });
     } catch (error) {
       console.error('Failed to load parity results:', error);
@@ -83,16 +227,15 @@ function ParityVerificationPanel() {
     }
   };
 
-  // Helper to calculate time difference in minutes
+  // Helper functions
   const getTimeDiffMinutes = (ts1: string | null, ts2: string | null): string => {
     if (!ts1 || !ts2) return 'N/A';
     const diff = Math.abs(dayjs(ts1).diff(dayjs(ts2), 'minute'));
-    if (diff === 0) return 'Same candle';
+    if (diff === 0) return 'Same';
     if (diff < 60) return `${diff}m`;
     return `${Math.floor(diff / 60)}h ${diff % 60}m`;
   };
 
-  // Helper to check if times are in same 15m candle
   const isSameCandle = (ts1: string | null, ts2: string | null): boolean => {
     if (!ts1 || !ts2) return false;
     const CANDLE_MS = 15 * 60 * 1000;
@@ -101,11 +244,6 @@ function ParityVerificationPanel() {
     return c1 === c2;
   };
 
-  // Helper to check if times are within ±1 candle (15 minutes)
-  // This is the acceptable tolerance because:
-  // - Backtest enters at candle CLOSE (e.g., 14:15:00)
-  // - Live enters when order executes (e.g., 14:30:14) - on the NEXT candle
-  // So a 1-candle difference is expected and normal
   const isWithinOneCandle = (ts1: string | null, ts2: string | null): boolean => {
     if (!ts1 || !ts2) return false;
     const CANDLE_MS = 15 * 60 * 1000;
@@ -114,196 +252,124 @@ function ParityVerificationPanel() {
     return Math.abs(c1 - c2) <= 1;
   };
 
-  const PNL_TOLERANCE = 0.5; // 0.5% tolerance
+  const PNL_TOLERANCE = 0.5;
 
-  const columns = [
+  // Table columns with sorting
+  const columns: ColumnsType<ParityResult> = [
     {
-      title: 'Trade',
+      title: 'Symbol',
       dataIndex: 'symbol',
       key: 'symbol',
-      width: 100,
-      render: (symbol: string, record: any) => (
+      width: 90,
+      sorter: (a, b) => a.symbol.localeCompare(b.symbol),
+      render: (symbol: string, record) => (
         <Space direction="vertical" size={0}>
-          <Text strong>{symbol.replace('/USDT:USDT', '')}</Text>
-          <Text type="secondary" style={{ fontSize: '11px' }}>
+          <Text strong style={{ fontSize: '13px' }}>{symbol.replace('/USDT:USDT', '')}</Text>
+          <Tag color={record.side === 'long' ? 'green' : 'red'} style={{ fontSize: '10px', margin: 0 }}>
             {record.side.toUpperCase()}
-          </Text>
+          </Tag>
         </Space>
       ),
     },
     {
-      title: 'Entry Time',
-      key: 'entryTime',
-      width: 180,
-      render: (record: any) => {
-        const withinOneCandle = isWithinOneCandle(record.liveEntryTs, record.btEntryTs);
-        const sameCandle = isSameCandle(record.liveEntryTs, record.btEntryTs);
-        const diff = getTimeDiffMinutes(record.liveEntryTs, record.btEntryTs);
+      title: 'Category',
+      key: 'category',
+      width: 130,
+      filters: [
+        { text: 'Match', value: 'MATCH' },
+        { text: 'No Signal', value: 'NO_SIGNAL' },
+        { text: 'Exit Mismatch', value: 'EXIT_MISMATCH' },
+        { text: 'PnL Variance', value: 'PNL_VARIANCE' },
+        { text: 'Data Error', value: 'DATA_ERROR' },
+      ],
+      onFilter: (value, record) => getCategory(record) === value,
+      render: (_, record) => {
+        const category = getCategory(record);
+        const config = categoryConfig[category];
         return (
-          <Space direction="vertical" size={0}>
-            <Tooltip title={`Live: ${dayjs(record.liveEntryTs).format('YYYY-MM-DD HH:mm:ss')}`}>
-              <Text>Live: {dayjs(record.liveEntryTs).format('MM-DD HH:mm')}</Text>
-            </Tooltip>
-            <Tooltip title={record.btEntryTs ? `BT: ${dayjs(record.btEntryTs).format('YYYY-MM-DD HH:mm:ss')}` : 'No BT trade'}>
-              <Text type="secondary" style={{ fontSize: '11px' }}>
-                BT: {record.btEntryTs ? dayjs(record.btEntryTs).format('MM-DD HH:mm') : 'N/A'}
-              </Text>
-            </Tooltip>
-            <Space size={4}>
-              {sameCandle ? (
-                <Tag color="green" style={{ fontSize: '10px' }}>Same candle</Tag>
-              ) : withinOneCandle ? (
-                <Tag color="green" style={{ fontSize: '10px' }}>Δ {diff} ✓</Tag>
-              ) : record.btEntryTs ? (
-                <Tag color="orange" style={{ fontSize: '10px' }}>Δ {diff}</Tag>
-              ) : (
-                <Tag color="red" style={{ fontSize: '10px' }}>No match</Tag>
-              )}
-            </Space>
-          </Space>
+          <Tooltip title={config.description}>
+            <Tag icon={config.icon} color={config.color} style={{ cursor: 'help' }}>
+              {config.label}
+            </Tag>
+          </Tooltip>
         );
       },
     },
     {
-      title: 'Exit Time',
-      key: 'exitTime',
-      width: 180,
-      render: (record: any) => {
-        const withinOneCandle = isWithinOneCandle(record.liveExitTs, record.btExitTs);
-        const sameCandle = isSameCandle(record.liveExitTs, record.btExitTs);
-        const diff = getTimeDiffMinutes(record.liveExitTs, record.btExitTs);
-        return (
-          <Space direction="vertical" size={0}>
-            <Tooltip title={`Live: ${dayjs(record.liveExitTs).format('YYYY-MM-DD HH:mm:ss')}`}>
-              <Text>Live: {dayjs(record.liveExitTs).format('MM-DD HH:mm')}</Text>
-            </Tooltip>
-            <Tooltip title={record.btExitTs ? `BT: ${dayjs(record.btExitTs).format('YYYY-MM-DD HH:mm:ss')}` : 'No BT trade'}>
-              <Text type="secondary" style={{ fontSize: '11px' }}>
-                BT: {record.btExitTs ? dayjs(record.btExitTs).format('MM-DD HH:mm') : 'N/A'}
-              </Text>
-            </Tooltip>
-            <Space size={4}>
-              {sameCandle ? (
-                <Tag color="green" style={{ fontSize: '10px' }}>Same candle</Tag>
-              ) : withinOneCandle ? (
-                <Tag color="green" style={{ fontSize: '10px' }}>Δ {diff} ✓</Tag>
-              ) : record.btExitTs ? (
-                <Tag color="orange" style={{ fontSize: '10px' }}>Δ {diff}</Tag>
-              ) : (
-                <Tag color="red" style={{ fontSize: '10px' }}>N/A</Tag>
-              )}
-            </Space>
-          </Space>
-        );
-      },
+      title: 'Entry',
+      key: 'entry',
+      width: 120,
+      sorter: (a, b) => dayjs(a.liveEntryTs).valueOf() - dayjs(b.liveEntryTs).valueOf(),
+      render: (_, record) => (
+        <Tooltip title={dayjs(record.liveEntryTs).format('YYYY-MM-DD HH:mm:ss')}>
+          <Text style={{ fontSize: '12px' }}>{dayjs(record.liveEntryTs).format('MM-DD HH:mm')}</Text>
+        </Tooltip>
+      ),
     },
     {
       title: 'Exit Reason',
       key: 'exitReason',
-      width: 120,
-      render: (record: any) => (
+      width: 140,
+      filters: [
+        { text: 'TRAIL', value: 'TRAIL' },
+        { text: 'SL', value: 'SL' },
+        { text: 'TIME', value: 'TIME' },
+        { text: 'REGIME_CHANGE', value: 'REGIME_CHANGE' },
+        { text: 'STAGNANT', value: 'STAGNANT' },
+      ],
+      onFilter: (value, record) => record.liveExitReason?.includes(String(value)),
+      render: (_, record) => (
         <Space direction="vertical" size={0}>
-          <Text>Live: {record.liveExitReason}</Text>
-          <Text type="secondary" style={{ fontSize: '11px' }}>
-            BT: {record.btExitReason || 'N/A'}
-          </Text>
-          {record.exitMatch ? (
-            <Tag color="green" style={{ fontSize: '10px' }}>MATCH</Tag>
-          ) : (
-            <Tag color="red" style={{ fontSize: '10px' }}>MISMATCH</Tag>
+          <Tag color="blue" style={{ fontSize: '10px' }}>{record.liveExitReason}</Tag>
+          {record.btExitReason && record.btExitReason !== record.liveExitReason && (
+            <Tag color="orange" style={{ fontSize: '10px' }}>BT: {record.btExitReason}</Tag>
           )}
         </Space>
       ),
     },
     {
-      title: 'PnL (±0.5% tol)',
-      key: 'pnl',
-      width: 150,
-      render: (record: any) => {
-        const livePnl = record.livePnlPct ?? 0;
-        const btPnl = record.btPnlPct;
-        const pnlDiff = btPnl != null ? Math.abs(livePnl - btPnl) : null;
-        const withinTolerance = pnlDiff != null && pnlDiff <= PNL_TOLERANCE;
-        
-        return (
-          <Space direction="vertical" size={0}>
-            <Text style={{ color: livePnl >= 0 ? '#52c41a' : '#ff4d4f' }}>
-              Live: {livePnl.toFixed(2)}%
-            </Text>
-            <Text type="secondary" style={{ fontSize: '11px' }}>
-              BT: {btPnl != null ? `${btPnl.toFixed(2)}%` : 'N/A'}
-            </Text>
-            {pnlDiff != null && (
-              <Tooltip title={`Difference: ${pnlDiff.toFixed(3)}% (Tolerance: ±${PNL_TOLERANCE}%)`}>
-                <Tag color={withinTolerance ? 'green' : 'red'} style={{ fontSize: '10px' }}>
-                  Δ {pnlDiff.toFixed(2)}% {withinTolerance ? '✓' : '✗'}
-                </Tag>
-              </Tooltip>
-            )}
-          </Space>
-        );
-      },
+      title: 'Live PnL',
+      dataIndex: 'livePnlPct',
+      key: 'livePnl',
+      width: 90,
+      sorter: (a, b) => (a.livePnlPct || 0) - (b.livePnlPct || 0),
+      render: (pnl: number) => (
+        <Text strong style={{ color: pnl >= 0 ? '#52c41a' : '#ff4d4f', fontSize: '13px' }}>
+          {pnl >= 0 ? '+' : ''}{pnl?.toFixed(2)}%
+        </Text>
+      ),
     },
     {
-      title: 'Status',
-      key: 'status',
-      width: 140,
-      render: (record: any) => {
-        // Check for new mismatchCategory field (if available from updated backend)
-        const category = record.mismatchCategory;
-        
-        if (record.overallMatch || category === 'NONE') {
-          return <Tag icon={<CheckCircleOutlined />} color="success">MATCH</Tag>;
-        }
-        
-        if (category === 'EXPECTED_VARIANCE') {
-          return (
-            <Tooltip title="Difference explained by live execution slippage - not a real issue">
-              <Tag color="warning" style={{ cursor: 'help' }}>⚠️ EXPECTED</Tag>
-            </Tooltip>
-          );
-        }
-        
-        // Real mismatch or old data without category
-        return (
-          <Tooltip title="Real mismatch - needs investigation">
-            <Tag icon={<CloseCircleOutlined />} color="error">🔍 INVESTIGATE</Tag>
-          </Tooltip>
-        );
-      },
+      title: 'BT PnL',
+      dataIndex: 'btPnlPct',
+      key: 'btPnl',
+      width: 90,
+      sorter: (a, b) => (a.btPnlPct || 0) - (b.btPnlPct || 0),
+      render: (pnl: number | null) => (
+        pnl != null ? (
+          <Text style={{ color: pnl >= 0 ? '#52c41a' : '#ff4d4f', fontSize: '12px' }}>
+            {pnl >= 0 ? '+' : ''}{pnl?.toFixed(2)}%
+          </Text>
+        ) : <Text type="secondary">-</Text>
+      ),
     },
     {
-      title: 'Entry Slippage',
-      key: 'slippage',
-      width: 100,
-      render: (record: any) => {
-        // Try to extract slippage from mismatchDetails if entryPriceDiffPct not directly available
-        let slippage: number | null = null;
-        
-        if (record.entryPriceDiffPct != null) {
-          slippage = record.entryPriceDiffPct;
-        } else if (record.mismatchDetails) {
-          try {
-            const details = JSON.parse(record.mismatchDetails);
-            const slippageDetail = details.find((d: string) => d.includes('Entry Price Slippage'));
-            if (slippageDetail) {
-              const match = slippageDetail.match(/(\d+\.?\d*)%/);
-              if (match) slippage = parseFloat(match[1]);
-            }
-          } catch {}
-        }
-        
-        if (slippage == null) {
-          return <Text type="secondary" style={{ fontSize: '11px' }}>N/A</Text>;
-        }
-        
-        const isHigh = slippage > 1.5;
+      title: 'Δ PnL',
+      key: 'pnlDiff',
+      width: 80,
+      sorter: (a, b) => {
+        const diffA = a.btPnlPct != null ? Math.abs((a.livePnlPct || 0) - a.btPnlPct) : 0;
+        const diffB = b.btPnlPct != null ? Math.abs((b.livePnlPct || 0) - b.btPnlPct) : 0;
+        return diffA - diffB;
+      },
+      render: (_, record) => {
+        if (record.btPnlPct == null) return <Text type="secondary">-</Text>;
+        const diff = Math.abs((record.livePnlPct || 0) - record.btPnlPct);
+        const ok = diff <= PNL_TOLERANCE;
         return (
-          <Tooltip title={`Entry price difference between live and backtest: ${slippage.toFixed(3)}%`}>
-            <Tag color={isHigh ? 'orange' : 'green'} style={{ fontSize: '10px' }}>
-              {slippage.toFixed(2)}%
-            </Tag>
-          </Tooltip>
+          <Tag color={ok ? 'green' : 'orange'} style={{ fontSize: '10px' }}>
+            {diff.toFixed(2)}%
+          </Tag>
         );
       },
     },
@@ -311,328 +377,329 @@ function ParityVerificationPanel() {
       title: 'Verified',
       dataIndex: 'verifiedAt',
       key: 'verifiedAt',
-      width: 100,
+      width: 90,
+      sorter: (a, b) => dayjs(a.verifiedAt).valueOf() - dayjs(b.verifiedAt).valueOf(),
+      defaultSortOrder: 'descend',
       render: (ts: string) => (
         <Tooltip title={dayjs(ts).format('YYYY-MM-DD HH:mm:ss')}>
-          <Text type="secondary" style={{ fontSize: '11px' }}>
-            {dayjs(ts).fromNow()}
-          </Text>
+          <Text type="secondary" style={{ fontSize: '11px' }}>{dayjs(ts).fromNow()}</Text>
         </Tooltip>
       ),
     },
   ];
 
-  // Calculate categorized stats from results
-  const categoryStats = React.useMemo(() => {
-    let expectedVariance = 0;
-    let realMismatch = 0;
-    
-    for (const r of results) {
-      if (!r.overallMatch) {
-        if (r.mismatchCategory === 'EXPECTED_VARIANCE') {
-          expectedVariance++;
-        } else {
-          realMismatch++;
-        }
-      }
-    }
-    
-    return { expectedVariance, realMismatch };
-  }, [results]);
+  // Render expanded row details
+  const renderExpandedRow = (record: ParityResult) => {
+    const livePnl = record.livePnlPct ?? 0;
+    const btPnl = record.btPnlPct;
+    const pnlDiff = btPnl != null ? (livePnl - btPnl) : null;
+    const holdTimeLive = record.liveExitTs && record.liveEntryTs
+      ? Math.round(dayjs(record.liveExitTs).diff(dayjs(record.liveEntryTs), 'minute'))
+      : null;
+    const holdTimeBt = record.btExitTs && record.btEntryTs
+      ? Math.round(dayjs(record.btExitTs).diff(dayjs(record.btEntryTs), 'minute'))
+      : null;
+    const parsed = parseDetails(record);
+    const category = getCategory(record);
+    const config = categoryConfig[category];
+
+    return (
+      <div style={{ padding: '16px', background: 'linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%)', borderRadius: 8 }}>
+        {/* Category Header */}
+        <div style={{ marginBottom: 16, padding: '12px 16px', background: '#fff', borderRadius: 8, borderLeft: `4px solid ${category === 'MATCH' ? '#52c41a' : category === 'NO_SIGNAL' ? '#faad14' : '#ff4d4f'}` }}>
+          <Space>
+            <Tag icon={config.icon} color={config.color} style={{ fontSize: '13px', padding: '4px 12px' }}>
+              {config.label}
+            </Tag>
+            <Text type="secondary">{config.description}</Text>
+          </Space>
+          {parsed?.signalCheck && !parsed.signalCheck.wouldBacktestEnter && (
+            <div style={{ marginTop: 8 }}>
+              <Text type="danger" strong>Signal Rejection Reason: </Text>
+              <Text code>{parsed.signalCheck.signalReason}</Text>
+            </div>
+          )}
+        </div>
+
+        <Row gutter={[16, 16]}>
+          {/* Time Comparison */}
+          <Col xs={24} lg={12}>
+            <Card size="small" title={<><Text strong>Time Comparison</Text></>} styles={{ body: { padding: '12px' } }}>
+              <table style={{ width: '100%', fontSize: '12px' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #f0f0f0' }}>
+                    <th style={{ textAlign: 'left', padding: '8px 0' }}></th>
+                    <th style={{ textAlign: 'left', padding: '8px 0' }}>LIVE</th>
+                    <th style={{ textAlign: 'left', padding: '8px 0' }}>BACKTEST</th>
+                    <th style={{ textAlign: 'left', padding: '8px 0' }}>Δ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ padding: '6px 0', color: '#8c8c8c' }}>Entry</td>
+                    <td>{dayjs(record.liveEntryTs).format('MM-DD HH:mm:ss')}</td>
+                    <td>{record.btEntryTs ? dayjs(record.btEntryTs).format('MM-DD HH:mm:ss') : '-'}</td>
+                    <td>
+                      <Tag color={isSameCandle(record.liveEntryTs, record.btEntryTs) ? 'green' : 'orange'} style={{ margin: 0, fontSize: '10px' }}>
+                        {getTimeDiffMinutes(record.liveEntryTs, record.btEntryTs)}
+                      </Tag>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '6px 0', color: '#8c8c8c' }}>Exit</td>
+                    <td>{dayjs(record.liveExitTs).format('MM-DD HH:mm:ss')}</td>
+                    <td>{record.btExitTs ? dayjs(record.btExitTs).format('MM-DD HH:mm:ss') : '-'}</td>
+                    <td>
+                      <Tag color={isSameCandle(record.liveExitTs, record.btExitTs) ? 'green' : 'orange'} style={{ margin: 0, fontSize: '10px' }}>
+                        {getTimeDiffMinutes(record.liveExitTs, record.btExitTs)}
+                      </Tag>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '6px 0', color: '#8c8c8c' }}>Hold</td>
+                    <td>{holdTimeLive != null ? `${holdTimeLive}m (${(holdTimeLive/15).toFixed(1)} candles)` : '-'}</td>
+                    <td>{holdTimeBt != null ? `${holdTimeBt}m (${(holdTimeBt/15).toFixed(1)} candles)` : '-'}</td>
+                    <td>
+                      {holdTimeLive != null && holdTimeBt != null && (
+                        <Tag color={Math.abs(holdTimeLive - holdTimeBt) <= 15 ? 'green' : 'orange'} style={{ margin: 0, fontSize: '10px' }}>
+                          {Math.abs(holdTimeLive - holdTimeBt)}m
+                        </Tag>
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </Card>
+          </Col>
+
+          {/* PnL Comparison */}
+          <Col xs={24} lg={12}>
+            <Card size="small" title={<><Text strong>PnL Comparison</Text></>} styles={{ body: { padding: '12px' } }}>
+              <Row gutter={16}>
+                <Col span={8}>
+                  <div style={{ textAlign: 'center' }}>
+                    <Text type="secondary" style={{ fontSize: '11px' }}>Live PnL</Text>
+                    <div style={{ fontSize: '18px', fontWeight: 600, color: livePnl >= 0 ? '#52c41a' : '#ff4d4f' }}>
+                      {livePnl >= 0 ? '+' : ''}{livePnl.toFixed(2)}%
+                    </div>
+                  </div>
+                </Col>
+                <Col span={8}>
+                  <div style={{ textAlign: 'center' }}>
+                    <Text type="secondary" style={{ fontSize: '11px' }}>Backtest PnL</Text>
+                    <div style={{ fontSize: '18px', fontWeight: 600, color: (btPnl ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>
+                      {btPnl != null ? `${btPnl >= 0 ? '+' : ''}${btPnl.toFixed(2)}%` : '-'}
+                    </div>
+                  </div>
+                </Col>
+                <Col span={8}>
+                  <div style={{ textAlign: 'center' }}>
+                    <Text type="secondary" style={{ fontSize: '11px' }}>Difference</Text>
+                    <div style={{ fontSize: '18px', fontWeight: 600, color: pnlDiff != null && Math.abs(pnlDiff) <= PNL_TOLERANCE ? '#52c41a' : '#ff4d4f' }}>
+                      {pnlDiff != null ? `${Math.abs(pnlDiff).toFixed(2)}%` : '-'}
+                    </div>
+                  </div>
+                </Col>
+              </Row>
+              <Divider style={{ margin: '12px 0 8px' }} />
+              <Space>
+                <Tag color={record.entryMatch ? 'green' : 'red'}>Entry {record.entryMatch ? '✓' : '✗'}</Tag>
+                <Tag color={record.exitMatch ? 'green' : 'red'}>Exit {record.exitMatch ? '✓' : '✗'}</Tag>
+                <Tag color={record.pnlMatch ? 'green' : 'red'}>PnL {record.pnlMatch ? '✓' : '✗'}</Tag>
+              </Space>
+            </Card>
+          </Col>
+        </Row>
+
+        {/* Details Section */}
+        {parsed?.details && category !== 'MATCH' && (
+          <Card size="small" style={{ marginTop: 16, background: '#fffbe6', border: '1px solid #ffe58f' }}
+                title={<><WarningOutlined style={{ color: '#faad14', marginRight: 8 }} /><Text strong>Details</Text></>}>
+            <Paragraph style={{ margin: 0 }}>{parsed.details}</Paragraph>
+          </Card>
+        )}
+
+        {/* Footer */}
+        <div style={{ marginTop: 12, textAlign: 'right' }}>
+          <Text type="secondary" style={{ fontSize: '11px' }}>
+            Verified {dayjs(record.verifiedAt).fromNow()} • Duration: {record.backtestDurationMs ? `${record.backtestDurationMs}ms` : 'N/A'}
+          </Text>
+        </div>
+      </div>
+    );
+  };
+
+  // Chart data for category distribution
+  const chartData = React.useMemo(() => {
+    return Object.entries(categoryStats).map(([key, value]) => ({
+      name: categoryConfig[key as ParityCategory].label,
+      value,
+      color: key === 'MATCH' ? '#52c41a' : key === 'NO_SIGNAL' ? '#faad14' : key === 'PNL_VARIANCE' ? '#1890ff' : '#ff4d4f',
+    })).filter(d => d.value > 0);
+  }, [categoryStats]);
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size="large">
-      <Card>
-        <Title level={3}>🔬 Backtest Parity Verification</Title>
-        <Text type="secondary">
-          Compare live/paper trades against backtest to ensure identical behavior
-        </Text>
+    <Space direction="vertical" style={{ width: '100%' }} size="middle">
+      {/* Header */}
+      <Card styles={{ body: { padding: '16px 24px' } }}>
+        <Row justify="space-between" align="middle">
+          <Col>
+            <Title level={4} style={{ margin: 0 }}>Parity Verification</Title>
+            <Text type="secondary">Compare live trades against backtest simulation</Text>
+          </Col>
+          <Col>
+            <Space>
+              <Text type="secondary">Last</Text>
+              <InputNumber min={1} max={365} value={days} onChange={(v) => setDays(v || 30)} style={{ width: 70 }} />
+              <Text type="secondary">days</Text>
+              <Button
+                type="primary"
+                icon={verifying ? <SyncOutlined spin /> : <ReloadOutlined />}
+                onClick={refreshAll}
+                loading={verifying}
+              >
+                Verify All
+              </Button>
+              <Button onClick={loadResults} loading={loading}>Refresh</Button>
+            </Space>
+          </Col>
+        </Row>
       </Card>
 
+      {/* Statistics Row */}
       <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} md={4}>
-          <Card>
-            <Statistic
-              title="Total Verified"
-              value={summary.total}
-              valueStyle={{ color: '#1890ff' }}
-            />
+        <Col xs={24} md={16}>
+          <Card styles={{ body: { padding: '16px' } }}>
+            <Row gutter={16}>
+              <Col span={4}>
+                <Statistic title="Total" value={summary.total} valueStyle={{ color: '#1890ff', fontSize: '24px' }} />
+              </Col>
+              <Col span={4}>
+                <Statistic title="Match" value={categoryStats.MATCH} valueStyle={{ color: '#52c41a', fontSize: '24px' }} prefix={<CheckCircleOutlined />} />
+              </Col>
+              <Col span={4}>
+                <Tooltip title="Live entered but backtest wouldn't">
+                  <Statistic title="No Signal" value={categoryStats.NO_SIGNAL} valueStyle={{ color: '#faad14', fontSize: '24px' }} prefix={<ExclamationCircleOutlined />} />
+                </Tooltip>
+              </Col>
+              <Col span={4}>
+                <Tooltip title="Same entry, different exit">
+                  <Statistic title="Exit Δ" value={categoryStats.EXIT_MISMATCH} valueStyle={{ color: '#ff4d4f', fontSize: '24px' }} prefix={<CloseCircleOutlined />} />
+                </Tooltip>
+              </Col>
+              <Col span={4}>
+                <Tooltip title="Same exit, PnL differs">
+                  <Statistic title="PnL Δ" value={categoryStats.PNL_VARIANCE} valueStyle={{ color: '#1890ff', fontSize: '24px' }} prefix={<InfoCircleOutlined />} />
+                </Tooltip>
+              </Col>
+              <Col span={4}>
+                <Statistic
+                  title="Match Rate"
+                  value={summary.matchRate}
+                  precision={1}
+                  suffix="%"
+                  valueStyle={{ color: summary.matchRate >= 90 ? '#52c41a' : summary.matchRate >= 70 ? '#faad14' : '#ff4d4f', fontSize: '24px' }}
+                />
+              </Col>
+            </Row>
           </Card>
         </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card>
-            <Statistic
-              title="Matched"
-              value={summary.matched}
-              valueStyle={{ color: '#52c41a' }}
-              suffix={<CheckCircleOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card>
-            <Tooltip title="Differences explained by live execution slippage - not bugs">
-              <Statistic
-                title="⚠️ Expected Variance"
-                value={categoryStats.expectedVariance}
-                valueStyle={{ color: '#faad14' }}
-              />
-            </Tooltip>
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card>
-            <Tooltip title="Real mismatches that need investigation">
-              <Statistic
-                title="🔍 Real Mismatch"
-                value={categoryStats.realMismatch}
-                valueStyle={{ color: categoryStats.realMismatch > 0 ? '#ff4d4f' : '#52c41a' }}
-                suffix={categoryStats.realMismatch > 0 ? <CloseCircleOutlined /> : <CheckCircleOutlined />}
-              />
-            </Tooltip>
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card>
-            <Statistic
-              title="Match Rate"
-              value={summary.matchRate}
-              precision={1}
-              suffix="%"
-              valueStyle={{ color: summary.matchRate >= 95 ? '#52c41a' : summary.matchRate >= 80 ? '#faad14' : '#ff4d4f' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card>
-            <Tooltip title="Matched + Expected Variance (no real bugs)">
-              <Statistic
-                title="✅ Effective Parity"
-                value={summary.total > 0 ? ((summary.matched + categoryStats.expectedVariance) / summary.total * 100) : 0}
-                precision={1}
-                suffix="%"
-                valueStyle={{ color: '#52c41a' }}
-              />
-            </Tooltip>
+        <Col xs={24} md={8}>
+          <Card styles={{ body: { padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' } }}>
+            {chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={80}>
+                <PieChart>
+                  <Pie data={chartData} dataKey="value" cx="50%" cy="50%" innerRadius={25} outerRadius={35} paddingAngle={2}>
+                    {chartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Legend layout="vertical" align="right" verticalAlign="middle" iconSize={8}
+                          formatter={(value) => <span style={{ fontSize: '11px' }}>{value}</span>} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <Text type="secondary">No data</Text>
+            )}
           </Card>
         </Col>
       </Row>
 
+      {/* Table */}
       <Card
         title={
           <Space>
-            <span>Verification Results</span>
-            {symbolFilter.length > 0 && (
-              <Tag color="blue">{filteredResults.length} / {results.length} trades</Tag>
+            <Text strong>Verification Results</Text>
+            {(symbolFilter.length > 0 || categoryFilter.length > 0 || sideFilter.length > 0) && (
+              <Tag color="blue">{filteredResults.length} / {results.length}</Tag>
             )}
           </Space>
         }
-        loading={loading}
         extra={
           <Space wrap>
-            <FilterOutlined />
             <Select
               mode="multiple"
-              placeholder="Filter by symbol"
+              placeholder="Symbol"
               value={symbolFilter}
               onChange={setSymbolFilter}
-              style={{ minWidth: 200 }}
+              style={{ minWidth: 120 }}
               allowClear
               options={availableSymbols.map(s => ({ label: s, value: s }))}
+              maxTagCount={1}
             />
-            <Text type="secondary">|</Text>
-            <Text type="secondary">Last</Text>
-            <InputNumber
-              min={1}
-              max={365}
-              value={days}
-              onChange={(v) => setDays(v || 30)}
-              style={{ width: 70 }}
+            <Select
+              mode="multiple"
+              placeholder="Category"
+              value={categoryFilter}
+              onChange={setCategoryFilter}
+              style={{ minWidth: 120 }}
+              allowClear
+              options={[
+                { label: 'Match', value: 'MATCH' },
+                { label: 'No Signal', value: 'NO_SIGNAL' },
+                { label: 'Exit Mismatch', value: 'EXIT_MISMATCH' },
+                { label: 'PnL Variance', value: 'PNL_VARIANCE' },
+              ]}
+              maxTagCount={1}
             />
-            <Text type="secondary">days</Text>
-            <Button
-              type="primary"
-              icon={verifying ? <SyncOutlined spin /> : <ReloadOutlined />}
-              onClick={refreshAll}
-              loading={verifying}
-            >
-              Verify All
-            </Button>
-            <Button onClick={loadResults} loading={loading}>
-              Refresh
-            </Button>
+            <Select
+              mode="multiple"
+              placeholder="Side"
+              value={sideFilter}
+              onChange={setSideFilter}
+              style={{ minWidth: 80 }}
+              allowClear
+              options={[
+                { label: 'Long', value: 'long' },
+                { label: 'Short', value: 'short' },
+              ]}
+              maxTagCount={1}
+            />
           </Space>
         }
+        loading={loading}
+        styles={{ body: { padding: 0 } }}
       >
-        {filteredResults.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px' }}>
-            <Text type="secondary">
-              {results.length === 0 
-                ? "No verification results yet. Click \"Verify All\" to compare trades against backtest."
-                : "No trades match the current filter."}
-            </Text>
-          </div>
-        ) : (
-          <Table
-            dataSource={filteredResults}
-            columns={columns}
-            rowKey="id"
-            pagination={{ pageSize: 20 }}
-            size="small"
-            expandable={{
-              expandedRowRender: (record) => {
-                const livePnl = record.livePnlPct ?? 0;
-                const btPnl = record.btPnlPct;
-                const pnlDiff = btPnl != null ? (livePnl - btPnl) : null;
-                const entryDiff = getTimeDiffMinutes(record.liveEntryTs, record.btEntryTs);
-                const exitDiff = getTimeDiffMinutes(record.liveExitTs, record.btExitTs);
-                const holdTimeLive = record.liveExitTs && record.liveEntryTs 
-                  ? Math.round(dayjs(record.liveExitTs).diff(dayjs(record.liveEntryTs), 'minute'))
-                  : null;
-                const holdTimeBt = record.btExitTs && record.btEntryTs
-                  ? Math.round(dayjs(record.btExitTs).diff(dayjs(record.btEntryTs), 'minute'))
-                  : null;
-
-                return (
-                  <div style={{ margin: 0, padding: '12px', background: '#fafafa', borderRadius: 8 }}>
-                    <Row gutter={[24, 16]}>
-                      {/* Detailed Time Comparison */}
-                      <Col span={12}>
-                        <Card size="small" title="⏱️ Time Comparison" style={{ marginBottom: 0 }}>
-                          <Row gutter={8}>
-                            <Col span={12}>
-                              <Text strong>LIVE</Text>
-                              <div style={{ marginTop: 4 }}>
-                                <Text type="secondary">Entry: </Text>
-                                <Text>{dayjs(record.liveEntryTs).format('YYYY-MM-DD HH:mm:ss')}</Text>
-                              </div>
-                              <div>
-                                <Text type="secondary">Exit: </Text>
-                                <Text>{dayjs(record.liveExitTs).format('YYYY-MM-DD HH:mm:ss')}</Text>
-                              </div>
-                              <div>
-                                <Text type="secondary">Hold Time: </Text>
-                                <Text>{holdTimeLive != null ? `${holdTimeLive}m (${(holdTimeLive/15).toFixed(1)} candles)` : 'N/A'}</Text>
-                              </div>
-                            </Col>
-                            <Col span={12}>
-                              <Text strong>BACKTEST</Text>
-                              <div style={{ marginTop: 4 }}>
-                                <Text type="secondary">Entry: </Text>
-                                <Text>{record.btEntryTs ? dayjs(record.btEntryTs).format('YYYY-MM-DD HH:mm:ss') : 'N/A'}</Text>
-                              </div>
-                              <div>
-                                <Text type="secondary">Exit: </Text>
-                                <Text>{record.btExitTs ? dayjs(record.btExitTs).format('YYYY-MM-DD HH:mm:ss') : 'N/A'}</Text>
-                              </div>
-                              <div>
-                                <Text type="secondary">Hold Time: </Text>
-                                <Text>{holdTimeBt != null ? `${holdTimeBt}m (${(holdTimeBt/15).toFixed(1)} candles)` : 'N/A'}</Text>
-                              </div>
-                            </Col>
-                          </Row>
-                          <div style={{ marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
-                            <Space>
-                              <Tag color={isWithinOneCandle(record.liveEntryTs, record.btEntryTs) ? 'green' : 'orange'}>
-                                Entry Δ: {entryDiff}
-                              </Tag>
-                              <Tag color={isWithinOneCandle(record.liveExitTs, record.btExitTs) ? 'green' : 'orange'}>
-                                Exit Δ: {exitDiff}
-                              </Tag>
-                            </Space>
-                          </div>
-                        </Card>
-                      </Col>
-
-                      {/* PnL Comparison */}
-                      <Col span={12}>
-                        <Card size="small" title="💰 PnL Comparison" style={{ marginBottom: 0 }}>
-                          <Row gutter={16}>
-                            <Col span={8}>
-                              <Statistic 
-                                title="Live PnL" 
-                                value={livePnl} 
-                                precision={3} 
-                                suffix="%" 
-                                valueStyle={{ color: livePnl >= 0 ? '#52c41a' : '#ff4d4f', fontSize: 16 }}
-                              />
-                            </Col>
-                            <Col span={8}>
-                              <Statistic 
-                                title="Backtest PnL" 
-                                value={btPnl ?? 0} 
-                                precision={3} 
-                                suffix="%" 
-                                valueStyle={{ color: (btPnl ?? 0) >= 0 ? '#52c41a' : '#ff4d4f', fontSize: 16 }}
-                              />
-                            </Col>
-                            <Col span={8}>
-                              <Statistic 
-                                title="Difference" 
-                                value={pnlDiff ?? 0} 
-                                precision={3} 
-                                suffix="%" 
-                                prefix={pnlDiff != null && pnlDiff > 0 ? '+' : ''}
-                                valueStyle={{ 
-                                  color: pnlDiff != null && Math.abs(pnlDiff) <= PNL_TOLERANCE ? '#52c41a' : '#ff4d4f',
-                                  fontSize: 16
-                                }}
-                              />
-                            </Col>
-                          </Row>
-                          <div style={{ marginTop: 8 }}>
-                            <Text type="secondary">Tolerance: ±{PNL_TOLERANCE}% </Text>
-                            {pnlDiff != null && Math.abs(pnlDiff) <= PNL_TOLERANCE ? (
-                              <Tag color="green">Within tolerance ✓</Tag>
-                            ) : (
-                              <Tag color="red">Outside tolerance ✗</Tag>
-                            )}
-                          </div>
-                        </Card>
-                      </Col>
-                    </Row>
-
-                    {/* Match Summary */}
-                    <Row style={{ marginTop: 12 }}>
-                      <Col span={24}>
-                        <Space wrap>
-                          <Text strong>Match Status:</Text>
-                          <Tag color={record.entryMatch ? 'green' : 'red'}>
-                            Entry: {record.entryMatch ? '✓ MATCH' : '✗ MISMATCH'}
-                          </Tag>
-                          <Tag color={record.exitMatch ? 'green' : 'red'}>
-                            Exit Reason: {record.exitMatch ? '✓ MATCH' : '✗ MISMATCH'}
-                          </Tag>
-                          <Tag color={record.pnlMatch ? 'green' : 'red'}>
-                            PnL: {record.pnlMatch ? '✓ MATCH' : '✗ MISMATCH'}
-                          </Tag>
-                          <Text type="secondary">|</Text>
-                          <Text type="secondary">Backtest Duration: {record.backtestDurationMs ? `${record.backtestDurationMs}ms` : 'N/A'}</Text>
-                        </Space>
-                      </Col>
-                    </Row>
-
-                    {/* Mismatch Details */}
-                    {record.mismatchDetails && (
-                      <Row style={{ marginTop: 12 }}>
-                        <Col span={24}>
-                          <Card size="small" title="⚠️ Mismatch Details" style={{ background: '#fff2f0', border: '1px solid #ffccc7' }}>
-                            <Space direction="vertical" size={0}>
-                              {JSON.parse(record.mismatchDetails).map((detail: string, i: number) => (
-                                <Text key={i} style={{ color: '#cf1322' }}>• {detail}</Text>
-                              ))}
-                            </Space>
-                          </Card>
-                        </Col>
-                      </Row>
-                    )}
-                  </div>
-                );
-              },
-              rowExpandable: () => true,
-            }}
-          />
-        )}
+        <Table
+          dataSource={filteredResults}
+          columns={columns}
+          rowKey="id"
+          pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'] }}
+          size="small"
+          expandable={{
+            expandedRowRender: renderExpandedRow,
+            expandedRowKeys,
+            onExpand: (expanded, record) => {
+              setExpandedRowKeys(expanded ? [record.id] : []);
+            },
+            rowExpandable: () => true,
+          }}
+          scroll={{ x: 900 }}
+          locale={{ emptyText: results.length === 0
+            ? 'No verification results yet. Click "Verify All" to compare trades against backtest.'
+            : 'No trades match the current filters.'
+          }}
+        />
       </Card>
     </Space>
   );
