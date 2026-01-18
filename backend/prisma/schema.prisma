@@ -263,6 +263,7 @@ model Position {
   maxPnlPct            Float?
   stagnantState        Json?
   trailingActive       Boolean       @default(false)
+  trailingBreachCandles Int          @default(0)  // V5.60: Persist breach counter for restart recovery
   session              AgentSession? @relation(fields: [sessionId], references: [id])
 
   @@index([sessionId])

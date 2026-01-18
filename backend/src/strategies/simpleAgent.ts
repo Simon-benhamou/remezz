@@ -3831,19 +3831,28 @@ export class SimpleAgent {
           // V5.39 FIX: Restore trailing/stagnant tracking state
           maxPnlPct: (dbPosition.maxPnlPct as number | null) ?? undefined,
           trailingActive: (dbPosition.trailingActive as boolean) ?? false,
-          trailingBreachCandles: 0, // Reset breach counter on restart (conservative)
-          stagnantState: dbPosition.stagnantState 
-            ? (typeof dbPosition.stagnantState === 'string' 
-                ? JSON.parse(dbPosition.stagnantState) 
-                : dbPosition.stagnantState as { triggered: boolean; triggeredAtMinutes?: number; confirmed: boolean; cancelled: boolean; obsPeakPct: number })
-            : undefined,
+          // V5.60 FIX: Restore trailingBreachCandles from DB to preserve exit confirmation state
+          trailingBreachCandles: (dbPosition.trailingBreachCandles as number | null) ?? 0,
+          // V5.60 FIX: Wrap JSON.parse in try-catch to prevent crash on corrupted data
+          stagnantState: (() => {
+            try {
+              if (!dbPosition.stagnantState) return undefined;
+              if (typeof dbPosition.stagnantState === 'string') {
+                return JSON.parse(dbPosition.stagnantState);
+              }
+              return dbPosition.stagnantState as { triggered: boolean; triggeredAtMinutes?: number; confirmed: boolean; cancelled: boolean; obsPeakPct: number };
+            } catch (e) {
+              logger.warn(`⚠️ [${this.config.symbol}] Failed to parse stagnantState from DB, resetting: ${e}`);
+              return undefined;
+            }
+          })(),
         };
         
         // ⚠️ CRITICAL: Register margin in CapitalPool to prevent double-spending!
         // This is essential for live mode where exchange balance includes locked margin
         this.config.capitalPool.commit(this.config.sessionId, marginUsd);
         
-        logger.info(`📥 [${this.config.symbol}] Loaded existing position: ${this.position?.side} @ $${this.position?.entryPrice} | margin=$${marginUsd.toFixed(2)} | trailingActive=${this.position.trailingActive} | maxPnl=${this.position.maxPnlPct?.toFixed(2) ?? 'N/A'}% | hwm=$${this.position.highWaterMark?.toFixed(4) ?? 'N/A'}`);
+        logger.info(`📥 [${this.config.symbol}] Loaded existing position: ${this.position?.side} @ $${this.position?.entryPrice} | margin=$${marginUsd.toFixed(2)} | trailingActive=${this.position.trailingActive} | breachCandles=${this.position.trailingBreachCandles ?? 0} | maxPnl=${this.position.maxPnlPct?.toFixed(2) ?? 'N/A'}% | hwm=$${this.position.highWaterMark?.toFixed(4) ?? 'N/A'}`);
       }
       
     } catch (error) {
@@ -4340,6 +4349,7 @@ export class SimpleAgent {
           lowWaterMark: this.position.lowWaterMark ?? null,
           maxPnlPct: this.position.maxPnlPct ?? null,
           trailingActive: this.position.trailingActive ?? false,
+          trailingBreachCandles: this.position.trailingBreachCandles ?? 0,  // V5.60: Persist breach counter
           stagnantState: this.position.stagnantState ?? null,
         },
       });
