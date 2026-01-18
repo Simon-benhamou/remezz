@@ -195,16 +195,7 @@ function checkSignalAtEntry(
   entryTs: number,
   side: 'long' | 'short'
 ): SignalCheckResult {
-  // Find the candle index at entry time
-  const entryIdx = candles.findIndex(c => c.timestamp >= entryTs);
-  if (entryIdx < 50) {
-    return { wouldEnter: false, strength: null, reason: 'Not enough warmup candles' };
-  }
-
-  // Get window of candles up to (not including) entry candle
-  const windowCandles = candles.slice(0, entryIdx);
-
-  // V5.60 FIX: Align BTC candle selection with live behavior
+  // V5.60 FIX: Align candle selection with live behavior for BOTH symbol and BTC
   // Live uses isFinal flag to exclude the "in-progress" candle.
   // For parity, we need to find the candle that was forming at entry time
   // and exclude it (since live would have excluded it via isFinal=false).
@@ -216,8 +207,20 @@ function checkSignalAtEntry(
   const inProgressCandleTs = Math.floor(entryTs / CANDLE_MS) * CANDLE_MS;
   const lastClosedCandleTs = inProgressCandleTs - CANDLE_MS;
 
-  // Use candles with timestamp <= lastClosedCandleTs (matches live's isFinal logic)
+  // V5.61 FIX: Apply same filter to BOTH symbol and BTC candles
+  // Previously only BTC was filtered correctly, causing signal calculation mismatch
+  const windowCandles = candles.filter(c => c.timestamp <= lastClosedCandleTs);
   const btcWindow = btcCandles.filter(c => c.timestamp <= lastClosedCandleTs);
+
+  if (windowCandles.length < 50 || btcWindow.length < 50) {
+    return { wouldEnter: false, strength: null, reason: 'Insufficient candle data' };
+  }
+
+  // Find the candle index at entry time (for reference only now)
+  const entryIdx = candles.findIndex(c => c.timestamp >= entryTs);
+  if (entryIdx < 50) {
+    return { wouldEnter: false, strength: null, reason: 'Not enough warmup candles' };
+  }
 
   if (windowCandles.length < 50 || btcWindow.length < 50) {
     return { wouldEnter: false, strength: null, reason: 'Insufficient candle data' };

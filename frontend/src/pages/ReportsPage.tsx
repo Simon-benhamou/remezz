@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message, Tabs, Tag, InputNumber, Tooltip, Select, Badge, Divider, Progress } from 'antd';
+import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message, Tabs, Tag, InputNumber, Tooltip, Select, Badge, Divider, Progress, theme } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, ReloadOutlined, FilterOutlined, ExclamationCircleOutlined, WarningOutlined, InfoCircleOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -109,6 +109,11 @@ function ParityVerificationPanel() {
   const [categoryFilter, setCategoryFilter] = React.useState<ParityCategory[]>([]);
   const [sideFilter, setSideFilter] = React.useState<string[]>([]);
   const [expandedRowKeys, setExpandedRowKeys] = React.useState<string[]>([]);
+
+  // Theme detection for dark mode compatibility
+  const { token } = theme.useToken();
+  const base = token.colorBgBase.toLowerCase();
+  const isDarkTheme = base.startsWith('#0') || base === 'black' || base.includes('dark');
 
   React.useEffect(() => {
     loadResults();
@@ -403,10 +408,18 @@ function ParityVerificationPanel() {
     const category = getCategory(record);
     const config = categoryConfig[category];
 
+    // Theme-aware colors for expanded row
+    const containerBg = isDarkTheme
+      ? 'linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(15, 23, 42, 0.85) 100%)'
+      : 'linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%)';
+    const headerBg = isDarkTheme ? 'rgba(30, 41, 59, 0.8)' : '#fff';
+    const tableBorder = isDarkTheme ? 'rgba(255, 255, 255, 0.1)' : '#f0f0f0';
+    const labelColor = isDarkTheme ? 'rgba(255, 255, 255, 0.65)' : '#8c8c8c';
+
     return (
-      <div style={{ padding: '16px', background: 'linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%)', borderRadius: 8 }}>
+      <div style={{ padding: '16px', background: containerBg, borderRadius: 8 }}>
         {/* Category Header */}
-        <div style={{ marginBottom: 16, padding: '12px 16px', background: '#fff', borderRadius: 8, borderLeft: `4px solid ${category === 'MATCH' ? '#52c41a' : category === 'NO_SIGNAL' ? '#faad14' : '#ff4d4f'}` }}>
+        <div style={{ marginBottom: 16, padding: '12px 16px', background: headerBg, borderRadius: 8, borderLeft: `4px solid ${category === 'MATCH' ? '#52c41a' : category === 'NO_SIGNAL' ? '#faad14' : '#ff4d4f'}` }}>
           <Space>
             <Tag icon={config.icon} color={config.color} style={{ fontSize: '13px', padding: '4px 12px' }}>
               {config.label}
@@ -427,7 +440,7 @@ function ParityVerificationPanel() {
             <Card size="small" title={<><Text strong>Time Comparison</Text></>} styles={{ body: { padding: '12px' } }}>
               <table style={{ width: '100%', fontSize: '12px' }}>
                 <thead>
-                  <tr style={{ borderBottom: '1px solid #f0f0f0' }}>
+                  <tr style={{ borderBottom: `1px solid ${tableBorder}` }}>
                     <th style={{ textAlign: 'left', padding: '8px 0' }}></th>
                     <th style={{ textAlign: 'left', padding: '8px 0' }}>LIVE</th>
                     <th style={{ textAlign: 'left', padding: '8px 0' }}>BACKTEST</th>
@@ -436,7 +449,7 @@ function ParityVerificationPanel() {
                 </thead>
                 <tbody>
                   <tr>
-                    <td style={{ padding: '6px 0', color: '#8c8c8c' }}>Entry</td>
+                    <td style={{ padding: '6px 0', color: labelColor }}>Entry</td>
                     <td>{dayjs(record.liveEntryTs).format('MM-DD HH:mm:ss')}</td>
                     <td>{record.btEntryTs ? dayjs(record.btEntryTs).format('MM-DD HH:mm:ss') : '-'}</td>
                     <td>
@@ -446,7 +459,7 @@ function ParityVerificationPanel() {
                     </td>
                   </tr>
                   <tr>
-                    <td style={{ padding: '6px 0', color: '#8c8c8c' }}>Exit</td>
+                    <td style={{ padding: '6px 0', color: labelColor }}>Exit</td>
                     <td>{dayjs(record.liveExitTs).format('MM-DD HH:mm:ss')}</td>
                     <td>{record.btExitTs ? dayjs(record.btExitTs).format('MM-DD HH:mm:ss') : '-'}</td>
                     <td>
@@ -456,7 +469,7 @@ function ParityVerificationPanel() {
                     </td>
                   </tr>
                   <tr>
-                    <td style={{ padding: '6px 0', color: '#8c8c8c' }}>Hold</td>
+                    <td style={{ padding: '6px 0', color: labelColor }}>Hold</td>
                     <td>{holdTimeLive != null ? `${holdTimeLive}m (${(holdTimeLive/15).toFixed(1)} candles)` : '-'}</td>
                     <td>{holdTimeBt != null ? `${holdTimeBt}m (${(holdTimeBt/15).toFixed(1)} candles)` : '-'}</td>
                     <td>
@@ -513,7 +526,11 @@ function ParityVerificationPanel() {
 
         {/* Details Section */}
         {parsed?.details && category !== 'MATCH' && (
-          <Card size="small" style={{ marginTop: 16, background: '#fffbe6', border: '1px solid #ffe58f' }}
+          <Card size="small" style={{
+            marginTop: 16,
+            background: isDarkTheme ? 'rgba(250, 173, 20, 0.1)' : '#fffbe6',
+            border: isDarkTheme ? '1px solid rgba(250, 173, 20, 0.3)' : '1px solid #ffe58f'
+          }}
                 title={<><WarningOutlined style={{ color: '#faad14', marginRight: 8 }} /><Text strong>Details</Text></>}>
             <Paragraph style={{ margin: 0 }}>{parsed.details}</Paragraph>
           </Card>
@@ -715,6 +732,11 @@ export default function ReportsPage() {
   const [reports, setReports] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(false);
   const { mode } = useMode();
+
+  // Theme detection for dark mode compatibility
+  const { token } = theme.useToken();
+  const base = token.colorBgBase.toLowerCase();
+  const isDarkTheme = base.startsWith('#0') || base === 'black' || base.includes('dark');
 
   React.useEffect(() => {
     loadSessions();
