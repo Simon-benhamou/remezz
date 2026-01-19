@@ -264,6 +264,92 @@ function checkSignalAtEntry(
 }
 
 // ============================================================================
+// V5.62: NFS (NOISE FILTER SCORE) FOR ADAPTIVE TRAILING
+// ============================================================================
+
+const NFS_CONFIG = {
+  HIGH_THRESHOLD: 70,
+  MEDIUM_THRESHOLD: 40,
+  WEIGHT_BREACH_ATR: 35,
+  WEIGHT_BREACH_DEPTH: 25,
+  WEIGHT_VOLUME: 20,
+  WEIGHT_BODY_RATIO: 10,
+  WEIGHT_MOMENTUM: 10,
+  BREACH_ATR_THRESHOLD: 0.40,
+  BREACH_DEPTH_THRESHOLD: 0.25,
+  VOLUME_RATIO_THRESHOLD: 1.5,
+  BODY_RATIO_THRESHOLD: 0.5,
+  MOMENTUM_THRESHOLD: 0.5,
+};
+
+interface NfsScore {
+  score: number;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+function calculateNfsScoreForBreach(
+  candle: Candle,
+  prevCandles: Candle[],
+  side: 'long' | 'short',
+  trailingStopPrice: number
+): NfsScore {
+  // Breach depth
+  let breachDepthAbs: number;
+  let breachDepthPct: number;
+  if (side === 'long') {
+    breachDepthAbs = Math.max(0, trailingStopPrice - candle.close);
+    breachDepthPct = trailingStopPrice > 0 ? (breachDepthAbs / trailingStopPrice) * 100 : 0;
+  } else {
+    breachDepthAbs = Math.max(0, candle.close - trailingStopPrice);
+    breachDepthPct = trailingStopPrice > 0 ? (breachDepthAbs / trailingStopPrice) * 100 : 0;
+  }
+
+  // ATR
+  const atrPeriod = Math.min(14, prevCandles.length);
+  let atrSum = 0;
+  for (let i = prevCandles.length - atrPeriod; i < prevCandles.length; i++) {
+    const c = prevCandles[i];
+    const prevClose = i > 0 ? prevCandles[i - 1].close : c.open;
+    const tr = Math.max(c.high - c.low, Math.abs(c.high - prevClose), Math.abs(c.low - prevClose));
+    atrSum += tr;
+  }
+  const atr = atrPeriod > 0 ? atrSum / atrPeriod : 1;
+  const breachAtrRatio = atr > 0 ? breachDepthAbs / atr : 0;
+
+  // Volume ratio
+  const avgVolume = prevCandles.slice(-20).reduce((s, c) => s + c.volume, 0) / Math.min(20, prevCandles.length);
+  const volumeRatio = avgVolume > 0 ? candle.volume / avgVolume : 1;
+
+  // Candle body ratio
+  const bodySize = Math.abs(candle.close - candle.open);
+  const candleRange = candle.high - candle.low;
+  const bodyRatio = candleRange > 0 ? bodySize / candleRange : 0;
+
+  // ROC5 momentum
+  const roc5Close = prevCandles[prevCandles.length - 5]?.close ?? candle.open;
+  const roc5 = roc5Close > 0 ? ((candle.close - roc5Close) / roc5Close) * 100 : 0;
+  const momentumAligned = side === 'long' ? roc5 <= -NFS_CONFIG.MOMENTUM_THRESHOLD : roc5 >= NFS_CONFIG.MOMENTUM_THRESHOLD;
+
+  // Score calculation
+  let score = 0;
+  if (breachAtrRatio >= NFS_CONFIG.BREACH_ATR_THRESHOLD) score += NFS_CONFIG.WEIGHT_BREACH_ATR;
+  else if (breachAtrRatio >= NFS_CONFIG.BREACH_ATR_THRESHOLD * 0.5) score += NFS_CONFIG.WEIGHT_BREACH_ATR * 0.5;
+  if (breachDepthPct >= NFS_CONFIG.BREACH_DEPTH_THRESHOLD) score += NFS_CONFIG.WEIGHT_BREACH_DEPTH;
+  else if (breachDepthPct >= NFS_CONFIG.BREACH_DEPTH_THRESHOLD * 0.5) score += NFS_CONFIG.WEIGHT_BREACH_DEPTH * 0.5;
+  if (volumeRatio >= NFS_CONFIG.VOLUME_RATIO_THRESHOLD) score += NFS_CONFIG.WEIGHT_VOLUME;
+  else if (volumeRatio >= NFS_CONFIG.VOLUME_RATIO_THRESHOLD * 0.8) score += NFS_CONFIG.WEIGHT_VOLUME * 0.5;
+  if (bodyRatio >= NFS_CONFIG.BODY_RATIO_THRESHOLD) score += NFS_CONFIG.WEIGHT_BODY_RATIO;
+  if (momentumAligned) score += NFS_CONFIG.WEIGHT_MOMENTUM;
+
+  let confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  if (score >= NFS_CONFIG.HIGH_THRESHOLD) confidence = 'HIGH';
+  else if (score >= NFS_CONFIG.MEDIUM_THRESHOLD) confidence = 'MEDIUM';
+  else confidence = 'LOW';
+
+  return { score, confidence };
+}
+
+// ============================================================================
 // EXIT SIMULATION
 // ============================================================================
 
@@ -340,18 +426,55 @@ function simulateExit(
     }
     // Stagnant state is tracked internally by shouldExitPosition via the position object
 
-    // Handle trailing breach confirmation (2 candles)
+    // V5.62: Handle trailing breach with NFS_ADAPTIVE
+    // NFS determines exit strategy based on confidence:
+    // - HIGH: Exit at trailing stop price (theoretical/perfect)
+    // - MEDIUM: 1-candle confirmation, exit at close
+    // - LOW: 2-candle confirmation, exit at close
     if (exitSignal.reason === 'trailing_breach' || exitSignal.reason === 'trailing') {
       position.trailingBreachCandles = (position.trailingBreachCandles ?? 0) + 1;
+      const trailingStopPrice = exitSignal.newStopLoss ?? position.appTrailingStop ?? candle.close;
 
-      if (position.trailingBreachCandles >= 2) {
-        const exitPrice = exitSignal.newStopLoss ?? candle.close;
+      // Calculate NFS score
+      const nfsScore = calculateNfsScoreForBreach(
+        candle,
+        windowCandles.slice(-20),
+        side,
+        trailingStopPrice
+      );
+
+      let shouldExit = false;
+      let exitPrice = candle.close;
+      let exitReason = 'TRAIL';
+
+      if (nfsScore.confidence === 'HIGH') {
+        // HIGH confidence: Exit at trailing stop price (perfect)
+        shouldExit = true;
+        exitPrice = trailingStopPrice;
+        exitReason = 'TRAIL_NFS_HIGH';
+      } else if (nfsScore.confidence === 'MEDIUM') {
+        // MEDIUM: 1-candle confirmation, exit at close
+        if (position.trailingBreachCandles >= 1) {
+          shouldExit = true;
+          exitPrice = candle.close;
+          exitReason = 'TRAIL_NFS_MED';
+        }
+      } else {
+        // LOW: 2-candle confirmation, exit at close
+        if (position.trailingBreachCandles >= 2) {
+          shouldExit = true;
+          exitPrice = candle.close;
+          exitReason = 'TRAIL_NFS_LOW';
+        }
+      }
+
+      if (shouldExit) {
         const pnlPct = side === 'long'
           ? ((exitPrice - entryPrice) / entryPrice) * 100 * leverage
           : ((entryPrice - exitPrice) / entryPrice) * 100 * leverage;
 
         return {
-          exitReason: 'TRAIL',
+          exitReason,
           exitPrice,
           exitCandleIndex: i - entryIdx,
           pnlPct,

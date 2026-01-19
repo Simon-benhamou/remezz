@@ -1281,28 +1281,35 @@ export class SimpleAgent {
             `[${symbol}] NFS components: breachATR=${nfsResult.components.breachATRRatio.toFixed(3)} breachDepth=${nfsResult.components.breachDepthPct.toFixed(3)}% vol=${nfsResult.components.volumeRatio.toFixed(2)}x body=${nfsResult.components.candleBodyRatio.toFixed(2)} roc5=${nfsResult.components.momentumROC5.toFixed(3)}%`
           );
 
-          // Decision based on NFS score
+          // ═══════════════════════════════════════════════════════════════════════
+          // V5.62: NFS_ADAPTIVE EXIT LOGIC (matches backtest)
+          // ═══════════════════════════════════════════════════════════════════════
+          // HIGH: Exit at trailing stop price (theoretical/perfect) - immediate
+          // MEDIUM: Exit at candle close with 1-candle confirmation
+          // LOW: Exit at candle close with 2-candle confirmation
+          // ═══════════════════════════════════════════════════════════════════════
           if (nfsResult.shouldExitImmediately) {
-            // HIGH confidence - exit immediately at trailing stop price
+            // HIGH confidence - exit immediately at trailing stop price (THEORETICAL)
+            // This captures the perfect exit that backtest achieves
             this.stopRealtimeExitMonitor();
-            const execPx = trailingStopPrice;
+            const execPx = trailingStopPrice; // HIGH = trailing stop price
             logger.info(
-              `⚡⚡⚡ [${symbol}] NFS HIGH EXIT (score=${nfsResult.score.toFixed(0)}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | reason=high_confidence_breach`,
+              `⚡⚡⚡ [${symbol}] NFS HIGH EXIT (score=${nfsResult.score.toFixed(0)}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | close=${closePx.toFixed(4)} | reason=high_confidence_breach`,
             );
             await this.closePosition(this.position!, execPx, 'trailing_nfs_high');
             return;
           } else if (nfsResult.confidence === 'MEDIUM' && this.nfsBreachCount >= 1) {
-            // MEDIUM confidence with 1+ breach - exit with slight delay to confirm
-            // Use 1 candle confirmation instead of 2
+            // MEDIUM confidence - 1 candle confirmation, exit at CANDLE CLOSE
+            // V5.62 FIX: Use closePx instead of trailingStopPrice to match backtest
             this.stopRealtimeExitMonitor();
-            const execPx = trailingStopPrice;
+            const execPx = closePx; // MEDIUM = candle close price
             logger.info(
               `⚡⚡ [${symbol}] NFS MEDIUM EXIT (score=${nfsResult.score.toFixed(0)}, breaches=${this.nfsBreachCount}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | reason=medium_confidence_confirmed`,
             );
             await this.closePosition(this.position!, execPx, 'trailing_nfs_medium');
             return;
           } else {
-            // LOW confidence - use standard 2-close confirmation
+            // LOW confidence - use standard 2-close confirmation (falls through)
             logger.info(
               `⏳ [${symbol}] NFS LOW (score=${nfsResult.score.toFixed(0)}) - using 2-close confirmation (${this.nfsBreachCount}/${confirmCandles})`,
             );
@@ -1328,14 +1335,18 @@ export class SimpleAgent {
         }
 
         this.stopRealtimeExitMonitor();
-        // V5.57 FIX: Use candidateStop (newStopLoss calculated NOW) as primary exit price
-        // This matches backtest - use the trailing stop calculated at this moment
-        // candidateStop = exitSignal.newStopLoss from shouldExitPosition()
+        // ═══════════════════════════════════════════════════════════════════════
+        // V5.62 FIX: Use CANDLE CLOSE for 2-close confirmation (LOW confidence)
+        // ═══════════════════════════════════════════════════════════════════════
+        // Previously: Used trailingStopPx (theoretical price) which caused paper
+        // mode to overestimate profits compared to actual market execution.
+        // Now: Use closePx to match backtest NFS_ADAPTIVE logic.
+        // ═══════════════════════════════════════════════════════════════════════
         const trailingStopPx = candidateStop ?? this.position!.appTrailingStop ?? this.lastAppTrailingStop;
-        const execPx = trailingStopPx && Number.isFinite(trailingStopPx) ? trailingStopPx : (Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : closePx);
-        const exitReason = nfsEnabled && this.lastNfsResult ? 'trailing_nfs_2close' : 'trailing_rt';
+        const execPx = closePx; // V5.62: Always use candle close for 2-candle confirmation
+        const exitReason = nfsEnabled && this.lastNfsResult ? 'trailing_nfs_low' : 'trailing_rt';
         logger.info(
-          `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (${exitReason}, 1m close) | exec=${execPx.toFixed(4)} | trailStop=${trailingStopPx?.toFixed(4) ?? 'n/a'} | close=${closePx.toFixed(4)} | confirmCandles=${confirmCandles}${this.lastNfsResult ? ` | nfs=${this.lastNfsResult.score.toFixed(0)}` : ''}`,
+          `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (${exitReason}, 2-close) | exec=${execPx.toFixed(4)} | trailStop=${trailingStopPx?.toFixed(4) ?? 'n/a'} | close=${closePx.toFixed(4)} | confirmCandles=${confirmCandles}${this.lastNfsResult ? ` | nfs=${this.lastNfsResult.score.toFixed(0)}` : ''}`,
         );
         await this.closePosition(this.position!, execPx, exitReason);
         return;
@@ -2676,33 +2687,87 @@ export class SimpleAgent {
       }
 
       // ════════════════════════════════════════════════════════════════════════
-      // V5.38: TRAILING STOP with 2-CLOSE CONFIRMATION (aligned with backtest)
-      // Requires 2 consecutive 15m candle closes beyond trailing stop to exit
-      // This filters out single-candle fakeouts and lets winners run longer
+      // V5.62: TRAILING STOP with NFS_ADAPTIVE (aligned with backtest)
+      // Uses NFS score to determine exit strategy:
+      // - HIGH: Exit at trailing stop price (immediate)
+      // - MEDIUM: Exit at candle close with 1-candle confirmation
+      // - LOW: Exit at candle close with 2-candle confirmation
       // ════════════════════════════════════════════════════════════════════════
       if (exitSignal.trailingBreached === true) {
         // Initialize breach counter if needed
         if (!this.position!.trailingBreachCandles) {
           this.position!.trailingBreachCandles = 0;
         }
-        
+
         this.position!.trailingBreachCandles += 1;
         const breachCount = this.position!.trailingBreachCandles;
-        const REQUIRED_CONFIRMATIONS = 2;
-        
-        if (breachCount >= REQUIRED_CONFIRMATIONS) {
-          // Confirmed! 2 consecutive closes beyond trailing stop
-          // V5.57 FIX: Use newStopLoss (calculated NOW with current HWM) as primary exit price
-          // This matches backtest exactly - the backtest uses exitSignal.newStopLoss
-          // which is HWM × (1 - TRAILING_DISTANCE_PCT) calculated at this moment
-          // NOT appTrailingStop which is the stored value from previous update
-          const trailingExitPrice = exitSignal.newStopLoss ?? this.position!.appTrailingStop ?? currentPrice;
-          logger.info(`🔴 [${symbol}] TRAILING CONFIRMED (${breachCount}/${REQUIRED_CONFIRMATIONS} closes) | price=$${currentPrice.toFixed(4)} | exitAt=$${trailingExitPrice.toFixed(4)} | PnL=${exitSignal.pnlPct?.toFixed(2)}%`);
-          await this.closePosition(this.position!, trailingExitPrice, 'trailing');
-          return;
+        const trailingStopPrice = exitSignal.newStopLoss ?? this.position!.appTrailingStop ?? currentPrice;
+
+        // V5.62: NFS_ADAPTIVE on 15m close (backup to 1m realtime monitor)
+        const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
+        const nfsAdaptive = (MomentumConfig.EXIT as any).NFS_ADAPTIVE_ENABLED ?? true;
+
+        if (nfsEnabled && nfsAdaptive && this.nfsCalculator) {
+          // Calculate NFS score for this breach
+          const symbolCandles = await this.fetchCandles();
+          const nfsCandles = symbolCandles.slice(-25).map(c => ({
+            timestamp: c.timestamp,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume || 0,
+            isFinal: true,
+          })) as NfsCandle[];
+
+          const currentNfsCandle: NfsCandle = {
+            timestamp: latestClosedCandle.timestamp,
+            open: latestClosedCandle.open,
+            high: latestClosedCandle.high,
+            low: latestClosedCandle.low,
+            close: latestClosedCandle.close,
+            volume: latestClosedCandle.volume || 0,
+            isFinal: true,
+          };
+
+          const nfsResult = this.nfsCalculator.calculate(
+            currentNfsCandle,
+            nfsCandles.slice(0, -1),
+            this.position!.side,
+            trailingStopPrice
+          );
+
+          logger.info(`🔴 [${symbol}] 15m TRAILING BREACH | NFS=${nfsResult.score.toFixed(0)} (${nfsResult.confidence}) | breaches=${breachCount} | close=${currentPrice.toFixed(4)} | stop=${trailingStopPrice.toFixed(4)}`);
+
+          if (nfsResult.shouldExitImmediately) {
+            // HIGH confidence: Exit at trailing stop price
+            logger.info(`⚡⚡⚡ [${symbol}] 15m NFS HIGH EXIT | exec=${trailingStopPrice.toFixed(4)}`);
+            await this.closePosition(this.position!, trailingStopPrice, 'trailing_nfs_high_15m');
+            return;
+          } else if (nfsResult.confidence === 'MEDIUM' && breachCount >= 1) {
+            // MEDIUM: 1-candle confirm, exit at close
+            logger.info(`⚡⚡ [${symbol}] 15m NFS MEDIUM EXIT | exec=${currentPrice.toFixed(4)}`);
+            await this.closePosition(this.position!, currentPrice, 'trailing_nfs_med_15m');
+            return;
+          } else if (breachCount >= 2) {
+            // LOW: 2-candle confirm, exit at close
+            logger.info(`⚡ [${symbol}] 15m NFS LOW EXIT (2-close) | exec=${currentPrice.toFixed(4)}`);
+            await this.closePosition(this.position!, currentPrice, 'trailing_nfs_low_15m');
+            return;
+          } else {
+            // LOW, first breach - wait for confirmation
+            logger.warn(`⏳ [${symbol}] 15m NFS LOW (score=${nfsResult.score.toFixed(0)}) - waiting for 2nd close (${breachCount}/2)`);
+          }
         } else {
-          // First breach - wait for confirmation
-          logger.warn(`⚠️ [${symbol}] TRAILING BREACH ${breachCount}/${REQUIRED_CONFIRMATIONS} | price=$${currentPrice.toFixed(4)} | trail=$${exitSignal.newStopLoss?.toFixed(4)} | Waiting for confirmation...`);
+          // Fallback: Standard 2-close confirmation (NFS disabled)
+          const REQUIRED_CONFIRMATIONS = 2;
+          if (breachCount >= REQUIRED_CONFIRMATIONS) {
+            logger.info(`🔴 [${symbol}] TRAILING CONFIRMED (${breachCount}/${REQUIRED_CONFIRMATIONS} closes) | price=$${currentPrice.toFixed(4)} | trailStop=$${trailingStopPrice.toFixed(4)} | PnL=${exitSignal.pnlPct?.toFixed(2)}%`);
+            await this.closePosition(this.position!, currentPrice, 'trailing');
+            return;
+          } else {
+            logger.warn(`⚠️ [${symbol}] TRAILING BREACH ${breachCount}/${REQUIRED_CONFIRMATIONS} | price=$${currentPrice.toFixed(4)} | trail=$${exitSignal.newStopLoss?.toFixed(4)} | Waiting for confirmation...`);
+          }
         }
       } else if (exitSignal.trailingBreached === false) {
         // V5.39 FIX: Explicit reset when trailingBreached is false (wick hit but close recovered)
