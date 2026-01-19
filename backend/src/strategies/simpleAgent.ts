@@ -69,6 +69,7 @@ import {
 import { notifyPositionOpened, notifyPositionClosed, notifySlippageAlert } from '../utils/notifications.js';
 import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
 import { calculateOrderPriority } from '../services/orderPriority.js';
+import { exchangeAPIDeduplicator, makeFetchMyTradesKey } from '../services/apiDeduplicator.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   NfsCalculator,
@@ -98,6 +99,43 @@ let btcWsSubscribed = false;
 const GLOBAL_BTC_1H_CACHE_TTL_MS = 900_000; // 15 minutes (1h candles change less frequently)
 let globalBtc1hCandleCache: { candles: Candle[]; fetchedAt: number } | null = null;
 let globalBtc1hCacheFetchingPromise: Promise<Candle[]> | null = null;
+
+// V5.66: Leverage cache per symbol to avoid redundant setLeverage API calls
+// Key: `${userId}:${symbol}:${leverage}` Value: timestamp when set
+const LEVERAGE_CACHE_TTL_MS = 3600_000; // 1 hour (leverage rarely changes)
+const leverageCache: Map<string, number> = new Map();
+
+function getLeverageCacheKey(userId: string, symbol: string, leverage: number): string {
+  return `${userId}:${symbol}:${leverage}`;
+}
+
+function isLeverageCached(userId: string, symbol: string, leverage: number): boolean {
+  const key = getLeverageCacheKey(userId, symbol, leverage);
+  const cachedAt = leverageCache.get(key);
+  if (!cachedAt) return false;
+
+  // Check if cache is still valid
+  if (Date.now() - cachedAt > LEVERAGE_CACHE_TTL_MS) {
+    leverageCache.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function cacheLeverage(userId: string, symbol: string, leverage: number): void {
+  const key = getLeverageCacheKey(userId, symbol, leverage);
+  leverageCache.set(key, Date.now());
+
+  // Cleanup old entries periodically (every 100 entries)
+  if (leverageCache.size > 100) {
+    const now = Date.now();
+    for (const [k, v] of leverageCache.entries()) {
+      if (now - v > LEVERAGE_CACHE_TTL_MS) {
+        leverageCache.delete(k);
+      }
+    }
+  }
+}
 
 // Type for exchange (we avoid importing ccxt directly to reduce bundle size)
 type Exchange = {
@@ -2374,26 +2412,35 @@ export class SimpleAgent {
         
         // Set leverage - Binance Futures requires integer leverage
         const intLeverage = Math.round(sizing.suggestedLeverage);
-        logger.info(`🔧 [${symbol}] Setting leverage: ${sizing.suggestedLeverage} → ${intLeverage} (rounded to integer for Binance)`);
-        
-        // 🔧 FIX: Convert symbol to Binance format if needed (e.g., ETH/USDT:USDT → ETHUSDT)
-        // Some CCXT versions/exchanges need the raw symbol format
-        const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
-        try {
-          await this.config.exchange.setLeverage(intLeverage, symbol);
-        } catch (levErr: any) {
-          // If setLeverage fails with the CCXT symbol, try with Binance format
-          if (levErr?.message?.includes('leverage') || levErr?.code === -1102) {
-            logger.warn(`⚠️ [${symbol}] setLeverage failed with CCXT symbol, trying Binance format: ${binanceSymbol}`);
-            try {
-              await this.config.exchange.setLeverage(intLeverage, binanceSymbol);
-              logger.info(`✅ [${symbol}] Leverage set successfully with Binance format`);
-            } catch (retryErr: any) {
-              logger.error(`❌ [${symbol}] setLeverage failed even with Binance format:`, retryErr?.message);
-              throw retryErr;
+
+        // V5.66: Check leverage cache to avoid redundant API calls
+        const userId = this.config.userId || 'unknown';
+        if (isLeverageCached(userId, symbol, intLeverage)) {
+          logger.debug(`✅ [${symbol}] Leverage ${intLeverage}x already cached - skipping API call`);
+        } else {
+          logger.info(`🔧 [${symbol}] Setting leverage: ${sizing.suggestedLeverage} → ${intLeverage} (rounded to integer for Binance)`);
+
+          // 🔧 FIX: Convert symbol to Binance format if needed (e.g., ETH/USDT:USDT → ETHUSDT)
+          // Some CCXT versions/exchanges need the raw symbol format
+          const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
+          try {
+            await this.config.exchange.setLeverage(intLeverage, symbol);
+            cacheLeverage(userId, symbol, intLeverage);
+          } catch (levErr: any) {
+            // If setLeverage fails with the CCXT symbol, try with Binance format
+            if (levErr?.message?.includes('leverage') || levErr?.code === -1102) {
+              logger.warn(`⚠️ [${symbol}] setLeverage failed with CCXT symbol, trying Binance format: ${binanceSymbol}`);
+              try {
+                await this.config.exchange.setLeverage(intLeverage, binanceSymbol);
+                logger.info(`✅ [${symbol}] Leverage set successfully with Binance format`);
+                cacheLeverage(userId, symbol, intLeverage);
+              } catch (retryErr: any) {
+                logger.error(`❌ [${symbol}] setLeverage failed even with Binance format:`, retryErr?.message);
+                throw retryErr;
+              }
+            } else {
+              throw levErr;
             }
-          } else {
-            throw levErr;
           }
         }
         
@@ -4323,8 +4370,16 @@ export class SimpleAgent {
           }
 
           // REST fallback (only if WS is not active or had no data)
+          // V5.66: Use deduplicator to prevent concurrent identical calls
           if (!exchangeOrderId && this.config.exchange.fetchMyTrades) {
-            const trades = await this.config.exchange.fetchMyTrades(symbol, Date.now() - 3600000, 10);
+            const since = Date.now() - 3600000;
+            const key = makeFetchMyTradesKey(this.config.userId, symbol, since);
+            const trades = await exchangeAPIDeduplicator.execute(
+              key,
+              () => this.config.exchange.fetchMyTrades!(symbol, since, 10),
+              5_000, // 5s cache TTL for exit sync
+              `${this.config.sessionId}:exitSync`
+            );
             if (trades && trades.length > 0) {
               const lastTrade = trades[trades.length - 1];
               exitPrice = lastTrade.price || exitPrice;
@@ -4504,12 +4559,19 @@ export class SimpleAgent {
       }
 
       // Get all trades from Binance for the last 2 hours (to catch recent misses)
+      // V5.66: Use deduplicator to prevent concurrent identical calls
       if (!this.config.exchange.fetchMyTrades) {
         return;
       }
-      
+
       const since = Date.now() - 2 * 3600 * 1000; // Last 2 hours
-      const binanceTrades = await this.config.exchange.fetchMyTrades(symbol, since, 50);
+      const key = makeFetchMyTradesKey(this.config.userId, symbol, since);
+      const binanceTrades = await exchangeAPIDeduplicator.execute(
+        key,
+        () => this.config.exchange.fetchMyTrades!(symbol, since, 50),
+        10_000, // 10s cache TTL for missing trades check
+        `${this.config.sessionId}:missingTradesCheck`
+      );
       
       if (!binanceTrades || binanceTrades.length === 0) {
         logger.info(`✅ [${symbol}] No Binance trades found in last 24h`);

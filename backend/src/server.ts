@@ -129,6 +129,49 @@ if (!envValidation.valid) {
 
 logger.info('✅ Environment validation passed');
 
+// ============================================================================
+// V5.65: BALANCE POLLING UTILITY
+// Waits for WebSocket balance with exponential backoff polling
+// Timeout: 8s max (up from 2s) to handle slow WS initialization
+// ============================================================================
+const BALANCE_POLL_CONFIG = {
+  maxWaitMs: 8000,        // Max 8 seconds total wait
+  pollIntervalMs: 500,    // Poll every 500ms
+  minWaitMs: 1000,        // Always wait at least 1s for WS to initialize
+};
+
+async function waitForWebSocketBalance(
+  userId: string,
+  currency: string = 'USDT'
+): Promise<{ total: number; free: number; locked: number } | null> {
+  const startTime = Date.now();
+
+  // Always wait minimum time for WS to connect and receive data
+  await new Promise(r => setTimeout(r, BALANCE_POLL_CONFIG.minWaitMs));
+
+  // Poll with exponential backoff
+  let attempts = 0;
+  while (Date.now() - startTime < BALANCE_POLL_CONFIG.maxWaitMs) {
+    const wsBalance = await getBalanceFromWebSocket(userId, currency);
+
+    if (wsBalance && wsBalance.total > 0) {
+      logger.info(`✅ [Balance] WebSocket balance received after ${Date.now() - startTime}ms (attempt ${attempts + 1})`);
+      return wsBalance;
+    }
+
+    attempts++;
+    // Exponential backoff: 500ms, 750ms, 1000ms, 1250ms...
+    const delay = Math.min(
+      BALANCE_POLL_CONFIG.pollIntervalMs * (1 + attempts * 0.5),
+      2000
+    );
+    await new Promise(r => setTimeout(r, delay));
+  }
+
+  logger.warn(`⚠️ [Balance] WebSocket balance not available after ${BALANCE_POLL_CONFIG.maxWaitMs}ms, will use REST fallback`);
+  return null;
+}
+
 // CORS
 const allowedFromEnv = (cfg.CORS_ORIGIN || "").split(",").map(s => s.trim()).filter(Boolean);
 const allowedOrigins = new Set<string>([
@@ -587,15 +630,12 @@ app.post("/api/agent/start", async (req, res) => {
           const binanceWs = getBinanceWebSocket();
           await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
           logger.info(`✅ [Live] User data stream subscribed for ${userId} - will receive real-time updates`);
-          
-          // Wait for WebSocket to receive initial account data
-          await new Promise(r => setTimeout(r, 2000));
         }
-        
-        // 🚀 Try WebSocket cache FIRST (0 weight)
-        const wsBalance = await getBalanceFromWebSocket(userId, 'USDT');
+
+        // V5.65: Wait for WebSocket balance with polling (8s timeout, up from 2s)
+        const wsBalance = await waitForWebSocketBalance(userId, 'USDT');
         let gotBalanceFromWs = false;
-        
+
         if (wsBalance && wsBalance.total > 0) {
           actualCapital = wsBalance.total;
           gotBalanceFromWs = true;
@@ -2093,14 +2133,13 @@ app.post("/api/agent/creation/activate", async (req, res) => {
             const binanceWs = getBinanceWebSocket();
             await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
             logger.info(`✅ [Live] User data stream subscribed for ${userId}`);
-            await new Promise(r => setTimeout(r, 2000)); // Wait for initial data
           }
         } catch (wsErr: any) {
           logger.warn(`⚠️ [Live] Failed to subscribe to user data stream:`, wsErr?.message);
         }
-        
-        // 🚀 Try WebSocket cache FIRST (0 weight)
-        const wsBalance = await getBalanceFromWebSocket(userId, 'USDT');
+
+        // V5.65: Wait for WebSocket balance with polling (8s timeout, up from 2s)
+        const wsBalance = await waitForWebSocketBalance(userId, 'USDT');
         if (wsBalance && wsBalance.total > 0) {
           actualStartBalance = wsBalance.total;
           logger.info(`[Live] ✅ Using WebSocket balance: $${actualStartBalance.toFixed(2)} (0 API weight)`);
@@ -2294,14 +2333,13 @@ app.post("/api/agent/restart", async (req, res) => {
             const binanceWs = getBinanceWebSocket();
             await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
             logger.info(`✅ [Restart Live] User data stream subscribed for ${userId}`);
-            await new Promise(r => setTimeout(r, 2000)); // Wait for initial data
           }
         } catch (wsErr: any) {
           logger.warn(`⚠️ [Restart Live] Failed to subscribe to user data stream:`, wsErr?.message);
         }
-        
-        // 🚀 Try WebSocket cache FIRST (0 weight)
-        const wsBalance = await getBalanceFromWebSocket(userId, 'USDT');
+
+        // V5.65: Wait for WebSocket balance with polling (8s timeout, up from 2s)
+        const wsBalance = await waitForWebSocketBalance(userId, 'USDT');
         if (wsBalance && wsBalance.total > 0) {
           actualCapital = wsBalance.total;
           logger.info(`✅ [Restart Live] Using WebSocket balance: $${actualCapital.toFixed(2)} (0 API weight)`);
@@ -3564,40 +3602,59 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
       return;
     }
     
-    // Fetch klines for each symbol with rate limiting (sequential, not parallel)
+    // V5.66: Fetch klines in PARALLEL batches (5 at a time) to speed up preload
+    // This is ~5x faster than sequential while still respecting rate limits
+    const BATCH_SIZE = 5;
     let loaded = 0;
     let failed = 0;
-    
-    for (const symbol of symbols) {
-      try {
-        // Convert to Binance format for WS cache key
-        const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
-        
-        // Fetch 220 candles (enough for SMA200 + buffer)
-        const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 220);
-        
-        if (ohlcv && ohlcv.length > 0) {
-          // Seed the WebSocket cache
-          seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
+    let ipBanned = false;
+
+    for (let i = 0; i < symbols.length && !ipBanned; i += BATCH_SIZE) {
+      const batch = symbols.slice(i, i + BATCH_SIZE);
+
+      const results = await Promise.allSettled(
+        batch.map(async (symbol) => {
+          // Convert to Binance format for WS cache key
+          const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
+
+          // Fetch 220 candles (enough for SMA200 + buffer)
+          const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 220);
+
+          if (ohlcv && ohlcv.length > 0) {
+            // Seed the WebSocket cache
+            seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
+            return true;
+          }
+          return false;
+        })
+      );
+
+      // Process results
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        if (result.status === 'fulfilled' && result.value) {
           loaded++;
+        } else if (result.status === 'rejected') {
+          failed++;
+          const error = result.reason;
+          // Check for IP ban
+          if (error?.message?.includes('418') || error?.message?.includes('banned')) {
+            logger.warn('🚫 IP ban detected during klines preload - stopping');
+            setIpBan(30 * 60 * 1000); // 30 min ban
+            ipBanned = true;
+            break;
+          }
+          logger.warn(`⚠️ Failed to preload klines for ${batch[j]}:`, error?.message);
         }
-        
-        // Small delay to avoid rate limits (50ms between calls)
-        await new Promise(r => setTimeout(r, 50));
-        
-      } catch (error: any) {
-        failed++;
-        // Check for IP ban
-        if (error?.message?.includes('418') || error?.message?.includes('banned')) {
-          logger.warn('🚫 IP ban detected during klines preload - stopping');
-          setIpBan(30 * 60 * 1000); // 30 min ban
-          break;
-        }
-        logger.warn(`⚠️ Failed to preload klines for ${symbol}:`, error?.message);
+      }
+
+      // Small delay between batches to avoid rate limits (100ms between batches)
+      if (i + BATCH_SIZE < symbols.length && !ipBanned) {
+        await new Promise(r => setTimeout(r, 100));
       }
     }
-    
-    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed)`);
+
+    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed) [parallel batches of ${BATCH_SIZE}]`);
 
     // V5.50 FIX: Also preload BTC 1h candles for MTF filter
     try {

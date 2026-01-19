@@ -224,7 +224,8 @@ async function getPublicExchangeFor(exchangeId: string, type: 'spot'|'swap') {
     inst.options = inst.options || {};
     inst.options.defaultType = type;
     
-    // V5.25: Use global cache - NEVER make REST calls if we have cache
+    // V5.66: FAIL FAST - Markets must be preloaded at startup via preloadMarkets()
+    // This prevents ad-hoc REST calls that can cause rate limiting
     if (globalMarketsCache) {
       inst.markets = globalMarketsCache.markets;
       inst.markets_by_id = globalMarketsCache.markets_by_id;
@@ -235,28 +236,12 @@ async function getPublicExchangeFor(exchangeId: string, type: 'spot'|'swap') {
       // IP is banned and no cache - throw error, don't make REST call
       throw new Error(`IP is banned until ${new Date(ipBannedUntil).toISOString()} and no markets cache available`);
     } else {
-      // No cache and not banned - load once
-      console.log(`📡 Loading markets for ${ccxtExchangeId}:${type} (first time)...`);
-      try {
-        await inst.loadMarkets();
-        // Cache globally for future use
-        globalMarketsCache = {
-          markets: inst.markets,
-          markets_by_id: inst.markets_by_id,
-          symbols: inst.symbols,
-          currencies: inst.currencies,
-          loadedAt: Date.now(),
-        };
-        console.log(`✅ Markets loaded and cached: ${Object.keys(inst.markets).length} symbols`);
-      } catch (e: any) {
-        if (e?.message?.includes('418') || e?.message?.includes('banned')) {
-          const match = e.message?.match(/banned until (\d+)/);
-          if (match) {
-            setIpBan(parseInt(match[1], 10));
-          }
-        }
-        throw e;
-      }
+      // V5.66: FAIL FAST - Don't try to load markets ad-hoc
+      // This prevents unexpected REST calls that can cause rate limiting with 1000+ agents
+      throw new Error(
+        'Markets not preloaded! Call preloadMarkets() at server startup before any agent operations. ' +
+        'Ad-hoc loadMarkets() calls are disabled to prevent rate limiting.'
+      );
     }
     
     publicExchanges.set(key, inst);
@@ -367,7 +352,7 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
     // @ts-ignore
     userExchange.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
 
-    // V5.25: Use global markets cache - NEVER make REST calls
+    // V5.66: FAIL FAST - Markets must be preloaded at startup
     if (globalMarketsCache) {
       userExchange.markets = globalMarketsCache.markets;
       userExchange.markets_by_id = globalMarketsCache.markets_by_id;
@@ -378,24 +363,11 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
       // IP is banned and no cache - throw error
       throw new Error(`IP is banned until ${new Date(ipBannedUntil).toISOString()} and no markets cache available`);
     } else {
-      // No cache, not banned - try to get from public exchange (which will cache)
-      try {
-        const pub = await getPublicExchangeFor(exchangeId, MARKET_TYPE);
-        userExchange.markets = pub.markets;
-        userExchange.markets_by_id = pub.markets_by_id;
-        userExchange.symbols = pub.symbols;
-        userExchange.currencies = pub.currencies;
-        console.log('✅ Markets assigned from public exchange');
-      } catch (e: any) {
-        // Check for ban and update state
-        if (e?.message?.includes('418') || e?.message?.includes('banned')) {
-          const match = e.message?.match(/banned until (\d+)/);
-          if (match) {
-            setIpBan(parseInt(match[1], 10));
-          }
-        }
-        throw e; // Don't fallback to loadMarkets - that would make another REST call!
-      }
+      // V5.66: FAIL FAST - Don't try to load markets ad-hoc
+      throw new Error(
+        'Markets not preloaded! Call preloadMarkets() at server startup before any agent operations. ' +
+        'Ad-hoc loadMarkets() calls are disabled to prevent rate limiting.'
+      );
     }
 
     userExchanges.set(cacheKey, userExchange);

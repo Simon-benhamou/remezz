@@ -127,15 +127,23 @@ class SignalRanker {
   // Timeout to batch signals (ms) - wait for all agents to report
   // CRITICAL: This must allow enough time for all agents to submit their signals
   // before any agent checks shouldExecuteSignal()
-  private readonly BATCH_WINDOW_MS = 2000; // 2 seconds - increased for multi-agent sync
+  private readonly BATCH_WINDOW_MS = 2000; // 2 seconds base window
+  private readonly BATCH_EXTENSION_MS = 500; // Extension for late arrivals
+  private readonly BATCH_MAX_WINDOW_MS = 4000; // Hard cap on total batch window
   private batchTimeouts: Map<string, NodeJS.Timeout | null> = new Map([
     ['paper', null],
     ['live', null],
   ]);
-  
+
+  // V5.66: Track batch start time to prevent infinite extensions
+  private batchStartTimes: Map<string, number> = new Map([
+    ['paper', 0],
+    ['live', 0],
+  ]);
+
   // Track the candle timestamp that signals are for (prevents mixing signals from different candles)
   private currentBatchCandleTs: number = 0;
-  
+
   // Promise that resolves when batch window closes (allows agents to wait) - PER MODE
   private batchCompletePromises: Map<string, Promise<void> | null> = new Map([
     ['paper', null],
@@ -148,41 +156,78 @@ class SignalRanker {
   
   /**
    * Add a signal candidate for ranking consideration
+   *
+   * V5.66: Fixed race condition - batch window now uses fixed start time
+   * with limited extension for late arrivals, preventing infinite resets.
    */
   addSignal(signal: RankedSignal): void {
     const mode = signal.mode || 'paper';  // Default to paper for backward compatibility
     const modeSignals = this.pendingSignals.get(mode)!;
-    
+    const now = Date.now();
+
     // Store signal (overwrites if symbol already has pending signal)
     modeSignals.set(signal.symbol, signal);
-    
-    // Create a new batch promise if one doesn't exist for this mode
-    if (!this.batchCompletePromises.get(mode)) {
+
+    // Check if this is a new batch or continuing an existing one
+    const batchStartTime = this.batchStartTimes.get(mode) || 0;
+    const isNewBatch = !this.batchCompletePromises.get(mode);
+
+    if (isNewBatch) {
       // V5.58: Reset slots consumed counter at start of new batch
       this.slotsConsumedInBatch.set(mode, 0);
-      
+      // V5.66: Record batch start time
+      this.batchStartTimes.set(mode, now);
+
       this.batchCompletePromises.set(mode, new Promise<void>((resolve) => {
         this.batchCompleteResolvers.set(mode, resolve);
       }));
-    }
-    
-    // Reset batch timer for this mode - wait for more signals to arrive
-    const existingTimeout = this.batchTimeouts.get(mode);
-    if (existingTimeout) {
-      clearTimeout(existingTimeout);
-    }
-    
-    // Auto-flush after batch window AND resolve the promise for this mode
-    this.batchTimeouts.set(mode, setTimeout(() => {
-      this.flushExpiredSignals(mode);
-      // Resolve the batch promise so waiting agents can proceed
-      const resolver = this.batchCompleteResolvers.get(mode);
-      if (resolver) {
-        resolver();
-        this.batchCompletePromises.set(mode, null);
-        this.batchCompleteResolvers.set(mode, null);
+
+      // Set initial batch timer
+      this.batchTimeouts.set(mode, setTimeout(() => {
+        this.closeBatch(mode);
+      }, this.BATCH_WINDOW_MS));
+
+      logger.debug(`📊 [${mode}] New batch started - waiting ${this.BATCH_WINDOW_MS}ms for signals`);
+    } else {
+      // V5.66: Existing batch - only extend if within allowed window
+      const elapsed = now - batchStartTime;
+      const remainingToMax = this.BATCH_MAX_WINDOW_MS - elapsed;
+
+      if (remainingToMax > this.BATCH_EXTENSION_MS) {
+        // Extend the window slightly for late arrivals
+        const existingTimeout = this.batchTimeouts.get(mode);
+        if (existingTimeout) {
+          clearTimeout(existingTimeout);
+        }
+
+        const extensionMs = Math.min(this.BATCH_EXTENSION_MS, remainingToMax);
+        this.batchTimeouts.set(mode, setTimeout(() => {
+          this.closeBatch(mode);
+        }, extensionMs));
+
+        logger.debug(`📊 [${mode}] Batch extended by ${extensionMs}ms for late signal (${signal.symbol})`);
+      } else {
+        logger.debug(`📊 [${mode}] Batch at max window - no extension for ${signal.symbol}`);
       }
-    }, this.BATCH_WINDOW_MS));
+    }
+  }
+
+  /**
+   * V5.66: Close batch and resolve waiting promises
+   */
+  private closeBatch(mode: 'live' | 'paper'): void {
+    this.flushExpiredSignals(mode);
+    this.batchStartTimes.set(mode, 0); // Reset for next batch
+
+    // Resolve the batch promise so waiting agents can proceed
+    const resolver = this.batchCompleteResolvers.get(mode);
+    if (resolver) {
+      const modeSignals = this.pendingSignals.get(mode)!;
+      logger.debug(`📊 [${mode}] Batch closed with ${modeSignals.size} signals`);
+      resolver();
+      this.batchCompletePromises.set(mode, null);
+      this.batchCompleteResolvers.set(mode, null);
+    }
   }
   
   /**
