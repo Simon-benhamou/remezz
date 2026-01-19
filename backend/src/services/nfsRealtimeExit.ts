@@ -161,6 +161,8 @@ export class NfsCalculator {
 
   /**
    * Calculate NFS score for a trailing breach
+   *
+   * V5.65: Added comprehensive error handling to prevent crashes
    */
   calculate(
     currentCandle: Candle,
@@ -168,23 +170,78 @@ export class NfsCalculator {
     side: 'long' | 'short',
     trailingStopPrice: number
   ): NfsResult {
-    const components = this.computeComponents(
-      currentCandle,
-      prevCandles,
-      side,
-      trailingStopPrice
-    );
+    try {
+      // Input validation
+      if (!currentCandle || typeof currentCandle.close !== 'number' || !Number.isFinite(currentCandle.close)) {
+        logger.warn('[NFS] Invalid currentCandle, returning safe LOW result');
+        return this.createSafeResult('Invalid candle data');
+      }
 
-    const score = this.computeScore(components, side);
-    const confidence = this.determineConfidence(score);
-    const recommendation = this.determineRecommendation(score, confidence);
+      if (!Number.isFinite(trailingStopPrice) || trailingStopPrice <= 0) {
+        logger.warn(`[NFS] Invalid trailingStopPrice: ${trailingStopPrice}, returning safe LOW result`);
+        return this.createSafeResult('Invalid trailing stop price');
+      }
 
+      if (!Array.isArray(prevCandles) || prevCandles.length === 0) {
+        logger.warn('[NFS] No previous candles, returning safe LOW result');
+        return this.createSafeResult('No previous candles');
+      }
+
+      const components = this.computeComponents(
+        currentCandle,
+        prevCandles,
+        side,
+        trailingStopPrice
+      );
+
+      const score = this.computeScore(components, side);
+
+      // Validate computed score
+      if (!Number.isFinite(score) || score < 0) {
+        logger.warn(`[NFS] Invalid computed score: ${score}, returning safe LOW result`);
+        return this.createSafeResult('Invalid computed score');
+      }
+
+      const confidence = this.determineConfidence(score);
+      const recommendation = this.determineRecommendation(score, confidence);
+
+      return {
+        score,
+        confidence,
+        shouldExitImmediately: score >= this.config.HIGH_CONFIDENCE_THRESHOLD,
+        components,
+        recommendation,
+      };
+    } catch (error) {
+      logger.error('[NFS] Critical error in calculate(), returning safe LOW result:', error);
+      return this.createSafeResult('Calculation error');
+    }
+  }
+
+  /**
+   * Create a safe fallback result when calculation fails
+   * Returns LOW confidence to trigger 2-close confirmation (safest approach)
+   */
+  private createSafeResult(reason: string): NfsResult {
     return {
-      score,
-      confidence,
-      shouldExitImmediately: score >= this.config.HIGH_CONFIDENCE_THRESHOLD,
-      components,
-      recommendation,
+      score: 0,
+      confidence: 'LOW',
+      shouldExitImmediately: false,
+      components: {
+        breachATRRatio: 0,
+        breachDepthPct: 0,
+        volumeRatio: 1,
+        candleBodyRatio: 0,
+        momentumROC5: 0,
+        rawScores: {
+          breachATR: 0,
+          breachDepth: 0,
+          volume: 0,
+          candleBody: 0,
+          momentum: 0,
+        },
+      },
+      recommendation: 'FALLBACK_2CLOSE',
     };
   }
 
@@ -194,59 +251,84 @@ export class NfsCalculator {
     side: 'long' | 'short',
     trailingStopPrice: number
   ): NfsComponents {
-    const allCandles = [...prevCandles.slice(-20), candle];
+    // V5.65: Add safety wrapper for component computation
+    try {
+      // Filter out invalid candles
+      const validPrevCandles = prevCandles.filter(c =>
+        c && typeof c.close === 'number' && Number.isFinite(c.close) &&
+        typeof c.high === 'number' && Number.isFinite(c.high) &&
+        typeof c.low === 'number' && Number.isFinite(c.low)
+      );
 
-    // 1. Breach depth
-    let breachDepthAbs: number;
-    let breachDepthPct: number;
+      const allCandles = [...validPrevCandles.slice(-20), candle];
 
-    if (side === 'long') {
-      breachDepthAbs = Math.max(0, trailingStopPrice - candle.close);
-      breachDepthPct = trailingStopPrice > 0
-        ? (breachDepthAbs / trailingStopPrice) * 100
-        : 0;
-    } else {
-      breachDepthAbs = Math.max(0, candle.close - trailingStopPrice);
-      breachDepthPct = trailingStopPrice > 0
-        ? (breachDepthAbs / trailingStopPrice) * 100
-        : 0;
+      // 1. Breach depth (with safety)
+      let breachDepthAbs: number;
+      let breachDepthPct: number;
+
+      if (side === 'long') {
+        breachDepthAbs = Math.max(0, trailingStopPrice - candle.close);
+        breachDepthPct = trailingStopPrice > 0
+          ? (breachDepthAbs / trailingStopPrice) * 100
+          : 0;
+      } else {
+        breachDepthAbs = Math.max(0, candle.close - trailingStopPrice);
+        breachDepthPct = trailingStopPrice > 0
+          ? (breachDepthAbs / trailingStopPrice) * 100
+          : 0;
+      }
+
+      // Clamp to reasonable range
+      breachDepthPct = Math.min(breachDepthPct, 100);
+
+      // 2. ATR calculation
+      const atr = this.calcATR(allCandles, 14);
+      const breachATRRatio = atr > 0 ? Math.min(breachDepthAbs / atr, 10) : 0; // Cap at 10x ATR
+
+      // 3. Volume ratio (with safety)
+      const volumes = allCandles.map(c => Math.max(0, c.volume || 0));
+      const volumeRatio = Math.min(this.calcVolRatio(volumes), 100); // Cap at 100x average
+
+      // 4. Candle body ratio (with division by zero protection)
+      const bodySize = Math.abs(candle.close - candle.open);
+      const candleRange = candle.high - candle.low;
+      const candleBodyRatio = candleRange > 0 ? Math.min(bodySize / candleRange, 1) : 0;
+
+      // 5. Momentum (ROC5) with safety
+      const closes = allCandles.map(c => c.close).filter(c => Number.isFinite(c));
+      const momentumROC5 = closes.length >= 6 ? this.calcROC(closes, 5) : 0;
+
+      // Raw scores (0-1 normalized, with safety clamping)
+      const w = this.config.WEIGHTS;
+
+      const rawScores = {
+        breachATR: Math.max(0, Math.min(1, breachATRRatio / (w.breachATR.threshold * 2))),
+        breachDepth: Math.max(0, Math.min(1, breachDepthPct / (w.breachDepth.threshold * 2))),
+        volume: Math.max(0, Math.min(1, volumeRatio / (w.volumeRatio.threshold * 2))),
+        candleBody: Math.max(0, Math.min(1, candleBodyRatio)),
+        momentum: Math.max(0, Math.min(1, Math.abs(momentumROC5) / (w.momentum.threshold * 2))),
+      };
+
+      return {
+        breachATRRatio: Number.isFinite(breachATRRatio) ? breachATRRatio : 0,
+        breachDepthPct: Number.isFinite(breachDepthPct) ? breachDepthPct : 0,
+        volumeRatio: Number.isFinite(volumeRatio) ? volumeRatio : 1,
+        candleBodyRatio: Number.isFinite(candleBodyRatio) ? candleBodyRatio : 0,
+        momentumROC5: Number.isFinite(momentumROC5) ? momentumROC5 : 0,
+        rawScores,
+      };
+    } catch (error) {
+      logger.error('[NFS] Error in computeComponents:', error);
+      // Return safe defaults
+      return {
+        breachATRRatio: 0,
+        breachDepthPct: 0,
+        volumeRatio: 1,
+        candleBodyRatio: 0,
+        momentumROC5: 0,
+        rawScores: { breachATR: 0, breachDepth: 0, volume: 0, candleBody: 0, momentum: 0 },
+      };
     }
-
-    // 2. ATR calculation
-    const atr = this.calcATR(allCandles, 14);
-    const breachATRRatio = atr > 0 ? breachDepthAbs / atr : 0;
-
-    // 3. Volume ratio
-    const volumeRatio = this.calcVolRatio(allCandles.map(c => c.volume));
-
-    // 4. Candle body ratio
-    const bodySize = Math.abs(candle.close - candle.open);
-    const candleRange = candle.high - candle.low;
-    const candleBodyRatio = candleRange > 0 ? bodySize / candleRange : 0;
-
-    // 5. Momentum (ROC5)
-    const closes = allCandles.map(c => c.close);
-    const momentumROC5 = this.calcROC(closes, 5);
-
-    // Raw scores (0-1 normalized)
-    const w = this.config.WEIGHTS;
-
-    const rawScores = {
-      breachATR: Math.min(1, breachATRRatio / (w.breachATR.threshold * 2)),
-      breachDepth: Math.min(1, breachDepthPct / (w.breachDepth.threshold * 2)),
-      volume: Math.min(1, volumeRatio / (w.volumeRatio.threshold * 2)),
-      candleBody: candleBodyRatio,
-      momentum: Math.min(1, Math.abs(momentumROC5) / (w.momentum.threshold * 2)),
-    };
-
-    return {
-      breachATRRatio,
-      breachDepthPct,
-      volumeRatio,
-      candleBodyRatio,
-      momentumROC5,
-      rawScores,
-    };
   }
 
   private computeScore(components: NfsComponents, side: 'long' | 'short'): number {
@@ -412,6 +494,8 @@ export class NfsExitStateMachine {
 
   /**
    * Main evaluation function - called on each price update
+   *
+   * V5.65: Added comprehensive error handling
    */
   evaluate(
     currentPrice: number,
@@ -422,39 +506,53 @@ export class NfsExitStateMachine {
     highWaterMark: number,
     lowWaterMark: number
   ): NfsEvaluationResult {
-    // Update tracking
-    this.state.trailingStopPrice = trailingStopPrice;
+    try {
+      // V5.65: Input validation
+      if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+        logger.warn(`[NFS] Invalid currentPrice: ${currentPrice}`);
+        return { action: 'NONE', reason: 'Invalid current price' };
+      }
 
-    // Calculate distance to trailing
-    const distanceToTrailing = side === 'long'
-      ? currentPrice - trailingStopPrice
-      : trailingStopPrice - currentPrice;
-    const distanceToTrailingPct = (distanceToTrailing / trailingStopPrice) * 100;
-    this.state.distanceToTrailingPct = distanceToTrailingPct;
+      if (!Number.isFinite(trailingStopPrice) || trailingStopPrice <= 0) {
+        logger.warn(`[NFS] Invalid trailingStopPrice: ${trailingStopPrice}`);
+        return { action: 'NONE', reason: 'Invalid trailing stop price' };
+      }
 
-    // Check breach conditions
-    const isBreaching = side === 'long'
-      ? currentPrice <= trailingStopPrice
-      : currentPrice >= trailingStopPrice;
+      // Update tracking
+      this.state.trailingStopPrice = trailingStopPrice;
 
-    const isApproaching = !isBreaching &&
-      distanceToTrailingPct <= this.config.PRE_BREACH_DISTANCE_PCT;
+      // Calculate distance to trailing (with division-by-zero protection)
+      const distanceToTrailing = side === 'long'
+        ? currentPrice - trailingStopPrice
+        : trailingStopPrice - currentPrice;
+      const distanceToTrailingPct = trailingStopPrice > 0
+        ? (distanceToTrailing / trailingStopPrice) * 100
+        : 0;
+      this.state.distanceToTrailingPct = Number.isFinite(distanceToTrailingPct) ? distanceToTrailingPct : 0;
 
-    // State machine logic
-    switch (this.state.state) {
-      case 'MONITORING':
-        return this.handleMonitoring(isApproaching, isBreaching, currentCandle, prevCandles, side, trailingStopPrice);
+      // Check breach conditions
+      const isBreaching = side === 'long'
+        ? currentPrice <= trailingStopPrice
+        : currentPrice >= trailingStopPrice;
 
-      case 'PRE_BREACH':
-        return this.handlePreBreach(isBreaching, currentCandle, prevCandles, side, trailingStopPrice);
+      const isApproaching = !isBreaching &&
+        distanceToTrailingPct <= this.config.PRE_BREACH_DISTANCE_PCT;
 
-      case 'BREACH_DETECTED':
-        return this.handleBreachDetected(isBreaching, currentCandle, prevCandles, side, trailingStopPrice);
+      // State machine logic
+      switch (this.state.state) {
+        case 'MONITORING':
+          return this.handleMonitoring(isApproaching, isBreaching, currentCandle, prevCandles, side, trailingStopPrice);
 
-      case 'LIMIT_PENDING':
-        return this.handleLimitPending(isBreaching);
+        case 'PRE_BREACH':
+          return this.handlePreBreach(isBreaching, currentCandle, prevCandles, side, trailingStopPrice);
 
-      case 'WAITING_2CLOSE':
+        case 'BREACH_DETECTED':
+          return this.handleBreachDetected(isBreaching, currentCandle, prevCandles, side, trailingStopPrice);
+
+        case 'LIMIT_PENDING':
+          return this.handleLimitPending(isBreaching);
+
+        case 'WAITING_2CLOSE':
         return this.handleWaiting2Close(isBreaching, currentCandle);
 
       case 'MARKET_FALLBACK':
@@ -464,6 +562,12 @@ export class NfsExitStateMachine {
 
       default:
         return { action: 'NONE', reason: 'Unknown state' };
+      }
+    } catch (error) {
+      // V5.65: Catch any errors in the state machine to prevent crashes
+      logger.error('[NFS] Critical error in evaluate():', error);
+      // Return safe action - wait for 2-close confirmation
+      return { action: 'WAIT', reason: 'Error in state machine - falling back to 2-close' };
     }
   }
 

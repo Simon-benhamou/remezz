@@ -66,7 +66,7 @@ import {
   notifySyncFailure,
   notifySignalDetected,
 } from '../services/notificationService.js';
-import { notifyPositionOpened, notifyPositionClosed } from '../utils/notifications.js';
+import { notifyPositionOpened, notifyPositionClosed, notifySlippageAlert } from '../utils/notifications.js';
 import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
 import { calculateOrderPriority } from '../services/orderPriority.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -126,16 +126,22 @@ export class CapitalPool {
   private totalCapitalUsd: number;
   private reservedByAgent: Map<string, number> = new Map();
   private inPositionByAgent: Map<string, number> = new Map();
-  
+
   // Live mode: sync with real Binance balance
   private mode: 'paper' | 'live';
   private userId: string | null = null;
   private lastBalanceSync: number = 0;
   private readonly BALANCE_SYNC_INTERVAL_MS = 30_000; // Sync every 30s max
   private hasEverSynced: boolean = false; // Track if we've ever successfully synced
-  
+
   // 🔧 FIX: Store exchange reference for REST fallback when WebSocket cache is empty
   private exchange: Exchange | null = null;
+
+  // V5.65: Atomic lock for reserve operations to prevent race conditions
+  // When multiple agents try to reserve simultaneously, this ensures only one
+  // can check+reserve at a time
+  private reserveLock: Promise<void> = Promise.resolve();
+  private reserveLockResolve: (() => void) | null = null;
 
   // V5.63: Skip-N-trades-then-resume rule after consecutive losers
   // Testing showed: Skip 1 trade after 2 consecutive losers = +70% PnL improvement
@@ -310,20 +316,52 @@ export class CapitalPool {
   }
   
   /**
-   * Reserve capital for a potential trade
-   * This is a temporary hold before the order is placed
+   * V5.65: Acquire lock for atomic reserve operations
+   * This prevents race conditions when multiple agents try to reserve simultaneously
    */
-  reserve(agentId: string, amountUsd: number): boolean {
-    const available = this.getAvailableCapital();
-    if (amountUsd > available) {
-      console.log(`[CapitalPool] Cannot reserve $${amountUsd.toFixed(2)} for ${agentId}, only $${available.toFixed(2)} available (total=$${this.totalCapitalUsd.toFixed(2)}, inPos=$${this.getInPositionsTotal().toFixed(2)})`);
-      return false;
+  private async acquireReserveLock(): Promise<void> {
+    // Wait for any pending reservation to complete
+    await this.reserveLock;
+
+    // Create new lock for this reservation
+    this.reserveLock = new Promise<void>((resolve) => {
+      this.reserveLockResolve = resolve;
+    });
+  }
+
+  /**
+   * V5.65: Release lock after reserve operation
+   */
+  private releaseReserveLock(): void {
+    if (this.reserveLockResolve) {
+      this.reserveLockResolve();
+      this.reserveLockResolve = null;
     }
-    
-    const current = this.reservedByAgent.get(agentId) || 0;
-    this.reservedByAgent.set(agentId, current + amountUsd);
-    console.log(`[CapitalPool] Reserved $${amountUsd.toFixed(2)} for ${agentId} | available after: $${(available - amountUsd).toFixed(2)}`);
-    return true;
+  }
+
+  /**
+   * Reserve capital for a potential trade (ATOMIC operation)
+   * This is a temporary hold before the order is placed
+   *
+   * V5.65: Made async with lock to prevent race conditions
+   */
+  async reserve(agentId: string, amountUsd: number): Promise<boolean> {
+    await this.acquireReserveLock();
+
+    try {
+      const available = this.getAvailableCapital();
+      if (amountUsd > available) {
+        console.log(`[CapitalPool] Cannot reserve $${amountUsd.toFixed(2)} for ${agentId}, only $${available.toFixed(2)} available (total=$${this.totalCapitalUsd.toFixed(2)}, inPos=$${this.getInPositionsTotal().toFixed(2)})`);
+        return false;
+      }
+
+      const current = this.reservedByAgent.get(agentId) || 0;
+      this.reservedByAgent.set(agentId, current + amountUsd);
+      console.log(`[CapitalPool] Reserved $${amountUsd.toFixed(2)} for ${agentId} | available after: $${(available - amountUsd).toFixed(2)}`);
+      return true;
+    } finally {
+      this.releaseReserveLock();
+    }
   }
   
   /**
@@ -1982,8 +2020,30 @@ export class SimpleAgent {
         logger.error(`❌ [${symbol}] Cannot open live position - failed to sync with exchange balance. Please check API connection.`);
         return;
       }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // V5.65: POSITION VERIFICATION PRE-ORDER
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Check that no position already exists on the exchange for this symbol.
+      // This prevents double positions after reconnection or crash recovery.
+      // ═══════════════════════════════════════════════════════════════════════════
+      try {
+        const existingPosition = getPositionFromWebSocket(this.config.userId, symbol);
+        if (existingPosition && Math.abs(existingPosition.positionAmt) > 0) {
+          logger.warn(
+            `⚠️ [${symbol}] POSITION ALREADY EXISTS on exchange | ` +
+            `qty=${existingPosition.positionAmt} | entryPrice=${existingPosition.entryPrice} | ` +
+            `unrealizedPnl=${existingPosition.unrealizedPnl.toFixed(2)} | ` +
+            `SKIPPING new entry to prevent double position`
+          );
+          return;
+        }
+      } catch (posCheckError) {
+        // If we can't verify, log warning but allow entry (conservative approach could block here)
+        logger.warn(`⚠️ [${symbol}] Could not verify exchange position status - proceeding with caution`);
+      }
     }
-    
+
     // V5.18: Check if we're at max positions before proceeding
     const openPositionCount = this.config.capitalPool.getOpenPositionCount();
     const maxPositions = this.config.capitalPool.getMaxPositions();
@@ -2105,7 +2165,8 @@ export class SimpleAgent {
     }
     
     // Try to reserve MARGIN (not notional) - this is what we actually risk
-    if (!this.config.capitalPool.reserve(this.config.sessionId, sizing.marginUsd)) {
+    // V5.65: reserve() is now async with atomic locking
+    if (!await this.config.capitalPool.reserve(this.config.sessionId, sizing.marginUsd)) {
       logger.info(`⚠️ [${symbol}] Cannot open position - failed to reserve margin $${sizing.marginUsd.toFixed(2)}`);
       return;
     }
@@ -2395,6 +2456,41 @@ export class SimpleAgent {
         const order = result.order!;
         const filledPrice = order.average || order.price || currentPrice;
         const filledQty = order.filled || formattedQty;
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // V5.65: SLIPPAGE VALIDATION FOR ENTRY ORDERS
+        // ═══════════════════════════════════════════════════════════════════════════
+        const expectedPrice = currentPrice;
+        const entrySlippage = side === 'long'
+          ? ((filledPrice - expectedPrice) / expectedPrice) * 100  // Positive = worse for long
+          : ((expectedPrice - filledPrice) / expectedPrice) * 100; // Positive = worse for short
+
+        const maxEntrySlippage = (MomentumConfig.EXIT as any).MAX_ENTRY_SLIPPAGE_PCT ?? 1.0;
+        const slippageAlertEnabled = (MomentumConfig.EXIT as any).SLIPPAGE_ALERT_ENABLED ?? true;
+
+        if (entrySlippage > maxEntrySlippage) {
+          logger.warn(
+            `⚠️ [${symbol}] HIGH ENTRY SLIPPAGE | ` +
+            `expected=$${expectedPrice.toFixed(4)} | filled=$${filledPrice.toFixed(4)} | ` +
+            `slippage=${entrySlippage.toFixed(2)}% (max=${maxEntrySlippage}%)`
+          );
+
+          if (slippageAlertEnabled) {
+            notifySlippageAlert?.({
+              symbol,
+              side,
+              type: 'entry',
+              expectedPrice,
+              filledPrice,
+              slippagePct: entrySlippage,
+              maxSlippagePct: maxEntrySlippage,
+            });
+          }
+        } else if (entrySlippage > 0.1) {
+          // Log notable slippage but don't alert
+          logger.info(`📊 [${symbol}] Entry slippage: ${entrySlippage.toFixed(3)}%`);
+        }
+
         // V5.46 FIX: Use candle.timestamp for entryTime (same as backtest)
         // This ensures EXACT parity with backtest's holdMinutes calculation.
         // Combined with calculateExitNowMs() in checkExit(), holdMinutes will be:
@@ -3202,7 +3298,40 @@ export class SimpleAgent {
         const order = result.order!;
         const closeSide = position.side === 'long' ? 'sell' : 'buy';
         const exitPrice = order.average || order.price || currentPrice;
-        
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // V5.65: SLIPPAGE VALIDATION FOR EXIT ORDERS
+        // ═══════════════════════════════════════════════════════════════════════════
+        const expectedExitPrice = currentPrice;
+        const exitSlippage = position.side === 'long'
+          ? ((expectedExitPrice - exitPrice) / expectedExitPrice) * 100  // Positive = worse for long exit (sold lower)
+          : ((exitPrice - expectedExitPrice) / expectedExitPrice) * 100; // Positive = worse for short exit (bought higher)
+
+        const maxExitSlippage = (MomentumConfig.EXIT as any).MAX_EXIT_SLIPPAGE_PCT ?? 2.0;
+        const slippageAlertEnabled = (MomentumConfig.EXIT as any).SLIPPAGE_ALERT_ENABLED ?? true;
+
+        if (exitSlippage > maxExitSlippage) {
+          logger.warn(
+            `⚠️ [${symbol}] HIGH EXIT SLIPPAGE | ` +
+            `expected=$${expectedExitPrice.toFixed(4)} | filled=$${exitPrice.toFixed(4)} | ` +
+            `slippage=${exitSlippage.toFixed(2)}% (max=${maxExitSlippage}%)`
+          );
+
+          if (slippageAlertEnabled) {
+            notifySlippageAlert?.({
+              symbol,
+              side: position.side,
+              type: 'exit',
+              expectedPrice: expectedExitPrice,
+              filledPrice: exitPrice,
+              slippagePct: exitSlippage,
+              maxSlippagePct: maxExitSlippage,
+            });
+          }
+        } else if (exitSlippage > 0.1) {
+          logger.info(`📊 [${symbol}] Exit slippage: ${exitSlippage.toFixed(3)}%`);
+        }
+
         // Recalculate actual PnL
         let actualPnlPct: number;
         let actualPnlUsd: number;
@@ -3884,17 +4013,57 @@ export class SimpleAgent {
           }
         }
       } catch (fallbackError: any) {
-        // This is CRITICAL - log prominently
+        // ═══════════════════════════════════════════════════════════════════════════
+        // V5.65: CRITICAL EMERGENCY PROTECTION
+        // ═══════════════════════════════════════════════════════════════════════════
+        // If BOTH trailing AND fallback SL fail, the position is UNPROTECTED.
+        // This is extremely dangerous - trigger an emergency market exit.
+        // ═══════════════════════════════════════════════════════════════════════════
         logger.error(`🚨🚨🚨 [${symbol}] CRITICAL: Both trailing AND fallback SL failed! Position UNPROTECTED!`, fallbackError.message);
-        
+
         // Send notification for critical error
         notifyOrderError({
           symbol,
           side: position.side,
-          orderType: 'stop_loss', // Using stop_loss type as it's the closest match
-          error: `Trailing failed AND fallback SL failed: ${fallbackError.message}`,
+          orderType: 'stop_loss',
+          error: `CRITICAL: Trailing failed AND fallback SL failed - EMERGENCY EXIT TRIGGERED: ${fallbackError.message}`,
           mode: 'live',
         });
+
+        // V5.65: EMERGENCY MARKET EXIT
+        // If we can't protect the position, close it immediately to prevent catastrophic loss
+        logger.error(`🚨 [${symbol}] TRIGGERING EMERGENCY MARKET EXIT due to unprotected position!`);
+        try {
+          // Use a slight delay to avoid rate limits from the failed orders
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          // Close position via market order
+          const ticker = await getTickerFromWebSocket(symbol);
+          const currentPrice = ticker?.last || position.entryPrice;
+
+          // Calculate current PnL to log it
+          const currentPnL = position.side === 'long'
+            ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
+            : ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
+
+          logger.warn(`🚨 [${symbol}] EMERGENCY EXIT | currentPrice=$${currentPrice.toFixed(4)} | pnl=${currentPnL.toFixed(2)}%`);
+
+          // Close position - pass position object, currentPrice, and reason
+          await this.closePosition(position, currentPrice, 'emergency_unprotected');
+
+        } catch (emergencyError: any) {
+          // Even emergency exit failed - this is catastrophic, log everything
+          logger.error(`🚨🚨🚨🚨 [${symbol}] CATASTROPHIC: Emergency exit ALSO failed! Manual intervention required IMMEDIATELY!`, emergencyError.message);
+
+          notifyOrderError({
+            symbol,
+            side: position.side,
+            orderType: 'exit', // Use 'exit' as emergency_exit is still an exit type
+            error: `CATASTROPHIC: All protection mechanisms failed. Manual closure required immediately!`,
+            mode: 'live',
+          });
+        }
+
         return false; // Fallback failed - indicate failure
       }
       

@@ -135,18 +135,20 @@ export async function notifyOrderFailed(order: {
   side: string;
   quantity: number;
   error: string;
-  retriesUsed: number;
+  retriesUsed?: number;
+  isEntry?: boolean;
 }): Promise<void> {
   if (!isEnabled) return;
 
+  const orderType = order.isEntry ? 'ENTRY' : 'EXIT';
   const message = `
-❌ ORDER FAILED
+❌ ORDER FAILED (${orderType})
 
 Symbol: ${order.symbol}
 Side: ${order.side.toUpperCase()}
 Qty: ${order.quantity}
 Error: ${order.error}
-Retries: ${order.retriesUsed}
+Retries: ${order.retriesUsed ?? 0}
   `.trim();
 
   await sendTelegramMessage(message);
@@ -248,6 +250,44 @@ ${emoji} SYSTEM ALERT
 
 ${alert.title}
 ${alert.message}
+  `.trim();
+
+  await sendTelegramMessage(message);
+}
+
+/**
+ * V5.65: Notify when slippage exceeds threshold
+ */
+export async function notifySlippageAlert(data: {
+  symbol: string;
+  side: string;
+  type: 'entry' | 'exit';
+  expectedPrice: number;
+  filledPrice: number;
+  slippagePct: number;
+  maxSlippagePct: number;
+}): Promise<void> {
+  if (!isEnabled) return;
+
+  const emoji = data.slippagePct > data.maxSlippagePct * 2 ? '🚨' : '⚠️';
+  const lossDirection = data.type === 'entry'
+    ? (data.side === 'long' ? 'Higher' : 'Lower')
+    : (data.side === 'long' ? 'Lower' : 'Higher');
+
+  const message = `
+${emoji} HIGH SLIPPAGE ALERT
+
+Symbol: ${data.symbol}
+Type: ${data.type.toUpperCase()}
+Side: ${data.side.toUpperCase()}
+
+Expected: $${data.expectedPrice.toFixed(4)}
+Filled: $${data.filledPrice.toFixed(4)}
+${lossDirection} by: ${data.slippagePct.toFixed(2)}%
+
+⚠️ Exceeds max: ${data.maxSlippagePct.toFixed(1)}%
+
+⏰ ${new Date().toLocaleTimeString()}
   `.trim();
 
   await sendTelegramMessage(message);

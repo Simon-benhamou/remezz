@@ -415,6 +415,13 @@ export const MomentumConfig = {
     NFS_PARTIAL_FILL_MIN_RATIO: 0.7,          // Accept partial if >= 70% filled
     NFS_MAX_SLIPPAGE_PCT: 0.5,                // Alert if slippage exceeds this
 
+    // V5.65: General Order Slippage Protection
+    // Applied to ALL market orders (entry and exit)
+    MAX_ENTRY_SLIPPAGE_PCT: 1.0,              // Max acceptable entry slippage (1%)
+    MAX_EXIT_SLIPPAGE_PCT: 2.0,               // Max acceptable exit slippage (2% - more lenient for exits)
+    SLIPPAGE_ALERT_ENABLED: true,             // Send alert when slippage exceeds threshold
+    SLIPPAGE_REJECT_ENABLED: false,           // If true, reject entries with excessive slippage (dangerous)
+
     // NFS 2-Close Fallback (for low confidence breaches)
     NFS_2CLOSE_TIMEOUT_MS: 180000,            // 3 minutes max wait for 2nd close
     NFS_2CLOSE_FALLBACK_TO_MARKET: true,      // Market exit if 2nd close not received

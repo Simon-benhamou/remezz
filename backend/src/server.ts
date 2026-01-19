@@ -57,6 +57,78 @@ process.on('unhandledRejection', (reason) => {
 
 const cfg = getConfig();
 
+// ============================================================================
+// V5.65: STARTUP ENV VALIDATION
+// Validates critical environment variables before starting the server
+// ============================================================================
+function validateEnvVars(): { valid: boolean; errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Critical vars - server cannot start without these
+  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.length < 10) {
+    errors.push('DATABASE_URL is missing or invalid');
+  }
+
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'change-me-jwt-secret') {
+    warnings.push('JWT_SECRET is using default value - should be changed in production');
+  }
+
+  if (!process.env.APP_API_KEY || process.env.APP_API_KEY === 'change-me') {
+    warnings.push('APP_API_KEY is using default value - should be changed in production');
+  }
+
+  // Trading-specific validations
+  if (cfg.PORT < 1 || cfg.PORT > 65535) {
+    errors.push(`PORT ${cfg.PORT} is invalid - must be between 1 and 65535`);
+  }
+
+  if (cfg.DEFAULT_RISK_PCT < 0.1 || cfg.DEFAULT_RISK_PCT > 10) {
+    warnings.push(`DEFAULT_RISK_PCT ${cfg.DEFAULT_RISK_PCT} seems unusual - typical range is 0.5-5%`);
+  }
+
+  if (cfg.DEFAULT_MAX_LEVERAGE < 1 || cfg.DEFAULT_MAX_LEVERAGE > 125) {
+    warnings.push(`DEFAULT_MAX_LEVERAGE ${cfg.DEFAULT_MAX_LEVERAGE} seems unusual - max Binance Futures is 125x`);
+  }
+
+  // Check for production mode security
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (isProduction) {
+    if (cfg.REQUIRE_API_KEY === false) {
+      warnings.push('REQUIRE_API_KEY is false in production - consider enabling for security');
+    }
+
+    if (process.env.CORS_ORIGIN?.includes('localhost')) {
+      warnings.push('CORS_ORIGIN includes localhost in production');
+    }
+  }
+
+  // Telegram notification check
+  if (process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_CHAT_ID) {
+    warnings.push('TELEGRAM_BOT_TOKEN is set but TELEGRAM_CHAT_ID is missing');
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+
+// Run env validation at startup
+const envValidation = validateEnvVars();
+
+if (envValidation.warnings.length > 0) {
+  logger.warn('⚠️ Startup warnings:', envValidation.warnings);
+}
+
+if (!envValidation.valid) {
+  logger.error('❌ STARTUP FAILED - Critical env validation errors:', envValidation.errors);
+  process.exit(1);
+}
+
+logger.info('✅ Environment validation passed');
+
 // CORS
 const allowedFromEnv = (cfg.CORS_ORIGIN || "").split(",").map(s => s.trim()).filter(Boolean);
 const allowedOrigins = new Set<string>([
@@ -2412,7 +2484,7 @@ app.post("/api/agent/stop-all", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
     let stoppedCount = 0;
-    
+
     // Stop both paper and live
     for (const mode of ['paper', 'live'] as const) {
       const agentKey = getAgentKey(userId, mode);
@@ -2425,10 +2497,139 @@ app.post("/api/agent/stop-all", async (req, res) => {
         userAgents.delete(agentKey);
       }
     }
-    
+
     res.json({ success: true, stoppedCount });
   } catch (error) {
     res.status(500).json({ error: "Failed to stop all" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// V5.65: EMERGENCY KILL SWITCH
+// ═══════════════════════════════════════════════════════════════════════════
+// Stops ALL trading immediately:
+// 1. Opens circuit breaker to block all new orders
+// 2. Stops all agents across all users
+// 3. Optionally closes all open positions (if closePositions=true)
+// USE WITH CAUTION - This is a last resort for emergencies!
+// ═══════════════════════════════════════════════════════════════════════════
+app.post("/api/ops/kill-switch", async (req, res) => {
+  try {
+    const { closePositions = false, reason = 'Manual kill switch activated' } = req.body || {};
+
+    logger.error(`🚨🚨🚨 KILL SWITCH ACTIVATED | reason: ${reason} | closePositions: ${closePositions}`);
+
+    // Step 1: Open circuit breaker to block ALL new orders
+    const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
+    globalRestCircuitBreaker.forceOpen('KILL_SWITCH', Date.now() + 24 * 60 * 60 * 1000); // 24h block
+    logger.info('   ✅ Circuit breaker OPENED - all new orders blocked for 24h');
+
+    // Step 2: Stop order queue processing
+    const { orderQueue } = await import('./services/orderQueue.js');
+    orderQueue.stop();
+    logger.info('   ✅ Order queue STOPPED');
+
+    // Step 3: Stop all agents across ALL users
+    let stoppedAgents = 0;
+    for (const [userId, agentData] of userAgents) {
+      for (const agent of agentData.agents) {
+        try {
+          await agent.stop();
+          stoppedAgents++;
+        } catch (err) {
+          logger.warn(`   ⚠️ Error stopping agent for ${userId}: ${(err as Error).message}`);
+        }
+      }
+      userAgents.delete(userId);
+    }
+    logger.info(`   ✅ Stopped ${stoppedAgents} agents`);
+
+    // Step 4: Optionally close all open positions
+    let closedPositions = 0;
+    if (closePositions) {
+      logger.warn('   🚨 Closing ALL open positions...');
+
+      // Get all positions from WebSocket cache for all users
+      const binanceWs = getBinanceWebSocket();
+
+      // This would need to be implemented - for now just log
+      // In a real implementation, you would iterate through all user positions
+      // and close them via market orders
+
+      logger.info(`   ✅ Position closure: Not implemented yet (manual close required)`);
+    }
+
+    // Step 5: Send notification
+    try {
+      const { notifySystemAlert } = await import('./utils/notifications.js');
+      await notifySystemAlert({
+        level: 'critical',
+        title: '🚨 KILL SWITCH ACTIVATED',
+        message: `Reason: ${reason}\nAgents stopped: ${stoppedAgents}\nClose positions: ${closePositions}`,
+      });
+    } catch { /* ignore notification errors */ }
+
+    res.json({
+      success: true,
+      message: 'Kill switch activated - all trading stopped',
+      details: {
+        circuitBreakerOpened: true,
+        orderQueueStopped: true,
+        agentsStopped: stoppedAgents,
+        positionsCloseRequested: closePositions,
+        reason,
+      },
+    });
+
+  } catch (error: any) {
+    logger.error(`Kill switch error:`, error);
+    res.status(500).json({
+      error: 'Kill switch failed',
+      detail: error.message,
+      message: 'MANUAL INTERVENTION REQUIRED - KILL SWITCH FAILED!',
+    });
+  }
+});
+
+// V5.65: Get kill switch status
+app.get("/api/ops/kill-switch/status", async (req, res) => {
+  try {
+    const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
+
+    const state = globalRestCircuitBreaker.getState();
+    const isKillSwitchActive = state.isOpen && state.closesAt && state.closesAt > Date.now() + 23 * 60 * 60 * 1000;
+
+    res.json({
+      killSwitchActive: isKillSwitchActive,
+      circuitBreakerState: state,
+      activeAgents: Array.from(userAgents.keys()).length,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// V5.65: Reset kill switch (reopen circuit breaker)
+app.post("/api/ops/kill-switch/reset", async (req, res) => {
+  try {
+    const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
+    const { orderQueue } = await import('./services/orderQueue.js');
+
+    // Close circuit breaker (allow orders again)
+    globalRestCircuitBreaker.forceClose();
+
+    // Restart order queue
+    orderQueue.start();
+
+    logger.info('✅ Kill switch RESET - trading can resume');
+
+    res.json({
+      success: true,
+      message: 'Kill switch reset - trading can resume',
+      note: 'You need to manually restart agents via /api/agent/start',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -3205,23 +3406,102 @@ initNotificationService(broadcast);
   }
 })();
 
-// Graceful shutdown
-const shutdown = async () => {
-  logger.info('🛑 Shutting down...');
-  for (const [userId, userAgentData] of userAgents) {
-    try {
-      for (const agent of userAgentData.agents) {
-        await agent.stop();
-      }
-      logger.info(`Stopped all agents for ${userId}`);
-    } catch { /* ignore */ }
+// ═══════════════════════════════════════════════════════════════════════════
+// V5.65: IMPROVED GRACEFUL SHUTDOWN WITH TIMEOUT
+// ═══════════════════════════════════════════════════════════════════════════
+// - 30 second timeout for graceful shutdown
+// - Ordered cleanup: agents → order queue → websockets → http server → database
+// - Force exit if timeout exceeded
+// - Proper close of all connections
+// ═══════════════════════════════════════════════════════════════════════════
+
+let isShuttingDown = false;
+const SHUTDOWN_TIMEOUT_MS = 30_000; // 30 seconds max
+
+const shutdown = async (signal: string = 'UNKNOWN') => {
+  // Prevent multiple shutdown calls
+  if (isShuttingDown) {
+    logger.warn(`🛑 Shutdown already in progress (signal: ${signal})`);
+    return;
   }
-  await disconnectDatabase();
-  process.exit(0);
+  isShuttingDown = true;
+
+  logger.info(`🛑 Initiating graceful shutdown (signal: ${signal})...`);
+
+  // Set up forced exit timeout
+  const forceExitTimer = setTimeout(() => {
+    logger.error(`⚠️ Shutdown timeout exceeded (${SHUTDOWN_TIMEOUT_MS / 1000}s) - forcing exit!`);
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+  forceExitTimer.unref(); // Don't keep process alive just for this timer
+
+  try {
+    // Step 1: Stop accepting new connections
+    logger.info('🛑 [1/5] Stopping HTTP server...');
+    server.close((err) => {
+      if (err) logger.warn(`HTTP server close error: ${err.message}`);
+      else logger.info('   ✅ HTTP server closed');
+    });
+
+    // Step 2: Close WebSocket connections
+    logger.info('🛑 [2/5] Closing WebSocket connections...');
+    for (const [ws] of wsClients) {
+      try {
+        ws.close(1000, 'Server shutting down');
+      } catch { /* ignore */ }
+    }
+    wsClients.clear();
+    logger.info(`   ✅ WebSocket clients disconnected`);
+
+    // Step 3: Stop all trading agents
+    logger.info('🛑 [3/5] Stopping trading agents...');
+    const stopPromises: Promise<void>[] = [];
+    for (const [userId, userAgentData] of userAgents) {
+      for (const agent of userAgentData.agents) {
+        stopPromises.push(
+          Promise.race([
+            agent.stop(),
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error('Agent stop timeout')), 5000)
+            )
+          ]).catch(err => {
+            logger.warn(`   ⚠️ Error stopping agent for ${userId}: ${err.message}`);
+          })
+        );
+      }
+    }
+    await Promise.allSettled(stopPromises);
+    logger.info(`   ✅ All agents stopped (${stopPromises.length} total)`);
+
+    // Step 4: Stop order queue
+    logger.info('🛑 [4/5] Stopping order queue...');
+    try {
+      const { orderQueue } = await import('./services/orderQueue.js');
+      orderQueue.stop();
+      logger.info('   ✅ Order queue stopped');
+    } catch (err: any) {
+      logger.warn(`   ⚠️ Error stopping order queue: ${err.message}`);
+    }
+
+    // Step 5: Disconnect database
+    logger.info('🛑 [5/5] Disconnecting database...');
+    await disconnectDatabase();
+    logger.info('   ✅ Database disconnected');
+
+    // Clear the timeout since we're done
+    clearTimeout(forceExitTimer);
+
+    logger.info('✅ Graceful shutdown complete');
+    process.exit(0);
+  } catch (error: any) {
+    logger.error(`❌ Shutdown error: ${error.message}`);
+    clearTimeout(forceExitTimer);
+    process.exit(1);
+  }
 };
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Initialize Binance WebSocket
 (async () => {

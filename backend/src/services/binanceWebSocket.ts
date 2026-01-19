@@ -2322,8 +2322,17 @@ class BinanceWebSocketManager {
           }
         };
 
-        // Step 3: Keep listenKey alive (every 30 minutes)
-        const keepAliveInterval = setInterval(async () => {
+        // ═══════════════════════════════════════════════════════════════════════════
+        // V5.65: IMPROVED LISTENKEY KEEP-ALIVE WITH RETRY LOGIC
+        // ═══════════════════════════════════════════════════════════════════════════
+        // - Reduced interval from 30min to 25min (5min safety margin)
+        // - Added retry logic with up to 3 attempts before reconnecting
+        // - Better error classification (401 vs 429 vs 5xx)
+        // ═══════════════════════════════════════════════════════════════════════════
+
+        const doKeepAlive = async (retryAttempt: number = 0): Promise<boolean> => {
+          const maxRetries = 3;
+
           try {
             const keepAliveUrl = new URL(this.endpoints.listenKeyPath, this.endpoints.rest);
             const params = new URLSearchParams({ listenKey });
@@ -2347,22 +2356,72 @@ class BinanceWebSocketManager {
 
             if (!keepAliveResponse.ok) {
               const errorText = await keepAliveResponse.text();
-              throw new Error(`Keep-alive failed (${keepAliveResponse.status}): ${errorText}`);
+              const status = keepAliveResponse.status;
+
+              // V5.65: Classify error and handle appropriately
+              if (status === 401 || status === 403) {
+                // Invalid API key - no point retrying, reconnect with new listenKey
+                console.error(`❌ [${userId}] ListenKey keep-alive: Invalid API key (${status}) - reconnecting...`);
+                return false; // Will trigger reconnect
+              }
+
+              if (status === 429) {
+                // Rate limited - wait and retry
+                if (retryAttempt < maxRetries) {
+                  const delay = 5000 * (retryAttempt + 1); // 5s, 10s, 15s
+                  console.warn(`⚠️ [${userId}] ListenKey keep-alive rate limited - retrying in ${delay}ms (attempt ${retryAttempt + 1}/${maxRetries})`);
+                  await new Promise(resolve => setTimeout(resolve, delay));
+                  return doKeepAlive(retryAttempt + 1);
+                }
+                return false;
+              }
+
+              if (status >= 500) {
+                // Server error - retry with backoff
+                if (retryAttempt < maxRetries) {
+                  const delay = 2000 * (retryAttempt + 1);
+                  console.warn(`⚠️ [${userId}] ListenKey keep-alive server error (${status}) - retrying in ${delay}ms`);
+                  await new Promise(resolve => setTimeout(resolve, delay));
+                  return doKeepAlive(retryAttempt + 1);
+                }
+                return false;
+              }
+
+              throw new Error(`Keep-alive failed (${status}): ${errorText}`);
             }
 
-            console.log(`✅ ListenKey kept alive for user ${userId}`);
-          } catch (error) {
-            console.error(`❌ Failed to keep listenKey alive for ${userId}:`, error);
+            console.log(`✅ [${userId}] ListenKey kept alive successfully`);
+            return true;
+          } catch (error: any) {
+            // Network error - retry
+            if (retryAttempt < maxRetries) {
+              const delay = 2000 * (retryAttempt + 1);
+              console.warn(`⚠️ [${userId}] ListenKey keep-alive network error - retrying in ${delay}ms: ${error.message}`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              return doKeepAlive(retryAttempt + 1);
+            }
+            console.error(`❌ [${userId}] ListenKey keep-alive failed after ${maxRetries} retries:`, error.message);
+            return false;
+          }
+        };
+
+        const keepAliveInterval = setInterval(async () => {
+          const success = await doKeepAlive(0);
+
+          if (!success) {
+            console.error(`❌ [${userId}] ListenKey keep-alive failed - triggering reconnection...`);
             clearKeepAlive();
             this.userDataStreams.delete(userId);
             try { userWs.close(); } catch {}
+
+            // Use the improved reconnect logic
             setTimeout(() => {
               this.subscribeToUserData(userId, apiKey, apiSecret).catch((err) => {
-                console.error(`❌ Failed to resubscribe user data stream for ${userId}:`, err);
+                console.error(`❌ [${userId}] Failed to resubscribe after keep-alive failure:`, err);
               });
-            }, 1000);
+            }, 500);
           }
-        }, 30 * 60 * 1000); // 30 minutes
+        }, 25 * 60 * 1000); // V5.65: 25 minutes instead of 30 (5min safety margin)
 
         streamRecord.keepAliveTimer = keepAliveInterval;
 
@@ -2373,30 +2432,50 @@ class BinanceWebSocketManager {
 
         userWs.on('close', (code, reason) => {
           console.log(`🔌 User data stream closed for user ${userId} (code: ${code}, reason: ${reason?.toString() || 'none'})`);
-          
+
           // Check if this was an intentional close (from unsubscribeFromUserData)
           const wasIntentional = (streamRecord as any)._intentionalClose === true;
           cleanup();
-          
+
           if (wasIntentional) {
             console.log(`🔌 User data stream intentionally closed for ${userId}, not reconnecting`);
             return;
           }
-          
-          // 🔧 FIX: Auto-reconnect on close (unless intentional unsubscribe)
+
+          // ═══════════════════════════════════════════════════════════════════════════
+          // V5.65: IMPROVED AUTO-RECONNECT WITH EXPONENTIAL BACKOFF
+          // ═══════════════════════════════════════════════════════════════════════════
           // Binance closes streams after 24h or network issues - we need to reconnect
-          console.log(`🔄 Scheduling user data stream reconnect for ${userId} in 2s...`);
-          setTimeout(() => {
-            this.subscribeToUserData(userId, apiKey, apiSecret).catch((err) => {
-              console.error(`❌ Failed to reconnect user data stream for ${userId}:`, err);
-              // Retry with exponential backoff
-              setTimeout(() => {
-                this.subscribeToUserData(userId, apiKey, apiSecret).catch((err2) => {
-                  console.error(`❌ Second reconnect attempt failed for ${userId}:`, err2);
+          // Use exponential backoff: 500ms, 1s, 2s, 4s, 8s, max 30s
+          // ═══════════════════════════════════════════════════════════════════════════
+          const maxRetries = 10;
+          const baseDelay = 500; // Start with 500ms instead of 2s
+          const maxDelay = 30000;
+
+          const attemptReconnect = (attempt: number) => {
+            if (attempt > maxRetries) {
+              console.error(`❌ [${userId}] User data stream reconnect FAILED after ${maxRetries} attempts. Manual intervention required!`);
+              // TODO: Send critical alert via Telegram
+              return;
+            }
+
+            const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
+            console.log(`🔄 [${userId}] Reconnecting user data stream (attempt ${attempt}/${maxRetries}) in ${delay}ms...`);
+
+            setTimeout(() => {
+              this.subscribeToUserData(userId, apiKey, apiSecret)
+                .then(() => {
+                  console.log(`✅ [${userId}] User data stream reconnected successfully on attempt ${attempt}`);
+                })
+                .catch((err) => {
+                  console.error(`❌ [${userId}] Reconnect attempt ${attempt} failed:`, err.message || err);
+                  attemptReconnect(attempt + 1);
                 });
-              }, 5000);
-            });
-          }, 2000);
+            }, delay);
+          };
+
+          // Start reconnection immediately (attempt 1 = 500ms delay)
+          attemptReconnect(1);
         });
 
         userWs.on('error', (error) => {

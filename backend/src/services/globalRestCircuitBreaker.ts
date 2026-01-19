@@ -55,12 +55,12 @@ class GlobalRestCircuitBreaker {
    */
   canMakeRequest(): boolean {
     const now = Date.now();
-    
+
     // If circuit is open, check if we can close it
     if (this.isOpen) {
       // Use explicit closesAt if set (from IP ban), otherwise use default cooldown
       const closeTime = this.closesAt ?? (this.openedAt! + this.DEFAULT_COOLDOWN_MS);
-      
+
       if (now >= closeTime) {
         // Cooldown period elapsed - CLOSE circuit
         this.closeCircuit();
@@ -70,8 +70,43 @@ class GlobalRestCircuitBreaker {
         return false;
       }
     }
-    
+
     return true; // Circuit closed = allow requests
+  }
+
+  /**
+   * V5.65: Check if CRITICAL requests are allowed (position closure)
+   * Critical orders are allowed even when circuit is open, with a limited rate
+   *
+   * This prevents positions from being stuck open during IP bans or rate limits.
+   * Critical orders get 1 attempt every 5 seconds even when circuit is open.
+   */
+  private lastCriticalRequest = 0;
+  private readonly CRITICAL_COOLDOWN_MS = 5000; // 5 seconds between critical requests when circuit open
+
+  canMakeCriticalRequest(): boolean {
+    // If circuit is closed, always allow
+    if (!this.isOpen) {
+      return true;
+    }
+
+    // Circuit is open - check if enough time has passed since last critical request
+    const now = Date.now();
+    if (now - this.lastCriticalRequest >= this.CRITICAL_COOLDOWN_MS) {
+      this.lastCriticalRequest = now;
+      console.log(`⚠️ [CircuitBreaker] Allowing CRITICAL request despite open circuit (rate limited: 1 per ${this.CRITICAL_COOLDOWN_MS / 1000}s)`);
+      return true;
+    }
+
+    console.log(`⚠️ [CircuitBreaker] CRITICAL request blocked - rate limit (${this.CRITICAL_COOLDOWN_MS / 1000}s cooldown)`);
+    return false;
+  }
+
+  /**
+   * V5.65: Check if the circuit is currently open
+   */
+  isCircuitOpen(): boolean {
+    return this.isOpen;
   }
   
   /**

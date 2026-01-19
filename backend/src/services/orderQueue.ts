@@ -31,6 +31,7 @@ import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
 import { calculateOrderPriority, getPriorityTier } from './orderPriority.js';
 import type { OrderPriorityContext } from './orderPriority.js';
 import { notifyOrderSubmitted, notifyOrderFilled, notifyOrderFailed } from '../utils/notifications.js';
+import { validateOrderComplete, adjustQtyToStepSize, getSymbolLimits, logValidationError } from './orderValidation.js';
 
 const logger = createLogger('order-queue');
 
@@ -106,6 +107,12 @@ export class OrderQueue {
   private readonly DEFAULT_TIMEOUT_MS: number;         // Max wait time per order
   private readonly EXECUTION_TIMEOUT_MS = 10_000;      // V5.38: Max time for exchange API call (10s)
 
+  // V5.65: Enhanced idempotency tracking to prevent double orders
+  // Tracks order IDs for 24 hours to handle any edge cases
+  private readonly IDEMPOTENCY_CACHE_TTL_MS: number;   // 24 hours
+  private readonly orderIdHistory = new Set<string>(); // Long-term order ID tracking
+  private orderIdHistoryCleanupAt = Date.now();        // Last cleanup timestamp
+
   // Stats
   private stats = {
     totalSubmitted: 0,
@@ -140,9 +147,10 @@ export class OrderQueue {
     this.MAX_CONCURRENT_ORDERS = config?.maxConcurrentOrders ?? 3;    // Safe for Binance
     this.ORDER_DELAY_MS = config?.orderDelayMs ?? 350;                // 350ms = ~8 orders/sec (well under 40/sec limit)
     this.MAX_RETRIES = config?.maxRetries ?? 2;                       // 2 retries max
-    this.RESULT_CACHE_TTL_MS = config?.resultCacheTTL ?? 60_000;      // 1 minute cache
+    this.RESULT_CACHE_TTL_MS = config?.resultCacheTTL ?? 300_000;     // V5.65: 5 minutes cache (was 60s)
     this.MAX_QUEUE_SIZE = config?.maxQueueSize ?? 5000;               // Support 1000 agents × 5 orders
     this.DEFAULT_TIMEOUT_MS = config?.defaultTimeoutMs ?? 30_000;     // 30 second timeout
+    this.IDEMPOTENCY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;              // V5.65: 24 hours for order ID history
 
     logger.info('[OrderQueue] Initialized with config:', {
       maxConcurrent: this.MAX_CONCURRENT_ORDERS,
@@ -194,11 +202,25 @@ export class OrderQueue {
   async submitOrder(request: OrderRequest): Promise<OrderResult> {
     this.stats.totalSubmitted++;
 
-    // 1. Check for duplicate order (idempotency)
+    // 1. Check for duplicate order (idempotency) - V5.65: Enhanced with long-term tracking
     const cachedResult = this.results.get(request.id);
     if (cachedResult) {
       logger.debug(`[${request.id}] Returning cached result (idempotent request)`);
       return cachedResult;
+    }
+
+    // V5.65: Also check long-term order ID history (24h)
+    // This prevents double orders even if result cache was cleaned up
+    if (this.orderIdHistory.has(request.id)) {
+      logger.warn(`[${request.id}] DUPLICATE ORDER BLOCKED - ID already processed (from history)`);
+      return {
+        success: false,
+        error: 'Duplicate order ID detected - order already processed',
+        errorCode: 'DUPLICATE_ORDER',
+        executedAt: Date.now(),
+        waitTimeMs: 0,
+        retriesUsed: 0,
+      };
     }
 
     // 2. Check queue size limit (prevent memory exhaustion)
@@ -351,12 +373,29 @@ export class OrderQueue {
       // 1. Health check (cleanup timeouts, stale results)
       await this.healthCheck();
 
-      // 2. Skip if circuit breaker is open
-      if (!globalRestCircuitBreaker.canMakeRequest()) {
-        if (this.queue.length > 0) {
-          logger.warn(`[OrderQueue] Circuit breaker OPEN - ${this.queue.length} orders waiting`);
+      // 2. Check circuit breaker status
+      // V5.65: Allow critical orders (exits) even when circuit is open
+      const isCircuitOpen = !globalRestCircuitBreaker.canMakeRequest();
+
+      if (isCircuitOpen && this.queue.length > 0) {
+        // Check if we have any exit orders (critical)
+        const hasExitOrders = this.queue.some(q => !q.request.isEntry);
+
+        if (hasExitOrders) {
+          // Check if we can make a critical request
+          if (!globalRestCircuitBreaker.canMakeCriticalRequest()) {
+            logger.warn(`[OrderQueue] Circuit breaker OPEN - ${this.queue.length} orders waiting (exit orders blocked by rate limit)`);
+            return;
+          }
+          // Critical request allowed - continue processing but only process exits
+          logger.info(`[OrderQueue] Circuit breaker OPEN but processing CRITICAL exit order`);
+        } else {
+          // No exit orders - skip entirely
+          logger.warn(`[OrderQueue] Circuit breaker OPEN - ${this.queue.length} entry orders waiting`);
+          return;
         }
-        return;
+      } else if (isCircuitOpen) {
+        return; // Empty queue + circuit open = nothing to do
       }
 
       // 3. Skip if queue is empty
@@ -376,7 +415,20 @@ export class OrderQueue {
       }
 
       // 6. Dequeue next order
-      const queuedOrder = this.queue.shift();
+      // V5.65: When circuit is open, only dequeue exit orders
+      let queuedOrder: QueuedOrder | undefined;
+
+      if (isCircuitOpen) {
+        // Find the first exit order (critical)
+        const exitIndex = this.queue.findIndex(q => !q.request.isEntry);
+        if (exitIndex >= 0) {
+          queuedOrder = this.queue.splice(exitIndex, 1)[0];
+        }
+      } else {
+        // Normal operation - dequeue by priority (first item)
+        queuedOrder = this.queue.shift();
+      }
+
       if (!queuedOrder) return;
 
       // 7. Check if order timed out while in queue
@@ -448,6 +500,57 @@ export class OrderQueue {
       // Get exchange instance for this user
       const exchange = await this.getExchangeForUser(userId);
 
+      // V5.65: Validate order before submission to exchange
+      // This prevents LOT_SIZE, MIN_NOTIONAL, and INVALID_SYMBOL errors
+      const validation = validateOrderComplete(
+        {
+          symbol,
+          side,
+          type: request.type,
+          quantity,
+          price: request.price,
+        },
+        exchange.markets,
+        undefined // currentPrice not available here, price validated at higher level
+      );
+
+      if (!validation.valid) {
+        logValidationError(symbol, validation, `order-queue:${id}`);
+
+        const result: OrderResult = {
+          success: false,
+          error: validation.error,
+          errorCode: validation.errorCode,
+          executedAt: Date.now(),
+          waitTimeMs,
+          retriesUsed: request.retries,
+        };
+
+        this.stats.totalFailed++;
+        this.results.set(id, result);
+        this.orderIdHistory.add(id);
+        this.executing.delete(id);
+
+        // Notify about the validation failure
+        void notifyOrderFailed({
+          id,
+          symbol,
+          side,
+          quantity,
+          error: validation.error || 'Validation failed',
+          isEntry: request.isEntry,
+        });
+
+        resolve(result);
+        return;
+      }
+
+      // Use adjusted quantity if step size correction was needed
+      const validatedQty = validation.adjustedQty ?? quantity;
+      if (validation.adjustedQty && validation.adjustedQty !== quantity) {
+        logger.info(`[${id}] Quantity adjusted for step size: ${quantity} → ${validatedQty}`);
+      }
+
       // V5.38: Execute order with timeout to prevent hanging
       // If Binance doesn't respond within EXECUTION_TIMEOUT_MS, we fail gracefully
       let order: any;
@@ -472,9 +575,9 @@ export class OrderQueue {
 
       if (request.type === 'market') {
         if (side === 'buy') {
-          order = await executeWithTimeout(exchange.createMarketBuyOrder(symbol, quantity, request.params));
+          order = await executeWithTimeout(exchange.createMarketBuyOrder(symbol, validatedQty, request.params));
         } else {
-          order = await executeWithTimeout(exchange.createMarketSellOrder(symbol, quantity, request.params));
+          order = await executeWithTimeout(exchange.createMarketSellOrder(symbol, validatedQty, request.params));
         }
       } else {
         // Limit order
@@ -482,7 +585,7 @@ export class OrderQueue {
           symbol,
           request.type,
           side,
-          quantity,
+          validatedQty,
           request.price,
           request.params
         ));
@@ -502,6 +605,9 @@ export class OrderQueue {
 
       this.stats.totalExecuted++;
       this.results.set(id, result);
+
+      // V5.65: Add to long-term order ID history
+      this.orderIdHistory.add(id);
 
       logger.info(
         `[${id}] ✅ SUCCESS | ` +
@@ -585,6 +691,11 @@ export class OrderQueue {
         });
 
         this.results.set(id, result);
+
+        // V5.65: Add to long-term order ID history even on failure
+        // This prevents resubmitting the same order ID
+        this.orderIdHistory.add(id);
+
         resolve(result); // Don't reject, return error result
       }
 
@@ -714,12 +825,24 @@ export class OrderQueue {
       logger.error(`[HealthCheck] Removed ${stuckOrders} stuck orders from executing map`);
     }
 
-    // 3. Log queue health
+    // 3. V5.65: Clean up order ID history (once per 24 hours)
+    // The history grows over time, but we only need to prevent duplicates for 24h
+    if (now - this.orderIdHistoryCleanupAt > this.IDEMPOTENCY_CACHE_TTL_MS) {
+      const historySize = this.orderIdHistory.size;
+      if (historySize > 0) {
+        this.orderIdHistory.clear();
+        this.orderIdHistoryCleanupAt = now;
+        logger.info(`[HealthCheck] Cleared ${historySize} order IDs from history (24h cleanup)`);
+      }
+    }
+
+    // 4. Log queue health
     if (this.queue.length > 0 || this.executing.size > 0) {
       logger.info(
         `[HealthCheck] Queue: ${this.queue.length}/${this.MAX_QUEUE_SIZE} | ` +
         `Executing: ${this.executing.size}/${this.MAX_CONCURRENT_ORDERS} | ` +
-        `Results cache: ${this.results.size}`
+        `Results cache: ${this.results.size} | ` +
+        `OrderIdHistory: ${this.orderIdHistory.size}`
       );
     }
   }
@@ -737,7 +860,7 @@ export const orderQueue = new OrderQueue({
   maxConcurrentOrders: 3,      // Conservative (Binance allows 40/sec)
   orderDelayMs: 350,           // 350ms = ~8.5 orders/sec (safe margin)
   maxRetries: 2,               // 2 retry attempts
-  resultCacheTTL: 60_000,      // 1 minute result cache
+  resultCacheTTL: 300_000,     // V5.65: 5 minutes result cache (was 60s)
   maxQueueSize: 5000,          // Support 1000 agents × 5 orders each
   defaultTimeoutMs: 30_000,    // 30 second timeout per order
 });
