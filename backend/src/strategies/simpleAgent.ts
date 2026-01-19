@@ -3396,10 +3396,16 @@ export class SimpleAgent {
   // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
   private async fetchBtcCandles1h(): Promise<Candle[]> {
     const btcSymbol = 'BTCUSDT'; // Binance format for WebSocket
+    const MIN_FINAL_CANDLES = 11;  // Need at least 11 final candles for MTF filter
 
     // 0. Check global cache first (shared across all agents)
     if (globalBtc1hCandleCache && Date.now() - globalBtc1hCandleCache.fetchedAt < GLOBAL_BTC_1H_CACHE_TTL_MS) {
-      return globalBtc1hCandleCache.candles;
+      // V5.50 FIX: Also verify cache has enough FINAL candles, otherwise refresh
+      const finalCount = globalBtc1hCandleCache.candles.filter(c => c.isFinal !== false).length;
+      if (finalCount >= MIN_FINAL_CANDLES) {
+        return globalBtc1hCandleCache.candles;
+      }
+      // Cache has insufficient final candles - force refresh
     }
 
     // Prevent multiple concurrent fetches
@@ -3451,15 +3457,23 @@ export class SimpleAgent {
             );
 
             if (ohlcv && ohlcv.length >= 11) {
-              const candles: Candle[] = ohlcv.map(c => ({
+              // V5.50 FIX: Mark REST candles as isFinal=true (historical candles are always closed)
+              // except the last one which might be in-progress
+              const candles: Candle[] = ohlcv.map((c, idx) => ({
                 timestamp: c[0] as number,
                 open: c[1] as number,
                 high: c[2] as number,
                 low: c[3] as number,
                 close: c[4] as number,
                 volume: c[5] as number,
+                isFinal: idx < ohlcv.length - 1,  // All except last are final
               }));
               globalBtc1hCandleCache = { candles, fetchedAt: Date.now() };
+
+              // V5.50 FIX: Also seed WebSocket cache so future reads work correctly
+              seedKlinesFromWebSocket(btcSymbol, '1h', ohlcv);
+              logger.info(`[fetchBtcCandles1h] REST seeded ${ohlcv.length} candles to WebSocket cache`);
+
               return candles;
             }
           }

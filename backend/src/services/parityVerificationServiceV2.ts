@@ -195,20 +195,24 @@ function checkSignalAtEntry(
   entryTs: number,
   side: 'long' | 'short'
 ): SignalCheckResult {
-  // V5.60 FIX: Align candle selection with live behavior for BOTH symbol and BTC
-  // Live uses isFinal flag to exclude the "in-progress" candle.
-  // For parity, we need to find the candle that was forming at entry time
-  // and exclude it (since live would have excluded it via isFinal=false).
+  // V5.62 FIX: Correct candle selection to match live behavior
   //
-  // Example: If trade entered at 10:15:01, the 10:15 candle was "in progress"
-  // so live used candles up to 10:00 (the last CLOSED candle).
-  // We replicate this by finding the candle boundary.
+  // CRITICAL: Live records entryTime as lastCandle.timestamp (V5.46)
+  // This is the timestamp of the candle that JUST CLOSED and triggered the entry.
+  //
+  // Example: If entryTs = 10:00:00
+  //   - Live detected the 10:00 candle closed (isFinal=true)
+  //   - Signal was checked using candles UP TO AND INCLUDING 10:00
+  //   - Entry time was recorded as 10:00:00 (lastCandle.timestamp)
+  //
+  // Previous bug: We subtracted CANDLE_MS thinking 10:00 was "in progress"
+  // This caused parity to use candles only up to 09:45, missing the 10:00 candle!
+  //
+  // Fix: Use entryTs directly as the last closed candle timestamp
   const CANDLE_MS = 15 * 60 * 1000; // 15-minute candles
-  const inProgressCandleTs = Math.floor(entryTs / CANDLE_MS) * CANDLE_MS;
-  const lastClosedCandleTs = inProgressCandleTs - CANDLE_MS;
+  const lastClosedCandleTs = Math.floor(entryTs / CANDLE_MS) * CANDLE_MS;
 
   // V5.61 FIX: Apply same filter to BOTH symbol and BTC candles
-  // Previously only BTC was filtered correctly, causing signal calculation mismatch
   const windowCandles = candles.filter(c => c.timestamp <= lastClosedCandleTs);
   const btcWindow = btcCandles.filter(c => c.timestamp <= lastClosedCandleTs);
 

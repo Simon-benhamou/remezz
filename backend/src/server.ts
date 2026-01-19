@@ -3318,7 +3318,18 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
     }
     
     logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed)`);
-    
+
+    // V5.50 FIX: Also preload BTC 1h candles for MTF filter
+    try {
+      const ohlcv1h = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 50);
+      if (ohlcv1h && ohlcv1h.length > 0) {
+        seedKlinesFromWebSocket('BTCUSDT', '1h', ohlcv1h);
+        logger.info(`✅ BTC 1h candles preloaded: ${ohlcv1h.length} candles for MTF filter`);
+      }
+    } catch (error: any) {
+      logger.warn(`⚠️ Failed to preload BTC 1h candles: ${error?.message}`);
+    }
+
   } catch (error) {
     logger.warn('⚠️ Failed to preload klines:', error);
   }
