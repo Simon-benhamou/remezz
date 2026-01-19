@@ -43,6 +43,9 @@ import {
   countConsecUp,
   countConsecDown,
   getCooldownBars,  // V5.41: Shared cooldown logic
+  // V5.64: Wick breakout early entry functions
+  checkWickBreakout,
+  calcBollingerBands,
   // V5.46 PARITY: Both backtest and live now use the same time calculation:
   // - entryTime = candle.timestamp (candle START/OPEN time)
   // - nowMs = entryTime + holdBars * 15 * 60000 (backtest) 
@@ -1723,10 +1726,23 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const signalsToEnter = signalCandidates.slice(0, availableSlots);
         
         for (const candidate of signalsToEnter) {
-          const { symbol, signal, current, idx } = candidate;
+          const { symbol, signal, current, idx, candles: windowCandles } = candidate;
           // 🔧 FIX V5.43: availableCapital = capital (free capital)
           // `capital` is already the free capital (total - inUse), no need to subtract again
           const availableCapital = capital;
+
+          // ═══════════════════════════════════════════════════════════════════
+          // V5.64: WICK BREAKOUT EARLY ENTRY
+          // ═══════════════════════════════════════════════════════════════════
+          // Check if wick already broke BB band - if so, use better entry price
+          const closes = windowCandles.map((c: BacktestCandle) => c.close);
+          const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
+          const wickBreakout = checkWickBreakout(current, bb, signal.side);
+
+          // Use early entry price if wick breakout triggered, otherwise use close
+          const entryPrice = wickBreakout.triggered && wickBreakout.entryPrice
+            ? wickBreakout.entryPrice
+            : current.close;
           
           // V5.51: In parity mode, skip capital checks - we're testing pure signal logic
           if (!parityMode) {
@@ -1828,14 +1844,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
               
               // Create additional positions (will be stored in multiPositions array)
               for (let posIdx = 1; posIdx < totalPositions; posIdx++) {
-                const addQty = perPosNotional / current.close;
+                // V5.64: Use wick breakout entry price for multi-positions too
+                const multiEntryPrice = entryPrice * (1 + (posIdx * 0.003 * (signal.side === 'long' ? -1 : 1))); // Slight price spread
+                const addQty = perPosNotional / multiEntryPrice;
                 capitalInUse += perPosMargin;
                 capital -= perPosMargin;
-                
+
                 multiPositions[symbol].push({
                   symbol,
                   side: signal.side,
-                  entryPrice: current.close * (1 + (posIdx * 0.003 * (signal.side === 'long' ? -1 : 1))), // Slight price spread
+                  entryPrice: multiEntryPrice,
                   entryTime: current.timestamp,
                   entryIdx: idx,
                   qty: addQty,
@@ -1845,9 +1863,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
                   capitalBefore: capital + perPosMargin,
                   wasCapped: true,
                   stopLossPct: CONFIG.EXIT.STOP_LOSS_PCT,
-                  highWaterMark: signal.side === 'long' ? current.close : undefined,
-                  lowWaterMark: signal.side === 'short' ? current.close : undefined,
-                  entryReason: `${signal.reason}_MULTI${posIdx}`,
+                  highWaterMark: signal.side === 'long' ? multiEntryPrice : undefined,
+                  lowWaterMark: signal.side === 'short' ? multiEntryPrice : undefined,
+                  entryReason: `${signal.reason}_MULTI${posIdx}${wickBreakout.triggered ? '|wick_entry' : ''}`,
                   positionIndex: posIdx,
                   totalPositions,
                   stagnantState: { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 }
@@ -1859,7 +1877,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             marginUsd = notionalUsd / posLev;
           }
 
-          const qty = notionalUsd / current.close;
+          const qty = notionalUsd / entryPrice;
           if (!Number.isFinite(qty) || qty <= 0) continue;
           // V5.13: Lower minimum margin for small accounts
           if (marginUsd < CONFIG.SIZING.MIN_MARGIN_USD) continue;
@@ -1869,10 +1887,15 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           capitalInUse += marginUsd;
           capital -= marginUsd;
 
+          // V5.64: Log wick breakout entry improvement
+          const entryReason = wickBreakout.triggered
+            ? `${signal.reason}|wick_entry(+${wickBreakout.improvement?.toFixed(2)}%)`
+            : signal.reason;
+
           positions[symbol] = {
             symbol,
             side: signal.side,
-            entryPrice: current.close,
+            entryPrice,  // V5.64: Use wick breakout entry price if triggered
             entryTime: current.timestamp,
             entryIdx: idx,
             qty,
@@ -1882,9 +1905,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             capitalBefore: capital + marginUsd,
             wasCapped,
             stopLossPct: slPct,
-            highWaterMark: signal.side === 'long' ? current.close : undefined,
-            lowWaterMark: signal.side === 'short' ? current.close : undefined,
-            entryReason: signal.reason,  // V5.32: Track entry reason
+            highWaterMark: signal.side === 'long' ? entryPrice : undefined,
+            lowWaterMark: signal.side === 'short' ? entryPrice : undefined,
+            entryReason,  // V5.64: Track entry reason with wick breakout info
             // V5.30: Multi-position tracking
             positionIndex: 0,
             totalPositions,

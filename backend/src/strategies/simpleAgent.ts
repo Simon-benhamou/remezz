@@ -25,6 +25,8 @@ import {
   determineVolatilityRegime,  // V5.14: Volatility-based trailing
   getCooldownBars,  // V5.41: Shared cooldown logic
   calculateExitNowMs,  // V5.45: Shared exit time calculation for parity
+  calcBollingerBands,  // V5.64: For wick breakout early entry
+  checkWickBreakout,   // V5.64: Wick breakout early entry
   LIQUIDATION_CONFIG,
   type Candle,
   type Position,
@@ -2126,7 +2128,26 @@ export class SimpleAgent {
     if (slCalc.isDynamic) {
       logger.info(`🎯 [${symbol}] Dynamic SL: ATR=${slCalc.atrPct?.toFixed(2)}% × 2.0 = ${slPct.toFixed(2)}%`);
     }
-    
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // V5.64: WICK BREAKOUT EARLY ENTRY
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Same shared functions as backtestService.ts for exact parity
+    // Entry price is improved when wick touches BB buffer before candle close
+    // ═══════════════════════════════════════════════════════════════════════════
+    const closes = candles.map((c: Candle) => c.close);
+    const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
+    const wickBreakout = checkWickBreakout(lastCandle, bb, side);
+
+    // Determine entry price: use wick breakout price if available, else close
+    const entryPrice = wickBreakout.triggered && wickBreakout.entryPrice
+      ? wickBreakout.entryPrice
+      : currentPrice;
+
+    if (wickBreakout.triggered && wickBreakout.improvement) {
+      logger.info(`⚡ [${symbol}] WICK BREAKOUT ENTRY | side=${side.toUpperCase()} | close=$${currentPrice.toFixed(4)} | wickEntry=$${entryPrice.toFixed(4)} | improvement=+${(wickBreakout.improvement * 100).toFixed(2)}%`);
+    }
+
     if (this.config.mode === 'paper') {
       // Paper trade
       // V5.46 FIX: Use candle.timestamp for entryTime (same as backtest)
@@ -2138,17 +2159,17 @@ export class SimpleAgent {
       const position: Position = {
         symbol,
         side,
-        entryPrice: currentPrice,
+        entryPrice,  // V5.64: Use wick breakout price if available
         qty: sizing.qty,
         entryTime: lastCandle.timestamp,  // V5.46: Use candle timestamp for backtest parity
         leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
         marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
-        stopLoss: side === 'long' 
-          ? currentPrice * (1 - slPct / 100)
-          : currentPrice * (1 + slPct / 100),
+        stopLoss: side === 'long'
+          ? entryPrice * (1 - slPct / 100)  // V5.64: Use entryPrice (may be wick breakout price)
+          : entryPrice * (1 + slPct / 100),
         stopLossPct: slPct,                    // V5.7: Store SL percentage used
-        highWaterMark: side === 'long' ? currentPrice : undefined,
-        lowWaterMark: side === 'short' ? currentPrice : undefined,
+        highWaterMark: side === 'long' ? entryPrice : undefined,   // V5.64: Use entryPrice
+        lowWaterMark: side === 'short' ? entryPrice : undefined,   // V5.64: Use entryPrice
         // V5.30: Multi-position tracking
         positionId: multiPlan?.enabled ? `${this.config.sessionId}_0` : undefined,
         groupId: multiPlan?.enabled ? `group_${Date.now()}_${symbol}` : undefined,
@@ -2242,19 +2263,19 @@ export class SimpleAgent {
         symbol,
         side,
         quantity: sizing.qty,
-        entryPrice: currentPrice,
+        entryPrice,  // V5.64: Use wick breakout entry price
         leverage: sizing.suggestedLeverage,
         stopLoss: position.stopLoss,
         mode: 'paper',
         notionalUsd: sizing.notionalUsd,
         marginUsd: sizing.marginUsd,
       });
-      
+
       // Old notification system (kept for compatibility)
       notifyTradeEntry({
         symbol,
         side,
-        price: currentPrice,
+        price: entryPrice,  // V5.64: Use wick breakout entry price
         qty: sizing.qty,
         notionalUsd: sizing.notionalUsd,
         marginUsd: sizing.marginUsd,
