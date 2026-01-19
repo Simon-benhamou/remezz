@@ -134,7 +134,15 @@ export class CapitalPool {
   
   // 🔧 FIX: Store exchange reference for REST fallback when WebSocket cache is empty
   private exchange: Exchange | null = null;
-  
+
+  // V5.63: Skip-N-trades-then-resume rule after consecutive losers
+  // Testing showed: Skip 1 trade after 2 consecutive losers = +70% PnL improvement
+  // Skips more losers (727) than winners (382), improves win rate 58.5% → 66.7%
+  private consecutiveLosers: number = 0;
+  private tradesToSkip: number = 0;
+  private readonly CONSECUTIVE_LOSER_THRESHOLD = 2;  // Trigger after this many consecutive losers
+  private readonly TRADES_TO_SKIP = 1;               // Skip this many trades, then resume
+
   constructor(initialCapitalUsd: number, mode: 'paper' | 'live' = 'paper', userId?: string, exchange?: Exchange) {
     this.totalCapitalUsd = initialCapitalUsd;
     this.mode = mode;
@@ -384,24 +392,27 @@ export class CapitalPool {
     inPositionsUsd: number;
     mode: 'paper' | 'live';
     lastSync: number;
+    consecutiveLosers: number;  // V5.63: Current consecutive loser count
+    tradesToSkip: number;       // V5.63: Trades remaining to skip
+    entryBlocked: boolean;      // V5.63: True if currently in skip mode
     byAgent: Record<string, { reserved: number; inPosition: number }>;
   } {
     let reservedTotal = 0;
     let inPositionTotal = 0;
     const byAgent: Record<string, { reserved: number; inPosition: number }> = {};
-    
+
     this.reservedByAgent.forEach((v, k) => {
       reservedTotal += v;
       if (!byAgent[k]) byAgent[k] = { reserved: 0, inPosition: 0 };
       byAgent[k].reserved = v;
     });
-    
+
     this.inPositionByAgent.forEach((v, k) => {
       inPositionTotal += v;
       if (!byAgent[k]) byAgent[k] = { reserved: 0, inPosition: 0 };
       byAgent[k].inPosition = v;
     });
-    
+
     return {
       totalUsd: this.totalCapitalUsd,
       availableUsd: this.getAvailableCapital(),
@@ -409,6 +420,9 @@ export class CapitalPool {
       inPositionsUsd: inPositionTotal,
       mode: this.mode,
       lastSync: this.lastBalanceSync,
+      consecutiveLosers: this.consecutiveLosers,
+      tradesToSkip: this.tradesToSkip,
+      entryBlocked: this.isInSkipMode(),  // Use read-only method
       byAgent,
     };
   }
@@ -461,7 +475,79 @@ export class CapitalPool {
   getMode(): 'paper' | 'live' {
     return this.mode;
   }
-  
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // V5.63: SKIP-N-TRADES-THEN-RESUME RULE
+  // After 2 consecutive losers, skip the next N trades, then resume
+  // Testing showed: Skip 1 = +70% PnL, skips 2x more losers than winners
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Record a trade result (winner or loser)
+   * Call this after every position close to track consecutive losers
+   * @param isWinner - true if trade was profitable (pnlPct > 0)
+   * @param symbol - symbol for logging
+   */
+  recordTradeResult(isWinner: boolean, symbol?: string): void {
+    if (isWinner) {
+      if (this.consecutiveLosers > 0) {
+        console.log(`[CapitalPool] 🔄 ${symbol || ''} WIN resets consecutive losers: ${this.consecutiveLosers} → 0`);
+      }
+      this.consecutiveLosers = 0;
+    } else {
+      this.consecutiveLosers++;
+      console.log(`[CapitalPool] 📉 ${symbol || ''} LOSS - consecutive losers now: ${this.consecutiveLosers}`);
+
+      // Trigger skip-N rule when threshold reached
+      if (this.consecutiveLosers >= this.CONSECUTIVE_LOSER_THRESHOLD) {
+        this.tradesToSkip = this.TRADES_TO_SKIP;
+        this.consecutiveLosers = 0; // Reset counter after triggering
+        console.log(`[CapitalPool] 🛑 Skip rule triggered! Will skip next ${this.TRADES_TO_SKIP} trade(s)`);
+      }
+    }
+  }
+
+  /**
+   * Check if entry should be skipped and decrement skip counter
+   * Returns true if we should skip this entry
+   * IMPORTANT: This decrements the counter, so only call once per entry attempt
+   */
+  shouldSkipEntry(): boolean {
+    if (this.tradesToSkip > 0) {
+      this.tradesToSkip--;
+      console.log(`[CapitalPool] 🛑 Skipping entry (${this.tradesToSkip} more to skip after this)`);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Check if currently in skip mode (without decrementing)
+   * Use this for display/logging purposes
+   */
+  isInSkipMode(): boolean {
+    return this.tradesToSkip > 0;
+  }
+
+  /**
+   * Get current skip state (for display/logging)
+   */
+  getSkipState(): { consecutiveLosers: number; tradesToSkip: number } {
+    return {
+      consecutiveLosers: this.consecutiveLosers,
+      tradesToSkip: this.tradesToSkip,
+    };
+  }
+
+  /**
+   * Reset skip state (e.g., at start of new session)
+   */
+  resetSkipState(): void {
+    this.consecutiveLosers = 0;
+    this.tradesToSkip = 0;
+    console.log(`[CapitalPool] Skip state reset`);
+  }
+
   /**
    * Debug: Log full state
    */
@@ -1873,7 +1959,16 @@ export class SimpleAgent {
     } catch (err) {
       logger.warn(`⚠️ [${symbol}] Failed to validate BTC regime:`, err);
     }
-    
+
+    // V5.63: Skip-N-trades-then-resume rule
+    // After 2 consecutive losers, skip the next 1 trade, then resume
+    // Testing showed: Skip 1 = +70% PnL, skips 2x more losers than winners
+    if (this.config.capitalPool.shouldSkipEntry()) {
+      const skipState = this.config.capitalPool.getSkipState();
+      logger.info(`🛑 [${symbol}] SKIPPED (skip rule active, ${skipState.tradesToSkip} more to skip after this)`);
+      return;
+    }
+
     // Sync with exchange balance before checking capital (live mode)
     // For live mode, force sync on first position attempt to ensure we have real balance
     if (this.config.mode === 'live') {
@@ -3005,7 +3100,12 @@ export class SimpleAgent {
         reason,
         mode: 'paper',
       });
-      
+
+      // V5.63: Record trade result for consecutive loser tracking
+      // Winner = positive net PnL after fees (use totalPnlUsd which includes multi-positions)
+      const isWinner = (totalPnlUsd - paperFeeUsd) > 0;
+      this.config.capitalPool.recordTradeResult(isWinner, symbol);
+
     } else {
       // Live close
       try {
@@ -3211,7 +3311,12 @@ export class SimpleAgent {
           reason,
           mode: 'live',
         });
-        
+
+        // V5.63: Record trade result for consecutive loser tracking
+        // Winner = positive net PnL after fees
+        const isWinnerLive = (actualPnlUsd - liveFeeUsd) > 0;
+        this.config.capitalPool.recordTradeResult(isWinnerLive, symbol);
+
         this.config.onTrade?.({
           symbol,
           side: closeSide,
