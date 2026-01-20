@@ -1160,7 +1160,9 @@ export class SimpleAgent {
 
   private async checkRealtimeExit(): Promise<void> {
     if (!this.running) return;
-    if (this.config.mode !== 'live') return;
+    // V5.73 FIX: Enable for BOTH paper and live modes (as V5.37 intended)
+    // Paper mode uses real WebSocket ticker data, just doesn't place orders
+    // This ensures paper/live parity for exit timing
     if (!MomentumConfig.EXIT.REALTIME_APP_EXIT_ENABLED) return;
     if (this.realtimeExitInProgress) return;
     if (this.closingPosition) return;
@@ -2434,13 +2436,14 @@ export class SimpleAgent {
           const marginPerPosition = multiPlan.positionSizeUsd / sizing.suggestedLeverage;
           const qtyPerPosition = multiPlan.positionSizeUsd / entryPrice;
           
-          // Check if we have enough capital for this additional position
-          const poolStatus = this.config.capitalPool.getStatus();
-          if (poolStatus.availableUsd < marginPerPosition) {
-            logger.warn(`⚠️ [${symbol}] Multi-position ${i+1}/${multiPlan.totalPositions} skipped - insufficient capital ($${poolStatus.availableUsd.toFixed(2)} < $${marginPerPosition.toFixed(2)})`);
+          // V5.73 FIX: Reserve THEN commit for multi-position (atomic protection)
+          // Previously only committed without reserve, allowing race conditions
+          const multiPosId = `${this.config.sessionId}_multi_${i}`;
+          if (!await this.config.capitalPool.reserve(multiPosId, marginPerPosition)) {
+            logger.warn(`⚠️ [${symbol}] Multi-position ${i+1}/${multiPlan.totalPositions} skipped - failed to reserve margin $${marginPerPosition.toFixed(2)}`);
             break;
           }
-          
+
           const additionalPosition: Position = {
             symbol,
             side,
@@ -2459,12 +2462,12 @@ export class SimpleAgent {
             groupId,
             entryIndex: i,
           };
-          
+
           this.additionalPositions.push(additionalPosition);
           totalAdditionalMargin += marginPerPosition;
-          
-          // Reserve and commit margin for this additional position
-          this.config.capitalPool.commit(`${this.config.sessionId}_multi_${i}`, marginPerPosition);
+
+          // Commit the reserved margin
+          this.config.capitalPool.commit(multiPosId, marginPerPosition);
           
           logger.info(`📝 [${symbol}] PAPER MULTI-POS ${i+1}/${multiPlan.totalPositions} @ $${entryPrice.toFixed(4)} | margin=$${marginPerPosition.toFixed(2)}`);
         }
@@ -2805,19 +2808,19 @@ export class SimpleAgent {
         // V5.30: Open additional positions if multi-position plan is active (LIVE mode)
         if (multiPlan?.enabled && multiPlan.totalPositions > 1) {
           const groupId = position.groupId!;
-          
+
           for (let i = 1; i < multiPlan.totalPositions; i++) {
             const targetEntryPrice = multiPlan.entryPrices[i];
             const marginPerPosition = multiPlan.positionSizeUsd / sizing.suggestedLeverage;
             const qtyPerPosition = this.formatQtyForExchange(symbol, multiPlan.positionSizeUsd / targetEntryPrice);
-            
-            // Check if we have enough capital
-            const poolStatus = this.config.capitalPool.getStatus();
-            if (poolStatus.availableUsd < marginPerPosition) {
-              logger.warn(`⚠️ [${symbol}] LIVE multi-pos ${i+1}/${multiPlan.totalPositions} skipped - insufficient capital`);
+
+            // V5.73 FIX: Reserve FIRST with atomic protection
+            const multiPosId = `${this.config.sessionId}_multi_${i}`;
+            if (!await this.config.capitalPool.reserve(multiPosId, marginPerPosition)) {
+              logger.warn(`⚠️ [${symbol}] LIVE multi-pos ${i+1}/${multiPlan.totalPositions} skipped - failed to reserve margin $${marginPerPosition.toFixed(2)}`);
               break;
             }
-            
+
             // Submit additional order via queue
             const additionalOrderRequest: OrderRequest = {
               id: uuidv4(),
@@ -2844,20 +2847,22 @@ export class SimpleAgent {
               retries: 0,
               timeoutMs: 30_000,
             };
-            
+
             logger.info(`[${symbol}] Submitting multi-pos ${i+1}/${multiPlan.totalPositions} | orderId=${additionalOrderRequest.id}`);
-            
+
             const additionalResult = await orderQueue.submitOrder(additionalOrderRequest);
-            
+
             if (!additionalResult.success) {
               logger.error(`[${symbol}] Multi-pos ${i+1} FAILED: ${additionalResult.error}`);
+              // V5.73 FIX: Cancel reservation if order fails
+              this.config.capitalPool.cancelReservation(multiPosId);
               continue;
             }
-            
+
             const addOrder = additionalResult.order!;
             const addFilledPrice = addOrder.average || addOrder.price || targetEntryPrice;
             const addFilledQty = addOrder.filled || qtyPerPosition;
-            
+
             const additionalPosition: Position = {
               symbol,
               side,
@@ -2877,19 +2882,20 @@ export class SimpleAgent {
               groupId,
               entryIndex: i,
             };
-            
+
             this.additionalPositions.push(additionalPosition);
-            this.config.capitalPool.commit(`${this.config.sessionId}_multi_${i}`, marginPerPosition);
-            
+            // Commit the reserved margin
+            this.config.capitalPool.commit(multiPosId, marginPerPosition);
+
             // Set SL for this position too
             await this.setStopLossOnExchange(additionalPosition);
-            
+
             logger.info(`🟢 [${symbol}] LIVE MULTI-POS ${i+1}/${multiPlan.totalPositions} @ $${addFilledPrice.toFixed(4)} | margin=$${marginPerPosition.toFixed(2)}`);
-            
+
             // Delay between orders to avoid rate limits
             await new Promise(r => setTimeout(r, 500));
           }
-          
+
           logger.info(`✅ [${symbol}] Opened ${1 + this.additionalPositions.length} LIVE positions`);
         }
         
