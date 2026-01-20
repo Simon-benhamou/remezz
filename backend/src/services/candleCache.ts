@@ -425,29 +425,47 @@ export async function seedFromLocalFiles(): Promise<{ seeded: number; symbols: n
         // Read and parse file
         const filePath = path.join(dataDir, file);
         const content = await fs.readFile(filePath, 'utf-8');
-        const candles = JSON.parse(content) as Array<{
-          openTime: number;
-          open: number;
-          high: number;
-          low: number;
-          close: number;
-          volume: number;
-        }>;
+        const parsed = JSON.parse(content);
 
-        if (!candles || candles.length === 0) {
-          logger.debug(`Empty file: ${file}`);
+        // Handle two formats:
+        // 1. Array of objects: [{openTime, open, high, low, close, volume}, ...]
+        // 2. Object with candles array: {"candles": [[ts, o, h, l, c, v], ...]}
+        let ohlcv: number[][];
+
+        if (Array.isArray(parsed)) {
+          // Format 1: Array of objects (15m files from refresh script)
+          const candles = parsed as Array<{
+            openTime: number;
+            open: number;
+            high: number;
+            low: number;
+            close: number;
+            volume: number;
+          }>;
+          if (!candles || candles.length === 0) {
+            logger.debug(`Empty file: ${file}`);
+            continue;
+          }
+          ohlcv = candles.map(c => [
+            c.openTime,
+            c.open,
+            c.high,
+            c.low,
+            c.close,
+            c.volume,
+          ]);
+        } else if (parsed.candles && Array.isArray(parsed.candles)) {
+          // Format 2: Object with candles array (1h files from backtest data)
+          const candles = parsed.candles as number[][];
+          if (!candles || candles.length === 0) {
+            logger.debug(`Empty file: ${file}`);
+            continue;
+          }
+          ohlcv = candles; // Already in [ts, o, h, l, c, v] format
+        } else {
+          logger.debug(`Unknown format in file: ${file}`);
           continue;
         }
-
-        // Convert to OHLCV format
-        const ohlcv: number[][] = candles.map(c => [
-          c.openTime,
-          c.open,
-          c.high,
-          c.low,
-          c.close,
-          c.volume,
-        ]);
 
         // Save to database
         const saved = await saveCandlesToDB(symbol, timeframe, ohlcv);
