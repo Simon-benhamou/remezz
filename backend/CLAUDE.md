@@ -54,6 +54,7 @@ npm run migrate             # Run migrations
 - `backtestService.ts` - Historical simulation with parity verification
 - `nfsRealtimeExit.ts` - Advanced trailing stop with stagnant detection
 - `apiDeduplicator.ts` - Deduplicates concurrent API calls (3x reduction)
+- `candleCache.ts` - PostgreSQL candle storage with background updates (V5.77)
 
 **Exchange** (`src/exchange/`)
 - `ccxtClient.ts` - CCXT wrapper with market preloading and IP ban tracking
@@ -80,9 +81,11 @@ npm run migrate             # Run migrations
 
 ## Database Schema (Prisma)
 
-Key models: `User`, `AgentSession`, `Position`, `Trade`, `Order`, `Fill`, `SessionKpi`
+Key models: `User`, `AgentSession`, `Position`, `Trade`, `Order`, `Fill`, `SessionKpi`, `MarketCandle`
 
 Position tracking includes: `trailingActive`, `trailingBreachCandles`, `stagnantState` (JSON)
+
+V5.77 `MarketCandle`: Cached candle data shared across all users (public market data). Eliminates REST API calls at startup.
 
 ## Testing
 
@@ -123,3 +126,4 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
 - V5.71: Signal Radar - real-time proximity tracking on every tick, logs only significant changes
 - V5.72: Wick breakout limit orders - use limit order at wick price in live (10s timeout, fallback to market)
 - V5.73: Critical fixes - multi-position reserve-before-commit race condition, paper/live parity (realtime exit enabled for paper)
+- V5.77: PostgreSQL candle cache - stores candles in MarketCandle table, 0 REST calls at startup (IP ban safe), background job updates every 15min

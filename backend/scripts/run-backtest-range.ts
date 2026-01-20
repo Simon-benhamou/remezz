@@ -1,4 +1,5 @@
 import { runBacktest } from '../src/services/backtestService.js';
+import { preloadMarkets } from '../src/exchange/ccxtClient.js';
 
 function iso(d: Date) {
   return d.toISOString();
@@ -22,6 +23,14 @@ function parseSymbolsEnv(): string[] | null {
 }
 
 async function main() {
+  // Preload markets first (required for backtest)
+  console.log('[BacktestScript] Preloading markets...');
+  const marketsLoaded = await preloadMarkets();
+  if (!marketsLoaded) {
+    throw new Error('Failed to preload markets');
+  }
+  console.log('[BacktestScript] Markets preloaded successfully');
+
   const startDate = new Date(process.env.START_DATE || '2025-01-01T00:00:00.000Z');
   const endDate = new Date(process.env.END_DATE || '2025-12-16T00:00:00.000Z');
 

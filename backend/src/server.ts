@@ -32,6 +32,7 @@ import { initNotificationService } from "./services/notificationService.js";
 import { setRadarBroadcast, getRecentRadarEvents } from "./services/signalRadarService.js";
 import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDeduplicator.js";
 import { orderQueue } from "./services/orderQueue.js";
+import { loadCandlesFromDB, startCandleUpdateJob, stopCandleUpdateJob, seedFromLocalFiles } from "./services/candleCache.js";
 
 // Strategy
 import {
@@ -3534,7 +3535,7 @@ const shutdown = async (signal: string = 'UNKNOWN') => {
     logger.info(`   ✅ All agents stopped (${stopPromises.length} total)`);
 
     // Step 4: Stop order queue
-    logger.info('🛑 [4/5] Stopping order queue...');
+    logger.info('🛑 [4/6] Stopping order queue...');
     try {
       const { orderQueue } = await import('./services/orderQueue.js');
       orderQueue.stop();
@@ -3543,8 +3544,17 @@ const shutdown = async (signal: string = 'UNKNOWN') => {
       logger.warn(`   ⚠️ Error stopping order queue: ${err.message}`);
     }
 
-    // Step 5: Disconnect database
-    logger.info('🛑 [5/5] Disconnecting database...');
+    // Step 5: Stop candle update job
+    logger.info('🛑 [5/6] Stopping candle update job...');
+    try {
+      stopCandleUpdateJob();
+      logger.info('   ✅ Candle update job stopped');
+    } catch (err: any) {
+      logger.warn(`   ⚠️ Error stopping candle update job: ${err.message}`);
+    }
+
+    // Step 6: Disconnect database
+    logger.info('🛑 [6/6] Disconnecting database...');
     await disconnectDatabase();
     logger.info('   ✅ Database disconnected');
 
@@ -4124,12 +4134,29 @@ async function runStartupSequence(): Promise<void> {
   
   // Now we always have markets (either full or minimal), so restore sessions
   if (areMarketsLoaded()) {
-    // V5.29: Pre-load klines BEFORE starting agents to avoid individual REST calls
-    if (marketsLoaded && !isIpBanned()) {
-      logger.info('📊 Step 3a/3: Pre-loading klines for active symbols...');
-      await preloadKlinesForActiveSymbols();
+    // V5.77: Load candles from PostgreSQL (0 REST calls) - IP ban safe!
+    logger.info('📊 Step 3a/3: Loading candles from database...');
+
+    // Always upsert from local files first - ensures committed data is merged into DB
+    // This handles: empty DB, outdated DB, or DB missing some candles
+    logger.info('📂 Upserting local data files into database...');
+    const { seeded, symbols: seededSymbols } = await seedFromLocalFiles();
+    if (seeded > 0) {
+      logger.info(`✅ Upserted ${seeded} candles for ${seededSymbols} symbols from local files`);
     }
-    
+
+    // Now load from DB (includes merged local + existing data)
+    const { loaded, symbols } = await loadCandlesFromDB();
+
+    if (loaded > 0) {
+      logger.info(`✅ Loaded ${loaded} candles for ${symbols} symbols from DB (0 REST calls)`);
+    } else {
+      logger.info('📋 No cached candles - background job will populate from API');
+    }
+
+    // Start background job to keep candles fresh
+    startCandleUpdateJob();
+
     logger.info('♻️ Step 3b/3: Restoring active sessions...');
     await restoreActiveSessions();
     logger.info('✅ Startup initialization complete');
