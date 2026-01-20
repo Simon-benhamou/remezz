@@ -4137,16 +4137,22 @@ async function runStartupSequence(): Promise<void> {
     // V5.77: Load candles from PostgreSQL (0 REST calls) - IP ban safe!
     logger.info('📊 Step 3a/3: Loading candles from database...');
 
-    // Always upsert from local files first - ensures committed data is merged into DB
-    // This handles: empty DB, outdated DB, or DB missing some candles
-    logger.info('📂 Upserting local data files into database...');
-    const { seeded, symbols: seededSymbols } = await seedFromLocalFiles();
-    if (seeded > 0) {
-      logger.info(`✅ Upserted ${seeded} candles for ${seededSymbols} symbols from local files`);
-    }
+    // First try loading from DB
+    let { loaded, symbols } = await loadCandlesFromDB();
 
-    // Now load from DB (includes merged local + existing data)
-    const { loaded, symbols } = await loadCandlesFromDB();
+    // Only seed from local files if DB is empty or has very few candles
+    // (Local files are static - only updated manually, so don't waste time if DB is populated)
+    if (loaded < 1000) {
+      logger.info(`📂 DB has only ${loaded} candles - seeding from local files...`);
+      const { seeded, symbols: seededSymbols } = await seedFromLocalFiles();
+      if (seeded > 0) {
+        logger.info(`✅ Seeded ${seeded} candles for ${seededSymbols} symbols from local files`);
+        // Reload from DB to get merged data
+        const result = await loadCandlesFromDB();
+        loaded = result.loaded;
+        symbols = result.symbols;
+      }
+    }
 
     if (loaded > 0) {
       logger.info(`✅ Loaded ${loaded} candles for ${symbols} symbols from DB (0 REST calls)`);
