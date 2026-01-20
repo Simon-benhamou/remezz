@@ -52,6 +52,8 @@ export interface NfsConfig {
 }
 
 // V5.62: Aligned with backtestService.ts and parityVerificationServiceV2.ts
+// V5.69: Aligned weights with backtestService.ts (35:25:20:10:10 proportions)
+// This ensures real-time and backtest produce identical NFS scores
 export const DEFAULT_NFS_CONFIG: NfsConfig = {
   HIGH_CONFIDENCE_THRESHOLD: 70,
   MEDIUM_CONFIDENCE_THRESHOLD: 40,   // V5.62 FIX: Was 50, now 40 to match backtest
@@ -59,12 +61,15 @@ export const DEFAULT_NFS_CONFIG: NfsConfig = {
   PRE_BREACH_DISTANCE_PCT: 0.3,
   MAX_SLIPPAGE_PCT: 2.0,
   PARTIAL_FILL_MIN_RATIO: 0.8,
+  // V5.69: Weights now match backtest proportions exactly (35:25:20:10:10)
+  // Previous: 4:2:2:1:1 = 40:20:20:10:10 (breachATR was overweighted)
+  // Now: 7:5:4:2:2 = 35:25:20:10:10 (exact parity with backtest)
   WEIGHTS: {
-    breachATR: { threshold: 0.40, weight: 4 },
-    breachDepth: { threshold: 0.25, weight: 2 },
-    volumeRatio: { threshold: 1.5, weight: 2 },   // V5.62 FIX: Was 1.2, now 1.5 to match backtest
-    candleBody: { threshold: 0.5, weight: 1 },    // V5.62 FIX: Was 0.6, now 0.5 to match backtest
-    momentum: { threshold: 0.5, weight: 1 },
+    breachATR: { threshold: 0.40, weight: 7 },    // 7/20 = 35%
+    breachDepth: { threshold: 0.25, weight: 5 },  // 5/20 = 25%
+    volumeRatio: { threshold: 1.5, weight: 4 },   // 4/20 = 20%
+    candleBody: { threshold: 0.5, weight: 2 },    // 2/20 = 10%
+    momentum: { threshold: 0.5, weight: 2 },      // 2/20 = 10%
   },
 };
 

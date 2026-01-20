@@ -84,6 +84,7 @@ interface BacktestSimPosition {
   entryPrice: number;
   entryTime: number;
   entryIdx: number;
+  entryCandle: BacktestCandle;  // V5.68: Store entry candle for realistic timing
   qty: number;
   notionalUsd: number;
   marginUsd: number;
@@ -1061,16 +1062,15 @@ async function fetchCandles(
 }
 
 // V5.36: Fetch 1h candles for Multi-Timeframe Confluence filter
-async function fetchCandles1h(
+// V5.67: Now tries local JSON files first (same pattern as fetchCandles)
+async function fetchCandles1hFromCcxt(
   exchange: any,
   symbol: string,
-  startDate: Date,
-  endDate: Date
+  since: number,
+  until: number
 ): Promise<Candle[]> {
   const out: Candle[] = [];
-  const until = endDate.getTime();
-  const extraBarsMs = 50 * 60 * 60 * 1000; // 50 bars × 1h
-  let cursor = startDate.getTime() - extraBarsMs;
+  let cursor = since;
 
   while (cursor < until) {
     try {
@@ -1120,6 +1120,50 @@ async function fetchCandles1h(
   return out;
 }
 
+async function fetchCandles1h(
+  exchange: any,
+  symbol: string,
+  startDate: Date,
+  endDate: Date
+): Promise<Candle[]> {
+  const until = endDate.getTime();
+  const extraBarsMs = 50 * 60 * 60 * 1000; // 50 bars × 1h
+  const since = startDate.getTime() - extraBarsMs;
+
+  // V5.67: Try local JSON files first (same pattern as fetchCandles)
+  const local = await loadLocalJsonCandles(symbol, '1h');
+  if (!local) {
+    console.log(`[Backtest] No local 1h data for ${symbol}, fetching from API`);
+    return await fetchCandles1hFromCcxt(exchange, symbol, since, until);
+  }
+
+  const needBefore = since < local.startTs;
+  const needAfter = until > local.endTs;
+
+  // If local data covers everything, use it
+  if (!needBefore && !needAfter) {
+    console.log(`[Backtest] Using local 1h data for ${symbol} (full coverage)`);
+    return sliceCandlesByTime(local.candles, since, until);
+  }
+
+  // Otherwise, merge local with API data for gaps
+  const localSlice = sliceCandlesByTime(local.candles, since, until);
+  const parts: BacktestCandle[][] = [localSlice];
+
+  if (needBefore) {
+    console.log(`[Backtest] Fetching 1h ${symbol} before local data (${new Date(since).toISOString()} to ${new Date(local.startTs).toISOString()})`);
+    const beforeCandles = await fetchCandles1hFromCcxt(exchange, symbol, since, local.startTs - 1);
+    parts.unshift(beforeCandles);
+  }
+  if (needAfter) {
+    console.log(`[Backtest] Fetching 1h ${symbol} after local data (${new Date(local.endTs).toISOString()} to ${new Date(until).toISOString()})`);
+    const afterCandles = await fetchCandles1hFromCcxt(exchange, symbol, local.endTs + 1, until);
+    parts.push(afterCandles);
+  }
+
+  return mergeDedupCandles(parts);
+}
+
 // ============================================================================
 // PNL CALCULATION
 // ============================================================================
@@ -1160,6 +1204,125 @@ function calculatePnl(
   const netPnlPct = (netPnlUsd / marginUsd) * 100;
 
   return { grossPnlPct, netPnlPct, netPnlUsd, feesUsd };
+}
+
+// ============================================================================
+// V5.68: INTRABAR TIMING ESTIMATION
+// ============================================================================
+// Estimates when a price level was reached within a candle for realistic timing.
+// Without tick data, we use OHLC bar order assumption:
+// - Bullish candle (C > O): O → L → H → C (price dips first, then rises)
+// - Bearish candle (C < O): O → H → L → C (price rises first, then drops)
+// This matches typical market microstructure patterns.
+// ============================================================================
+
+interface IntrabarTimingResult {
+  estimatedTimestamp: number;
+  fractionOfCandle: number; // 0.0 = candle open, 1.0 = candle close
+}
+
+function estimateIntrabarTiming(
+  candle: BacktestCandle,
+  targetPrice: number,
+  _side: 'long' | 'short',  // Reserved for future directional estimation
+  _isEntry: boolean         // Reserved for future entry vs exit optimization
+): IntrabarTimingResult {
+  const candleDurationMs = 15 * 60 * 1000; // 15 minutes
+  const { timestamp, open, high, low, close } = candle;
+  const isBullish = close >= open;
+
+  // If price is outside candle range, return candle close time
+  if (targetPrice > high || targetPrice < low) {
+    return { estimatedTimestamp: timestamp + candleDurationMs, fractionOfCandle: 1.0 };
+  }
+
+  // Calculate position within the OHLC range
+  // For bullish candles: O → L (0-0.25) → H (0.25-0.75) → C (0.75-1.0)
+  // For bearish candles: O → H (0-0.25) → L (0.25-0.75) → C (0.75-1.0)
+
+  let fraction = 0.5; // Default to mid-candle
+
+  if (isBullish) {
+    // Bullish: O → L → H → C
+    if (targetPrice <= open && targetPrice >= low) {
+      // Price in the O → L range (first 25% of candle)
+      const range = open - low;
+      fraction = range > 0 ? 0.25 * (1 - (targetPrice - low) / range) : 0.125;
+    } else if (targetPrice >= open && targetPrice <= high) {
+      // Price in the L → H range (middle 50% of candle)
+      const range = high - low;
+      fraction = range > 0 ? 0.25 + 0.5 * ((targetPrice - low) / range) : 0.5;
+    } else {
+      // Price in the H → C range (last 25% of candle)
+      const range = high - close;
+      fraction = range > 0 ? 0.75 + 0.25 * ((high - targetPrice) / range) : 0.875;
+    }
+  } else {
+    // Bearish: O → H → L → C
+    if (targetPrice >= open && targetPrice <= high) {
+      // Price in the O → H range (first 25% of candle)
+      const range = high - open;
+      fraction = range > 0 ? 0.25 * ((targetPrice - open) / range) : 0.125;
+    } else if (targetPrice <= open && targetPrice >= low) {
+      // Price in the H → L range (middle 50% of candle)
+      const range = high - low;
+      fraction = range > 0 ? 0.25 + 0.5 * ((high - targetPrice) / range) : 0.5;
+    } else {
+      // Price in the L → C range (last 25% of candle)
+      const range = close - low;
+      fraction = range > 0 ? 0.75 + 0.25 * ((targetPrice - low) / range) : 0.875;
+    }
+  }
+
+  // Clamp fraction to valid range
+  fraction = Math.max(0.05, Math.min(0.95, fraction));
+
+  const estimatedTimestamp = Math.round(timestamp + fraction * candleDurationMs);
+
+  return { estimatedTimestamp, fractionOfCandle: fraction };
+}
+
+/**
+ * Calculate realistic hold time considering intrabar entry/exit timing
+ */
+function calculateRealisticHoldMinutes(
+  entryCandle: BacktestCandle,
+  entryPrice: number,
+  exitCandle: BacktestCandle,
+  exitPrice: number,
+  exitReason: string,
+  side: 'long' | 'short'
+): { holdMinutes: number; entryTimestamp: number; exitTimestamp: number } {
+  const candleDurationMs = 15 * 60 * 1000;
+
+  // Estimate entry time (for wick breakout entries)
+  const entryTiming = estimateIntrabarTiming(entryCandle, entryPrice, side, true);
+
+  // For exits, check if it's an intrabar exit type
+  const isIntrabarExit = exitReason.includes('NFS_HIGH') ||
+                          exitReason === 'SL' ||
+                          exitReason === 'TP' ||
+                          exitReason === 'STOP_LOSS' ||
+                          exitReason === 'TAKE_PROFIT';
+
+  let exitTimestamp: number;
+  if (isIntrabarExit) {
+    // For intrabar exits, estimate when exit price was reached
+    const exitTiming = estimateIntrabarTiming(exitCandle, exitPrice, side, false);
+    exitTimestamp = exitTiming.estimatedTimestamp;
+  } else {
+    // For candle close exits (NFS_MED, NFS_LOW, STAGNANT, etc.), use candle end time
+    exitTimestamp = exitCandle.timestamp + candleDurationMs;
+  }
+
+  const holdMs = exitTimestamp - entryTiming.estimatedTimestamp;
+  const holdMinutes = Math.max(1, Math.round(holdMs / 60000)); // At least 1 minute
+
+  return {
+    holdMinutes,
+    entryTimestamp: entryTiming.estimatedTimestamp,
+    exitTimestamp,
+  };
 }
 
 // ============================================================================
@@ -1397,22 +1560,32 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           capital += pnl.netPnlUsd + pos.marginUsd;
           capitalInUse -= pos.marginUsd;
 
-          const month = new Date(current.timestamp).toISOString().slice(0, 7);
-          const exitDay = new Date(current.timestamp).toISOString().slice(0, 10);
+          // V5.68: Calculate realistic intrabar timing for entry/exit
+          const realisticTiming = calculateRealisticHoldMinutes(
+            pos.entryCandle,
+            pos.entryPrice,
+            current,
+            exitPrice,
+            exitReason,
+            pos.side
+          );
+
+          const month = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 7);
+          const exitDay = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 10);
 
           trades.push({
             id: `trade_${++tradeId}`,
             symbol,
             side: pos.side,
-            entryTime: new Date(pos.entryTime).toISOString(),
-            exitTime: new Date(current.timestamp).toISOString(),
+            entryTime: new Date(realisticTiming.entryTimestamp).toISOString(),
+            exitTime: new Date(realisticTiming.exitTimestamp).toISOString(),
             entryPrice: pos.entryPrice,
             exitPrice,
             qty: pos.qty,
             notionalUsd: pos.notionalUsd,
             marginUsd: pos.marginUsd,
             leverage: pos.leverage,
-            holdMinutes: holdBars * 15,
+            holdMinutes: realisticTiming.holdMinutes,  // V5.68: Realistic hold time
             grossPnlPct: pnl.grossPnlPct,
             netPnlPct: pnl.netPnlPct,
             netPnlUsd: pnl.netPnlUsd,
@@ -1441,19 +1614,29 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             capital += multiPnl.netPnlUsd + multiPos.marginUsd;
             capitalInUse -= multiPos.marginUsd;
 
+            // V5.68: Calculate realistic timing for multi-positions too
+            const multiTiming = calculateRealisticHoldMinutes(
+              multiPos.entryCandle,
+              multiPos.entryPrice,
+              current,
+              exitPrice,
+              exitReason,
+              multiPos.side
+            );
+
             trades.push({
               id: `trade_${++tradeId}`,
               symbol,
               side: multiPos.side,
-              entryTime: new Date(multiPos.entryTime).toISOString(),
-              exitTime: new Date(current.timestamp).toISOString(),
+              entryTime: new Date(multiTiming.entryTimestamp).toISOString(),
+              exitTime: new Date(multiTiming.exitTimestamp).toISOString(),
               entryPrice: multiPos.entryPrice,
               exitPrice,
               qty: multiPos.qty,
               notionalUsd: multiPos.notionalUsd,
               marginUsd: multiPos.marginUsd,
               leverage: multiPos.leverage,
-              holdMinutes: multiHoldBars * 15,
+              holdMinutes: multiTiming.holdMinutes,  // V5.68: Realistic hold time
               grossPnlPct: multiPnl.grossPnlPct,
               netPnlPct: multiPnl.netPnlPct,
               netPnlUsd: multiPnl.netPnlUsd,
@@ -1649,6 +1832,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
               entryPrice: currentCandle.close,
               entryTime: currentCandle.timestamp,
               entryIdx: forcedIdx,
+              entryCandle: currentCandle,  // V5.68: Store entry candle for realistic timing
               qty,
               notionalUsd,
               marginUsd,
@@ -1856,6 +2040,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
                   entryPrice: multiEntryPrice,
                   entryTime: current.timestamp,
                   entryIdx: idx,
+                  entryCandle: current,  // V5.68: Store entry candle for realistic timing
                   qty: addQty,
                   notionalUsd: perPosNotional,
                   marginUsd: perPosMargin,
@@ -1898,6 +2083,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             entryPrice,  // V5.64: Use wick breakout entry price if triggered
             entryTime: current.timestamp,
             entryIdx: idx,
+            entryCandle: current,  // V5.68: Store entry candle for realistic timing
             qty,
             notionalUsd,
             marginUsd,
@@ -1948,19 +2134,29 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       capital += pnl.netPnlUsd + pos.marginUsd;
       capitalInUse -= pos.marginUsd;
 
+      // V5.68: Calculate realistic entry timing for END trades (exit is at candle close)
+      const endTiming = calculateRealisticHoldMinutes(
+        pos.entryCandle,
+        pos.entryPrice,
+        lastCandle,
+        lastCandle.close,
+        'END',  // END exits at candle close
+        pos.side
+      );
+
       trades.push({
         id: `trade_${++tradeId}`,
         symbol,
         side: pos.side,
-        entryTime: new Date(pos.entryTime).toISOString(),
-        exitTime: new Date(lastCandle.timestamp).toISOString(),
+        entryTime: new Date(endTiming.entryTimestamp).toISOString(),
+        exitTime: new Date(endTiming.exitTimestamp).toISOString(),
         entryPrice: pos.entryPrice,
         exitPrice: lastCandle.close,
         qty: pos.qty,
         notionalUsd: pos.notionalUsd,
         marginUsd: pos.marginUsd,
         leverage: pos.leverage,
-        holdMinutes: holdBars * 15,
+        holdMinutes: endTiming.holdMinutes,  // V5.68: Realistic hold time
         grossPnlPct: pnl.grossPnlPct,
         netPnlPct: pnl.netPnlPct,
         netPnlUsd: pnl.netPnlUsd,
@@ -1969,8 +2165,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         entryReason: pos.entryReason,  // V5.32: Track entry reason
         capitalBefore: pos.capitalBefore,
         capitalAfter: capital + capitalInUse, // Total capital (free + in use)
-        month: new Date(lastCandle.timestamp).toISOString().slice(0, 7),
-        day: new Date(lastCandle.timestamp).toISOString().slice(0, 10),
+        month: new Date(endTiming.exitTimestamp).toISOString().slice(0, 7),
+        day: new Date(endTiming.exitTimestamp).toISOString().slice(0, 10),
         wasCapped: pos.wasCapped,
         slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
       });
@@ -1989,19 +2185,29 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         capital += multiPnl.netPnlUsd + multiPos.marginUsd;
         capitalInUse -= multiPos.marginUsd;
 
+        // V5.68: Realistic timing for multi-position END trades
+        const multiEndTiming = calculateRealisticHoldMinutes(
+          multiPos.entryCandle,
+          multiPos.entryPrice,
+          lastCandle,
+          lastCandle.close,
+          'END',
+          multiPos.side
+        );
+
         trades.push({
           id: `trade_${++tradeId}`,
           symbol,
           side: multiPos.side,
-          entryTime: new Date(multiPos.entryTime).toISOString(),
-          exitTime: new Date(lastCandle.timestamp).toISOString(),
+          entryTime: new Date(multiEndTiming.entryTimestamp).toISOString(),
+          exitTime: new Date(multiEndTiming.exitTimestamp).toISOString(),
           entryPrice: multiPos.entryPrice,
           exitPrice: lastCandle.close,
           qty: multiPos.qty,
           notionalUsd: multiPos.notionalUsd,
           marginUsd: multiPos.marginUsd,
           leverage: multiPos.leverage,
-          holdMinutes: multiHoldBars * 15,
+          holdMinutes: multiEndTiming.holdMinutes,  // V5.68: Realistic hold time
           grossPnlPct: multiPnl.grossPnlPct,
           netPnlPct: multiPnl.netPnlPct,
           netPnlUsd: multiPnl.netPnlUsd,
@@ -2010,8 +2216,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           entryReason: multiPos.entryReason,
           capitalBefore: multiPos.capitalBefore,
           capitalAfter: capital + capitalInUse,
-          month: new Date(lastCandle.timestamp).toISOString().slice(0, 7),
-          day: new Date(lastCandle.timestamp).toISOString().slice(0, 10),
+          month: new Date(multiEndTiming.exitTimestamp).toISOString().slice(0, 7),
+          day: new Date(multiEndTiming.exitTimestamp).toISOString().slice(0, 10),
           wasCapped: multiPos.wasCapped,
           slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
         });

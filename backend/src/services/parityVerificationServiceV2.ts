@@ -67,6 +67,7 @@ export interface ParityResultV2 {
     exitPrice: number;
     exitCandleIndex: number;
     pnlPct: number;
+    durationMin: number;  // V5.70: Simulated duration in minutes
   } | null;
 
   // Comparison
@@ -74,6 +75,7 @@ export interface ParityResultV2 {
     signalMatch: boolean;
     exitReasonMatch: boolean;
     pnlDiffPct: number | null;
+    durationDiffMin: number | null;  // V5.70: Duration difference in minutes
     category: ParityCategory;
     details: string;
   };
@@ -84,11 +86,12 @@ export interface ParityResultV2 {
 }
 
 export type ParityCategory =
-  | 'MATCH'           // Everything matches
-  | 'EXIT_MISMATCH'   // Same entry, different exit reason (BUG!)
-  | 'NO_SIGNAL'       // Backtest wouldn't have entered
-  | 'PNL_VARIANCE'    // Same exit but PnL differs
-  | 'DATA_ERROR';     // Couldn't fetch data
+  | 'MATCH'              // Everything matches
+  | 'EXIT_MISMATCH'      // Same entry, different exit reason (BUG!)
+  | 'NO_SIGNAL'          // Backtest wouldn't have entered
+  | 'PNL_VARIANCE'       // Same exit but PnL differs
+  | 'DURATION_MISMATCH'  // V5.70: Same exit reason but duration differs too much
+  | 'DATA_ERROR';        // Couldn't fetch data
 
 // ============================================================================
 // EXCHANGE SETUP
@@ -358,6 +361,7 @@ interface ExitSimResult {
   exitPrice: number;
   exitCandleIndex: number;
   pnlPct: number;
+  durationMin: number;  // V5.70: Duration in minutes for parity comparison
 }
 
 function simulateExit(
@@ -472,12 +476,14 @@ function simulateExit(
         const pnlPct = side === 'long'
           ? ((exitPrice - entryPrice) / entryPrice) * 100 * leverage
           : ((entryPrice - exitPrice) / entryPrice) * 100 * leverage;
+        const candlesHeld = i - entryIdx;
 
         return {
           exitReason,
           exitPrice,
-          exitCandleIndex: i - entryIdx,
+          exitCandleIndex: candlesHeld,
           pnlPct,
+          durationMin: candlesHeld * 15,  // V5.70: 15m candles
         };
       }
     } else {
@@ -507,12 +513,14 @@ function simulateExit(
       const pnlPct = side === 'long'
         ? ((exitPrice - entryPrice) / entryPrice) * 100 * leverage
         : ((entryPrice - exitPrice) / entryPrice) * 100 * leverage;
+      const candlesHeld = i - entryIdx;
 
       return {
         exitReason: reasonMap[exitSignal.reason ?? ''] ?? exitSignal.reason?.toUpperCase() ?? 'UNKNOWN',
         exitPrice,
-        exitCandleIndex: i - entryIdx,
+        exitCandleIndex: candlesHeld,
         pnlPct,
+        durationMin: candlesHeld * 15,  // V5.70: 15m candles
       };
     }
 
@@ -521,12 +529,14 @@ function simulateExit(
       const pnlPct = side === 'long'
         ? ((candle.close - entryPrice) / entryPrice) * 100 * leverage
         : ((entryPrice - candle.close) / entryPrice) * 100 * leverage;
+      const candlesHeld = i - entryIdx;
 
       return {
         exitReason: 'TIME',
         exitPrice: candle.close,
-        exitCandleIndex: i - entryIdx,
+        exitCandleIndex: candlesHeld,
         pnlPct,
+        durationMin: candlesHeld * 15,  // V5.70: 15m candles
       };
     }
   }
@@ -583,6 +593,7 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
         signalMatch: false,
         exitReasonMatch: false,
         pnlDiffPct: null,
+        durationDiffMin: null,  // V5.70
         category: 'DATA_ERROR',
         details: `Only ${symbolCandles.length} symbol candles and ${btcCandles.length} BTC candles fetched`,
       },
@@ -619,6 +630,7 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
         signalMatch: signalCheck.wouldEnter,
         exitReasonMatch: false,
         pnlDiffPct: null,
+        durationDiffMin: null,  // V5.70
         category: 'DATA_ERROR',
         details: 'Exit simulation failed - insufficient data after entry',
       },
@@ -627,13 +639,21 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
     };
   }
 
-  logger.info(`[PARITY-V2] Exit sim: reason=${exitSim.exitReason}, price=${exitSim.exitPrice.toFixed(4)}, pnl=${exitSim.pnlPct.toFixed(2)}%`);
+  logger.info(`[PARITY-V2] Exit sim: reason=${exitSim.exitReason}, price=${exitSim.exitPrice.toFixed(4)}, pnl=${exitSim.pnlPct.toFixed(2)}%, duration=${exitSim.durationMin}min`);
 
   // 5. Compare results
   const liveExitReason = normalizeExitReason(trade.exitReason || 'UNKNOWN');
   const simExitReason = normalizeExitReason(exitSim.exitReason);
   const livePnlPct = (trade.roiPct || 0) * leverage;
   const pnlDiff = Math.abs(livePnlPct - exitSim.pnlPct);
+
+  // V5.70: Duration comparison with tolerance
+  // Tolerance: max(30 min, 20% of live duration) - accounts for intrabar timing differences
+  const liveDurationMin = trade.durationMinutes || 0;
+  const simDurationMin = exitSim.durationMin;
+  const durationDiff = Math.abs(liveDurationMin - simDurationMin);
+  const durationTolerance = Math.max(30, liveDurationMin * 0.2);
+  const durationMatch = durationDiff <= durationTolerance;
 
   const exitReasonMatch = liveExitReason === simExitReason;
 
@@ -649,9 +669,13 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   } else if (pnlDiff > 3.0) {
     category = 'PNL_VARIANCE';
     details = `Same exit reason but PnL differs by ${pnlDiff.toFixed(2)}% (Live=${livePnlPct.toFixed(2)}%, Sim=${exitSim.pnlPct.toFixed(2)}%)`;
+  } else if (!durationMatch) {
+    // V5.70: Duration mismatch - exit reason matches but timing is significantly off
+    category = 'DURATION_MISMATCH';
+    details = `Same exit reason but duration differs by ${durationDiff}min (Live=${liveDurationMin}min, Sim=${simDurationMin}min, tolerance=${durationTolerance.toFixed(0)}min)`;
   } else {
     category = 'MATCH';
-    details = `✅ Signal and exit match (PnL diff: ${pnlDiff.toFixed(2)}%)`;
+    details = `✅ Signal and exit match (PnL diff: ${pnlDiff.toFixed(2)}%, duration diff: ${durationDiff}min)`;
   }
 
   const result: ParityResultV2 = {
@@ -672,6 +696,7 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
       signalMatch: signalCheck.wouldEnter,
       exitReasonMatch,
       pnlDiffPct: pnlDiff,
+      durationDiffMin: durationDiff,  // V5.70
       category,
       details,
     },
@@ -680,7 +705,8 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   };
 
   // Log summary
-  const icon = category === 'MATCH' ? '✅' : category === 'NO_SIGNAL' ? '⚠️' : '❌';
+  // V5.70: DURATION_MISMATCH uses ⏱️ to indicate timing issue (less severe than EXIT_MISMATCH)
+  const icon = category === 'MATCH' ? '✅' : category === 'NO_SIGNAL' ? '⚠️' : category === 'DURATION_MISMATCH' ? '⏱️' : '❌';
   logger.info(`[PARITY-V2] ${icon} ${category}: ${details}`);
 
   // Save to DB
@@ -800,6 +826,7 @@ export async function verifyAllTradesV2(opts: {
     EXIT_MISMATCH: 0,
     NO_SIGNAL: 0,
     PNL_VARIANCE: 0,
+    DURATION_MISMATCH: 0,  // V5.70
     DATA_ERROR: 0,
   };
 

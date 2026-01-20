@@ -3273,13 +3273,17 @@ export class SimpleAgent {
     } else {
       // Live close
       try {
-        // 🚫 Check circuit breaker FIRST - don't attempt REST calls if IP is banned
-        if (!globalRestCircuitBreaker.canMakeRequest()) {
+        // 🚫 V5.71: Check circuit breaker with CRITICAL exit allowance
+        // Position exits are critical - we allow them even when circuit is open (rate-limited to 1 per 5s)
+        // This prevents positions from being stuck open during IP bans or rate limits
+        if (!globalRestCircuitBreaker.canMakeCriticalRequest()) {
           const state = globalRestCircuitBreaker.getState();
           const remainingMs = state.closesAt ? state.closesAt - Date.now() : 0;
           const remainingSec = Math.round(remainingMs / 1000);
-          logger.error(`🚫 [${symbol}] REST circuit breaker is OPEN - cannot close position (${remainingSec}s remaining) ⚠️ POSITION REMAINS OPEN!`);
+          logger.error(`🚫 [${symbol}] REST circuit breaker is OPEN and critical rate limit exceeded - cannot close position (${remainingSec}s remaining) ⚠️ POSITION REMAINS OPEN! Will retry on next cycle.`);
           // Don't clear position or release capital - the position is still open on exchange!
+          // Reset closingPosition flag so we can retry on next exit check cycle
+          this.closingPosition = false;
           return;
         }
         
@@ -4798,8 +4802,8 @@ export class SimpleAgent {
   }
   
   private async saveExitToDb(
-    position: Position, 
-    exitPrice: number, 
+    position: Position,
+    exitPrice: number,
     reason: string,
     pnlPct: number,
     pnlUsd: number,
@@ -4810,11 +4814,11 @@ export class SimpleAgent {
       // Exit side is opposite of position side (SELL to close LONG, BUY to close SHORT)
       const exitSide = position.side === 'long' ? 'sell' : 'buy';
       const isLive = this.config.mode === 'live';
-      
+
       // 🔧 FIX: Use exchange orderId if available (for synced exits), otherwise generate unique ID
       // Check if order already exists in DB to avoid duplicate clientOrderId constraint error
       let clientOrderId = exchangeOrderId || `${isLive ? 'live' : 'paper'}_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      
+
       if (exchangeOrderId) {
         const existing = await this.config.prisma.order.findFirst({ where: { clientOrderId: exchangeOrderId } });
         if (existing) {
@@ -4822,65 +4826,69 @@ export class SimpleAgent {
           return;
         }
       }
-      
+
       // Calculate fee if not provided (0.04% taker fee on notional)
       const notionalUsd = position.qty * exitPrice;
       const calculatedFee = feeUsd ?? (notionalUsd * 0.0004); // 0.04% taker
-      
-      const order = await this.config.prisma.order.create({
-        data: {
-          clientOrderId,
-          sessionId: this.config.sessionId,
-          symbol: position.symbol,
-          side: exitSide,
-          type: 'market',
-          qty: position.qty,
-          price: exitPrice,
-          status: 'filled',
-          source: 'simple_agent',
-          strategyUsed: 'momentum_simple',
-          leverage: position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4,
-          pctChange: pnlPct / 100, // Store as decimal (e.g., 0.015 for 1.5%)
-        },
-      });
-      
-      // Log exit as a Fill record linked to the order (using order.id, not clientOrderId)
-      const fill = await this.config.prisma.fill.create({
-        data: {
-          orderId: order.id,  // Use the generated Order ID
-          sessionId: this.config.sessionId,
-          symbol: position.symbol,
-          price: exitPrice,
-          qty: position.qty,
-          side: exitSide,
-          realizedPnl: pnlUsd,
-          fee: calculatedFee,  // Store fee for accurate PnL tracking
-          strategyUsed: 'momentum_simple',
-          strategyFamily: 'momentum',
-          ts: new Date(),
-          // V5.11: Add exit metadata for detailed trade analysis
-          exitReason: reason.toUpperCase(),  // TRAIL, SL, TIME, SIGNAL, MANUAL
-          entryTs: new Date(position.entryTime),  // For duration calculation
-          maxPnlPct: position.maxPnlPct ?? null,  // High water mark reached
-        },
-      });
-      
-      // 🆕 V5.14: Create Trade record for direct DB persistence (no more dynamic aggregation)
-      try {
-        const entryTs = new Date(position.entryTime);
-        const exitTs = fill.ts;
-        const durationMs = exitTs.getTime() - entryTs.getTime();
-        const durationMinutes = Math.max(0, Math.round(durationMs / 60000));
-        const entryNotional = position.entryPrice * position.qty;
-        const priceChange = position.side === 'long'
-          ? exitPrice - position.entryPrice
-          : position.entryPrice - exitPrice;
-        const pctChange = (priceChange / position.entryPrice) * 100;
-        const roiPct = entryNotional > 0 ? (pnlUsd / entryNotional) * 100 : 0;
-        const leverage = position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4;
-        const roePct = roiPct * leverage;
 
-        await this.config.prisma.trade.create({
+      // V5.71: Use Prisma transaction to ensure atomic trade lifecycle operations
+      // All DB operations succeed or fail together - no partial state on crash
+      const exitTs = new Date();
+      const entryTs = new Date(position.entryTime);
+      const durationMs = exitTs.getTime() - entryTs.getTime();
+      const durationMinutes = Math.max(0, Math.round(durationMs / 60000));
+      const entryNotional = position.entryPrice * position.qty;
+      const priceChange = position.side === 'long'
+        ? exitPrice - position.entryPrice
+        : position.entryPrice - exitPrice;
+      const pctChange = (priceChange / position.entryPrice) * 100;
+      const roiPct = entryNotional > 0 ? (pnlUsd / entryNotional) * 100 : 0;
+      const leverage = position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4;
+      const roePct = roiPct * leverage;
+
+      // Use interactive transaction for dependent operations
+      const result = await this.config.prisma.$transaction(async (tx) => {
+        // 1. Create Order record
+        const order = await tx.order.create({
+          data: {
+            clientOrderId,
+            sessionId: this.config.sessionId,
+            symbol: position.symbol,
+            side: exitSide,
+            type: 'market',
+            qty: position.qty,
+            price: exitPrice,
+            status: 'filled',
+            source: 'simple_agent',
+            strategyUsed: 'momentum_simple',
+            leverage,
+            pctChange: pnlPct / 100, // Store as decimal (e.g., 0.015 for 1.5%)
+          },
+        });
+
+        // 2. Create Fill record linked to Order
+        const fill = await tx.fill.create({
+          data: {
+            orderId: order.id,
+            sessionId: this.config.sessionId,
+            symbol: position.symbol,
+            price: exitPrice,
+            qty: position.qty,
+            side: exitSide,
+            realizedPnl: pnlUsd,
+            fee: calculatedFee,
+            strategyUsed: 'momentum_simple',
+            strategyFamily: 'momentum',
+            ts: exitTs,
+            exitReason: reason.toUpperCase(),
+            entryTs,
+            maxPnlPct: position.maxPnlPct ?? null,
+            tradeId: order.id,  // Link to trade immediately
+          },
+        });
+
+        // 3. Create Trade record
+        await tx.trade.create({
           data: {
             id: order.id,  // Use exitOrderId as tradeId
             sessionId: this.config.sessionId,
@@ -4905,39 +4913,34 @@ export class SimpleAgent {
           },
         });
 
-        // Link Fill to Trade
-        await this.config.prisma.fill.update({
-          where: { id: fill.id },
-          data: { tradeId: order.id },
+        // 4. Delete the closed position
+        await tx.position.deleteMany({
+          where: {
+            sessionId: this.config.sessionId,
+            symbol: position.symbol,
+          },
         });
 
-        logger.info(`✅ [${this.config.symbol}] Trade created: ${position.side.toUpperCase()} ${position.qty} PnL=$${pnlUsd.toFixed(2)}`);
-
-        // V5.60: Trigger parity verification V2 (async, non-blocking)
-        // V2 has fixed regime detection alignment between live and backtest
-        if (process.env.AUTO_VERIFY_PARITY === 'true') {
-          import('../services/parityVerificationServiceV2.js').then(({ triggerVerificationV2 }) => {
-            triggerVerificationV2(order.id);
-          }).catch(() => {}); // Ignore import errors
-        }
-      } catch (tradeError) {
-        logger.error(`❌ [${this.config.symbol}] Failed to create Trade:`, tradeError);
-        // Continue anyway - Fill was saved, Trade is optional for now
-      }
-      
-      // Delete the position (it's closed)
-      await this.config.prisma.position.deleteMany({
-        where: {
-          sessionId: this.config.sessionId,
-          symbol: position.symbol,
-        },
+        return { order, fill };
+      }, {
+        maxWait: 5000,  // Max time to wait for transaction slot
+        timeout: 10000, // Max time for transaction to complete
       });
-      
-      // Update SessionKpi with new performance metrics
+
+      logger.info(`✅ [${this.config.symbol}] Trade created (atomic): ${position.side.toUpperCase()} ${position.qty} PnL=$${pnlUsd.toFixed(2)}`);
+
+      // V5.60: Trigger parity verification V2 (async, non-blocking, outside transaction)
+      if (process.env.AUTO_VERIFY_PARITY === 'true') {
+        import('../services/parityVerificationServiceV2.js').then(({ triggerVerificationV2 }) => {
+          triggerVerificationV2(result.order.id);
+        }).catch(() => {}); // Ignore import errors
+      }
+
+      // Update SessionKpi with new performance metrics (outside transaction - non-critical)
       await this.updateSessionKpi(pnlUsd, pnlPct);
-      
+
       logger.info(`💾 [${this.config.symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%), Fee: $${calculatedFee.toFixed(2)}`);
-      
+
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Failed to save exit to DB:`, error);
     }
