@@ -1,12 +1,12 @@
 /**
- * V5.72: OrdersTradesPanel Component
+ * V5.79: OrdersTradesPanel Component - Full Data Display
  *
- * Tabbed panel for orders and trades with filters.
+ * Tabbed panel for orders and trades with all available fields.
  * Smart defaults: Orders when IN_POSITION, Trades when WATCHING.
  */
 
 import React, { useState, useMemo } from 'react';
-import { Table, Tag, Segmented, Select, Empty, Tooltip } from 'antd';
+import { Table, Tag, Segmented, Select, Empty, Tooltip, Progress } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Filter, X } from 'lucide-react';
 import type { Order, Trade, TradeFilters, OrdersTradesPanelProps } from '../../types/cockpit';
@@ -44,6 +44,13 @@ const formatDateTime = (ts: string | number): string => {
   return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, { hour12: false })}`;
 };
 
+const formatDuration = (mins: number | undefined): string => {
+  if (!mins || !Number.isFinite(mins)) return '—';
+  const hours = Math.floor(mins / 60);
+  if (hours > 0) return `${hours}h ${Math.round(mins % 60)}m`;
+  return `${Math.round(mins)}m`;
+};
+
 const getOrderStatusColor = (status: string): string => {
   switch (status.toLowerCase()) {
     case 'filled':
@@ -55,6 +62,8 @@ const getOrderStatusColor = (status: string): string => {
     case 'canceled':
     case 'expired':
       return 'default';
+    case 'rejected':
+      return 'red';
     default:
       return 'default';
   }
@@ -68,15 +77,30 @@ const getOrderTypeColor = (type: string): string => {
       return 'purple';
     case 'stop_market':
       return 'orange';
+    case 'stop_loss':
+      return 'red';
     case 'take_profit_market':
+    case 'take_profit':
       return 'green';
+    case 'trailing_stop':
+      return 'magenta';
     default:
       return 'default';
   }
 };
 
+const getExitReasonColor = (reason: string): string => {
+  const r = reason?.toLowerCase() || '';
+  if (r.includes('tp') || r.includes('take_profit')) return 'green';
+  if (r.includes('sl') || r.includes('stop_loss')) return 'red';
+  if (r.includes('trailing')) return 'orange';
+  if (r.includes('manual')) return 'blue';
+  if (r.includes('regime')) return 'purple';
+  return 'default';
+};
+
 // ============================================================================
-// ORDERS TABLE
+// ORDERS TABLE - FULL COLUMNS
 // ============================================================================
 
 interface OrdersTableProps {
@@ -86,10 +110,22 @@ interface OrdersTableProps {
 const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
   const columns: ColumnsType<Order> = [
     {
-      title: 'Time',
+      title: 'Created',
       dataIndex: 'createdAt',
       key: 'createdAt',
-      width: 100,
+      width: 90,
+      fixed: 'left',
+      render: (ts: string) => (
+        <Tooltip title={formatDateTime(ts)}>
+          <span className="otp-table__time">{formatTime(ts)}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      title: 'Updated',
+      dataIndex: 'updatedAt',
+      key: 'updatedAt',
+      width: 90,
       render: (ts: string) => (
         <Tooltip title={formatDateTime(ts)}>
           <span className="otp-table__time">{formatTime(ts)}</span>
@@ -100,10 +136,21 @@ const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
       title: 'Side',
       dataIndex: 'side',
       key: 'side',
-      width: 80,
+      width: 70,
       render: (side: string) => (
         <Tag color={side === 'buy' ? 'green' : 'red'} className="otp-table__tag">
-          {side.toUpperCase()}
+          {side?.toUpperCase() || '—'}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Symbol',
+      dataIndex: 'symbol',
+      key: 'symbol',
+      width: 90,
+      render: (symbol: string) => (
+        <Tag color="geekblue" className="otp-table__tag">
+          {symbol?.replace('/USDT:USDT', '') || '—'}
         </Tag>
       ),
     },
@@ -111,24 +158,36 @@ const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
       title: 'Type',
       dataIndex: 'type',
       key: 'type',
-      width: 120,
+      width: 100,
       render: (type: string) => (
         <Tag color={getOrderTypeColor(type)} className="otp-table__tag">
-          {type.replace('_', ' ').toUpperCase()}
+          {type?.replace('_', ' ').toUpperCase() || '—'}
         </Tag>
       ),
+    },
+    {
+      title: 'TIF',
+      dataIndex: 'tif',
+      key: 'tif',
+      width: 50,
+      render: (tif: string) => tif ? <Tag>{tif}</Tag> : '—',
     },
     {
       title: 'Price',
       dataIndex: 'price',
       key: 'price',
-      width: 100,
+      width: 90,
       align: 'right',
-      render: (price: number, record: Order) => (
-        <span className="otp-table__number">
-          {record.avgPrice ? `$${formatPrice(record.avgPrice)}` : price ? `$${formatPrice(price)}` : 'Market'}
-        </span>
-      ),
+      render: (price: number, record: any) => {
+        const requested = record.requestedPrice;
+        return (
+          <Tooltip title={requested ? `Requested: $${formatPrice(requested)}` : undefined}>
+            <span className="otp-table__number">
+              {record.avgPrice ? `$${formatPrice(record.avgPrice)}` : price ? `$${formatPrice(price)}` : 'Market'}
+            </span>
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Qty',
@@ -136,17 +195,173 @@ const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
       key: 'qty',
       width: 80,
       align: 'right',
-      render: (qty: number) => <span className="otp-table__number">{qty.toFixed(4)}</span>,
+      render: (qty: number, record: any) => (
+        <Tooltip title={record.requestedQty ? `Requested: ${record.requestedQty.toFixed(4)}` : undefined}>
+          <span className="otp-table__number">{qty?.toFixed(4) || '—'}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      title: 'Notional',
+      key: 'notional',
+      width: 90,
+      align: 'right',
+      render: (_: unknown, record: any) => {
+        const notional = (record.qty || 0) * (record.price || 0);
+        return <span className="otp-table__number">{notional > 0 ? formatUsd(notional) : '—'}</span>;
+      },
+    },
+    {
+      title: 'Lev',
+      dataIndex: 'leverage',
+      key: 'leverage',
+      width: 50,
+      align: 'center',
+      render: (lev: number) => lev ? <Tag color="blue">{lev}x</Tag> : '—',
+    },
+    {
+      title: 'SL',
+      dataIndex: 'sl',
+      key: 'sl',
+      width: 80,
+      align: 'right',
+      render: (sl: number) => sl ? <span className="otp-table__number otp-table__number--negative">${formatPrice(sl)}</span> : '—',
+    },
+    {
+      title: 'TP',
+      dataIndex: 'tp',
+      key: 'tp',
+      width: 80,
+      align: 'right',
+      render: (tp: number) => tp ? <span className="otp-table__number otp-table__number--positive">${formatPrice(tp)}</span> : '—',
     },
     {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 100,
+      width: 80,
       render: (status: string) => (
         <Tag color={getOrderStatusColor(status)} className="otp-table__tag">
-          {status.toUpperCase()}
+          {status?.toUpperCase() || '—'}
         </Tag>
+      ),
+    },
+    {
+      title: 'Fill %',
+      dataIndex: 'fillRatio',
+      key: 'fillRatio',
+      width: 80,
+      render: (ratio: number) => {
+        if (!ratio || !Number.isFinite(ratio)) return '—';
+        const pct = Math.round(ratio * 100);
+        return <Progress percent={pct} size="small" status={pct >= 100 ? 'success' : 'active'} strokeWidth={5} />;
+      },
+    },
+    {
+      title: 'Slip',
+      dataIndex: 'slippageBps',
+      key: 'slippageBps',
+      width: 60,
+      align: 'right',
+      render: (bps: number) => {
+        if (!bps || !Number.isFinite(bps)) return '—';
+        const tone = bps > 10 ? 'otp-table__number--negative' : bps < 0 ? 'otp-table__number--positive' : '';
+        return <span className={`otp-table__number ${tone}`}>{bps.toFixed(1)}</span>;
+      },
+    },
+    {
+      title: 'Latency',
+      dataIndex: 'latencyMs',
+      key: 'latencyMs',
+      width: 70,
+      align: 'right',
+      render: (ms: number) => {
+        if (!ms || !Number.isFinite(ms)) return '—';
+        const tone = ms > 1000 ? 'otp-table__number--negative' : ms < 200 ? 'otp-table__number--positive' : '';
+        return <span className={`otp-table__number ${tone}`}>{ms}ms</span>;
+      },
+    },
+    {
+      title: 'Chg %',
+      dataIndex: 'pctChange',
+      key: 'pctChange',
+      width: 70,
+      align: 'right',
+      render: (pct: number) => {
+        if (!pct || !Number.isFinite(pct)) return '—';
+        const tone = pct >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
+        return <span className={`otp-table__number ${tone}`}>{formatPercent(pct)}</span>;
+      },
+    },
+    {
+      title: 'Source',
+      dataIndex: 'source',
+      key: 'source',
+      width: 70,
+      render: (source: string) => {
+        if (!source) return '—';
+        const colorMap: Record<string, string> = { agent: 'blue', manual: 'green', api: 'purple', system: 'orange' };
+        return <Tag color={colorMap[source.toLowerCase()] || 'default'}>{source}</Tag>;
+      },
+    },
+    {
+      title: 'Strategy',
+      dataIndex: 'strategyUsed',
+      key: 'strategyUsed',
+      width: 100,
+      render: (strat: string, record: any) => {
+        if (!strat) return '—';
+        const conf = record.strategyConfidence;
+        return (
+          <Tooltip title={conf ? `Confidence: ${(conf * 100).toFixed(1)}%` : undefined}>
+            <Tag color="purple">{strat}</Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: 'Retry',
+      key: 'retries',
+      width: 60,
+      align: 'center',
+      render: (_: unknown, record: any) => {
+        const attempts = record.attempts || 0;
+        const cancels = record.cancelCount || 0;
+        if (!attempts && !cancels) return '—';
+        return (
+          <Tooltip title={`Attempts: ${attempts}, Cancels: ${cancels}`}>
+            <span className="otp-table__number">{attempts}/{cancels}</span>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: 'Error',
+      dataIndex: 'error',
+      key: 'error',
+      width: 100,
+      render: (err: string) => {
+        if (!err) return '—';
+        return (
+          <Tooltip title={err}>
+            <Tag color="red" style={{ maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {err.substring(0, 12)}...
+            </Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: 'Order ID',
+      dataIndex: 'clientOrderId',
+      key: 'clientOrderId',
+      width: 120,
+      render: (id: string, record: any) => (
+        <Tooltip title={`Exchange: ${record.exchangeOrderId || 'N/A'}`}>
+          <span className="otp-table__muted" style={{ fontSize: 10 }}>
+            {id ? id.substring(0, 14) + '...' : '—'}
+          </span>
+        </Tooltip>
       ),
     },
   ];
@@ -157,15 +372,16 @@ const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
       columns={columns}
       rowKey="id"
       size="small"
-      pagination={{ pageSize: 10, hideOnSinglePage: true }}
+      pagination={{ pageSize: 15, showSizeChanger: true, showTotal: (t) => `${t} orders` }}
       className="otp-table"
+      scroll={{ x: 1800 }}
       locale={{ emptyText: <Empty description="No orders" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
     />
   );
 };
 
 // ============================================================================
-// TRADES TABLE
+// TRADES TABLE - FULL COLUMNS
 // ============================================================================
 
 interface TradesTableProps {
@@ -175,10 +391,22 @@ interface TradesTableProps {
 const TradesTable: React.FC<TradesTableProps> = ({ trades }) => {
   const columns: ColumnsType<Trade> = [
     {
-      title: 'Exit Time',
+      title: 'Entry',
+      dataIndex: 'entryTs',
+      key: 'entryTs',
+      width: 90,
+      fixed: 'left',
+      render: (ts: string) => (
+        <Tooltip title={formatDateTime(ts)}>
+          <span className="otp-table__time">{formatTime(ts)}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      title: 'Exit',
       dataIndex: 'exitTs',
       key: 'exitTs',
-      width: 100,
+      width: 90,
       render: (ts: string) => (
         <Tooltip title={formatDateTime(ts)}>
           <span className="otp-table__time">{formatTime(ts)}</span>
@@ -189,15 +417,26 @@ const TradesTable: React.FC<TradesTableProps> = ({ trades }) => {
       title: 'Side',
       dataIndex: 'positionSide',
       key: 'positionSide',
-      width: 80,
+      width: 70,
       render: (side: string) => (
         <Tag color={side === 'long' ? 'green' : 'red'} className="otp-table__tag">
-          {side.toUpperCase()}
+          {side?.toUpperCase() || '—'}
         </Tag>
       ),
     },
     {
-      title: 'Entry',
+      title: 'Symbol',
+      dataIndex: 'symbol',
+      key: 'symbol',
+      width: 90,
+      render: (symbol: string) => (
+        <Tag color="geekblue" className="otp-table__tag">
+          {symbol?.replace('/USDT:USDT', '') || '—'}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Entry $',
       dataIndex: 'entryPrice',
       key: 'entryPrice',
       width: 90,
@@ -205,7 +444,7 @@ const TradesTable: React.FC<TradesTableProps> = ({ trades }) => {
       render: (price: number) => <span className="otp-table__number">${formatPrice(price)}</span>,
     },
     {
-      title: 'Exit',
+      title: 'Exit $',
       dataIndex: 'exitPrice',
       key: 'exitPrice',
       width: 90,
@@ -213,34 +452,99 @@ const TradesTable: React.FC<TradesTableProps> = ({ trades }) => {
       render: (price: number) => <span className="otp-table__number">${formatPrice(price)}</span>,
     },
     {
-      title: 'P&L',
-      key: 'pnl',
-      width: 120,
+      title: 'Qty',
+      dataIndex: 'qty',
+      key: 'qty',
+      width: 80,
       align: 'right',
-      render: (_: unknown, record: Trade) => {
-        const isPositive = record.realizedPnlUsd >= 0;
+      render: (qty: number) => <span className="otp-table__number">{qty?.toFixed(4) || '—'}</span>,
+    },
+    {
+      title: 'Notional',
+      dataIndex: 'entryNotional',
+      key: 'entryNotional',
+      width: 90,
+      align: 'right',
+      render: (val: number) => <span className="otp-table__number">{val ? formatUsd(val) : '—'}</span>,
+    },
+    {
+      title: 'Lev',
+      dataIndex: 'leverage',
+      key: 'leverage',
+      width: 50,
+      align: 'center',
+      render: (lev: number) => lev ? <Tag color="blue">{lev}x</Tag> : '—',
+    },
+    {
+      title: 'P&L',
+      dataIndex: 'realizedPnlUsd',
+      key: 'realizedPnlUsd',
+      width: 90,
+      align: 'right',
+      render: (pnl: number) => {
+        const isPositive = pnl >= 0;
         return (
-          <div className="otp-table__pnl">
-            <span className={`otp-table__number ${isPositive ? 'otp-table__number--positive' : 'otp-table__number--negative'}`}>
-              {formatUsd(record.realizedPnlUsd)}
-            </span>
-            <span className={`otp-table__pct ${isPositive ? 'otp-table__pct--positive' : 'otp-table__pct--negative'}`}>
-              {formatPercent(record.pctChange)}
-            </span>
-          </div>
+          <span className={`otp-table__number ${isPositive ? 'otp-table__number--positive' : 'otp-table__number--negative'}`}>
+            {formatUsd(pnl)}
+          </span>
         );
       },
     },
     {
-      title: 'Exit Reason',
-      dataIndex: 'exitReason',
-      key: 'exitReason',
-      width: 120,
-      render: (reason: string) => (
-        <Tooltip title={reason}>
-          <span className="otp-table__reason">{reason || '—'}</span>
-        </Tooltip>
-      ),
+      title: 'ROI %',
+      dataIndex: 'roiPct',
+      key: 'roiPct',
+      width: 70,
+      align: 'right',
+      render: (roi: number) => {
+        if (!roi || !Number.isFinite(roi)) return '—';
+        const tone = roi >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
+        return <span className={`otp-table__number ${tone}`}>{formatPercent(roi)}</span>;
+      },
+    },
+    {
+      title: 'ROE %',
+      dataIndex: 'roePct',
+      key: 'roePct',
+      width: 70,
+      align: 'right',
+      render: (roe: number) => {
+        if (!roe || !Number.isFinite(roe)) return '—';
+        const tone = roe >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
+        return <span className={`otp-table__number ${tone}`}>{formatPercent(roe)}</span>;
+      },
+    },
+    {
+      title: 'Chg %',
+      dataIndex: 'pctChange',
+      key: 'pctChange',
+      width: 70,
+      align: 'right',
+      render: (pct: number) => {
+        if (!pct || !Number.isFinite(pct)) return '—';
+        const tone = pct >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
+        return <span className={`otp-table__number ${tone}`}>{formatPercent(pct)}</span>;
+      },
+    },
+    {
+      title: 'Max %',
+      dataIndex: 'maxPnlPct',
+      key: 'maxPnlPct',
+      width: 70,
+      align: 'right',
+      render: (max: number) => {
+        if (!max || !Number.isFinite(max)) return '—';
+        const tone = max >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
+        return <span className={`otp-table__number ${tone}`}>{formatPercent(max)}</span>;
+      },
+    },
+    {
+      title: 'Fees',
+      dataIndex: 'feesUsd',
+      key: 'feesUsd',
+      width: 70,
+      align: 'right',
+      render: (fees: number) => <span className="otp-table__muted">{fees ? formatUsd(fees) : '—'}</span>,
     },
     {
       title: 'Duration',
@@ -248,12 +552,29 @@ const TradesTable: React.FC<TradesTableProps> = ({ trades }) => {
       key: 'durationMinutes',
       width: 80,
       align: 'right',
-      render: (mins: number) => {
-        if (!mins) return '—';
-        const hours = Math.floor(mins / 60);
-        if (hours > 0) return `${hours}h ${mins % 60}m`;
-        return `${mins}m`;
+      render: (mins: number) => <span className="otp-table__number">{formatDuration(mins)}</span>,
+    },
+    {
+      title: 'Exit Reason',
+      dataIndex: 'exitReason',
+      key: 'exitReason',
+      width: 110,
+      render: (reason: string) => {
+        if (!reason) return '—';
+        return (
+          <Tooltip title={reason}>
+            <Tag color={getExitReasonColor(reason)}>{reason}</Tag>
+          </Tooltip>
+        );
       },
+    },
+    {
+      title: 'Orders',
+      dataIndex: 'orderCount',
+      key: 'orderCount',
+      width: 60,
+      align: 'center',
+      render: (count: number) => count ? <span className="otp-table__number">{count}</span> : '—',
     },
   ];
 
@@ -263,8 +584,9 @@ const TradesTable: React.FC<TradesTableProps> = ({ trades }) => {
       columns={columns}
       rowKey="id"
       size="small"
-      pagination={{ pageSize: 10, hideOnSinglePage: true }}
+      pagination={{ pageSize: 15, showSizeChanger: true, showTotal: (t) => `${t} trades` }}
       className="otp-table"
+      scroll={{ x: 1600 }}
       locale={{ emptyText: <Empty description="No trades yet" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
     />
   );
@@ -511,6 +833,7 @@ const styles = `
 
   .otp-panel__content {
     padding: 0;
+    overflow-x: auto;
   }
 
   .otp-table .ant-table {
@@ -524,14 +847,15 @@ const styles = `
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    padding: 8px 12px !important;
+    padding: 6px 8px !important;
+    white-space: nowrap;
   }
 
   .otp-table .ant-table-tbody > tr > td {
     background: transparent !important;
     border-bottom: 1px solid rgba(148, 163, 184, 0.08) !important;
     color: rgba(226, 232, 240, 0.85);
-    padding: 8px 12px !important;
+    padding: 6px 8px !important;
   }
 
   .otp-table .ant-table-tbody > tr:hover > td {
@@ -539,22 +863,28 @@ const styles = `
   }
 
   .otp-table__time {
-    font-size: 12px;
+    font-size: 11px;
     font-family: 'JetBrains Mono', monospace;
     color: rgba(226, 232, 240, 0.7);
   }
 
   .otp-table__tag {
-    font-size: 10px !important;
-    padding: 0 6px !important;
-    border-radius: 4px !important;
+    font-size: 9px !important;
+    padding: 0 5px !important;
+    border-radius: 3px !important;
     font-weight: 600;
   }
 
   .otp-table__number {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
+    font-size: 11px;
     color: rgba(226, 232, 240, 0.9);
+  }
+
+  .otp-table__muted {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: rgba(226, 232, 240, 0.5);
   }
 
   .otp-table__number--positive {
@@ -600,6 +930,11 @@ const styles = `
 
   .otp-table .ant-empty-description {
     color: rgba(226, 232, 240, 0.5);
+  }
+
+  .otp-table .ant-table-cell-fix-left,
+  .otp-table .ant-table-cell-fix-right {
+    background: rgba(15, 23, 42, 0.98) !important;
   }
 
   @media (max-width: 768px) {
