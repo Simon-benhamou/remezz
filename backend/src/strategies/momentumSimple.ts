@@ -256,6 +256,12 @@ export const MomentumConfig = {
     SHORT_BB_BUFFER: 0.005,         // low < BB_lower × 0.995 (0.5% below)
     // SHORT: Entry price when triggered
     SHORT_ENTRY_BUFFER: 0.003,      // Entry at BB_lower × 0.997 (0.3% below)
+
+    // V5.72: LIMIT ORDER FOR WICK BREAKOUT (Live trading)
+    // When wick breakout triggers, use limit order at wick price instead of market
+    LIMIT_ORDER_ENABLED: true,      // Use limit order at wick price in live
+    LIMIT_ORDER_TIMEOUT_MS: 10_000, // Wait 10 seconds for limit order to fill
+    LIMIT_ORDER_FALLBACK: true,     // If not filled, cancel and use market order
   },
 
   // Config commune

@@ -2584,61 +2584,161 @@ export class SimpleAgent {
 
         // ========================================================================
         // ORDER QUEUE INTEGRATION - Submit order via global queue
+        // V5.72: Use limit order at wick price when wick breakout triggers
         // ========================================================================
-        const orderRequest: OrderRequest = {
-          id: uuidv4(),
-          agentId: this.config.sessionId,
-          userId: this.config.userId || 'unknown',
-          priority: calculateOrderPriority({
-            reason: 'signal_entry',
-            isEntry: true,
-            urgency: 'medium',
-          }),
-          symbol,
-          side: side === 'long' ? 'buy' : 'sell',
-          type: 'market',
-          quantity: formattedQty,
-          params: { reduceOnly: false },
-          isEntry: true,
-          reason: 'signal_entry',
-          priorityContext: {
-            isEntry: true,
-            reason: 'signal_entry',
-            urgency: 'medium',
-          },
-          submittedAt: Date.now(),
-          retries: 0,
-          timeoutMs: 30_000,
-        };
+        const wickConfig = MomentumConfig.WICK_BREAKOUT;
+        const useWickLimitOrder = wickBreakout.triggered &&
+          wickBreakout.entryPrice &&
+          wickConfig.LIMIT_ORDER_ENABLED;
 
-        logger.info(`[${symbol}] Submitting ${side} entry order to queue | orderId=${orderRequest.id} | priority=${orderRequest.priority}`);
+        let filledPrice: number;
+        let filledQty: number;
+        let orderId: string | undefined;
+        let usedLimitOrder = false;
 
-        const result = await orderQueue.submitOrder(orderRequest);
+        if (useWickLimitOrder) {
+          // ════════════════════════════════════════════════════════════════════
+          // V5.72: LIMIT ORDER AT WICK PRICE
+          // Place limit order at the wick breakout price for better fill
+          // ════════════════════════════════════════════════════════════════════
+          const limitPrice = wickBreakout.entryPrice!;
+          logger.info(`⚡ [${symbol}] WICK LIMIT ORDER | ${side.toUpperCase()} @ $${limitPrice.toFixed(4)} (current: $${currentPrice.toFixed(4)}) | improvement potential: +${(wickBreakout.improvement! * 100).toFixed(2)}%`);
 
-        if (!result.success) {
-          logger.error(`[${symbol}] Order FAILED: ${result.error} (${result.errorCode})`);
-          this.config.capitalPool.cancelReservation(this.config.sessionId);
-          notifyOrderError({
-            symbol,
-            side,
-            orderType: 'entry',
-            error: result.error || 'Unknown error',
-            mode: this.config.mode,
-          });
-          return;
+          // For limit orders, we use direct exchange API with timeout
+          // This gives us more control over the fill checking
+          try {
+            const orderSide = side === 'long' ? 'buy' : 'sell';
+            const limitOrder = await this.config.exchange.createOrder(
+              symbol,
+              'limit',
+              orderSide,
+              formattedQty,
+              limitPrice,
+              { timeInForce: 'GTC' }
+            );
+
+            const timeoutMs = wickConfig.LIMIT_ORDER_TIMEOUT_MS || 10_000;
+            const startTime = Date.now();
+            let lastStatus = limitOrder;
+
+            // Poll for fill
+            while ((Date.now() - startTime) < timeoutMs) {
+              const filled = (lastStatus.filled || 0) >= formattedQty * 0.99;
+              const isClosed = lastStatus.status === 'closed';
+
+              if (filled || isClosed) {
+                // Order filled!
+                filledPrice = lastStatus.average || lastStatus.price || limitPrice;
+                filledQty = lastStatus.filled || formattedQty;
+                orderId = lastStatus.id;
+                usedLimitOrder = true;
+
+                const improvement = side === 'long'
+                  ? ((currentPrice - filledPrice) / currentPrice) * 100
+                  : ((filledPrice - currentPrice) / currentPrice) * 100;
+                logger.info(`✅ [${symbol}] WICK LIMIT FILLED | $${filledPrice.toFixed(4)} | saved ${improvement.toFixed(2)}% vs market`);
+                break;
+              }
+
+              // Wait and check again
+              await new Promise(resolve => setTimeout(resolve, 500));
+
+              // Fetch fresh order status
+              try {
+                const orders = await this.config.exchange.fetchMyTrades?.(symbol, undefined, 1);
+                if (orders && orders.length > 0 && orders[0].order === lastStatus.id) {
+                  // Check if our order was filled via trades
+                  lastStatus = { ...lastStatus, filled: orders[0].amount, status: 'closed' };
+                }
+              } catch {
+                // Ignore fetch errors, continue polling
+              }
+            }
+
+            // If not filled after timeout, cancel and fall back to market
+            if (!usedLimitOrder) {
+              if (wickConfig.LIMIT_ORDER_FALLBACK) {
+                logger.warn(`⏱️ [${symbol}] Limit order timeout after ${timeoutMs}ms - cancelling and using market order`);
+                try {
+                  await this.config.exchange.cancelOrder?.(limitOrder.id, symbol);
+                } catch (cancelErr) {
+                  logger.debug(`[${symbol}] Cancel order error (may already be filled/cancelled): ${cancelErr}`);
+                }
+              } else {
+                logger.error(`❌ [${symbol}] Limit order not filled and fallback disabled - aborting entry`);
+                try {
+                  await this.config.exchange.cancelOrder?.(limitOrder.id, symbol);
+                } catch {
+                  // Ignore
+                }
+                this.config.capitalPool.cancelReservation(this.config.sessionId);
+                return;
+              }
+            }
+          } catch (limitErr) {
+            logger.warn(`⚠️ [${symbol}] Limit order failed, falling back to market | error: ${limitErr}`);
+            // Fall through to market order
+          }
         }
 
-        const order = result.order!;
-        const filledPrice = order.average || order.price || currentPrice;
-        const filledQty = order.filled || formattedQty;
+        // Market order (default or fallback from limit)
+        if (!usedLimitOrder) {
+          const orderRequest: OrderRequest = {
+            id: uuidv4(),
+            agentId: this.config.sessionId,
+            userId: this.config.userId || 'unknown',
+            priority: calculateOrderPriority({
+              reason: 'signal_entry',
+              isEntry: true,
+              urgency: 'medium',
+            }),
+            symbol,
+            side: side === 'long' ? 'buy' : 'sell',
+            type: 'market',
+            quantity: formattedQty,
+            params: { reduceOnly: false },
+            isEntry: true,
+            reason: 'signal_entry',
+            priorityContext: {
+              isEntry: true,
+              reason: 'signal_entry',
+              urgency: 'medium',
+            },
+            submittedAt: Date.now(),
+            retries: 0,
+            timeoutMs: 30_000,
+          };
+
+          logger.info(`[${symbol}] Submitting ${side} MARKET entry order to queue | orderId=${orderRequest.id}`);
+
+          const result = await orderQueue.submitOrder(orderRequest);
+
+          if (!result.success) {
+            logger.error(`[${symbol}] Order FAILED: ${result.error} (${result.errorCode})`);
+            this.config.capitalPool.cancelReservation(this.config.sessionId);
+            notifyOrderError({
+              symbol,
+              side,
+              orderType: 'entry',
+              error: result.error || 'Unknown error',
+              mode: this.config.mode,
+            });
+            return;
+          }
+
+          const order = result.order!;
+          filledPrice = order.average || order.price || currentPrice;
+          filledQty = order.filled || formattedQty;
+          orderId = order.id;
+        }
 
         // ═══════════════════════════════════════════════════════════════════════════
         // V5.65: SLIPPAGE VALIDATION FOR ENTRY ORDERS
         // ═══════════════════════════════════════════════════════════════════════════
         const expectedPrice = currentPrice;
         const entrySlippage = side === 'long'
-          ? ((filledPrice - expectedPrice) / expectedPrice) * 100  // Positive = worse for long
-          : ((expectedPrice - filledPrice) / expectedPrice) * 100; // Positive = worse for short
+          ? ((filledPrice! - expectedPrice) / expectedPrice) * 100  // Positive = worse for long
+          : ((expectedPrice - filledPrice!) / expectedPrice) * 100; // Positive = worse for short
 
         const maxEntrySlippage = (MomentumConfig.EXIT as any).MAX_ENTRY_SLIPPAGE_PCT ?? 1.0;
         const slippageAlertEnabled = (MomentumConfig.EXIT as any).SLIPPAGE_ALERT_ENABLED ?? true;
@@ -2646,7 +2746,7 @@ export class SimpleAgent {
         if (entrySlippage > maxEntrySlippage) {
           logger.warn(
             `⚠️ [${symbol}] HIGH ENTRY SLIPPAGE | ` +
-            `expected=$${expectedPrice.toFixed(4)} | filled=$${filledPrice.toFixed(4)} | ` +
+            `expected=$${expectedPrice.toFixed(4)} | filled=$${filledPrice!.toFixed(4)} | ` +
             `slippage=${entrySlippage.toFixed(2)}% (max=${maxEntrySlippage}%)`
           );
 
@@ -2656,7 +2756,7 @@ export class SimpleAgent {
               side,
               type: 'entry',
               expectedPrice,
-              filledPrice,
+              filledPrice: filledPrice!,
               slippagePct: entrySlippage,
               maxSlippagePct: maxEntrySlippage,
             });
@@ -2677,18 +2777,18 @@ export class SimpleAgent {
         const position: Position = {
           symbol,
           side,
-          entryPrice: filledPrice,
-          qty: filledQty,
+          entryPrice: filledPrice!,
+          qty: filledQty!,
           entryTime: entryTimeMs,  // V5.46: Aligned with backtest
           leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
           marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
           stopLoss: side === 'long'
-            ? filledPrice * (1 - slPct / 100)
-            : filledPrice * (1 + slPct / 100),
+            ? filledPrice! * (1 - slPct / 100)
+            : filledPrice! * (1 + slPct / 100),
           stopLossPct: slPct,                    // V5.7: Store SL percentage used
-          orderId: order.id,
-          highWaterMark: side === 'long' ? filledPrice : undefined,
-          lowWaterMark: side === 'short' ? filledPrice : undefined,
+          orderId: orderId,
+          highWaterMark: side === 'long' ? filledPrice! : undefined,
+          lowWaterMark: side === 'short' ? filledPrice! : undefined,
           // V5.30: Multi-position tracking
           positionId: multiPlan?.enabled ? `${this.config.sessionId}_0` : undefined,
           groupId: multiPlan?.enabled ? `group_${Date.now()}_${symbol}` : undefined,
@@ -2798,8 +2898,8 @@ export class SimpleAgent {
         logger.info(`💰 [${symbol}] Capital after LIVE entry: total=$${statusAfterCommit.totalUsd.toFixed(2)} | inPositions=$${statusAfterCommit.inPositionsUsd.toFixed(2)} | available=$${statusAfterCommit.availableUsd.toFixed(2)}`);
         
         // Extract entry fee from CCXT order, fallback to 0.04% calculation
-        const liveEntryNotional = filledQty * filledPrice;
-        const liveEntryFee = order.fee?.cost ?? (liveEntryNotional * 0.0004);
+        const liveEntryNotional = filledQty! * filledPrice!;
+        const liveEntryFee = liveEntryNotional * 0.0004;  // V5.72: Simplified - fee info not available from our order tracking
         
         // Exchange-side protection: EMERGENCY STOP ONLY (wide, crash protection)
         // Trailing exit is managed app-side; do NOT move exchange SL above entry.
@@ -2836,45 +2936,45 @@ export class SimpleAgent {
           }
         }
         
-        logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
-        
+        logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice!} | qty=${filledQty!} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
+
         // V5.42 FIX: Mark current candle as processed to prevent checkExit() from
         // checking exit conditions on the same candle where we just entered.
         this.lastProcessedExitCandleTs = lastCandle.timestamp;
-        
+
         // 📢 Send Telegram notification for live entry avec détails complets
         void notifyPositionOpened({
           agentId: this.config.sessionId,
           symbol,
           side,
-          quantity: filledQty,
-          entryPrice: filledPrice,
+          quantity: filledQty!,
+          entryPrice: filledPrice!,
           leverage: sizing.suggestedLeverage,
           stopLoss: position.stopLoss,
           mode: 'live',
           notionalUsd: sizing.notionalUsd,
           marginUsd: sizing.marginUsd,
         });
-        
+
         // Old notification system (kept for compatibility)
         notifyTradeEntry({
           symbol,
           side,
-          price: filledPrice,
-          qty: filledQty,
+          price: filledPrice!,
+          qty: filledQty!,
           notionalUsd: sizing.notionalUsd,
           marginUsd: sizing.marginUsd,
           leverage: sizing.suggestedLeverage,
           stopLoss: position.stopLoss,
           mode: 'live',
         });
-        
+
         this.config.onTrade?.({
           symbol,
           side: side === 'long' ? 'buy' : 'sell',
-          qty: filledQty,
-          price: filledPrice,
-          orderId: order.id,
+          qty: filledQty!,
+          price: filledPrice!,
+          orderId: orderId!,
           timestamp: new Date(),
         });
         
