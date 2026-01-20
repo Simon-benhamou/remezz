@@ -41,7 +41,6 @@ import {
   resetCapitalPool,
   type CapitalPool
 } from "./strategies/simpleAgent.js";
-import { loadLocalJsonCandles } from "./services/backtest/localOhlcvJsonStore.js";
 import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, LIQUIDATION_CONFIG, getLiquidityTier, getMaxSafePositionSize } from "./strategies/momentumSimple.js";
 
 const logLevel = configureLogging();
@@ -3588,8 +3587,50 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // ============================================
 // V5.29: PRE-LOAD KLINES TO AVOID REST CALLS DURING AGENT STARTUP
 // ============================================
-// Instead of each agent making individual REST calls, pre-load ALL klines once
-// and seed the WebSocket cache so agents find data immediately
+// V5.76: RATE-LIMITED KLINES PRELOAD
+// Intelligent rate limiting that monitors Binance weight and adapts
+// ============================================
+
+// Rate limiter state
+const RATE_LIMIT_CONFIG = {
+  MAX_WEIGHT_PER_MINUTE: 1200,      // Binance limit
+  SAFE_WEIGHT_THRESHOLD: 600,       // Stop if we reach this (50% of limit)
+  WARNING_WEIGHT_THRESHOLD: 400,    // Slow down if we reach this
+  BASE_DELAY_MS: 1000,              // 1 second between calls (conservative)
+  MAX_DELAY_MS: 5000,               // Max backoff delay
+  KLINES_WEIGHT: 5,                 // fetchOHLCV with limit 220 = ~5 weight
+};
+
+let currentMinuteWeight = 0;
+let weightResetTime = Date.now() + 60_000;
+
+function resetWeightIfNeeded(): void {
+  if (Date.now() > weightResetTime) {
+    currentMinuteWeight = 0;
+    weightResetTime = Date.now() + 60_000;
+  }
+}
+
+function canMakeRequest(weight: number): boolean {
+  resetWeightIfNeeded();
+  return currentMinuteWeight + weight < RATE_LIMIT_CONFIG.SAFE_WEIGHT_THRESHOLD;
+}
+
+function recordWeight(weight: number): void {
+  currentMinuteWeight += weight;
+}
+
+function getAdaptiveDelay(): number {
+  resetWeightIfNeeded();
+  // Exponential backoff based on current weight usage
+  const usageRatio = currentMinuteWeight / RATE_LIMIT_CONFIG.SAFE_WEIGHT_THRESHOLD;
+  if (usageRatio > 0.8) {
+    return RATE_LIMIT_CONFIG.MAX_DELAY_MS; // 5s if over 80%
+  } else if (usageRatio > 0.5) {
+    return RATE_LIMIT_CONFIG.BASE_DELAY_MS * 2; // 2s if over 50%
+  }
+  return RATE_LIMIT_CONFIG.BASE_DELAY_MS; // 1s default
+}
 
 async function preloadKlinesForActiveSymbols(): Promise<void> {
   try {
@@ -3610,143 +3651,115 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
       symbols.unshift('BTC/USDT:USDT');
     }
 
-    logger.info(`📊 Pre-loading klines for ${symbols.length} symbols: ${symbols.slice(0, 5).join(', ')}${symbols.length > 5 ? '...' : ''}`);
+    logger.info(`📊 Pre-loading klines for ${symbols.length} symbols`);
 
-    // =========================================================================
-    // V5.75: LOCAL FILES FIRST - Load from local JSON files (0 API calls!)
-    // This is the ROOT CAUSE fix for IP bans - avoid REST calls entirely
-    // =========================================================================
-    let loadedFromLocal = 0;
-    let loadedFromRest = 0;
-    const symbolsNeedingRest: string[] = [];
-
-    for (const symbol of symbols) {
-      const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
-
-      // Try local file first
-      const localData = await loadLocalJsonCandles(symbol, '15m');
-      if (localData && localData.candles.length >= 200) {
-        // Convert to OHLCV format and seed cache
-        // Get last 220 candles (most recent)
-        const recentCandles = localData.candles.slice(-220);
-        const ohlcv = recentCandles.map(c => [c.timestamp, c.open, c.high, c.low, c.close, c.volume]);
-        seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
-        loadedFromLocal++;
-        logger.debug(`✅ [${binanceSymbol}] Loaded ${recentCandles.length} candles from local file`);
-      } else {
-        symbolsNeedingRest.push(symbol);
-      }
-    }
-
-    // Also try BTC 1h from local file
-    const btc1hLocal = await loadLocalJsonCandles('BTC/USDT:USDT', '1h');
-    if (btc1hLocal && btc1hLocal.candles.length >= 50) {
-      const recentCandles = btc1hLocal.candles.slice(-50);
-      const ohlcv = recentCandles.map(c => [c.timestamp, c.open, c.high, c.low, c.close, c.volume]);
-      seedKlinesFromWebSocket('BTCUSDT', '1h', ohlcv);
-      logger.info(`✅ BTC 1h candles loaded from local file: ${recentCandles.length} candles`);
-    }
-
-    if (loadedFromLocal > 0) {
-      logger.info(`✅ Loaded ${loadedFromLocal}/${symbols.length} symbols from local files (0 API calls)`);
-    }
-
-    // =========================================================================
-    // REST FALLBACK - Only for symbols without local files
-    // =========================================================================
-    if (symbolsNeedingRest.length === 0) {
-      logger.info('✅ All symbols loaded from local files - no REST API calls needed!');
-      return;
-    }
-
-    // V5.74: Environment variable to completely skip REST klines preload
-    if (process.env.SKIP_KLINES_REST_PRELOAD === 'true') {
-      logger.warn(`⚠️ SKIP_KLINES_REST_PRELOAD=true - ${symbolsNeedingRest.length} symbols without local files will use WebSocket only`);
-      return;
-    }
-
-    // Check if IP is banned - skip REST preload
+    // Check if IP is banned
     if (isIpBanned()) {
-      logger.warn(`⚠️ IP is banned - ${symbolsNeedingRest.length} symbols without local files will use WebSocket stream`);
+      logger.warn('⚠️ IP is banned - skipping klines preload, agents will use WebSocket stream');
       return;
     }
 
-    logger.info(`📡 ${symbolsNeedingRest.length} symbols need REST API: ${symbolsNeedingRest.slice(0, 3).join(', ')}${symbolsNeedingRest.length > 3 ? '...' : ''}`);
-
-    // Get a shared exchange instance for fetching
+    // Get exchange instance
     const exchange = await getCachedExchange();
     if (!exchange) {
-      logger.warn('⚠️ No exchange available for REST klines preload');
+      logger.warn('⚠️ No exchange available for klines preload');
       return;
     }
 
-    // V5.74: PROBE REQUEST - Test with lightweight call before attempting klines
+    // V5.76: PROBE REQUEST with rate limit check
     try {
-      logger.info('🔍 Testing API access with probe request...');
+      logger.info('🔍 Testing API access...');
+      resetWeightIfNeeded();
       await exchange.fetchTime();
-      logger.info('✅ API probe successful - proceeding with REST klines preload');
+      recordWeight(1); // fetchTime = 1 weight
+      logger.info('✅ API accessible - starting rate-limited preload');
     } catch (probeError: any) {
       const msg = probeError?.message || '';
       if (msg.includes('418') || msg.includes('banned') || msg.includes('Too many') || msg.includes('-1003')) {
         const banMatch = msg.match(/banned until (\d+)/);
         const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
         const banDurationMs = Math.max(banUntil - Date.now(), 60 * 60 * 1000);
-        logger.warn(`🚫 API probe detected IP ban - skipping REST calls for ${Math.round(banDurationMs / 60000)} minutes`);
+        logger.warn(`🚫 IP banned - waiting ${Math.round(banDurationMs / 60000)} minutes`);
         setIpBan(banDurationMs);
         return;
       }
-      logger.warn(`⚠️ API probe failed (non-ban): ${msg}`);
+      logger.warn(`⚠️ Probe failed (non-ban): ${msg}`);
     }
 
-    // V5.73: Check if we were RECENTLY banned (within last 2 hours) - be extra cautious
-    const banExpiry = getIpBanExpiry();
-    if (banExpiry && Date.now() < banExpiry + 2 * 60 * 60 * 1000) {
-      logger.warn('⚠️ IP ban recently expired - skipping REST klines preload');
-      return;
-    }
-
-    // V5.73: SEQUENTIAL klines preload with 500ms delay
+    // V5.76: RATE-LIMITED SEQUENTIAL PRELOAD
+    let loaded = 0;
     let failed = 0;
-    let ipBanned = false;
+    let stopped = false;
 
-    for (let i = 0; i < symbolsNeedingRest.length && !ipBanned; i++) {
-      const symbol = symbolsNeedingRest[i];
+    for (let i = 0; i < symbols.length && !stopped; i++) {
+      const symbol = symbols[i];
       const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
+
+      // Check if we have weight budget
+      if (!canMakeRequest(RATE_LIMIT_CONFIG.KLINES_WEIGHT)) {
+        const waitTime = weightResetTime - Date.now();
+        if (waitTime > 0) {
+          logger.info(`⏳ Rate limit approaching - waiting ${Math.round(waitTime / 1000)}s for weight reset...`);
+          await new Promise(r => setTimeout(r, waitTime + 1000)); // Wait for reset + buffer
+          resetWeightIfNeeded();
+        }
+      }
 
       try {
         const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 220);
+        recordWeight(RATE_LIMIT_CONFIG.KLINES_WEIGHT);
+
         if (ohlcv && ohlcv.length > 0) {
           seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
-          loadedFromRest++;
+          loaded++;
+          logger.debug(`✅ [${i + 1}/${symbols.length}] ${binanceSymbol}: ${ohlcv.length} candles (weight: ${currentMinuteWeight}/${RATE_LIMIT_CONFIG.SAFE_WEIGHT_THRESHOLD})`);
         }
       } catch (error: any) {
+        const msg = error?.message || '';
         failed++;
-        if (error?.message?.includes('418') || error?.message?.includes('banned') || error?.message?.includes('Too many') || error?.message?.includes('-1003')) {
-          logger.warn('🚫 IP ban detected during klines preload - stopping REST calls');
-          setIpBan(60 * 60 * 1000);
-          ipBanned = true;
+
+        // Check for rate limit warning (429) or ban (418)
+        if (msg.includes('418') || msg.includes('-1003') || msg.includes('banned')) {
+          const banMatch = msg.match(/banned until (\d+)/);
+          const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
+          setIpBan(Math.max(banUntil - Date.now(), 60 * 60 * 1000));
+          logger.warn('🚫 IP ban detected - stopping preload');
+          stopped = true;
           break;
+        } else if (msg.includes('429') || msg.includes('Too many') || msg.includes('-1015')) {
+          // Rate limit warning - back off significantly
+          logger.warn('⚠️ Rate limit warning - backing off for 60s');
+          await new Promise(r => setTimeout(r, 60_000));
+          resetWeightIfNeeded();
+          i--; // Retry this symbol
+          failed--; // Don't count as failed
+          continue;
         }
-        logger.warn(`⚠️ Failed to preload klines for ${symbol}:`, error?.message);
+
+        logger.warn(`⚠️ Failed ${symbol}: ${msg}`);
       }
 
-      if (i + 1 < symbolsNeedingRest.length && !ipBanned) {
-        await new Promise(r => setTimeout(r, 500));
+      // Adaptive delay between requests
+      if (i + 1 < symbols.length && !stopped) {
+        const delay = getAdaptiveDelay();
+        await new Promise(r => setTimeout(r, delay));
       }
     }
 
-    logger.info(`✅ Klines preloaded: ${loadedFromLocal} local + ${loadedFromRest} REST (${failed} failed)`);
+    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed)`);
 
-    // BTC 1h candles (only if not loaded from local and not banned)
-    if (!ipBanned && !btc1hLocal) {
+    // BTC 1h candles for MTF filter
+    if (!stopped && canMakeRequest(RATE_LIMIT_CONFIG.KLINES_WEIGHT)) {
       try {
+        await new Promise(r => setTimeout(r, getAdaptiveDelay()));
         const ohlcv1h = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 50);
+        recordWeight(RATE_LIMIT_CONFIG.KLINES_WEIGHT);
         if (ohlcv1h && ohlcv1h.length > 0) {
           seedKlinesFromWebSocket('BTCUSDT', '1h', ohlcv1h);
-          logger.info(`✅ BTC 1h candles preloaded: ${ohlcv1h.length} candles for MTF filter`);
+          logger.info(`✅ BTC 1h candles: ${ohlcv1h.length} candles`);
         }
       } catch (error: any) {
-        logger.warn(`⚠️ Failed to preload BTC 1h candles: ${error?.message}`);
+        logger.warn(`⚠️ Failed BTC 1h: ${error?.message}`);
       }
     }
 
