@@ -3616,67 +3616,70 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
       logger.warn('⚠️ IP is banned - skipping klines preload, agents will use WebSocket stream');
       return;
     }
-    
+
     // Get a shared exchange instance for fetching
     const exchange = await getCachedExchange();
     if (!exchange) {
       logger.warn('⚠️ No exchange available for klines preload');
       return;
     }
-    
-    // V5.66: Fetch klines in PARALLEL batches (5 at a time) to speed up preload
-    // This is ~5x faster than sequential while still respecting rate limits
-    const BATCH_SIZE = 5;
+
+    // V5.73: Check if we were RECENTLY banned (within last 2 hours) - be extra cautious
+    const banExpiry = getIpBanExpiry();
+    if (banExpiry && Date.now() < banExpiry + 2 * 60 * 60 * 1000) {
+      logger.warn('⚠️ IP ban recently expired - being cautious, only preloading BTC');
+      // Only preload BTC for regime filter, skip individual symbols
+      try {
+        const ohlcv = await exchange.fetchOHLCV('BTC/USDT:USDT', '15m', undefined, 220);
+        if (ohlcv && ohlcv.length > 0) {
+          seedKlinesFromWebSocket('BTCUSDT', '15m', ohlcv);
+          logger.info(`✅ BTC klines preloaded (cautious mode): ${ohlcv.length} candles`);
+        }
+      } catch (error: any) {
+        logger.warn(`⚠️ Failed to preload BTC klines: ${error?.message}`);
+      }
+      return;
+    }
+
+    // V5.73: SEQUENTIAL klines preload to avoid IP bans
+    // Binance rate limits are strict - even batch of 5 was too aggressive
+    // Now we do 1 symbol at a time with 500ms delay between each
     let loaded = 0;
     let failed = 0;
     let ipBanned = false;
 
-    for (let i = 0; i < symbols.length && !ipBanned; i += BATCH_SIZE) {
-      const batch = symbols.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < symbols.length && !ipBanned; i++) {
+      const symbol = symbols[i];
+      const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
 
-      const results = await Promise.allSettled(
-        batch.map(async (symbol) => {
-          // Convert to Binance format for WS cache key
-          const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
+      try {
+        // Fetch 220 candles (enough for SMA200 + buffer)
+        const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 220);
 
-          // Fetch 220 candles (enough for SMA200 + buffer)
-          const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 220);
-
-          if (ohlcv && ohlcv.length > 0) {
-            // Seed the WebSocket cache
-            seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
-            return true;
-          }
-          return false;
-        })
-      );
-
-      // Process results
-      for (let j = 0; j < results.length; j++) {
-        const result = results[j];
-        if (result.status === 'fulfilled' && result.value) {
+        if (ohlcv && ohlcv.length > 0) {
+          // Seed the WebSocket cache
+          seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
           loaded++;
-        } else if (result.status === 'rejected') {
-          failed++;
-          const error = result.reason;
-          // Check for IP ban
-          if (error?.message?.includes('418') || error?.message?.includes('banned')) {
-            logger.warn('🚫 IP ban detected during klines preload - stopping');
-            setIpBan(30 * 60 * 1000); // 30 min ban
-            ipBanned = true;
-            break;
-          }
-          logger.warn(`⚠️ Failed to preload klines for ${batch[j]}:`, error?.message);
         }
+      } catch (error: any) {
+        failed++;
+        // Check for IP ban
+        if (error?.message?.includes('418') || error?.message?.includes('banned') || error?.message?.includes('Too many')) {
+          logger.warn('🚫 IP ban detected during klines preload - stopping');
+          setIpBan(30 * 60 * 1000); // 30 min ban
+          ipBanned = true;
+          break;
+        }
+        logger.warn(`⚠️ Failed to preload klines for ${symbol}:`, error?.message);
       }
 
-      // Small delay between batches to avoid rate limits (100ms between batches)
-      if (i + BATCH_SIZE < symbols.length && !ipBanned) {
-        await new Promise(r => setTimeout(r, 100));
+      // 500ms delay between each symbol to respect rate limits
+      if (i + 1 < symbols.length && !ipBanned) {
+        await new Promise(r => setTimeout(r, 500));
       }
     }
 
-    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed) [parallel batches of ${BATCH_SIZE}]`);
+    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed) [sequential with 500ms delay]`);
 
     // V5.50 FIX: Also preload BTC 1h candles for MTF filter
     try {
