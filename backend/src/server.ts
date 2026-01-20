@@ -3587,18 +3587,18 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // ============================================
 // V5.29: PRE-LOAD KLINES TO AVOID REST CALLS DURING AGENT STARTUP
 // ============================================
-// V5.76: RATE-LIMITED KLINES PRELOAD
-// Intelligent rate limiting that monitors Binance weight and adapts
+// ============================================
+// V5.76: ULTRA-CONSERVATIVE RATE-LIMITED KLINES PRELOAD
+// Designed to NEVER trigger IP bans
 // ============================================
 
-// Rate limiter state
 const RATE_LIMIT_CONFIG = {
-  MAX_WEIGHT_PER_MINUTE: 1200,      // Binance limit
-  SAFE_WEIGHT_THRESHOLD: 600,       // Stop if we reach this (50% of limit)
-  WARNING_WEIGHT_THRESHOLD: 400,    // Slow down if we reach this
-  BASE_DELAY_MS: 1000,              // 1 second between calls (conservative)
-  MAX_DELAY_MS: 5000,               // Max backoff delay
+  MAX_WEIGHT_PER_MINUTE: 1200,      // Binance hard limit
+  SAFE_WEIGHT_THRESHOLD: 200,       // Only use 16% of limit - VERY safe
+  BASE_DELAY_MS: 2000,              // 2 seconds between calls
+  MAX_DELAY_MS: 10000,              // 10s max backoff
   KLINES_WEIGHT: 5,                 // fetchOHLCV with limit 220 = ~5 weight
+  POST_BAN_EXTRA_DELAY_MS: 3000,    // Extra delay after recent ban
 };
 
 let currentMinuteWeight = 0;
@@ -3620,16 +3620,22 @@ function recordWeight(weight: number): void {
   currentMinuteWeight += weight;
 }
 
-function getAdaptiveDelay(): number {
+function getAdaptiveDelay(recentlyBanned: boolean): number {
   resetWeightIfNeeded();
-  // Exponential backoff based on current weight usage
+
+  // Extra conservative if recently banned
+  const baseDelay = recentlyBanned
+    ? RATE_LIMIT_CONFIG.BASE_DELAY_MS + RATE_LIMIT_CONFIG.POST_BAN_EXTRA_DELAY_MS
+    : RATE_LIMIT_CONFIG.BASE_DELAY_MS;
+
+  // Scale up based on weight usage
   const usageRatio = currentMinuteWeight / RATE_LIMIT_CONFIG.SAFE_WEIGHT_THRESHOLD;
-  if (usageRatio > 0.8) {
-    return RATE_LIMIT_CONFIG.MAX_DELAY_MS; // 5s if over 80%
-  } else if (usageRatio > 0.5) {
-    return RATE_LIMIT_CONFIG.BASE_DELAY_MS * 2; // 2s if over 50%
+  if (usageRatio > 0.7) {
+    return RATE_LIMIT_CONFIG.MAX_DELAY_MS;
+  } else if (usageRatio > 0.4) {
+    return baseDelay * 2;
   }
-  return RATE_LIMIT_CONFIG.BASE_DELAY_MS; // 1s default
+  return baseDelay;
 }
 
 async function preloadKlinesForActiveSymbols(): Promise<void> {
@@ -3651,13 +3657,21 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
       symbols.unshift('BTC/USDT:USDT');
     }
 
-    logger.info(`📊 Pre-loading klines for ${symbols.length} symbols`);
-
-    // Check if IP is banned
+    // Check if IP is currently banned
     if (isIpBanned()) {
       logger.warn('⚠️ IP is banned - skipping klines preload, agents will use WebSocket stream');
       return;
     }
+
+    // V5.76: Check if we were RECENTLY banned (within last 4 hours) - be EXTRA careful
+    const banExpiry = getIpBanExpiry();
+    const recentlyBanned = banExpiry > 0 && Date.now() < banExpiry + 4 * 60 * 60 * 1000;
+
+    if (recentlyBanned) {
+      logger.warn('⚠️ IP was recently banned - using ULTRA-CONSERVATIVE mode (5s delays)');
+    }
+
+    logger.info(`📊 Pre-loading klines for ${symbols.length} symbols ${recentlyBanned ? '[POST-BAN RECOVERY MODE]' : ''}`);
 
     // Get exchange instance
     const exchange = await getCachedExchange();
@@ -3666,12 +3680,19 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
       return;
     }
 
-    // V5.76: PROBE REQUEST with rate limit check
+    // V5.76: PROBE REQUEST - test if we're still banned
     try {
       logger.info('🔍 Testing API access...');
       resetWeightIfNeeded();
+
+      // Extra wait before probe if recently banned
+      if (recentlyBanned) {
+        logger.info('⏳ Post-ban safety delay (5s)...');
+        await new Promise(r => setTimeout(r, 5000));
+      }
+
       await exchange.fetchTime();
-      recordWeight(1); // fetchTime = 1 weight
+      recordWeight(1);
       logger.info('✅ API accessible - starting rate-limited preload');
     } catch (probeError: any) {
       const msg = probeError?.message || '';
@@ -3679,14 +3700,14 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
         const banMatch = msg.match(/banned until (\d+)/);
         const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
         const banDurationMs = Math.max(banUntil - Date.now(), 60 * 60 * 1000);
-        logger.warn(`🚫 IP banned - waiting ${Math.round(banDurationMs / 60000)} minutes`);
+        logger.warn(`🚫 Still IP banned - waiting ${Math.round(banDurationMs / 60000)} minutes`);
         setIpBan(banDurationMs);
         return;
       }
       logger.warn(`⚠️ Probe failed (non-ban): ${msg}`);
     }
 
-    // V5.76: RATE-LIMITED SEQUENTIAL PRELOAD
+    // V5.76: ULTRA-CONSERVATIVE SEQUENTIAL PRELOAD
     let loaded = 0;
     let failed = 0;
     let stopped = false;
@@ -3695,12 +3716,12 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
       const symbol = symbols[i];
       const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
 
-      // Check if we have weight budget
+      // Check weight budget - wait for reset if needed
       if (!canMakeRequest(RATE_LIMIT_CONFIG.KLINES_WEIGHT)) {
         const waitTime = weightResetTime - Date.now();
         if (waitTime > 0) {
-          logger.info(`⏳ Rate limit approaching - waiting ${Math.round(waitTime / 1000)}s for weight reset...`);
-          await new Promise(r => setTimeout(r, waitTime + 1000)); // Wait for reset + buffer
+          logger.info(`⏳ Weight limit reached - waiting ${Math.round(waitTime / 1000)}s for reset...`);
+          await new Promise(r => setTimeout(r, waitTime + 2000)); // Extra buffer
           resetWeightIfNeeded();
         }
       }
@@ -3712,13 +3733,13 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
         if (ohlcv && ohlcv.length > 0) {
           seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
           loaded++;
-          logger.debug(`✅ [${i + 1}/${symbols.length}] ${binanceSymbol}: ${ohlcv.length} candles (weight: ${currentMinuteWeight}/${RATE_LIMIT_CONFIG.SAFE_WEIGHT_THRESHOLD})`);
+          logger.info(`✅ [${i + 1}/${symbols.length}] ${binanceSymbol}: ${ohlcv.length} candles`);
         }
       } catch (error: any) {
         const msg = error?.message || '';
         failed++;
 
-        // Check for rate limit warning (429) or ban (418)
+        // IP BAN - stop immediately
         if (msg.includes('418') || msg.includes('-1003') || msg.includes('banned')) {
           const banMatch = msg.match(/banned until (\d+)/);
           const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
@@ -3726,10 +3747,11 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
           logger.warn('🚫 IP ban detected - stopping preload');
           stopped = true;
           break;
-        } else if (msg.includes('429') || msg.includes('Too many') || msg.includes('-1015')) {
-          // Rate limit warning - back off significantly
-          logger.warn('⚠️ Rate limit warning - backing off for 60s');
-          await new Promise(r => setTimeout(r, 60_000));
+        }
+        // RATE LIMIT WARNING - back off significantly
+        else if (msg.includes('429') || msg.includes('Too many') || msg.includes('-1015')) {
+          logger.warn('⚠️ Rate limit warning - backing off for 90s');
+          await new Promise(r => setTimeout(r, 90_000)); // 90s backoff
           resetWeightIfNeeded();
           i--; // Retry this symbol
           failed--; // Don't count as failed
@@ -3739,19 +3761,23 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
         logger.warn(`⚠️ Failed ${symbol}: ${msg}`);
       }
 
-      // Adaptive delay between requests
+      // Adaptive delay between requests (longer if recently banned)
       if (i + 1 < symbols.length && !stopped) {
-        const delay = getAdaptiveDelay();
+        const delay = getAdaptiveDelay(recentlyBanned);
+        if (i % 5 === 0) {
+          logger.info(`⏳ Delay: ${delay}ms before next symbol...`);
+        }
         await new Promise(r => setTimeout(r, delay));
       }
     }
 
-    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed)`);
+    const totalTime = symbols.length * (recentlyBanned ? 5 : 2); // Rough estimate in seconds
+    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed) in ~${totalTime}s`);
 
     // BTC 1h candles for MTF filter
     if (!stopped && canMakeRequest(RATE_LIMIT_CONFIG.KLINES_WEIGHT)) {
       try {
-        await new Promise(r => setTimeout(r, getAdaptiveDelay()));
+        await new Promise(r => setTimeout(r, getAdaptiveDelay(recentlyBanned)));
         const ohlcv1h = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 50);
         recordWeight(RATE_LIMIT_CONFIG.KLINES_WEIGHT);
         if (ohlcv1h && ohlcv1h.length > 0) {
