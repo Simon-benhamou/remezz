@@ -217,3 +217,17 @@ export function isBinanceRestIpBanned(): boolean {
 export function getBinanceIpBanExpiry(): number {
   return ipBannedUntil;
 }
+
+/**
+ * V5.73: Emergency reset of IP ban state
+ * Use when the ban has actually expired but state is stuck
+ */
+export function resetBinanceIpBan(): { wasSet: boolean; previousExpiry: number } {
+  const wasSet = ipBannedUntil > 0;
+  const previousExpiry = ipBannedUntil;
+  ipBannedUntil = 0;
+  if (wasSet) {
+    console.log(`🔄 IP ban state manually reset (was: ${new Date(previousExpiry).toISOString()})`);
+  }
+  return { wasSet, previousExpiry };
+}

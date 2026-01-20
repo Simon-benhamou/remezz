@@ -487,17 +487,20 @@ export function useSessionState(
       const breakdown = await api.getPerfBreakdown(sessionId);
       if (!mountedRef.current) return;
 
-      if (breakdown?.totals) {
+      // Only set performance from backend if it has actual data
+      // Otherwise, let fetchTrades calculate it from trades
+      if (breakdown?.totals && breakdown.totals.n > 0) {
         setPerformance({
-          winRate: breakdown.totals.n > 0 ? (breakdown.totals.wins / breakdown.totals.n) * 100 : 0,
+          winRate: (breakdown.totals.wins / breakdown.totals.n) * 100,
           expectancy: breakdown.totals.expectancy || 0,
-          totalTrades: breakdown.totals.n || 0,
+          totalTrades: breakdown.totals.n,
           wins: breakdown.totals.wins || 0,
           losses: breakdown.totals.losses || 0,
           avgWin: breakdown.totals.avgWin || 0,
           avgLoss: breakdown.totals.avgLoss || 0,
         });
       }
+      // If breakdown returns 0 trades, don't overwrite - let fetchTrades handle it
     } catch (err) {
       console.warn('Failed to fetch performance:', err);
     }
@@ -550,16 +553,18 @@ export function useSessionState(
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
+      // First batch: fetch all data in parallel (except trades which calculates performance)
       await Promise.all([
         fetchSessionStatus(),
         fetchAgentState(),
         fetchTicker(),
         fetchOrders(),
-        fetchTrades(),
-        fetchPerformance(),
         fetchParity(),
         fetchActivity(),
       ]);
+      // Then fetch trades which also calculates performance from the actual trades
+      // This ensures performance is always calculated from trades, not the Orders-based endpoint
+      await fetchTrades();
       setLastUpdate(Date.now());
     } finally {
       setIsLoading(false);
@@ -570,7 +575,6 @@ export function useSessionState(
     fetchTicker,
     fetchOrders,
     fetchTrades,
-    fetchPerformance,
     fetchParity,
     fetchActivity,
   ]);

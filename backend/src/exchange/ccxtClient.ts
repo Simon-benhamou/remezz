@@ -39,6 +39,19 @@ export function getIpBanExpiry(): number {
   return ipBannedUntil;
 }
 
+/**
+ * V5.73: Emergency reset of IP ban state in ccxtClient
+ */
+export function resetCcxtIpBan(): { wasSet: boolean; previousExpiry: number } {
+  const wasSet = ipBannedUntil > 0;
+  const previousExpiry = ipBannedUntil;
+  ipBannedUntil = 0;
+  if (wasSet) {
+    console.log(`🔄 CCXT IP ban state manually reset (was: ${new Date(previousExpiry).toISOString()})`);
+  }
+  return { wasSet, previousExpiry };
+}
+
 // V5.27: Check if markets are loaded
 export function areMarketsLoaded(): boolean {
   return globalMarketsCache !== null;

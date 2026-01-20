@@ -161,12 +161,29 @@ router.get("/parity", authenticateUser, async (req: AuthenticatedRequest, res) =
     });
 
     const verifiedTrades = parityResults.length;
-    const matchedTrades = parityResults.filter(r => r.overallMatch).length;
+
+    // Calculate matched trades using normalized exit reason comparison
+    // A trade is considered "matched" if:
+    // 1. DB says overallMatch = true, OR
+    // 2. The normalized exit reasons are the same (e.g., TRAIL vs TRAILING)
+    const matchedTrades = parityResults.filter(r => {
+      if (r.overallMatch) return true;
+      // Check if normalized exit reasons match (false mismatch due to naming)
+      const normalizedLive = normalizeExitReasonForDisplay(r.liveExitReason);
+      const normalizedBt = normalizeExitReasonForDisplay(r.btExitReason);
+      return normalizedLive === normalizedBt;
+    }).length;
+
     const matchRate = verifiedTrades > 0 ? (matchedTrades / verifiedTrades) * 100 : 100;
 
-    // Get mismatch details with normalized exit reasons
+    // Get actual mismatches (where normalized reasons differ)
     const mismatches = parityResults
-      .filter(r => !r.overallMatch)
+      .filter(r => {
+        if (r.overallMatch) return false;
+        const normalizedLive = normalizeExitReasonForDisplay(r.liveExitReason);
+        const normalizedBt = normalizeExitReasonForDisplay(r.btExitReason);
+        return normalizedLive !== normalizedBt;
+      })
       .slice(0, 10)
       .map(r => {
         const normalizedLive = normalizeExitReasonForDisplay(r.liveExitReason);
@@ -177,16 +194,12 @@ router.get("/parity", authenticateUser, async (req: AuthenticatedRequest, res) =
           side: r.side,
           liveExitReason: normalizedLive,
           btExitReason: normalizedBt,
-          // If normalized reasons match, this is actually a match (naming difference only)
-          isActualMismatch: normalizedLive !== normalizedBt,
           livePnlPct: r.livePnlPct,
           btPnlPct: r.btPnlPct,
           pnlDiff: r.btPnlPct != null ? r.livePnlPct - r.btPnlPct : null,
           details: r.mismatchDetails,
         };
-      })
-      // Filter out false mismatches where only naming differs
-      .filter(m => m.isActualMismatch);
+      });
 
     // Determine status based on match rate
     let status: 'healthy' | 'warning' | 'critical' = 'healthy';

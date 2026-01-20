@@ -877,3 +877,92 @@ router.get('/diagnose-apikeys', async (req: AuthenticatedRequest, res) => {
     });
   }
 });
+
+// =============================================================================
+// V5.73: IP Ban Management Endpoints
+// =============================================================================
+
+// Get current IP ban status
+router.get('/ip-ban-status', async (req, res) => {
+  try {
+    const { getBinanceIpBanExpiry, isBinanceRestIpBanned } = await import('../services/binanceRest.js');
+    const { getIpBanExpiry, isIpBanned } = await import('../exchange/ccxtClient.js');
+    const { globalRestCircuitBreaker } = await import('../services/globalRestCircuitBreaker.js');
+
+    const now = Date.now();
+    const restBanExpiry = getBinanceIpBanExpiry();
+    const ccxtBanExpiry = getIpBanExpiry();
+    const circuitState = globalRestCircuitBreaker.getState();
+    const circuitCooldown = globalRestCircuitBreaker.getRemainingCooldown();
+
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      binanceRest: {
+        isBanned: isBinanceRestIpBanned(),
+        banExpiry: restBanExpiry > 0 ? new Date(restBanExpiry).toISOString() : null,
+        banExpiryMs: restBanExpiry,
+        remainingMs: Math.max(0, restBanExpiry - now),
+        remainingMinutes: Math.max(0, Math.ceil((restBanExpiry - now) / 60000)),
+      },
+      ccxt: {
+        isBanned: isIpBanned(),
+        banExpiry: ccxtBanExpiry > 0 ? new Date(ccxtBanExpiry).toISOString() : null,
+        banExpiryMs: ccxtBanExpiry,
+        remainingMs: Math.max(0, ccxtBanExpiry - now),
+        remainingMinutes: Math.max(0, Math.ceil((ccxtBanExpiry - now) / 60000)),
+      },
+      circuitBreaker: {
+        state: circuitState,
+        remainingCooldownMs: circuitCooldown,
+        remainingCooldownMinutes: Math.ceil(circuitCooldown / 60000),
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error)
+    });
+  }
+});
+
+// Reset IP ban state (emergency recovery)
+router.post('/reset-ip-ban', async (req, res) => {
+  try {
+    const { resetBinanceIpBan } = await import('../services/binanceRest.js');
+    const { resetCcxtIpBan } = await import('../exchange/ccxtClient.js');
+    const { globalRestCircuitBreaker } = await import('../services/globalRestCircuitBreaker.js');
+
+    const restResult = resetBinanceIpBan();
+    const ccxtResult = resetCcxtIpBan();
+
+    // Also reset the circuit breaker
+    globalRestCircuitBreaker.forceClose();
+
+    console.log('🔄 IP ban state manually reset via API');
+
+    res.json({
+      success: true,
+      message: 'IP ban state has been reset. REST requests will be attempted again.',
+      binanceRest: {
+        wasSet: restResult.wasSet,
+        previousExpiry: restResult.previousExpiry > 0
+          ? new Date(restResult.previousExpiry).toISOString()
+          : null,
+      },
+      ccxt: {
+        wasSet: ccxtResult.wasSet,
+        previousExpiry: ccxtResult.previousExpiry > 0
+          ? new Date(ccxtResult.previousExpiry).toISOString()
+          : null,
+      },
+      circuitBreaker: 'forceClosed',
+      warning: 'If Binance actually banned your IP, requests will fail again and the ban will be re-detected.',
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error)
+    });
+  }
+});
