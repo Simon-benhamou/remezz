@@ -121,9 +121,9 @@ function emitEvent(event: RadarEvent): void {
     eventBuffer.pop();
   }
 
-  // Broadcast to connected clients
+  // Broadcast to ALL connected clients (no symbol filter - radar is global feed)
   if (broadcastFn) {
-    broadcastFn('radar_event', event, event.symbol);
+    broadcastFn('radar_event', event);  // No symbol = broadcast to all
   }
 
   // Log to console for debugging

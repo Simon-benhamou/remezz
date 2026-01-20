@@ -3,6 +3,18 @@ import { getTicker } from '../data/market.js';
 
 export const router = Router();
 
+// ============================================================================
+// V5.73: OHLCV Request Deduplication & Caching
+// Prevents IP bans from rapid chart timeframe switches
+// ============================================================================
+const OHLCV_CACHE_TTL_MS = 10_000; // 10 second cache for chart data
+const ohlcvCache = new Map<string, { data: any; timestamp: number }>();
+const ohlcvInflight = new Map<string, Promise<any>>(); // Dedupe in-flight requests
+
+function getOhlcvCacheKey(symbol: string, timeframe: string, limit: number): string {
+  return `${symbol}:${timeframe}:${limit}`;
+}
+
 // Get live ticker data for a symbol (POST to handle symbols with slashes)
 router.post('/ticker', async (req, res) => {
   try {
@@ -243,41 +255,97 @@ router.post('/history', async (req, res) => {
 });
 
 // Get OHLCV candlestick data for professional chart
+// V5.73: Added caching and request deduplication to prevent IP bans
 router.post('/ohlcv', async (req, res) => {
   try {
-    const { symbol, timeframe = '15m', limit = 300 } = req.body;
-    
+    const { symbol, timeframe = '15m', limit: requestedLimit = 300 } = req.body;
+
     if (!symbol) {
       return res.status(400).json({ error: 'Symbol parameter is required in request body' });
     }
-    
+
+    // V5.73: Cap the limit to prevent excessive REST calls
+    // 1m candles: max 200 (enough for ~3h of data)
+    // 15m candles: max 200 (enough for ~50h of data)
+    // 1h+ candles: max 300
+    const maxLimitByTimeframe: Record<string, number> = {
+      '1m': 200,
+      '5m': 200,
+      '15m': 200,
+      '1h': 300,
+      '4h': 300,
+    };
+    const maxLimit = maxLimitByTimeframe[timeframe] || 300;
+    const limit = Math.min(requestedLimit, maxLimit);
+
     const { getOHLCV } = await import('../data/market.js');
     const { resolveSymbol } = await import('../exchange/ccxtClient.js');
-    
+
     // Resolve symbol
     const resolvedSymbol = await resolveSymbol(symbol);
-    
-    // Get OHLCV data
-    const ohlcv = await getOHLCV(resolvedSymbol, timeframe, limit);
-    
-    // Convert to candlestick format
-    const candleData = ohlcv.map((candle) => ({
-      timestamp: new Date(candle[0]).toISOString(),
-      open: candle[1],
-      high: candle[2],
-      low: candle[3],
-      close: candle[4],
-      volume: candle[5]
-    }));
-    
-    res.json({
-      symbol: resolvedSymbol,
-      timeframe,
-      data: candleData,
-      count: candleData.length,
-      timestamp: Date.now(),
-      lastUpdate: new Date().toISOString()
-    });
+    const cacheKey = getOhlcvCacheKey(resolvedSymbol, timeframe, limit);
+
+    // V5.73: Check cache first
+    const cached = ohlcvCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && (now - cached.timestamp) < OHLCV_CACHE_TTL_MS) {
+      return res.json({
+        ...cached.data,
+        fromCache: true,
+        cacheAge: now - cached.timestamp,
+      });
+    }
+
+    // V5.73: Check for in-flight request (deduplication)
+    let dataPromise = ohlcvInflight.get(cacheKey);
+    if (!dataPromise) {
+      // No in-flight request, create new one
+      dataPromise = (async () => {
+        const ohlcv = await getOHLCV(resolvedSymbol, timeframe, limit);
+
+        // Convert to candlestick format
+        const candleData = ohlcv.map((candle: number[]) => ({
+          timestamp: new Date(candle[0]).toISOString(),
+          open: candle[1],
+          high: candle[2],
+          low: candle[3],
+          close: candle[4],
+          volume: candle[5]
+        }));
+
+        return {
+          symbol: resolvedSymbol,
+          timeframe,
+          data: candleData,
+          count: candleData.length,
+          timestamp: Date.now(),
+          lastUpdate: new Date().toISOString()
+        };
+      })();
+
+      ohlcvInflight.set(cacheKey, dataPromise);
+
+      // Clean up after request completes
+      dataPromise.finally(() => {
+        ohlcvInflight.delete(cacheKey);
+      });
+    }
+
+    const responseData = await dataPromise;
+
+    // V5.73: Cache the result
+    ohlcvCache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+
+    // Clean old cache entries periodically
+    if (ohlcvCache.size > 50) {
+      for (const [key, entry] of ohlcvCache.entries()) {
+        if ((now - entry.timestamp) > OHLCV_CACHE_TTL_MS * 3) {
+          ohlcvCache.delete(key);
+        }
+      }
+    }
+
+    res.json(responseData);
   } catch (err) {
     console.error('Failed to get OHLCV data:', err);
     res.status(502).json({

@@ -235,6 +235,8 @@ function mapApiOrder(apiOrder: any): Order {
 }
 
 function mapApiTrade(apiTrade: any): Trade {
+  // Backend returns createdAt: trade.exitTs, so check multiple field names
+  const exitTs = apiTrade.exitTs || apiTrade.exitTime || apiTrade.createdAt || '';
   return {
     id: apiTrade.id || '',
     sessionId: apiTrade.sessionId || '',
@@ -244,9 +246,9 @@ function mapApiTrade(apiTrade: any): Trade {
     entryPrice: Number(apiTrade.entryPrice || 0),
     exitPrice: Number(apiTrade.exitPrice || 0),
     entryTs: apiTrade.entryTs || apiTrade.entryTime || '',
-    exitTs: apiTrade.exitTs || apiTrade.exitTime || '',
+    exitTs,
     realizedPnlUsd: Number(apiTrade.realizedPnlUsd || apiTrade.pnlUsd || 0),
-    pctChange: Number(apiTrade.pctChange || 0),
+    pctChange: Number(apiTrade.pctChange || apiTrade.roiPct || 0),
     feesUsd: Number(apiTrade.feesUsd || 0),
     exitReason: apiTrade.exitReason,
     durationMinutes: apiTrade.durationMinutes,
@@ -438,11 +440,42 @@ export function useSessionState(
       if (!mountedRef.current) return;
 
       const arr = Array.isArray(tradesData) ? tradesData : (tradesData?.trades || []);
-      setTrades(arr.map(mapApiTrade));
+      const mappedTrades = arr.map(mapApiTrade);
+      setTrades(mappedTrades);
 
       // Update sparkline from recent trades
-      const recentPnls = arr.slice(0, 20).map((t: any) => Number(t.pctChange || 0)).reverse();
+      const recentPnls = arr.slice(0, 20).map((t: any) => Number(t.pctChange || t.roiPct || 0)).reverse();
       setSparklineData(recentPnls);
+
+      // Calculate performance from trades directly (more reliable than Order-based calculation)
+      if (mappedTrades.length > 0) {
+        const wins = mappedTrades.filter((t: Trade) => t.realizedPnlUsd > 0).length;
+        const losses = mappedTrades.filter((t: Trade) => t.realizedPnlUsd < 0).length;
+        const totalTrades = mappedTrades.length;
+        const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
+
+        const winningTrades = mappedTrades.filter((t: Trade) => t.pctChange > 0);
+        const losingTrades = mappedTrades.filter((t: Trade) => t.pctChange < 0);
+        const avgWin = winningTrades.length > 0
+          ? winningTrades.reduce((sum: number, t: Trade) => sum + t.pctChange, 0) / winningTrades.length
+          : 0;
+        const avgLoss = losingTrades.length > 0
+          ? losingTrades.reduce((sum: number, t: Trade) => sum + t.pctChange, 0) / losingTrades.length
+          : 0;
+
+        const winRateFrac = totalTrades > 0 ? wins / totalTrades : 0;
+        const expectancy = winRateFrac * avgWin + (1 - winRateFrac) * avgLoss;
+
+        setPerformance({
+          winRate,
+          expectancy,
+          totalTrades,
+          wins,
+          losses,
+          avgWin,
+          avgLoss,
+        });
+      }
     } catch (err) {
       console.warn('Failed to fetch trades:', err);
     }
@@ -749,10 +782,29 @@ export function useSessionState(
   }, [trades, position]);
 
   const roiPct = useMemo(() => {
-    const startBalance = Number(session?.profileJson?.startBalanceUsd || session?.profileJson?.startBalance) || 0;
-    if (startBalance <= 0) return 0;
-    return (netPnl / startBalance) * 100;
-  }, [netPnl, session]);
+    // Try to get start balance from multiple sources
+    const profileJson = session?.profileJson as Record<string, unknown> | undefined;
+    const startBalance = Number(
+      profileJson?.startBalanceUsd ||
+      profileJson?.startBalance ||
+      profileJson?.availableUsd ||
+      profileJson?.budget ||
+      0
+    );
+
+    // If we have a valid start balance, calculate ROI from it
+    if (startBalance > 0) {
+      return (netPnl / startBalance) * 100;
+    }
+
+    // Fallback: calculate average ROI from trades' pctChange values
+    if (trades.length > 0) {
+      const totalPctChange = trades.reduce((sum, t) => sum + (t.pctChange || 0), 0);
+      return totalPctChange;
+    }
+
+    return 0;
+  }, [netPnl, session, trades]);
 
   // ============================================================================
   // RETURN

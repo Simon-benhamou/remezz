@@ -106,9 +106,10 @@ export async function fetchBinanceOhlcv(
         const banMatch = parsed.msg?.match(/banned until (\d+)/);
         if (banMatch) {
           let banTimestamp = parseInt(banMatch[1], 10);
-          // Binance returns timestamp in milliseconds, ensure it's in the future
-          // If timestamp looks like seconds (< year 2100), convert to milliseconds
-          if (banTimestamp < 4000000000000) {
+          // Binance returns timestamp in milliseconds
+          // Only convert if it looks like seconds (< 10 billion = year ~2286 in seconds)
+          // Current ms timestamps are ~1.7 trillion, so anything > 100 billion is already ms
+          if (banTimestamp < 100_000_000_000) {
             banTimestamp = banTimestamp * 1000;
           }
           // Add cooldown period after ban expires

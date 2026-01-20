@@ -20,9 +20,10 @@ const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 const SYNTHETIC_WARN_INTERVAL_MS = 60_000;
 const syntheticWarnedAt = new Map<string, number>();
 
-// Global rate limiter for REST backfill to prevent IP bans
+// V5.73: Global rate limiter for REST backfill to prevent IP bans
 // When multiple agents start simultaneously, queue their backfills
-const REST_BACKFILL_MIN_DELAY_MS = 3000; // 3 seconds between backfills
+// Increased from 3s to 5s to be more conservative with Binance rate limits
+const REST_BACKFILL_MIN_DELAY_MS = 5000; // 5 seconds between backfills
 let lastRestBackfillTime = 0;
 const backfillQueue: Array<() => void> = [];
 let backfillQueueProcessing = false;
