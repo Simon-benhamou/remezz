@@ -7,10 +7,14 @@ import {
   EyeOutlined,
   ExclamationCircleOutlined,
   ReloadOutlined,
+  FireOutlined,
+  RiseOutlined,
+  FallOutlined,
 } from '@ant-design/icons';
-import { TrendingUp, TrendingDown, Clock, Zap, Target, AlertTriangle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Clock, Zap, Target, AlertTriangle, Thermometer, Activity } from 'lucide-react';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
+import { openWS } from '../ws';
 
 const { Text, Title } = Typography;
 
@@ -22,6 +26,17 @@ interface AgentLog {
   message: string;
   level: 'info' | 'warn' | 'error';
   details?: Record<string, any>;
+}
+
+// V5.71: Signal Radar events from WebSocket
+interface RadarEvent {
+  type: 'symbol_proximity' | 'market_regime' | 'market_volatility' | 'position_update' | 'opportunity_alert';
+  severity: 'info' | 'warning' | 'success';
+  title: string;
+  message: string;
+  symbol?: string;
+  data?: Record<string, any>;
+  timestamp: number;
 }
 
 interface AgentState {
@@ -37,11 +52,43 @@ type BiasFilter = 'all' | 'long' | 'short' | 'watch';
 
 export default function FeedPage() {
   const [logs, setLogs] = React.useState<AgentLog[]>([]);
+  const [radarEvents, setRadarEvents] = React.useState<RadarEvent[]>([]);
   const [agentStates, setAgentStates] = React.useState<AgentState[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [filterType, setFilterType] = React.useState<FilterType>('all');
   const [biasFilter, setBiasFilter] = React.useState<BiasFilter>('all');
   const { mode } = useMode();
+  const wsRef = React.useRef<ReturnType<typeof openWS> | null>(null);
+
+  // V5.71: WebSocket listener for radar events
+  React.useEffect(() => {
+    const API_BASE = (import.meta as any).env.VITE_API_BASE || 'http://localhost:4000';
+    const apiKey = localStorage.getItem('apiKey') || '';
+
+    if (!apiKey) return;
+
+    wsRef.current = openWS(
+      API_BASE,
+      apiKey,
+      undefined,
+      (msg: any) => {
+        if (msg?.type === 'radar_event' && msg?.data) {
+          const event = msg.data as RadarEvent;
+          setRadarEvents(prev => [event, ...prev].slice(0, 50)); // Keep last 50 events
+        }
+      },
+      undefined,
+      undefined,
+      undefined
+    );
+
+    return () => {
+      try {
+        wsRef.current?.close();
+      } catch {}
+      wsRef.current = null;
+    };
+  }, []);
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
@@ -103,6 +150,29 @@ export default function FeedPage() {
       default: return { icon: <EyeOutlined />, color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', label: log.kind.toUpperCase() };
     }
   };
+
+  // V5.71: Get radar event display info
+  const getRadarMeta = (event: RadarEvent) => {
+    switch (event.type) {
+      case 'symbol_proximity':
+        const score = event.data?.newScore as number | undefined;
+        if (score && score >= 70) return { icon: <FireOutlined />, color: '#f97316', bg: 'rgba(249, 115, 22, 0.1)', label: 'HOT' };
+        if (score && score >= 50) return { icon: <Thermometer size={14} />, color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.1)', label: 'WARM' };
+        return { icon: <Activity size={14} />, color: '#64748b', bg: 'rgba(100, 116, 139, 0.08)', label: 'PROXIMITY' };
+      case 'market_regime':
+        const isBull = event.data?.newRegime === 'BULL';
+        return { icon: isBull ? <RiseOutlined /> : <FallOutlined />, color: isBull ? '#4ade80' : '#f87171', bg: isBull ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', label: isBull ? 'BULL' : 'BEAR' };
+      case 'market_volatility':
+        const isHigh = event.data?.newVolatility === 'HIGH';
+        return { icon: <Zap size={14} />, color: isHigh ? '#f97316' : '#64748b', bg: isHigh ? 'rgba(249, 115, 22, 0.1)' : 'rgba(100, 116, 139, 0.08)', label: 'VOLATILITY' };
+      case 'position_update':
+        return { icon: <ThunderboltOutlined />, color: event.severity === 'success' ? '#4ade80' : '#fbbf24', bg: event.severity === 'success' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(251, 191, 36, 0.1)', label: 'POSITION' };
+      case 'opportunity_alert':
+        return { icon: <Target size={14} />, color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.1)', label: 'OPPORTUNITY' };
+    }
+  };
+
+  const formatRadarTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   // Parse tick message to extract status
   const parseTickStatus = (message: string): { status: string; price?: string; bias?: string; sinceCandle?: string } | null => {
@@ -223,6 +293,80 @@ export default function FeedPage() {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* V5.71: Signal Radar - Real-time market intelligence */}
+      <div style={{ ...cardStyle, padding: 0, marginBottom: 20 }}>
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(148, 163, 184, 0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Activity size={14} style={{ color: '#f97316' }} />
+            <Text style={{ color: '#f8fafc', fontWeight: 600 }}>Signal Radar</Text>
+            <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(249, 115, 22, 0.1)', color: '#f97316', fontSize: 10, margin: 0 }}>
+              LIVE
+            </Tag>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#f97316', animation: 'pulse 2s infinite' }} />
+            <Text style={{ color: '#64748b', fontSize: 11 }}>WebSocket</Text>
+          </div>
+        </div>
+
+        {radarEvents.length === 0 ? (
+          <div style={{ padding: 24, textAlign: 'center' }}>
+            <Text style={{ color: '#64748b', fontSize: 13 }}>
+              Waiting for market events... Signal changes will appear here in real-time.
+            </Text>
+          </div>
+        ) : (
+          <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+            {radarEvents.map((event, idx) => {
+              const meta = getRadarMeta(event);
+              const symbol = event.symbol?.replace('/USDT:USDT', '').replace('/USDT', '');
+
+              return (
+                <div
+                  key={`${event.timestamp}-${idx}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 12,
+                    padding: '10px 20px',
+                    borderBottom: '1px solid rgba(148, 163, 184, 0.04)',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(148, 163, 184, 0.03)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  {/* Time */}
+                  <Text style={{ color: '#64748b', fontSize: 11, minWidth: 65, fontFamily: 'monospace' }}>
+                    {formatRadarTime(event.timestamp)}
+                  </Text>
+
+                  {/* Symbol Tag (if present) */}
+                  {symbol && (
+                    <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(148, 163, 184, 0.1)', color: '#f8fafc', fontSize: 10, fontWeight: 600, margin: 0 }}>
+                      {symbol}
+                    </Tag>
+                  )}
+
+                  {/* Status Tag */}
+                  <Tag style={{ borderRadius: 4, border: 'none', background: meta.bg, color: meta.color, fontSize: 10, fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {meta.icon}
+                    {meta.label}
+                  </Tag>
+
+                  {/* Content */}
+                  <div style={{ flex: 1 }}>
+                    <Text style={{ color: '#f8fafc', fontSize: 12 }}>{event.title.replace(/\[.*?\]\s*/, '')}</Text>
+                    <div style={{ marginTop: 2 }}>
+                      <Text style={{ color: '#94a3b8', fontSize: 11 }}>{event.message}</Text>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Activity Feed */}
