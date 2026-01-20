@@ -29,6 +29,7 @@ import { router as backtestRouter } from "./routes/backtest.js";
 // Services
 import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket, seedKlinesFromWebSocket, toBinanceSymbolId } from "./services/binanceWebSocket.js";
 import { initNotificationService } from "./services/notificationService.js";
+import { setRadarBroadcast } from "./services/signalRadarService.js";
 import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDeduplicator.js";
 import { orderQueue } from "./services/orderQueue.js";
 
@@ -3430,6 +3431,9 @@ function broadcast(type: string, data: any, symbol?: string) {
 
 // Initialize notification service with broadcast function
 initNotificationService(broadcast);
+
+// V5.71: Initialize signal radar with broadcast function
+setRadarBroadcast(broadcast);
 
 // ============================================
 // INITIALIZATION

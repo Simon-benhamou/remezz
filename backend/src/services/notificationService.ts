@@ -19,6 +19,7 @@
  */
 
 import { createLogger } from '../utils/logger.js';
+import { notifyRegimeChangeTelegram } from '../utils/notifications.js';
 
 const logger = createLogger('notifications');
 
@@ -307,10 +308,13 @@ export function notifyRegimeChange(params: {
   };
   
   logger.info(`📢 [REGIME CHANGE] ${wasBull ? 'BULL' : 'BEAR'} → ${isBull ? 'BULL' : 'BEAR'} | BTC=$${params.btcPrice.toFixed(0)} vs SMA200=$${params.sma200.toFixed(0)}`);
-  
+
   if (broadcastFn) {
     broadcastFn('trade_notification', notification);
   }
+
+  // V5.71: Send to Telegram
+  notifyRegimeChangeTelegram(params);
 }
 
 // =============================================================================

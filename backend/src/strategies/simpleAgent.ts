@@ -82,6 +82,14 @@ import {
   type Candle as NfsCandle,
   DEFAULT_NFS_CONFIG,
 } from '../services/nfsRealtimeExit.js';
+import {
+  updateSymbolState,
+  updateMarketState,
+  calculateProximityScore,
+  logEntry as radarLogEntry,
+  logExit as radarLogExit,
+  type SignalFeatures,
+} from '../services/signalRadarService.js';
 
 const logger = createLogger('agent');
 
@@ -1905,8 +1913,39 @@ export class SimpleAgent {
           // 📢 Broadcast updated market conditions to dashboard
           this.config.onMarketConditions?.(this.lastMarketConditions);
         }
+
+        // V5.71: Update Signal Radar with current state
+        const radarFeatures: SignalFeatures = {
+          roc: f.roc || 0,
+          volRatio: f.volRatio,
+          bbDistance,
+          atrPct: 0, // Will be calculated if signal is valid
+          trendStrength: 0,
+        };
+        const currentRegime = f.btcInBullRegime ? 'BULL' : (f.btcInBearRegime ? 'BEAR' : 'NEUTRAL');
+        const proximityScore = calculateProximityScore(radarFeatures, currentRegime, !!this.position);
+
+        // Calculate PnL if in position
+        let positionPnlPct: number | undefined;
+        if (this.position) {
+          positionPnlPct = this.position.side === 'long'
+            ? ((currentPrice - this.position.entryPrice) / this.position.entryPrice) * 100
+            : ((this.position.entryPrice - currentPrice) / this.position.entryPrice) * 100;
+        }
+
+        updateSymbolState({
+          symbol,
+          proximityScore,
+          regime: currentRegime,
+          features: radarFeatures,
+          lastUpdate: Date.now(),
+          inPosition: !!this.position,
+          positionSide: this.position?.side,
+          positionPnlPct,
+          trailingActive: this.position?.trailingActive,
+        });
       }
-      
+
       if (signal.valid && signal.side) {
         // V5.56 DEBUG: Log BTC regime state for parity debugging
         // This helps identify cases where live enters but backtest wouldn't

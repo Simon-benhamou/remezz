@@ -323,3 +323,33 @@ Time: ${new Date().toLocaleString()}
     return false;
   }
 }
+
+/**
+ * V5.71: Notify when BTC regime changes (goes to Telegram)
+ */
+export async function notifyRegimeChangeTelegram(params: {
+  newRegime: 'bull' | 'bear';
+  btcPrice: number;
+  sma200: number;
+}): Promise<void> {
+  if (!isEnabled) return;
+
+  const isBull = params.newRegime === 'bull';
+  const emoji = isBull ? '🐂' : '🐻';
+  const direction = isBull ? 'BULL' : 'BEAR';
+  const action = isBull ? 'crossed above' : 'dropped below';
+
+  const message = `
+${emoji} REGIME CHANGE → ${direction}
+
+BTC ${action} SMA200
+Price: $${params.btcPrice.toFixed(0)}
+SMA200: $${params.sma200.toFixed(0)}
+
+Strategy: ${isBull ? 'LONG only' : 'SHORT only'}
+
+⏰ ${new Date().toLocaleTimeString()}
+  `.trim();
+
+  await sendTelegramMessage(message);
+}
