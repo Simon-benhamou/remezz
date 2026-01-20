@@ -1,6 +1,7 @@
 import ccxt from 'ccxt';
 import { createHash } from 'crypto';
 import { getConfig } from '../utils/env.js';
+import { binanceRestQueue, BINANCE_WEIGHTS } from '../services/binanceRestQueue.js';
 
 // User-specific exchange instances for authenticated operations
 const userExchanges: Map<string, any> = new Map();
@@ -162,8 +163,8 @@ function mapExchangeId(exchangeId: string, type: 'spot'|'swap' = 'spot'): string
 }
 
 /**
- * V5.25: Load markets ONCE at server startup
- * This should be called early in server initialization
+ * V5.78: Load markets ONCE at server startup via queue
+ * Uses BinanceRestQueue for rate limiting
  * Returns true if successful, false if banned/failed
  */
 export async function preloadMarkets(): Promise<boolean> {
@@ -171,23 +172,26 @@ export async function preloadMarkets(): Promise<boolean> {
     console.log('✅ Markets already preloaded, skipping');
     return true;
   }
-  
-  if (isIpBanned()) {
-    console.warn('🚫 Cannot preload markets - IP is banned until', new Date(ipBannedUntil).toISOString());
-    return false;
-  }
-  
+
   try {
-    console.log('📡 Preloading markets (ONCE at startup)...');
+    console.log('📡 Preloading markets via queue...');
     const exchangeId = getConfig().EXCHANGE_ID || 'binance';
     const ccxtExchangeId = mapExchangeId(exchangeId, 'swap');
     const Klass: any = (ccxt as any)[ccxtExchangeId];
-    const inst = new Klass({ enableRateLimit: true, rateLimit: 1000 });
+    const inst = new Klass({ enableRateLimit: false }); // Queue handles rate limiting
     inst.options = inst.options || {};
     inst.options.defaultType = 'swap';
-    
-    await inst.loadMarkets();
-    
+
+    // Load markets via queue (high priority since startup depends on it)
+    await binanceRestQueue.enqueue(
+      () => inst.loadMarkets(),
+      {
+        weight: BINANCE_WEIGHTS.LOAD_MARKETS,
+        priority: 'high',
+        tag: 'loadMarkets',
+      }
+    );
+
     globalMarketsCache = {
       markets: inst.markets,
       markets_by_id: inst.markets_by_id,
@@ -195,17 +199,10 @@ export async function preloadMarkets(): Promise<boolean> {
       currencies: inst.currencies,
       loadedAt: Date.now(),
     };
-    
+
     console.log(`✅ Markets preloaded: ${Object.keys(inst.markets).length} symbols cached`);
     return true;
   } catch (e: any) {
-    // Check if it's an IP ban
-    if (e?.message?.includes('418') || e?.message?.includes('banned')) {
-      const match = e.message?.match(/banned until (\d+)/);
-      if (match) {
-        setIpBan(parseInt(match[1], 10));
-      }
-    }
     console.error('❌ Failed to preload markets:', e?.message);
     return false;
   }

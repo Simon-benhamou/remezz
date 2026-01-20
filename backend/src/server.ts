@@ -32,7 +32,8 @@ import { initNotificationService } from "./services/notificationService.js";
 import { setRadarBroadcast, getRecentRadarEvents } from "./services/signalRadarService.js";
 import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDeduplicator.js";
 import { orderQueue } from "./services/orderQueue.js";
-import { loadCandlesFromDB, startCandleUpdateJob, stopCandleUpdateJob, seedFromLocalFiles } from "./services/candleCache.js";
+import { binanceRestQueue, BINANCE_WEIGHTS } from "./services/binanceRestQueue.js";
+import { seedFromLocalFiles, seedFreshCandles, startCandleRefreshJob, stopCandleRefreshJob } from "./services/candleCache.js";
 
 // Strategy
 import {
@@ -3535,7 +3536,7 @@ const shutdown = async (signal: string = 'UNKNOWN') => {
     logger.info(`   ✅ All agents stopped (${stopPromises.length} total)`);
 
     // Step 4: Stop order queue
-    logger.info('🛑 [4/6] Stopping order queue...');
+    logger.info('🛑 [4/7] Stopping order queue...');
     try {
       const { orderQueue } = await import('./services/orderQueue.js');
       orderQueue.stop();
@@ -3544,17 +3545,27 @@ const shutdown = async (signal: string = 'UNKNOWN') => {
       logger.warn(`   ⚠️ Error stopping order queue: ${err.message}`);
     }
 
-    // Step 5: Stop candle update job
-    logger.info('🛑 [5/6] Stopping candle update job...');
+    // Step 5: Stop REST API queue
+    logger.info('🛑 [5/7] Stopping REST API queue...');
     try {
-      stopCandleUpdateJob();
-      logger.info('   ✅ Candle update job stopped');
+      binanceRestQueue.pause();
+      binanceRestQueue.clear('Server shutdown');
+      logger.info('   ✅ REST API queue stopped');
     } catch (err: any) {
-      logger.warn(`   ⚠️ Error stopping candle update job: ${err.message}`);
+      logger.warn(`   ⚠️ Error stopping REST queue: ${err.message}`);
     }
 
-    // Step 6: Disconnect database
-    logger.info('🛑 [6/6] Disconnecting database...');
+    // Step 6: Stop candle refresh job
+    logger.info('🛑 [6/7] Stopping candle refresh job...');
+    try {
+      stopCandleRefreshJob();
+      logger.info('   ✅ Candle refresh job stopped');
+    } catch (err: any) {
+      logger.warn(`   ⚠️ Error stopping candle refresh job: ${err.message}`);
+    }
+
+    // Step 7: Disconnect database
+    logger.info('🛑 [7/7] Disconnecting database...');
     await disconnectDatabase();
     logger.info('   ✅ Database disconnected');
 
@@ -3593,216 +3604,6 @@ process.on('SIGINT', () => shutdown('SIGINT'));
     logger.warn('WebSocket init failed:', e); 
   }
 })();
-
-// ============================================
-// V5.29: PRE-LOAD KLINES TO AVOID REST CALLS DURING AGENT STARTUP
-// ============================================
-// ============================================
-// V5.76: ULTRA-CONSERVATIVE RATE-LIMITED KLINES PRELOAD
-// Designed to NEVER trigger IP bans
-// ============================================
-
-const RATE_LIMIT_CONFIG = {
-  MAX_WEIGHT_PER_MINUTE: 1200,      // Binance hard limit
-  SAFE_WEIGHT_THRESHOLD: 200,       // Only use 16% of limit - VERY safe
-  BASE_DELAY_MS: 2000,              // 2 seconds between calls
-  MAX_DELAY_MS: 10000,              // 10s max backoff
-  KLINES_WEIGHT: 5,                 // fetchOHLCV with limit 220 = ~5 weight
-  POST_BAN_EXTRA_DELAY_MS: 3000,    // Extra delay after recent ban
-};
-
-let currentMinuteWeight = 0;
-let weightResetTime = Date.now() + 60_000;
-
-function resetWeightIfNeeded(): void {
-  if (Date.now() > weightResetTime) {
-    currentMinuteWeight = 0;
-    weightResetTime = Date.now() + 60_000;
-  }
-}
-
-function canMakeRequest(weight: number): boolean {
-  resetWeightIfNeeded();
-  return currentMinuteWeight + weight < RATE_LIMIT_CONFIG.SAFE_WEIGHT_THRESHOLD;
-}
-
-function recordWeight(weight: number): void {
-  currentMinuteWeight += weight;
-}
-
-function getAdaptiveDelay(recentlyBanned: boolean): number {
-  resetWeightIfNeeded();
-
-  // Extra conservative if recently banned
-  const baseDelay = recentlyBanned
-    ? RATE_LIMIT_CONFIG.BASE_DELAY_MS + RATE_LIMIT_CONFIG.POST_BAN_EXTRA_DELAY_MS
-    : RATE_LIMIT_CONFIG.BASE_DELAY_MS;
-
-  // Scale up based on weight usage
-  const usageRatio = currentMinuteWeight / RATE_LIMIT_CONFIG.SAFE_WEIGHT_THRESHOLD;
-  if (usageRatio > 0.7) {
-    return RATE_LIMIT_CONFIG.MAX_DELAY_MS;
-  } else if (usageRatio > 0.4) {
-    return baseDelay * 2;
-  }
-  return baseDelay;
-}
-
-async function preloadKlinesForActiveSymbols(): Promise<void> {
-  try {
-    // Get unique symbols from active sessions
-    const activeSessions = await prisma.agentSession.findMany({
-      where: { stoppedAt: null, haltedAt: null },
-      select: { symbol: true }
-    });
-
-    if (activeSessions.length === 0) {
-      logger.info('📋 No active sessions - skipping klines preload');
-      return;
-    }
-
-    // Get unique symbols + always include BTC for regime filter
-    const symbols = [...new Set(activeSessions.map(s => s.symbol))];
-    if (!symbols.some(s => s.includes('BTC'))) {
-      symbols.unshift('BTC/USDT:USDT');
-    }
-
-    // Check if IP is currently banned
-    if (isIpBanned()) {
-      logger.warn('⚠️ IP is banned - skipping klines preload, agents will use WebSocket stream');
-      return;
-    }
-
-    // V5.76: Check if we were RECENTLY banned (within last 4 hours) - be EXTRA careful
-    const banExpiry = getIpBanExpiry();
-    const recentlyBanned = banExpiry > 0 && Date.now() < banExpiry + 4 * 60 * 60 * 1000;
-
-    if (recentlyBanned) {
-      logger.warn('⚠️ IP was recently banned - using ULTRA-CONSERVATIVE mode (5s delays)');
-    }
-
-    logger.info(`📊 Pre-loading klines for ${symbols.length} symbols ${recentlyBanned ? '[POST-BAN RECOVERY MODE]' : ''}`);
-
-    // Get exchange instance
-    const exchange = await getCachedExchange();
-    if (!exchange) {
-      logger.warn('⚠️ No exchange available for klines preload');
-      return;
-    }
-
-    // V5.76: PROBE REQUEST - test if we're still banned
-    try {
-      logger.info('🔍 Testing API access...');
-      resetWeightIfNeeded();
-
-      // Extra wait before probe if recently banned
-      if (recentlyBanned) {
-        logger.info('⏳ Post-ban safety delay (5s)...');
-        await new Promise(r => setTimeout(r, 5000));
-      }
-
-      await exchange.fetchTime();
-      recordWeight(1);
-      logger.info('✅ API accessible - starting rate-limited preload');
-    } catch (probeError: any) {
-      const msg = probeError?.message || '';
-      if (msg.includes('418') || msg.includes('banned') || msg.includes('Too many') || msg.includes('-1003')) {
-        const banMatch = msg.match(/banned until (\d+)/);
-        const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
-        const banDurationMs = Math.max(banUntil - Date.now(), 60 * 60 * 1000);
-        logger.warn(`🚫 Still IP banned - waiting ${Math.round(banDurationMs / 60000)} minutes`);
-        setIpBan(banDurationMs);
-        return;
-      }
-      logger.warn(`⚠️ Probe failed (non-ban): ${msg}`);
-    }
-
-    // V5.76: ULTRA-CONSERVATIVE SEQUENTIAL PRELOAD
-    let loaded = 0;
-    let failed = 0;
-    let stopped = false;
-
-    for (let i = 0; i < symbols.length && !stopped; i++) {
-      const symbol = symbols[i];
-      const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
-
-      // Check weight budget - wait for reset if needed
-      if (!canMakeRequest(RATE_LIMIT_CONFIG.KLINES_WEIGHT)) {
-        const waitTime = weightResetTime - Date.now();
-        if (waitTime > 0) {
-          logger.info(`⏳ Weight limit reached - waiting ${Math.round(waitTime / 1000)}s for reset...`);
-          await new Promise(r => setTimeout(r, waitTime + 2000)); // Extra buffer
-          resetWeightIfNeeded();
-        }
-      }
-
-      try {
-        const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 220);
-        recordWeight(RATE_LIMIT_CONFIG.KLINES_WEIGHT);
-
-        if (ohlcv && ohlcv.length > 0) {
-          seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
-          loaded++;
-          logger.info(`✅ [${i + 1}/${symbols.length}] ${binanceSymbol}: ${ohlcv.length} candles`);
-        }
-      } catch (error: any) {
-        const msg = error?.message || '';
-        failed++;
-
-        // IP BAN - stop immediately
-        if (msg.includes('418') || msg.includes('-1003') || msg.includes('banned')) {
-          const banMatch = msg.match(/banned until (\d+)/);
-          const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
-          setIpBan(Math.max(banUntil - Date.now(), 60 * 60 * 1000));
-          logger.warn('🚫 IP ban detected - stopping preload');
-          stopped = true;
-          break;
-        }
-        // RATE LIMIT WARNING - back off significantly
-        else if (msg.includes('429') || msg.includes('Too many') || msg.includes('-1015')) {
-          logger.warn('⚠️ Rate limit warning - backing off for 90s');
-          await new Promise(r => setTimeout(r, 90_000)); // 90s backoff
-          resetWeightIfNeeded();
-          i--; // Retry this symbol
-          failed--; // Don't count as failed
-          continue;
-        }
-
-        logger.warn(`⚠️ Failed ${symbol}: ${msg}`);
-      }
-
-      // Adaptive delay between requests (longer if recently banned)
-      if (i + 1 < symbols.length && !stopped) {
-        const delay = getAdaptiveDelay(recentlyBanned);
-        if (i % 5 === 0) {
-          logger.info(`⏳ Delay: ${delay}ms before next symbol...`);
-        }
-        await new Promise(r => setTimeout(r, delay));
-      }
-    }
-
-    const totalTime = symbols.length * (recentlyBanned ? 5 : 2); // Rough estimate in seconds
-    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed) in ~${totalTime}s`);
-
-    // BTC 1h candles for MTF filter
-    if (!stopped && canMakeRequest(RATE_LIMIT_CONFIG.KLINES_WEIGHT)) {
-      try {
-        await new Promise(r => setTimeout(r, getAdaptiveDelay(recentlyBanned)));
-        const ohlcv1h = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 50);
-        recordWeight(RATE_LIMIT_CONFIG.KLINES_WEIGHT);
-        if (ohlcv1h && ohlcv1h.length > 0) {
-          seedKlinesFromWebSocket('BTCUSDT', '1h', ohlcv1h);
-          logger.info(`✅ BTC 1h candles: ${ohlcv1h.length} candles`);
-        }
-      } catch (error: any) {
-        logger.warn(`⚠️ Failed BTC 1h: ${error?.message}`);
-      }
-    }
-
-  } catch (error) {
-    logger.warn('⚠️ Failed to preload klines:', error);
-  }
-}
 
 // Restore active sessions - ONLY restore sessions that exist in DB, don't create new ones
 // This function is called AFTER markets + WebSocket are ready
@@ -3895,17 +3696,23 @@ async function restoreActiveSessions() {
 
             // 📊 CRITICAL: Fetch existing positions from Binance to seed cache
             // WebSocket user data stream only sends updates, not initial state!
-            // V5.74: Only attempt if not IP banned
+            // V5.78: Use queue for rate limiting
             try {
-              const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
-              if (!isIpBanned() && globalRestCircuitBreaker.canMakeRequest() && exchange.fetchPositions) {
-                logger.info(`📊 [LIVE] Fetching existing positions from Binance...`);
-                const positions = await exchangeAPIDeduplicator.execute(
-                  makeFetchPositionsKey(userId),
-                  () => exchange.fetchPositions!(),
-                  30_000,
-                  `restore_session_${userId}`
-                ) as any[];
+              if (exchange.fetchPositions) {
+                logger.info(`📊 [LIVE] Fetching existing positions via queue...`);
+                const positions = await binanceRestQueue.enqueue<any[]>(
+                  () => exchangeAPIDeduplicator.execute(
+                    makeFetchPositionsKey(userId),
+                    () => exchange.fetchPositions!(),
+                    30_000,
+                    `restore_session_${userId}`
+                  ),
+                  {
+                    weight: BINANCE_WEIGHTS.FETCH_POSITIONS,
+                    priority: 'high',
+                    tag: `fetchPositions_${userId}`,
+                  }
+                );
                 let seededCount = 0;
 
                 for (const pos of positions) {
@@ -3936,36 +3743,29 @@ async function restoreActiveSessions() {
                 if (seededCount > 0) {
                   logger.info(`✅ [LIVE] Position cache seeded with ${seededCount} existing positions`);
                 }
-
-                // Mark as seeded
-                markPositionCacheSeeded(userId);
-              } else if (isIpBanned()) {
-                logger.warn(`⚠️ [LIVE] IP banned - loading positions from database instead`);
-                // Load positions from DB instead of REST API
-                const dbPositions = await prisma.position.findMany({
-                  where: {
-                    sessionId: { in: sessions.map((s: any) => s.id) }
-                  }
-                });
-                for (const pos of dbPositions) {
-                  const qty = pos.qty ?? 0;
-                  const entryPrice = pos.entryPrice ?? 0;
-                  if (qty > 0 && entryPrice > 0) {
-                    const binanceSymbol = pos.symbol.split('/')[0] + 'USDT';
-                    seedPositionCache(userId, binanceSymbol, {
-                      positionAmt: pos.side === 'long' ? qty : -qty,
-                      entryPrice: entryPrice,
-                      unrealizedPnl: 0, // Unknown without REST
-                      side: pos.side as 'long' | 'short',
-                      updateTime: Date.now(),
-                    });
-                    logger.info(`📊 [LIVE] Loaded position from DB: ${binanceSymbol} ${pos.side} ${qty} @ $${entryPrice}`);
-                  }
-                }
                 markPositionCacheSeeded(userId);
               }
             } catch (posErr: any) {
-              logger.warn(`⚠️ [LIVE] Failed to fetch positions:`, posErr?.message);
+              // Queue rejected (IP banned) or fetch failed - load from DB
+              logger.warn(`⚠️ [LIVE] Failed to fetch positions: ${posErr?.message} - loading from DB`);
+              const dbPositions = await prisma.position.findMany({
+                where: { sessionId: { in: sessions.map((s: any) => s.id) } }
+              });
+              for (const pos of dbPositions) {
+                const qty = pos.qty ?? 0;
+                const entryPrice = pos.entryPrice ?? 0;
+                if (qty > 0 && entryPrice > 0) {
+                  const binanceSymbol = pos.symbol.split('/')[0] + 'USDT';
+                  seedPositionCache(userId, binanceSymbol, {
+                    positionAmt: pos.side === 'long' ? qty : -qty,
+                    entryPrice: entryPrice,
+                    unrealizedPnl: 0,
+                    side: pos.side as 'long' | 'short',
+                    updateTime: Date.now(),
+                  });
+                }
+              }
+              markPositionCacheSeeded(userId);
             }
             
             // �🚀 Try WebSocket cache FIRST (0 weight)
@@ -3974,14 +3774,16 @@ async function restoreActiveSessions() {
               currentCapitalUsd = wsBalance.total;
               logger.info(`📊 [LIVE] Restoring with WebSocket balance: $${currentCapitalUsd.toFixed(2)} (0 API weight)`);
             } else {
-              // Fallback to REST only if WebSocket has no data AND circuit breaker allows
-              const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
-              if (globalRestCircuitBreaker.canMakeRequest()) {
-                logger.info(`📊 [LIVE] WebSocket balance not available, falling back to REST...`);
-                const balance = await exchange.fetchBalance({ type: 'future' });
+              // Fallback to REST only if WebSocket has no data
+              logger.info(`📊 [LIVE] WebSocket balance not available, falling back to REST via queue...`);
+              try {
+                const balance = await binanceRestQueue.enqueue<any>(
+                  () => exchange.fetchBalance({ type: 'future' }),
+                  { weight: BINANCE_WEIGHTS.FETCH_BALANCE, priority: 'high', tag: `fetchBalance_${userId}` }
+                );
                 const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
                 const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
-                
+
                 if (totalUsdt > 0) {
                   currentCapitalUsd = totalUsdt;
                   logger.info(`📊 [LIVE] Restoring with REST balance: $${currentCapitalUsd.toFixed(2)}`);
@@ -3990,8 +3792,8 @@ async function restoreActiveSessions() {
                 } else {
                   logger.warn(`⚠️ [LIVE] Binance balance is $0, using fallback: $${initialCapitalUsd.toFixed(2)}`);
                 }
-              } else {
-                logger.warn(`⚠️ [LIVE] REST circuit breaker is OPEN, using fallback capital: $${initialCapitalUsd.toFixed(2)}`);
+              } catch (queueErr: any) {
+                logger.warn(`⚠️ [LIVE] REST queue rejected fetchBalance (${queueErr?.message}), using fallback capital: $${initialCapitalUsd.toFixed(2)}`);
               }
             }
           } catch (err: any) {
@@ -4077,19 +3879,21 @@ async function restoreActiveSessions() {
 }
 
 // ============================================
-// V5.27: SEQUENTIAL STARTUP - Markets → WebSocket → Restore
+// V5.78: SIMPLIFIED STARTUP with BinanceRestQueue
 // ============================================
-// CRITICAL: These must run in order, not in parallel!
-// 1. Load markets ONCE (single REST call)
-// 2. Initialize WebSocket (no REST calls)
-// 3. Restore active sessions (use minimal markets fallback if REST unavailable)
+// All REST calls go through the queue - rate limiting automatic!
+// 1. Load markets via queue
+// 2. Initialize WebSocket
+// 3. Seed candles: local files (instant) + REST via queue (fresh)
+// 4. Restore sessions (REST via queue)
+// 5. Start background refresh
 
 async function runStartupSequence(): Promise<void> {
   let marketsLoaded = false;
-  
-  // STEP 1: Preload markets first
+
+  // STEP 1: Preload markets via queue
   try {
-    logger.info('📡 Step 1/3: Preloading exchange markets...');
+    logger.info('📡 Step 1/5: Preloading exchange markets via queue...');
     marketsLoaded = await preloadMarkets();
     if (marketsLoaded) {
       logger.info('✅ Markets preloaded successfully');
@@ -4099,97 +3903,84 @@ async function runStartupSequence(): Promise<void> {
   } catch (error) {
     logger.warn('⚠️ Failed to preload markets:', error);
   }
-  
-  // STEP 2: Initialize WebSocket AFTER markets are ready
+
+  // STEP 2: Initialize WebSocket (0 REST)
   try {
-    logger.info('🌐 Step 2/3: Initializing Binance WebSocket...');
+    logger.info('🌐 Step 2/5: Initializing Binance WebSocket...');
     const ws = getBinanceWebSocket();
-    
-    // Wait for WebSocket to connect and become healthy (with timeout)
-    const maxWait = 10000; // 10 seconds max
+
+    const maxWait = 10000;
     const startTime = Date.now();
-    
+
     while (!ws.isConnectedAndReceiving() && Date.now() - startTime < maxWait) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    
+
     if (ws.isConnectedAndReceiving()) {
-      logger.info('✅ Binance WebSocket connected and receiving data');
-      // Give it a moment to accumulate some initial candle data
+      logger.info('✅ Binance WebSocket connected');
       await new Promise(resolve => setTimeout(resolve, 1000));
     } else {
-      logger.warn('⚠️ WebSocket connection timeout - agents will use REST fallback initially');
+      logger.warn('⚠️ WebSocket timeout - using REST');
     }
   } catch (error) {
     logger.warn('⚠️ Failed to initialize WebSocket:', error);
   }
-  
-  // STEP 3: Ensure markets are available (use minimal fallback if needed) and restore sessions
+
+  // STEP 3: Ensure markets available
   if (!marketsLoaded && !areMarketsLoaded()) {
-    // REST API unavailable (IP banned or other issue) - use minimal hardcoded markets
-    logger.info('🔧 REST API unavailable - initializing minimal hardcoded markets for common symbols...');
+    logger.info('🔧 Using minimal hardcoded markets...');
     initializeMinimalMarkets();
-    logger.info('✅ Minimal markets initialized - agents can work with WebSocket data');
   }
-  
-  // Now we always have markets (either full or minimal), so restore sessions
-  if (areMarketsLoaded()) {
-    // V5.77: Load candles from PostgreSQL (0 REST calls) - IP ban safe!
-    logger.info('📊 Step 3a/3: Loading candles from database...');
 
-    // First try loading from DB
-    let { loaded, symbols } = await loadCandlesFromDB();
+  if (!areMarketsLoaded()) {
+    logger.error('❌ Failed to initialize markets');
+    return;
+  }
 
-    // Only seed from local files if DB is empty or has very few candles
-    // (Local files are static - only updated manually, so don't waste time if DB is populated)
-    if (loaded < 1000) {
-      logger.info(`📂 DB has only ${loaded} candles - seeding from local files...`);
-      const { seeded, symbols: seededSymbols } = await seedFromLocalFiles();
-      if (seeded > 0) {
-        logger.info(`✅ Seeded ${seeded} candles for ${seededSymbols} symbols from local files`);
-        // Reload from DB to get merged data
-        const result = await loadCandlesFromDB();
-        loaded = result.loaded;
-        symbols = result.symbols;
-      }
-    }
+  // STEP 4: Seed candles - local files first (instant), then fresh REST via queue
+  logger.info('📊 Step 3/5: Seeding candles...');
 
-    if (loaded > 0) {
-      logger.info(`✅ Loaded ${loaded} candles for ${symbols} symbols from DB (0 REST calls)`);
-    } else {
-      logger.info('📋 No cached candles - background job will populate from API');
-    }
+  // 4a. Local files first (instant, gives us data while REST fetches)
+  const { seeded: localSeeded } = await seedFromLocalFiles();
+  if (localSeeded > 0) {
+    logger.info(`✅ Local cache: ${localSeeded} candles (instant)`);
+  }
 
-    // Start background job to keep candles fresh
-    startCandleUpdateJob();
+  // 4b. Fresh candles via REST queue (rate-limited automatically)
+  logger.info('📥 Step 4/5: Fetching fresh candles via queue...');
+  const { seeded: freshSeeded, failed } = await seedFreshCandles();
+  logger.info(`✅ Fresh candles: ${freshSeeded} symbols seeded, ${failed} failed`);
 
-    logger.info('♻️ Step 3b/3: Restoring active sessions...');
-    await restoreActiveSessions();
-    logger.info('✅ Startup initialization complete');
-    
-    // If we're using minimal markets, try to upgrade to full markets later when ban expires
-    if (!marketsLoaded && isIpBanned()) {
-      const banExpiry = getIpBanExpiry();
-      const waitMs = Math.max(0, banExpiry - Date.now()) + 60000; // 1 min buffer
-      const waitMinutes = Math.ceil(waitMs / 60000);
-      logger.info(`📅 Will try to load full markets in ${waitMinutes} minutes (after IP ban expires)`);
-      
-      setTimeout(async () => {
-        try {
-          logger.info('🔄 Attempting to load full markets...');
-          const fullLoaded = await preloadMarkets();
-          if (fullLoaded) {
-            logger.info('✅ Full markets loaded - all symbols now available');
-          } else {
-            logger.warn('⚠️ Full markets still unavailable - continuing with minimal markets');
-          }
-        } catch (error) {
-          logger.warn('⚠️ Failed to load full markets:', error);
+  // STEP 5: Restore active sessions (REST calls via queue)
+  logger.info('♻️ Step 5/5: Restoring active sessions...');
+  await restoreActiveSessions();
+
+  // Start background refresh job
+  startCandleRefreshJob();
+
+  logger.info('✅ Startup complete - BinanceRestQueue managing all REST calls');
+  logger.info(`📊 Queue stats: ${JSON.stringify(binanceRestQueue.getStats())}`);
+
+  // If we're using minimal markets, try to upgrade to full markets later when ban expires
+  if (!marketsLoaded && isIpBanned()) {
+    const banExpiry = getIpBanExpiry();
+    const waitMs = Math.max(0, banExpiry - Date.now()) + 60000; // 1 min buffer
+    const waitMinutes = Math.ceil(waitMs / 60000);
+    logger.info(`📅 Will try to load full markets in ${waitMinutes} minutes (after IP ban expires)`);
+
+    setTimeout(async () => {
+      try {
+        logger.info('🔄 Attempting to load full markets...');
+        const fullLoaded = await preloadMarkets();
+        if (fullLoaded) {
+          logger.info('✅ Full markets loaded - all symbols now available');
+        } else {
+          logger.warn('⚠️ Full markets still unavailable');
         }
-      }, waitMs);
-    }
-  } else {
-    logger.error('❌ Failed to initialize markets - this should not happen');
+      } catch (error) {
+        logger.warn('⚠️ Failed to load full markets:', error);
+      }
+    }, waitMs);
   }
 }
 
@@ -4219,7 +4010,7 @@ app.get('/api/monitor/order-queue', authMiddleware, (req, res) => {
 });
 
 // API Deduplication Stats
-app.get('/api/monitor/api-dedup', authMiddleware, (req, res) => {
+app.get('/api/monitor/api-dedup', authMiddleware, (_req, res) => {
   try {
     const stats = exchangeAPIDeduplicator.getStats();
 
@@ -4230,6 +4021,29 @@ app.get('/api/monitor/api-dedup', authMiddleware, (req, res) => {
     });
   } catch (error: any) {
     logger.error('[Monitor] API dedup stats error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// V5.78: REST API Queue Stats
+app.get('/api/monitor/rest-queue', authMiddleware, (_req, res) => {
+  try {
+    const stats = binanceRestQueue.getStats();
+    const queueContents = binanceRestQueue.getQueueContents();
+    const remainingWeight = binanceRestQueue.getRemainingWeight();
+
+    res.json({
+      success: true,
+      stats,
+      remainingWeight,
+      queueContents: queueContents.slice(0, 20), // First 20 items
+      timestamp: Date.now(),
+    });
+  } catch (error: any) {
+    logger.error('[Monitor] REST queue stats error:', error);
     res.status(500).json({
       success: false,
       error: error.message,

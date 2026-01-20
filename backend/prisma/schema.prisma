@@ -362,21 +362,3 @@ enum AgentActionStatus {
   skipped
 }
 
-// V5.77: Cached market candles - shared across all users (public data)
-// Eliminates REST API calls at startup, prevents IP bans
-model MarketCandle {
-  id        String   @id @default(cuid())
-  symbol    String   // e.g., "BTC/USDT:USDT"
-  timeframe String   // e.g., "15m", "1h"
-  openTime  BigInt   // Unix timestamp in milliseconds
-  open      Float
-  high      Float
-  low       Float
-  close     Float
-  volume    Float
-  updatedAt DateTime @updatedAt
-
-  @@unique([symbol, timeframe, openTime])
-  @@index([symbol, timeframe, openTime])
-  @@index([updatedAt])
-}
