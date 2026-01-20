@@ -42,6 +42,7 @@ const SEED_SYMBOLS = [
   'UNI/USDT:USDT',
   'BCH/USDT:USDT',
   'LTC/USDT:USDT',
+  'SONIC/USDT:USDT',
 ];
 
 // How many candles to fetch

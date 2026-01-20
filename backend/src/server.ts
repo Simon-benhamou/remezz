@@ -3951,6 +3951,15 @@ async function runStartupSequence(): Promise<void> {
   const { seeded: freshSeeded, failed } = await seedFreshCandles();
   logger.info(`✅ Fresh candles: ${freshSeeded} symbols seeded, ${failed} failed`);
 
+  // 4c. Subscribe to BTC 1h WebSocket for MTF filter (keeps cache fresh)
+  try {
+    const ws = getBinanceWebSocket();
+    ws.subscribeToKline('BTCUSDT', '1h');
+    logger.info('✅ Subscribed to BTC 1h WebSocket for MTF filter');
+  } catch (error) {
+    logger.warn('⚠️ Failed to subscribe to BTC 1h WebSocket:', error);
+  }
+
   // STEP 5: Restore active sessions (REST calls via queue)
   logger.info('♻️ Step 5/5: Restoring active sessions...');
   await restoreActiveSessions();
