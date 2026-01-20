@@ -29,7 +29,7 @@ import { router as backtestRouter } from "./routes/backtest.js";
 // Services
 import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket, seedKlinesFromWebSocket, toBinanceSymbolId } from "./services/binanceWebSocket.js";
 import { initNotificationService } from "./services/notificationService.js";
-import { setRadarBroadcast } from "./services/signalRadarService.js";
+import { setRadarBroadcast, getRecentRadarEvents } from "./services/signalRadarService.js";
 import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDeduplicator.js";
 import { orderQueue } from "./services/orderQueue.js";
 
@@ -972,20 +972,23 @@ app.get("/api/agent/logs", async (req, res) => {
     const limit = Math.min(parseInt(String(req.query.limit || '100')), 500);
     const symbol = req.query.symbol as string | undefined;
     const source = req.query.source as 'memory' | 'db' | 'all' | undefined;
-    
-    // Get active sessions for this user
+    const sessionId = req.query.sessionId as string | undefined; // V5.72: Session-specific filtering
+
+    // Get active sessions for this user (or specific session if provided)
     const sessionsWhere: any = { userId };
     if (mode) sessionsWhere.mode = mode;
-    
+    if (sessionId) sessionsWhere.id = sessionId;
+
     const activeSessions = await prisma.agentSession.findMany({
-      where: {
+      where: sessionId ? { id: sessionId } : {
         ...sessionsWhere,
         stoppedAt: null,
       },
       select: { id: true, symbol: true, mode: true },
     });
-    
+
     const sessionIds = activeSessions.map(s => s.id);
+    const sessionSymbol = activeSessions.length === 1 ? activeSessions[0].symbol : undefined;
     
     // =========================================================================
     // IN-MEMORY LOGS (from logger buffer) - Real-time agent activity
@@ -1106,9 +1109,24 @@ app.get("/api/agent/logs", async (req, res) => {
       }
     }
     
-    // Combine memory logs with DB logs
-    const allLogs = [...memoryLogs, ...logs];
-    
+    // V5.72: Get radar events and convert to log format
+    const radarEvents = getRecentRadarEvents({
+      limit: limit,
+      symbol: sessionSymbol || symbol,
+    });
+    const radarLogs = radarEvents.map(event => ({
+      timestamp: new Date(event.timestamp).toISOString(),
+      sessionId: '',
+      symbol: event.symbol || '',
+      kind: event.type,
+      message: `${event.title} - ${event.message}`,
+      level: event.severity === 'warning' ? 'warn' : (event.severity === 'success' ? 'info' : 'info') as 'info' | 'warn' | 'error',
+      details: { ...event.data, source: 'radar', eventType: event.type },
+    }));
+
+    // Combine memory logs, radar events, and DB logs
+    const allLogs = [...memoryLogs, ...radarLogs, ...logs];
+
     // Sort by timestamp descending and limit
     allLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     

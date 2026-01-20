@@ -765,6 +765,10 @@ export class SimpleAgent {
   private lastAppTrailingStop: number | null = null;
   private lastRtTrailingKlineTs: number | null = null;
   private rtTrailingBreachCandles = 0;
+
+  // V5.72: Trailing stop tracking for frontend display
+  private trailingActivatedAt: number | null = null;
+  private trailingUpdateCount: number = 0;
   
   // Throttle WebSocket unhealthy warnings (max once per 30s per agent)
   private lastWsUnhealthyWarnTs = 0;
@@ -1387,7 +1391,16 @@ export class SimpleAgent {
         
         // V5.26: Persist trailing activation - once active, stays active
         if (exitSignal.trailingActivated) {
+          // V5.72: Track when trailing first activated
+          if (!this.position!.trailingActive) {
+            this.trailingActivatedAt = Date.now();
+          }
           this.position!.trailingActive = true;
+        }
+
+        // V5.72: Track trailing stop updates
+        if (this.position!.appTrailingStop && this.position!.appTrailingStop !== this.lastAppTrailingStop) {
+          this.trailingUpdateCount++;
         }
 
         // ONLY react to trailing exits in realtime - regime_change and momentum_reversal
@@ -1549,6 +1562,10 @@ export class SimpleAgent {
       
       // V5.26: Persist trailing activation - once active, stays active
       if (exitSignal.trailingActivated) {
+        // V5.72: Track when trailing first activated
+        if (!this.position!.trailingActive) {
+          this.trailingActivatedAt = Date.now();
+        }
         this.position!.trailingActive = true;
       }
 
@@ -2981,6 +2998,10 @@ export class SimpleAgent {
 
       // V5.26: Persist trailing activation - once active, stays active
       if (exitSignal.trailingActivated) {
+        // V5.72: Track when trailing first activated
+        if (!this.position!.trailingActive) {
+          this.trailingActivatedAt = Date.now();
+        }
         this.position!.trailingActive = true;
       }
 
@@ -3216,7 +3237,10 @@ export class SimpleAgent {
     };
     this.currentBias = null;
     this.lastSignal = null;
-    
+    // V5.72: Reset trailing tracking for frontend
+    this.trailingActivatedAt = null;
+    this.trailingUpdateCount = 0;
+
     if (this.config.mode === 'paper') {
       // Paper close
       this.position = null;
@@ -4493,7 +4517,10 @@ export class SimpleAgent {
         // Reset trailing flags
         this.trailingNotified = false;
         this.trailingWidened = false;
-        
+        // V5.72: Reset trailing tracking for frontend
+        this.trailingActivatedAt = null;
+        this.trailingUpdateCount = 0;
+
         this.position = null;
       }
       
@@ -5123,7 +5150,7 @@ export class SimpleAgent {
    * Get detailed agent state for frontend display
    */
   getAgentState(): {
-    pos: (Position & { 
+    pos: (Position & {
       currentPrice?: number;
       pnlPct?: number;
       pnlUsd?: number;
@@ -5137,6 +5164,21 @@ export class SimpleAgent {
       stopPrice?: number;
       stop?: number;
       targets?: number[];
+      // V5.72: Trailing state for frontend
+      trailingState?: {
+        active: boolean;
+        activatedAt: number | null;
+        updateCount: number;
+        currentStopPrice: number | undefined;
+        peakPrice: number;
+        distanceFromPeak: number;
+      };
+      // V5.72: Health status for frontend
+      healthStatus?: 'progressing' | 'watching' | 'stagnant' | 'at_risk';
+      healthReason?: string;
+      peakPrice?: number;
+      distanceFromPeak?: number;
+      stopDistancePct?: number;
     }) | null;
     plan: { 
       bias?: 'long' | 'short' | null; 
@@ -5180,6 +5222,48 @@ export class SimpleAgent {
           : ((this.position.stopLoss - currentPrice) / currentPrice) * 100
         : 0;
       
+      // V5.72: Calculate peak price and distance from peak
+      const peakPrice = this.position.side === 'long'
+        ? this.position.highWaterMark || this.position.entryPrice
+        : this.position.lowWaterMark || this.position.entryPrice;
+      const distanceFromPeak = this.position.side === 'long'
+        ? peakPrice > 0 ? ((peakPrice - currentPrice) / peakPrice) * 100 : 0
+        : peakPrice > 0 ? ((currentPrice - peakPrice) / peakPrice) * 100 : 0;
+
+      // V5.72: Calculate health status based on backend state
+      const holdMinutes = duration / 60000;
+      const minHoldForJudgment = 15; // 15 minutes minimum before judging
+      const stopDistancePct = trailDistance;
+      const isStagnant = this.position.stagnantState?.confirmed && !this.position.stagnantState?.cancelled;
+      const isAtRisk = stopDistancePct < 0.5; // Less than 0.5% from stop
+
+      let healthStatus: 'progressing' | 'watching' | 'stagnant' | 'at_risk' = 'progressing';
+      let healthReason = 'Price moving favorably';
+
+      if (holdMinutes < minHoldForJudgment) {
+        healthStatus = 'watching';
+        healthReason = `Monitoring (${Math.round(holdMinutes)}m / ${minHoldForJudgment}m min)`;
+      } else if (isAtRisk) {
+        healthStatus = 'at_risk';
+        healthReason = `Near stop loss (${stopDistancePct.toFixed(2)}% away)`;
+      } else if (isStagnant) {
+        healthStatus = 'stagnant';
+        healthReason = 'Trade stagnant - not progressing';
+      } else if (pnlPct > 0) {
+        healthStatus = 'progressing';
+        healthReason = `In profit (+${pnlPct.toFixed(2)}%)`;
+      }
+
+      // V5.72: Build trailing state object
+      const trailingState = {
+        active: this.position.trailingActive || false,
+        activatedAt: this.trailingActivatedAt,
+        updateCount: this.trailingUpdateCount,
+        currentStopPrice: this.position.appTrailingStop || this.position.stopLoss,
+        peakPrice,
+        distanceFromPeak,
+      };
+
       posWithMetrics = {
         ...this.position,
         // Add entry as alias for frontend compatibility (PositionInfoCard expects 'entry')
@@ -5189,8 +5273,8 @@ export class SimpleAgent {
         // Add openedAt for frontend time-held calculation
         openedAt: this.position.entryTime,
         // Add stopPrice as alias for frontend compatibility
-        stopPrice: this.position.stopLoss,
-        stop: this.position.stopLoss,
+        stopPrice: this.position.appTrailingStop || this.position.stopLoss,
+        stop: this.position.appTrailingStop || this.position.stopLoss,
         // Add targets from lastSignal
         targets: this.lastSignal?.targets || [],
         currentPrice,
@@ -5199,6 +5283,15 @@ export class SimpleAgent {
         notionalUsd,
         duration,
         trailDistance,
+        // V5.72: Add trailing state for frontend
+        trailingState,
+        // V5.72: Add health status for frontend
+        healthStatus,
+        healthReason,
+        // V5.72: Add additional context
+        peakPrice,
+        distanceFromPeak,
+        stopDistancePct,
       };
     }
     

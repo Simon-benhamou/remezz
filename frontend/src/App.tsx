@@ -11,7 +11,7 @@ import OperationsDashboardPage from './pages/DashboardPageCompact';
 import RegisterPage from './pages/RegisterPage';
 import SessionsPage from './pages/SessionsPage';
 import ReportsPage from './pages/ReportsPage';
-import SessionCockpitPage from './pages/SessionCockpitPage';
+import SessionCockpitPage from './pages/SessionCockpitPageNew';
 import FeedPage from './pages/FeedPage';
 import BacktestPage from './pages/BacktestPage';
 import { useAppStore } from './store';

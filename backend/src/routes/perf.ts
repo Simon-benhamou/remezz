@@ -110,6 +110,85 @@ router.get("/breakdown", authenticateUser, async (req: AuthenticatedRequest, res
   });
 });
 
+// V5.72: Get parity verification summary for a session
+router.get("/parity", authenticateUser, async (req: AuthenticatedRequest, res) => {
+  const sessionId = String(req.query.sessionId || "");
+  if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
+  // Security: verify session belongs to user
+  const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+  if (!session) return res.status(404).json({ error: "session not found" });
+  if (req.user?.id && session.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+    return res.status(403).json({ error: 'session_forbidden' });
+  }
+
+  try {
+    // Get all trades for this session
+    const trades = await prisma.trade.findMany({
+      where: { sessionId },
+      select: { id: true },
+    });
+    const tradeIds = trades.map(t => t.id);
+
+    if (tradeIds.length === 0) {
+      return res.json({
+        totalTrades: 0,
+        verifiedTrades: 0,
+        matchedTrades: 0,
+        matchRate: 100,
+        mismatches: [],
+        status: 'healthy',
+      });
+    }
+
+    // Get parity results for these trades
+    const parityResults = await prisma.tradeParityResult.findMany({
+      where: { tradeId: { in: tradeIds } },
+      orderBy: { verifiedAt: 'desc' },
+    });
+
+    const verifiedTrades = parityResults.length;
+    const matchedTrades = parityResults.filter(r => r.overallMatch).length;
+    const matchRate = verifiedTrades > 0 ? (matchedTrades / verifiedTrades) * 100 : 100;
+
+    // Get mismatch details
+    const mismatches = parityResults
+      .filter(r => !r.overallMatch)
+      .slice(0, 10)
+      .map(r => ({
+        tradeId: r.tradeId,
+        symbol: r.symbol,
+        side: r.side,
+        liveExitReason: r.liveExitReason,
+        btExitReason: r.btExitReason || 'N/A',
+        livePnlPct: r.livePnlPct,
+        btPnlPct: r.btPnlPct,
+        pnlDiff: r.btPnlPct != null ? r.livePnlPct - r.btPnlPct : null,
+        details: r.mismatchDetails,
+      }));
+
+    // Determine status based on match rate
+    let status: 'healthy' | 'warning' | 'critical' = 'healthy';
+    if (matchRate < 70) {
+      status = 'critical';
+    } else if (matchRate < 90) {
+      status = 'warning';
+    }
+
+    res.json({
+      totalTrades: tradeIds.length,
+      verifiedTrades,
+      matchedTrades,
+      matchRate,
+      mismatches,
+      status,
+    });
+  } catch (error) {
+    console.error("Failed to get parity results:", error);
+    res.status(500).json({ error: "failed_to_get_parity" });
+  }
+});
+
 router.get("/session-metrics", authenticateUser, async (req: AuthenticatedRequest, res) => {
   const rawIds = (req.query.sessionId ?? (req.query["sessionId[]"] as any)) as
     | string

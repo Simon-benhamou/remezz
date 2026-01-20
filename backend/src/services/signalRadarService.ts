@@ -107,6 +107,49 @@ let marketMemory: {
 // Broadcast function (set by server.ts)
 let broadcastFn: ((type: string, data: unknown, symbol?: string) => void) | null = null;
 
+// V5.72: Event buffer for activity feed (stores recent events)
+const EVENT_BUFFER_MAX_SIZE = 100;
+const eventBuffer: RadarEvent[] = [];
+
+/**
+ * V5.72: Add event to buffer and broadcast
+ */
+function emitEvent(event: RadarEvent): void {
+  // Add to buffer
+  eventBuffer.unshift(event);
+  if (eventBuffer.length > EVENT_BUFFER_MAX_SIZE) {
+    eventBuffer.pop();
+  }
+
+  // Broadcast to connected clients
+  if (broadcastFn) {
+    broadcastFn('radar_event', event, event.symbol);
+  }
+
+  // Log to console for debugging
+  logger.info(`[RADAR] ${event.title} - ${event.message}`);
+}
+
+/**
+ * V5.72: Get recent radar events for activity feed
+ */
+export function getRecentRadarEvents(opts: {
+  limit?: number;
+  symbol?: string;
+  sessionId?: string;
+} = {}): RadarEvent[] {
+  const limit = opts.limit || 50;
+  let events = [...eventBuffer];
+
+  // Filter by symbol if provided
+  if (opts.symbol) {
+    const targetSymbol = opts.symbol;
+    events = events.filter(e => e.symbol === targetSymbol || e.symbol?.includes(targetSymbol));
+  }
+
+  return events.slice(0, limit);
+}
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================
@@ -309,12 +352,9 @@ export function updateSymbolState(state: SymbolState): RadarEvent[] {
     memory.lastLoggedAt = now;
   }
 
-  // Broadcast events
+  // V5.72: Emit events (store in buffer + broadcast)
   for (const event of events) {
-    logger.info(`${event.title} | ${event.message}`);
-    if (broadcastFn) {
-      broadcastFn('radar_event', event, event.symbol);
-    }
+    emitEvent(event);
   }
 
   return events;
@@ -400,12 +440,9 @@ export function updateMarketState(state: MarketState): RadarEvent[] {
     }
   }
 
-  // Broadcast events
+  // V5.72: Emit events (store in buffer + broadcast)
   for (const event of events) {
-    logger.info(`${event.title} | ${event.message}`);
-    if (broadcastFn) {
-      broadcastFn('radar_event', event);
-    }
+    emitEvent(event);
   }
 
   return events;
@@ -435,10 +472,8 @@ export function logEntry(params: {
     timestamp: Date.now(),
   };
 
-  logger.info(`${event.title} | ${event.message}`);
-  if (broadcastFn) {
-    broadcastFn('radar_event', event, params.symbol);
-  }
+  // V5.72: Use emitEvent to store in buffer + broadcast
+  emitEvent(event);
 
   return event;
 }
@@ -470,10 +505,8 @@ export function logExit(params: {
     timestamp: Date.now(),
   };
 
-  logger.info(`${event.title} | ${event.message}`);
-  if (broadcastFn) {
-    broadcastFn('radar_event', event, params.symbol);
-  }
+  // V5.72: Use emitEvent to store in buffer + broadcast
+  emitEvent(event);
 
   return event;
 }
