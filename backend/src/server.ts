@@ -34,13 +34,14 @@ import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDe
 import { orderQueue } from "./services/orderQueue.js";
 
 // Strategy
-import { 
-  SimpleAgent, 
-  createAllAgents, 
+import {
+  SimpleAgent,
+  createAllAgents,
   getCapitalPool,
   resetCapitalPool,
-  type CapitalPool 
+  type CapitalPool
 } from "./strategies/simpleAgent.js";
+import { loadLocalJsonCandles } from "./services/backtest/localOhlcvJsonStore.js";
 import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, LIQUIDATION_CONFIG, getLiquidityTier, getMaxSafePositionSize } from "./strategies/momentumSimple.js";
 
 const logLevel = configureLogging();
@@ -3592,13 +3593,6 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 async function preloadKlinesForActiveSymbols(): Promise<void> {
   try {
-    // V5.74: Environment variable to completely skip REST klines preload
-    // Use this when IP is repeatedly flagged by Binance
-    if (process.env.SKIP_KLINES_REST_PRELOAD === 'true') {
-      logger.info('📊 SKIP_KLINES_REST_PRELOAD=true - skipping REST klines preload, using WebSocket only');
-      return;
-    }
-
     // Get unique symbols from active sessions
     const activeSessions = await prisma.agentSession.findMany({
       where: { stoppedAt: null, haltedAt: null },
@@ -3618,100 +3612,133 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
 
     logger.info(`📊 Pre-loading klines for ${symbols.length} symbols: ${symbols.slice(0, 5).join(', ')}${symbols.length > 5 ? '...' : ''}`);
 
-    // Check if IP is banned - skip REST preload
-    if (isIpBanned()) {
-      logger.warn('⚠️ IP is banned - skipping klines preload, agents will use WebSocket stream');
+    // =========================================================================
+    // V5.75: LOCAL FILES FIRST - Load from local JSON files (0 API calls!)
+    // This is the ROOT CAUSE fix for IP bans - avoid REST calls entirely
+    // =========================================================================
+    let loadedFromLocal = 0;
+    let loadedFromRest = 0;
+    const symbolsNeedingRest: string[] = [];
+
+    for (const symbol of symbols) {
+      const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
+
+      // Try local file first
+      const localData = await loadLocalJsonCandles(symbol, '15m');
+      if (localData && localData.candles.length >= 200) {
+        // Convert to OHLCV format and seed cache
+        // Get last 220 candles (most recent)
+        const recentCandles = localData.candles.slice(-220);
+        const ohlcv = recentCandles.map(c => [c.timestamp, c.open, c.high, c.low, c.close, c.volume]);
+        seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
+        loadedFromLocal++;
+        logger.debug(`✅ [${binanceSymbol}] Loaded ${recentCandles.length} candles from local file`);
+      } else {
+        symbolsNeedingRest.push(symbol);
+      }
+    }
+
+    // Also try BTC 1h from local file
+    const btc1hLocal = await loadLocalJsonCandles('BTC/USDT:USDT', '1h');
+    if (btc1hLocal && btc1hLocal.candles.length >= 50) {
+      const recentCandles = btc1hLocal.candles.slice(-50);
+      const ohlcv = recentCandles.map(c => [c.timestamp, c.open, c.high, c.low, c.close, c.volume]);
+      seedKlinesFromWebSocket('BTCUSDT', '1h', ohlcv);
+      logger.info(`✅ BTC 1h candles loaded from local file: ${recentCandles.length} candles`);
+    }
+
+    if (loadedFromLocal > 0) {
+      logger.info(`✅ Loaded ${loadedFromLocal}/${symbols.length} symbols from local files (0 API calls)`);
+    }
+
+    // =========================================================================
+    // REST FALLBACK - Only for symbols without local files
+    // =========================================================================
+    if (symbolsNeedingRest.length === 0) {
+      logger.info('✅ All symbols loaded from local files - no REST API calls needed!');
       return;
     }
+
+    // V5.74: Environment variable to completely skip REST klines preload
+    if (process.env.SKIP_KLINES_REST_PRELOAD === 'true') {
+      logger.warn(`⚠️ SKIP_KLINES_REST_PRELOAD=true - ${symbolsNeedingRest.length} symbols without local files will use WebSocket only`);
+      return;
+    }
+
+    // Check if IP is banned - skip REST preload
+    if (isIpBanned()) {
+      logger.warn(`⚠️ IP is banned - ${symbolsNeedingRest.length} symbols without local files will use WebSocket stream`);
+      return;
+    }
+
+    logger.info(`📡 ${symbolsNeedingRest.length} symbols need REST API: ${symbolsNeedingRest.slice(0, 3).join(', ')}${symbolsNeedingRest.length > 3 ? '...' : ''}`);
 
     // Get a shared exchange instance for fetching
     const exchange = await getCachedExchange();
     if (!exchange) {
-      logger.warn('⚠️ No exchange available for klines preload');
+      logger.warn('⚠️ No exchange available for REST klines preload');
       return;
     }
 
     // V5.74: PROBE REQUEST - Test with lightweight call before attempting klines
-    // This prevents wasting API weight if we're already banned
     try {
       logger.info('🔍 Testing API access with probe request...');
       await exchange.fetchTime();
-      logger.info('✅ API probe successful - proceeding with klines preload');
+      logger.info('✅ API probe successful - proceeding with REST klines preload');
     } catch (probeError: any) {
       const msg = probeError?.message || '';
       if (msg.includes('418') || msg.includes('banned') || msg.includes('Too many') || msg.includes('-1003')) {
-        // Extract ban duration from error if available
         const banMatch = msg.match(/banned until (\d+)/);
         const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
-        const banDurationMs = Math.max(banUntil - Date.now(), 60 * 60 * 1000); // At least 1 hour
-
-        logger.warn(`🚫 API probe detected IP ban - skipping ALL REST calls for ${Math.round(banDurationMs / 60000)} minutes`);
+        const banDurationMs = Math.max(banUntil - Date.now(), 60 * 60 * 1000);
+        logger.warn(`🚫 API probe detected IP ban - skipping REST calls for ${Math.round(banDurationMs / 60000)} minutes`);
         setIpBan(banDurationMs);
         return;
       }
-      // Non-ban error - log but continue
       logger.warn(`⚠️ API probe failed (non-ban): ${msg}`);
     }
 
     // V5.73: Check if we were RECENTLY banned (within last 2 hours) - be extra cautious
     const banExpiry = getIpBanExpiry();
     if (banExpiry && Date.now() < banExpiry + 2 * 60 * 60 * 1000) {
-      logger.warn('⚠️ IP ban recently expired - being cautious, only preloading BTC');
-      // Only preload BTC for regime filter, skip individual symbols
-      try {
-        const ohlcv = await exchange.fetchOHLCV('BTC/USDT:USDT', '15m', undefined, 220);
-        if (ohlcv && ohlcv.length > 0) {
-          seedKlinesFromWebSocket('BTCUSDT', '15m', ohlcv);
-          logger.info(`✅ BTC klines preloaded (cautious mode): ${ohlcv.length} candles`);
-        }
-      } catch (error: any) {
-        logger.warn(`⚠️ Failed to preload BTC klines: ${error?.message}`);
-      }
+      logger.warn('⚠️ IP ban recently expired - skipping REST klines preload');
       return;
     }
 
-    // V5.73: SEQUENTIAL klines preload to avoid IP bans
-    // Binance rate limits are strict - even batch of 5 was too aggressive
-    // Now we do 1 symbol at a time with 500ms delay between each
-    let loaded = 0;
+    // V5.73: SEQUENTIAL klines preload with 500ms delay
     let failed = 0;
     let ipBanned = false;
 
-    for (let i = 0; i < symbols.length && !ipBanned; i++) {
-      const symbol = symbols[i];
+    for (let i = 0; i < symbolsNeedingRest.length && !ipBanned; i++) {
+      const symbol = symbolsNeedingRest[i];
       const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
 
       try {
-        // Fetch 220 candles (enough for SMA200 + buffer)
         const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 220);
-
         if (ohlcv && ohlcv.length > 0) {
-          // Seed the WebSocket cache
           seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
-          loaded++;
+          loadedFromRest++;
         }
       } catch (error: any) {
         failed++;
-        // Check for IP ban
         if (error?.message?.includes('418') || error?.message?.includes('banned') || error?.message?.includes('Too many') || error?.message?.includes('-1003')) {
-          logger.warn('🚫 IP ban detected during klines preload - stopping');
-          setIpBan(60 * 60 * 1000); // 1 hour ban (more conservative)
+          logger.warn('🚫 IP ban detected during klines preload - stopping REST calls');
+          setIpBan(60 * 60 * 1000);
           ipBanned = true;
           break;
         }
         logger.warn(`⚠️ Failed to preload klines for ${symbol}:`, error?.message);
       }
 
-      // 500ms delay between each symbol to respect rate limits
-      if (i + 1 < symbols.length && !ipBanned) {
+      if (i + 1 < symbolsNeedingRest.length && !ipBanned) {
         await new Promise(r => setTimeout(r, 500));
       }
     }
 
-    logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed) [sequential with 500ms delay]`);
+    logger.info(`✅ Klines preloaded: ${loadedFromLocal} local + ${loadedFromRest} REST (${failed} failed)`);
 
-    // V5.50 FIX: Also preload BTC 1h candles for MTF filter (only if not banned)
-    if (!ipBanned) {
+    // BTC 1h candles (only if not loaded from local and not banned)
+    if (!ipBanned && !btc1hLocal) {
       try {
         const ohlcv1h = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 50);
         if (ohlcv1h && ohlcv1h.length > 0) {
@@ -3868,20 +3895,23 @@ async function restoreActiveSessions() {
                 // Load positions from DB instead of REST API
                 const dbPositions = await prisma.position.findMany({
                   where: {
-                    sessionId: { in: sessions.map((s: any) => s.id) },
-                    exitTs: null // Only open positions
+                    sessionId: { in: sessions.map((s: any) => s.id) }
                   }
                 });
                 for (const pos of dbPositions) {
-                  const binanceSymbol = pos.symbol.split('/')[0] + 'USDT';
-                  seedPositionCache(userId, binanceSymbol, {
-                    positionAmt: pos.side === 'long' ? pos.qty : -pos.qty,
-                    entryPrice: pos.entryPrice,
-                    unrealizedPnl: 0, // Unknown without REST
-                    side: pos.side as 'long' | 'short',
-                    updateTime: Date.now(),
-                  });
-                  logger.info(`📊 [LIVE] Loaded position from DB: ${binanceSymbol} ${pos.side} ${pos.qty} @ $${pos.entryPrice}`);
+                  const qty = pos.qty ?? 0;
+                  const entryPrice = pos.entryPrice ?? 0;
+                  if (qty > 0 && entryPrice > 0) {
+                    const binanceSymbol = pos.symbol.split('/')[0] + 'USDT';
+                    seedPositionCache(userId, binanceSymbol, {
+                      positionAmt: pos.side === 'long' ? qty : -qty,
+                      entryPrice: entryPrice,
+                      unrealizedPnl: 0, // Unknown without REST
+                      side: pos.side as 'long' | 'short',
+                      updateTime: Date.now(),
+                    });
+                    logger.info(`📊 [LIVE] Loaded position from DB: ${binanceSymbol} ${pos.side} ${qty} @ $${entryPrice}`);
+                  }
                 }
                 markPositionCacheSeeded(userId);
               }
