@@ -3592,25 +3592,32 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 async function preloadKlinesForActiveSymbols(): Promise<void> {
   try {
+    // V5.74: Environment variable to completely skip REST klines preload
+    // Use this when IP is repeatedly flagged by Binance
+    if (process.env.SKIP_KLINES_REST_PRELOAD === 'true') {
+      logger.info('📊 SKIP_KLINES_REST_PRELOAD=true - skipping REST klines preload, using WebSocket only');
+      return;
+    }
+
     // Get unique symbols from active sessions
     const activeSessions = await prisma.agentSession.findMany({
       where: { stoppedAt: null, haltedAt: null },
       select: { symbol: true }
     });
-    
+
     if (activeSessions.length === 0) {
       logger.info('📋 No active sessions - skipping klines preload');
       return;
     }
-    
+
     // Get unique symbols + always include BTC for regime filter
     const symbols = [...new Set(activeSessions.map(s => s.symbol))];
     if (!symbols.some(s => s.includes('BTC'))) {
       symbols.unshift('BTC/USDT:USDT');
     }
-    
+
     logger.info(`📊 Pre-loading klines for ${symbols.length} symbols: ${symbols.slice(0, 5).join(', ')}${symbols.length > 5 ? '...' : ''}`);
-    
+
     // Check if IP is banned - skip REST preload
     if (isIpBanned()) {
       logger.warn('⚠️ IP is banned - skipping klines preload, agents will use WebSocket stream');
@@ -3622,6 +3629,28 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
     if (!exchange) {
       logger.warn('⚠️ No exchange available for klines preload');
       return;
+    }
+
+    // V5.74: PROBE REQUEST - Test with lightweight call before attempting klines
+    // This prevents wasting API weight if we're already banned
+    try {
+      logger.info('🔍 Testing API access with probe request...');
+      await exchange.fetchTime();
+      logger.info('✅ API probe successful - proceeding with klines preload');
+    } catch (probeError: any) {
+      const msg = probeError?.message || '';
+      if (msg.includes('418') || msg.includes('banned') || msg.includes('Too many') || msg.includes('-1003')) {
+        // Extract ban duration from error if available
+        const banMatch = msg.match(/banned until (\d+)/);
+        const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
+        const banDurationMs = Math.max(banUntil - Date.now(), 60 * 60 * 1000); // At least 1 hour
+
+        logger.warn(`🚫 API probe detected IP ban - skipping ALL REST calls for ${Math.round(banDurationMs / 60000)} minutes`);
+        setIpBan(banDurationMs);
+        return;
+      }
+      // Non-ban error - log but continue
+      logger.warn(`⚠️ API probe failed (non-ban): ${msg}`);
     }
 
     // V5.73: Check if we were RECENTLY banned (within last 2 hours) - be extra cautious
@@ -3664,9 +3693,9 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
       } catch (error: any) {
         failed++;
         // Check for IP ban
-        if (error?.message?.includes('418') || error?.message?.includes('banned') || error?.message?.includes('Too many')) {
+        if (error?.message?.includes('418') || error?.message?.includes('banned') || error?.message?.includes('Too many') || error?.message?.includes('-1003')) {
           logger.warn('🚫 IP ban detected during klines preload - stopping');
-          setIpBan(30 * 60 * 1000); // 30 min ban
+          setIpBan(60 * 60 * 1000); // 1 hour ban (more conservative)
           ipBanned = true;
           break;
         }
@@ -3681,15 +3710,17 @@ async function preloadKlinesForActiveSymbols(): Promise<void> {
 
     logger.info(`✅ Klines preloaded: ${loaded}/${symbols.length} symbols (${failed} failed) [sequential with 500ms delay]`);
 
-    // V5.50 FIX: Also preload BTC 1h candles for MTF filter
-    try {
-      const ohlcv1h = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 50);
-      if (ohlcv1h && ohlcv1h.length > 0) {
-        seedKlinesFromWebSocket('BTCUSDT', '1h', ohlcv1h);
-        logger.info(`✅ BTC 1h candles preloaded: ${ohlcv1h.length} candles for MTF filter`);
+    // V5.50 FIX: Also preload BTC 1h candles for MTF filter (only if not banned)
+    if (!ipBanned) {
+      try {
+        const ohlcv1h = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 50);
+        if (ohlcv1h && ohlcv1h.length > 0) {
+          seedKlinesFromWebSocket('BTCUSDT', '1h', ohlcv1h);
+          logger.info(`✅ BTC 1h candles preloaded: ${ohlcv1h.length} candles for MTF filter`);
+        }
+      } catch (error: any) {
+        logger.warn(`⚠️ Failed to preload BTC 1h candles: ${error?.message}`);
       }
-    } catch (error: any) {
-      logger.warn(`⚠️ Failed to preload BTC 1h candles: ${error?.message}`);
     }
 
   } catch (error) {
@@ -3752,23 +3783,46 @@ async function restoreActiveSessions() {
         
         if (mode === 'live') {
           // LIVE MODE: Get balance preferring WebSocket (0 weight) over REST
+          // V5.74: Skip REST calls entirely if IP is banned
+          const ipCurrentlyBanned = isIpBanned();
+
           try {
-            // 🚀 FIRST: Subscribe to user data stream for real-time updates (0 weight)
-            const credentials = await getUserCredentials(userId);
-            if (credentials && credentials.apiKey && credentials.apiSecret) {
-              const binanceWs = getBinanceWebSocket();
-              await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
-              logger.info(`✅ [Restore] User data stream subscribed for ${userId}`);
-              
-              // Wait a bit for WebSocket to receive initial data
-              await new Promise(r => setTimeout(r, 1500));
+            // 🚀 FIRST: Subscribe to user data stream for real-time updates
+            // NOTE: This requires a REST call to create listenKey - will fail if banned
+            if (!ipCurrentlyBanned) {
+              const credentials = await getUserCredentials(userId);
+              if (credentials && credentials.apiKey && credentials.apiSecret) {
+                const binanceWs = getBinanceWebSocket();
+                try {
+                  await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
+                  logger.info(`✅ [Restore] User data stream subscribed for ${userId}`);
+
+                  // Wait a bit for WebSocket to receive initial data
+                  await new Promise(r => setTimeout(r, 1500));
+                } catch (wsSubErr: any) {
+                  const errMsg = wsSubErr?.message || '';
+                  // Check if this is an IP ban error
+                  if (errMsg.includes('-1003') || errMsg.includes('banned') || errMsg.includes('Too many')) {
+                    const banMatch = errMsg.match(/banned until (\d+)/);
+                    const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
+                    const banDurationMs = Math.max(banUntil - Date.now(), 60 * 60 * 1000);
+                    logger.warn(`🚫 [Restore] IP ban detected during user data subscription - setting ban for ${Math.round(banDurationMs / 60000)} minutes`);
+                    setIpBan(banDurationMs);
+                  } else {
+                    logger.warn(`⚠️ [Restore] Failed to subscribe to user data:`, errMsg);
+                  }
+                }
+              }
+            } else {
+              logger.warn(`⚠️ [Restore] IP is banned - skipping user data subscription, will use DB positions`);
             }
-            
-            // � CRITICAL: Fetch existing positions from Binance to seed cache
+
+            // 📊 CRITICAL: Fetch existing positions from Binance to seed cache
             // WebSocket user data stream only sends updates, not initial state!
+            // V5.74: Only attempt if not IP banned
             try {
               const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
-              if (globalRestCircuitBreaker.canMakeRequest() && !isIpBanned() && exchange.fetchPositions) {
+              if (!isIpBanned() && globalRestCircuitBreaker.canMakeRequest() && exchange.fetchPositions) {
                 logger.info(`📊 [LIVE] Fetching existing positions from Binance...`);
                 const positions = await exchangeAPIDeduplicator.execute(
                   makeFetchPositionsKey(userId),
@@ -3783,13 +3837,13 @@ async function restoreActiveSessions() {
                   const positionAmt = parseFloat(pos?.contracts || pos?.info?.positionAmt || '0');
                   const entryPrice = parseFloat(pos?.entryPrice || pos?.info?.entryPrice || '0');
                   const unrealizedPnl = parseFloat(pos?.unrealizedPnl || pos?.info?.unRealizedProfit || '0');
-                  
+
                   if (Math.abs(positionAmt) > 0.000001 && symbol) {
                     // Use toBinanceSymbolId for proper normalization
                     // ETH/USDT:USDT → ETHUSDT (not ETHUSDTUSDT!)
                     const binanceSymbol = toBinanceSymbolId(symbol);
                     const side = positionAmt > 0 ? 'long' : 'short';
-                    
+
                     seedPositionCache(userId, binanceSymbol, {
                       positionAmt: positionAmt,
                       entryPrice: entryPrice,
@@ -3797,17 +3851,38 @@ async function restoreActiveSessions() {
                       side: side,
                       updateTime: Date.now(),
                     });
-                    
+
                     logger.info(`📊 [LIVE] Seeded position: ${binanceSymbol} ${side} ${Math.abs(positionAmt)} @ $${entryPrice}`);
                     seededCount++;
                   }
                 }
-                
+
                 if (seededCount > 0) {
                   logger.info(`✅ [LIVE] Position cache seeded with ${seededCount} existing positions`);
                 }
-                
+
                 // Mark as seeded
+                markPositionCacheSeeded(userId);
+              } else if (isIpBanned()) {
+                logger.warn(`⚠️ [LIVE] IP banned - loading positions from database instead`);
+                // Load positions from DB instead of REST API
+                const dbPositions = await prisma.position.findMany({
+                  where: {
+                    sessionId: { in: sessions.map((s: any) => s.id) },
+                    exitTs: null // Only open positions
+                  }
+                });
+                for (const pos of dbPositions) {
+                  const binanceSymbol = pos.symbol.split('/')[0] + 'USDT';
+                  seedPositionCache(userId, binanceSymbol, {
+                    positionAmt: pos.side === 'long' ? pos.qty : -pos.qty,
+                    entryPrice: pos.entryPrice,
+                    unrealizedPnl: 0, // Unknown without REST
+                    side: pos.side as 'long' | 'short',
+                    updateTime: Date.now(),
+                  });
+                  logger.info(`📊 [LIVE] Loaded position from DB: ${binanceSymbol} ${pos.side} ${pos.qty} @ $${pos.entryPrice}`);
+                }
                 markPositionCacheSeeded(userId);
               }
             } catch (posErr: any) {
