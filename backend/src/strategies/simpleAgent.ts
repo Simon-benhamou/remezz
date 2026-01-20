@@ -803,6 +803,9 @@ export class SimpleAgent {
     bbDistance: number;  // % distance from BB upper/lower
     reason: string;
   } | null = null;
+
+  // V5.71: Cache last known BTC regime for real-time Signal Radar
+  private lastKnownRegime: 'BULL' | 'BEAR' | 'NEUTRAL' = 'NEUTRAL';
   
   // Track trailing stop activation (to notify only once)
   private trailingNotified: boolean = false;
@@ -1702,7 +1705,75 @@ export class SimpleAgent {
         tickCount: this.tickCount,
         timestamp: now,
       });
-      
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // V5.71: Real-time Signal Radar - Calculate proximity on every tick
+      // This detects when price approaches signal thresholds and logs only changes
+      // ═══════════════════════════════════════════════════════════════════════════
+      try {
+        // Calculate BB from recent candles (need at least 20)
+        if (candles.length >= 20) {
+          const closePrices = candles.slice(-20).map(c => c.close);
+          const sma = closePrices.reduce((a, b) => a + b, 0) / 20;
+          const stdDev = Math.sqrt(closePrices.map(p => (p - sma) ** 2).reduce((a, b) => a + b, 0) / 20);
+          const upperBB = sma + 2 * stdDev;
+          const lowerBB = sma - 2 * stdDev;
+          const bbWidth = upperBB - lowerBB;
+
+          // BB distance: positive = above SMA, negative = below
+          const bbDistance = bbWidth > 0 ? ((currentPrice - sma) / (bbWidth / 2)) * 100 : 0;
+
+          // Volume ratio (current vs 20-period average)
+          const volumes = candles.slice(-20).map(c => c.volume);
+          const avgVolume = volumes.reduce((a, b) => a + b, 0) / 20;
+          const currentVolume = candles[candles.length - 1].volume;
+          const volRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
+
+          // ROC (rate of change over 14 periods)
+          const rocPeriod = Math.min(14, candles.length - 1);
+          const rocPrice = candles[candles.length - 1 - rocPeriod]?.close || currentPrice;
+          const roc = rocPrice > 0 ? ((currentPrice - rocPrice) / rocPrice) * 100 : 0;
+
+          // Use last known regime from signal features or default to NEUTRAL
+          // (Real regime is determined in checkEntry when analyzing BTC, we reuse that)
+          const currentRegime = this.lastKnownRegime || 'NEUTRAL';
+
+          const radarFeatures: SignalFeatures = {
+            roc,
+            volRatio,
+            bbDistance,
+            atrPct: 0,  // Would need ATR calculation, skip for real-time
+            trendStrength: 0,
+          };
+
+          const proximityScore = calculateProximityScore(radarFeatures, currentRegime, !!this.position);
+
+          // Calculate PnL if in position
+          let positionPnlPct: number | undefined;
+          if (this.position) {
+            positionPnlPct = this.position.side === 'long'
+              ? ((currentPrice - this.position.entryPrice) / this.position.entryPrice) * 100
+              : ((this.position.entryPrice - currentPrice) / this.position.entryPrice) * 100;
+          }
+
+          // Update Signal Radar - it will log only when significant changes occur
+          updateSymbolState({
+            symbol,
+            proximityScore,
+            regime: currentRegime,
+            features: radarFeatures,
+            lastUpdate: Date.now(),
+            inPosition: !!this.position,
+            positionSide: this.position?.side,
+            positionPnlPct,
+            trailingActive: this.position?.trailingActive,
+          });
+        }
+      } catch (radarError) {
+        // Don't let radar errors crash the tick
+        logger.debug(`Signal Radar error for ${symbol}:`, radarError);
+      }
+
       // 1. Si on a une position, checker l'exit avec trailing
       if (this.position) {
         // Avoid per-tick spam: checkExit already logs once per newly-closed 15m candle.
@@ -1940,6 +2011,7 @@ export class SimpleAgent {
           trendStrength: 0,
         };
         const currentRegime = f.btcInBullRegime ? 'BULL' : (f.btcInBearRegime ? 'BEAR' : 'NEUTRAL');
+        this.lastKnownRegime = currentRegime; // Cache for real-time radar
         const proximityScore = calculateProximityScore(radarFeatures, currentRegime, !!this.position);
 
         // Calculate PnL if in position

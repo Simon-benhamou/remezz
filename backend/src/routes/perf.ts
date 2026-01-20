@@ -110,6 +110,19 @@ router.get("/breakdown", authenticateUser, async (req: AuthenticatedRequest, res
   });
 });
 
+// V5.72: Normalize exit reason for display
+function normalizeExitReasonForDisplay(reason: string | null): string {
+  if (!reason) return 'N/A';
+  const r = reason.toUpperCase();
+  if (r.includes('TRAIL')) return 'TRAILING';
+  if (r.includes('STOP') || r === 'SL') return 'STOP_LOSS';
+  if (r.includes('STAGNANT')) return 'STAGNANT';
+  if (r.includes('TIME') || r.includes('MAX_HOLD')) return 'TIMEOUT';
+  if (r.includes('REGIME')) return 'REGIME_CHANGE';
+  if (r.includes('MOMENTUM') || r.includes('REVERSAL')) return 'MOMENTUM_REVERSAL';
+  return reason.toUpperCase();
+}
+
 // V5.72: Get parity verification summary for a session
 router.get("/parity", authenticateUser, async (req: AuthenticatedRequest, res) => {
   const sessionId = String(req.query.sessionId || "");
@@ -151,21 +164,29 @@ router.get("/parity", authenticateUser, async (req: AuthenticatedRequest, res) =
     const matchedTrades = parityResults.filter(r => r.overallMatch).length;
     const matchRate = verifiedTrades > 0 ? (matchedTrades / verifiedTrades) * 100 : 100;
 
-    // Get mismatch details
+    // Get mismatch details with normalized exit reasons
     const mismatches = parityResults
       .filter(r => !r.overallMatch)
       .slice(0, 10)
-      .map(r => ({
-        tradeId: r.tradeId,
-        symbol: r.symbol,
-        side: r.side,
-        liveExitReason: r.liveExitReason,
-        btExitReason: r.btExitReason || 'N/A',
-        livePnlPct: r.livePnlPct,
-        btPnlPct: r.btPnlPct,
-        pnlDiff: r.btPnlPct != null ? r.livePnlPct - r.btPnlPct : null,
-        details: r.mismatchDetails,
-      }));
+      .map(r => {
+        const normalizedLive = normalizeExitReasonForDisplay(r.liveExitReason);
+        const normalizedBt = normalizeExitReasonForDisplay(r.btExitReason);
+        return {
+          tradeId: r.tradeId,
+          symbol: r.symbol,
+          side: r.side,
+          liveExitReason: normalizedLive,
+          btExitReason: normalizedBt,
+          // If normalized reasons match, this is actually a match (naming difference only)
+          isActualMismatch: normalizedLive !== normalizedBt,
+          livePnlPct: r.livePnlPct,
+          btPnlPct: r.btPnlPct,
+          pnlDiff: r.btPnlPct != null ? r.livePnlPct - r.btPnlPct : null,
+          details: r.mismatchDetails,
+        };
+      })
+      // Filter out false mismatches where only naming differs
+      .filter(m => m.isActualMismatch);
 
     // Determine status based on match rate
     let status: 'healthy' | 'warning' | 'critical' = 'healthy';

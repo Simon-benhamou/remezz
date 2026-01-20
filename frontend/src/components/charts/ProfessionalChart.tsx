@@ -77,6 +77,7 @@ export default function ProfessionalChart({
   const [loading, setLoading] = useState(true);
   const [chartData, setChartData] = useState<CandleData[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [chartReady, setChartReady] = useState(false);
   const formatPriceLabel = useCallback((value?: number | null) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) return null;
     return formatPriceDisplay(value);
@@ -168,6 +169,9 @@ export default function ProfessionalChart({
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
 
+    // Mark chart as ready for data loading
+    setChartReady(true);
+
     // Handle resize
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
@@ -190,13 +194,18 @@ export default function ProfessionalChart({
       supportLineRef.current = null;
       resistanceLineRef.current = null;
       targetLinesRef.current = [];
+      setChartReady(false);
     };
   }, []);
 
   // Fetch historical data
   const fetchHistoricalData = useCallback(async () => {
     if (!symbol) return;
-    
+    if (!candleSeriesRef.current) {
+      console.warn('[ProfessionalChart] Series not ready yet, skipping fetch');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     
@@ -260,10 +269,12 @@ export default function ProfessionalChart({
     }
   }, [symbol, timeframe]);
 
-  // Load data when symbol or timeframe changes
+  // Load data when chart is ready and symbol or timeframe changes
   useEffect(() => {
-    fetchHistoricalData();
-  }, [fetchHistoricalData]);
+    if (chartReady) {
+      fetchHistoricalData();
+    }
+  }, [fetchHistoricalData, chartReady]);
 
   // Overlay price lines for entry/stop/targets/support-resistance
   useEffect(() => {
