@@ -3608,6 +3608,63 @@ export class SimpleAgent {
         const exitPrice = order.average || order.price || currentPrice;
 
         // ═══════════════════════════════════════════════════════════════════════════
+        // V5.79: PARTIAL FILL DETECTION AND RETRY
+        // Market orders can partially fill, leaving a "ghost" position on exchange
+        // ═══════════════════════════════════════════════════════════════════════════
+        const filledQty = order.filled ?? 0;
+        const requestedQty = position.qty;
+        const fillRatio = filledQty / requestedQty;
+
+        if (fillRatio < 0.99) {
+          const remainingQty = requestedQty - filledQty;
+          logger.warn(
+            `⚠️ [${symbol}] PARTIAL FILL DETECTED! ` +
+            `Requested=${requestedQty} Filled=${filledQty} (${(fillRatio * 100).toFixed(1)}%) ` +
+            `Remaining=${remainingQty.toFixed(6)}`
+          );
+
+          // Retry close for remaining amount
+          try {
+            const retryFormattedQty = this.formatQtyForExchange(symbol, remainingQty);
+
+            // Only retry if remaining qty meets minimum order size
+            if (retryFormattedQty > 0) {
+              const retryOrderRequest: OrderRequest = {
+                id: uuidv4(),
+                agentId: this.config.sessionId,
+                userId: this.config.userId || 'unknown',
+                priority: 95, // CRITICAL priority for cleanup
+                symbol,
+                side: closeSide,
+                type: 'market',
+                quantity: retryFormattedQty,
+                params: { reduceOnly: true },
+                isEntry: false,
+                reason: 'partial_fill_cleanup',
+                priorityContext: { isEntry: false, reason: 'partial_fill_cleanup' as any },
+                submittedAt: Date.now(),
+                retries: 0,
+                timeoutMs: 30_000,
+              };
+
+              logger.info(`🔄 [${symbol}] Submitting RETRY order for remaining ${retryFormattedQty} qty`);
+              const retryResult = await orderQueue.submitOrder(retryOrderRequest);
+
+              if (retryResult.success) {
+                logger.info(`✅ [${symbol}] Partial fill cleanup SUCCESS | filled=${retryResult.order?.filled}`);
+              } else {
+                logger.error(`❌ [${symbol}] Partial fill cleanup FAILED: ${retryResult.error}`);
+                // Position may still be partially open - will be caught by syncWithExchange
+              }
+            } else {
+              logger.warn(`⚠️ [${symbol}] Remaining qty ${remainingQty} too small to close (below min order size)`);
+            }
+          } catch (retryError: any) {
+            logger.error(`❌ [${symbol}] Partial fill retry error: ${retryError.message}`);
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════════
         // V5.65: SLIPPAGE VALIDATION FOR EXIT ORDERS
         // ═══════════════════════════════════════════════════════════════════════════
         const expectedExitPrice = currentPrice;
@@ -4788,9 +4845,38 @@ export class SimpleAgent {
           }
           
           logger.info(`✅ [${symbol}] Position synced from exchange: ${exchangeSide} @ $${entryPrice} (age: ${Math.round((Date.now() - (dbEntryTime || Date.now())) / 60000)}min)`);
+
+          // ═══════════════════════════════════════════════════════════════════════════
+          // V5.79: CRITICAL - Set up stop loss protection for synced positions
+          // Without this, positions detected by sync would have NO PROTECTION
+          // ═══════════════════════════════════════════════════════════════════════════
+          if (this.config.mode === 'live') {
+            try {
+              // Calculate emergency stop (same logic as live entry)
+              const baseSlPct = 2.0; // Default base SL
+              const emergencyTargetPct = baseSlPct * (MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER || 2.5);
+              const emergencyMaxPct = MomentumConfig.EXIT.EMERGENCY_STOP_MAX_PCT ?? 3.0;
+              const emergencySlPct = Math.min(emergencyTargetPct, emergencyMaxPct);
+              const emergencyStop = exchangeSide === 'long'
+                ? entryPrice * (1 - emergencySlPct / 100)
+                : entryPrice * (1 + emergencySlPct / 100);
+
+              this.position.stopLoss = emergencyStop;
+              this.position.emergencyStopPrice = emergencyStop;
+
+              await this.setStopLossOnExchange(this.position, false);
+              logger.info(`🛡️ [${symbol}] SYNC: Emergency SL set @ $${emergencyStop.toFixed(4)} (${emergencySlPct.toFixed(2)}%) for synced position`);
+
+              // Start realtime exit monitor for the synced position
+              this.startRealtimeExitMonitorIfNeeded();
+            } catch (slError: any) {
+              logger.error(`❌ [${symbol}] SYNC: Failed to set stop loss for synced position: ${slError.message}`);
+              // Position exists but has no protection - will be caught by safety check on next 15m candle
+            }
+          }
         }
       }
-      
+
       // Case 3: Both have position - verify they match (use variables we already have)
       else if (this.position && exchangeQty > 0) {
         // Just log for now, could add reconciliation logic
