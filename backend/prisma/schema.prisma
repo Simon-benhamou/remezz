@@ -239,32 +239,32 @@ model Trade {
 }
 
 model Position {
-  id                   String        @id @default(cuid())
-  sessionId            String?
-  symbol               String
-  side                 String
-  entryPrice           Float?
-  qty                  Float?
-  markPrice            Float?
-  unrealizedPnl        Float?
-  leverage             Float?
-  openedAt             DateTime?     @default(now())
-  updatedAt            DateTime      @updatedAt
-  stopPrice            Float?
-  takeProfit           Json?
-  slOrderId            String?
-  tpOrderId            String?
-  lastProtectiveSyncAt DateTime?
-  protectiveStatus     String?
-  entryTime            BigInt?
-  highWaterMark        Float?
-  lowWaterMark         Float?
-  marginUsd            Float?
-  maxPnlPct            Float?
-  stagnantState        Json?
-  trailingActive       Boolean       @default(false)
-  trailingBreachCandles Int          @default(0)  // V5.60: Persist breach counter for restart recovery
-  session              AgentSession? @relation(fields: [sessionId], references: [id])
+  id                    String        @id @default(cuid())
+  sessionId             String?
+  symbol                String
+  side                  String
+  entryPrice            Float?
+  qty                   Float?
+  markPrice             Float?
+  unrealizedPnl         Float?
+  leverage              Float?
+  openedAt              DateTime?     @default(now())
+  updatedAt             DateTime      @updatedAt
+  stopPrice             Float?
+  takeProfit            Json?
+  slOrderId             String?
+  tpOrderId             String?
+  lastProtectiveSyncAt  DateTime?
+  protectiveStatus      String?
+  entryTime             BigInt?
+  highWaterMark         Float?
+  lowWaterMark          Float?
+  marginUsd             Float?
+  maxPnlPct             Float?
+  stagnantState         Json?
+  trailingActive        Boolean       @default(false)
+  trailingBreachCandles Int           @default(0)
+  session               AgentSession? @relation(fields: [sessionId], references: [id])
 
   @@index([sessionId])
   @@index([stagnantState])
@@ -361,4 +361,3 @@ enum AgentActionStatus {
   failed
   skipped
 }
-

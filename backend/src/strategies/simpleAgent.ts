@@ -2368,13 +2368,15 @@ export class SimpleAgent {
     const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
     const wickBreakout = checkWickBreakout(lastCandle, bb, side);
 
-    // Determine entry price: use wick breakout price if available, else close
-    const entryPrice = wickBreakout.triggered && wickBreakout.entryPrice
-      ? wickBreakout.entryPrice
-      : currentPrice;
+    // V5.78 FIX: Always use market price (currentPrice = candle close) for entries
+    // Wick breakout price is theoretical (achievable during candle formation, not after close)
+    // This ensures paper and live have realistic, comparable entry prices
+    // TODO: Implement intrabar entry (Option D) after backtesting
+    const entryPrice = currentPrice;
 
     if (wickBreakout.triggered && wickBreakout.improvement) {
-      logger.info(`⚡ [${symbol}] WICK BREAKOUT ENTRY | side=${side.toUpperCase()} | close=$${currentPrice.toFixed(4)} | wickEntry=$${entryPrice.toFixed(4)} | improvement=+${(wickBreakout.improvement * 100).toFixed(2)}%`);
+      // Log wick breakout detection but DON'T use the price
+      logger.info(`📊 [${symbol}] WICK BREAKOUT DETECTED (not used) | side=${side.toUpperCase()} | close=$${currentPrice.toFixed(4)} | theoreticalWickEntry=$${wickBreakout.entryPrice?.toFixed(4)} | potentialImprovement=+${(wickBreakout.improvement * 100).toFixed(2)}%`);
     }
 
     if (this.config.mode === 'paper') {
@@ -2587,12 +2589,16 @@ export class SimpleAgent {
 
         // ========================================================================
         // ORDER QUEUE INTEGRATION - Submit order via global queue
-        // V5.72: Use limit order at wick price when wick breakout triggers
+        // V5.78 FIX: Disabled wick limit orders - always use market order
+        // Wick limit orders for SHORT can't fill (price above market after candle close)
+        // and cause 10s delays. TODO: Implement intrabar entry (Option D) after backtesting
         // ========================================================================
         const wickConfig = MomentumConfig.WICK_BREAKOUT;
-        const useWickLimitOrder = wickBreakout.triggered &&
-          wickBreakout.entryPrice &&
-          wickConfig.LIMIT_ORDER_ENABLED;
+        const useWickLimitOrder = false;  // V5.78: Disabled - use market order for reliability
+        // Original logic (disabled):
+        // const useWickLimitOrder = wickBreakout.triggered &&
+        //   wickBreakout.entryPrice &&
+        //   wickConfig.LIMIT_ORDER_ENABLED;
 
         let filledPrice: number;
         let filledQty: number;
@@ -3471,11 +3477,21 @@ export class SimpleAgent {
       const fundingFee = fundingPeriods * (entryNotionalUsd * 0.0001); // 0.01% per period
       
       const paperFeeUsd = tradingFeeEntry + tradingFeeExit + slippageEntry + slippageExit + fundingFee;
-      
-      await this.saveExitToDb(position, currentPrice, reason, pnlPct, totalPnlUsd, undefined, paperFeeUsd);
+
+      // V5.78 FIX: Only send notifications if DB save succeeds
+      // This prevents false notifications when position is still open due to DB failure
+      const dbSaveSuccess = await this.saveExitToDb(position, currentPrice, reason, pnlPct, totalPnlUsd, undefined, paperFeeUsd);
+
+      if (!dbSaveSuccess) {
+        logger.error(`❌ [${symbol}] PAPER close DB save FAILED - position may still exist in DB. Skipping notifications.`);
+        // Don't send notification - position might still be open
+        return;
+      }
+
       logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${totalPnlUsd.toFixed(2)}) | margin released=$${totalMarginReleased.toFixed(2)} | costs=$${paperFeeUsd.toFixed(2)}`);
-      
+
       // 📢 Send Telegram notification for paper exit avec P&L et balance
+      // V5.78: Only sent AFTER successful DB save
       const balanceAfterPaper = this.config.capitalPool.getTotalCapital();
       void notifyPositionClosed({
         agentId: this.config.sessionId,
@@ -3491,7 +3507,7 @@ export class SimpleAgent {
         balanceAfter: balanceAfterPaper,
         feesUsd: paperFeeUsd,
       });
-      
+
       // Old notification system (kept for compatibility)
       notifyTradeExit({
         symbol,
@@ -3717,13 +3733,21 @@ export class SimpleAgent {
         // Extract fee from CCXT order response, fallback to 0.04% calculation
         const exitNotionalUsd = position.qty * exitPrice;
         const liveFeeUsd = order.fee?.cost ?? (exitNotionalUsd * 0.0004);
-        
+
+        // V5.78 FIX: Only send notifications if DB save succeeds
         // Pass the real exchange orderId and fee for proper tracking
-        await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd, order.id, liveFeeUsd);
-        
+        const dbSaveSuccessLive = await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd, order.id, liveFeeUsd);
+
+        if (!dbSaveSuccessLive) {
+          logger.error(`❌ [${symbol}] LIVE close DB save FAILED - position may still exist in DB. Skipping notifications.`);
+          // Don't send notification but position IS closed on exchange
+          return;
+        }
+
         logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | fee=$${liveFeeUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)} | orderId=${order.id}`)
-        
+
         // 📢 Send Telegram notification for live exit avec tous les détails
+        // V5.78: Only sent AFTER successful DB save
         const balanceAfterLive = this.config.capitalPool.getTotalCapital();
         void notifyPositionClosed({
           agentId: this.config.sessionId,
@@ -3739,7 +3763,7 @@ export class SimpleAgent {
           balanceAfter: balanceAfterLive,
           feesUsd: liveFeeUsd,
         });
-        
+
         // Old notification system (kept for compatibility)
         notifyTradeExit({
           symbol,
@@ -5053,7 +5077,7 @@ export class SimpleAgent {
     pnlUsd: number,
     exchangeOrderId?: string,  // Optional: real orderId from exchange (for live mode)
     feeUsd?: number  // Optional: actual fee from exchange or calculated
-  ): Promise<void> {
+  ): Promise<boolean> {  // V5.78: Return boolean to indicate success for notification gating
     try {
       // Exit side is opposite of position side (SELL to close LONG, BUY to close SHORT)
       const exitSide = position.side === 'long' ? 'sell' : 'buy';
@@ -5067,7 +5091,7 @@ export class SimpleAgent {
         const existing = await this.config.prisma.order.findFirst({ where: { clientOrderId: exchangeOrderId } });
         if (existing) {
           logger.warn(`⚠️ [${this.config.symbol}] Exit order ${exchangeOrderId} already exists in DB, skipping save`);
-          return;
+          return true;  // V5.78: Order exists = already processed, safe to continue
         }
       }
 
@@ -5078,7 +5102,13 @@ export class SimpleAgent {
       // V5.71: Use Prisma transaction to ensure atomic trade lifecycle operations
       // All DB operations succeed or fail together - no partial state on crash
       const exitTs = new Date();
-      const entryTs = new Date(position.entryTime);
+      // V5.78 FIX: Handle undefined entryTime - fallback to openedAt or current time
+      // This prevents NaN in durationMinutes which causes Prisma transaction to fail
+      const entryTimeMs = position.entryTime || Date.now();
+      const entryTs = new Date(entryTimeMs);
+      if (!position.entryTime) {
+        logger.warn(`⚠️ [${this.config.symbol}] position.entryTime was undefined, using fallback: ${entryTs.toISOString()}`);
+      }
       const durationMs = exitTs.getTime() - entryTs.getTime();
       const durationMinutes = Math.max(0, Math.round(durationMs / 60000));
       const entryNotional = position.entryPrice * position.qty;
@@ -5110,29 +5140,9 @@ export class SimpleAgent {
           },
         });
 
-        // 2. Create Fill record linked to Order
-        const fill = await tx.fill.create({
-          data: {
-            orderId: order.id,
-            sessionId: this.config.sessionId,
-            symbol: position.symbol,
-            price: exitPrice,
-            qty: position.qty,
-            side: exitSide,
-            realizedPnl: pnlUsd,
-            fee: calculatedFee,
-            strategyUsed: 'momentum_simple',
-            strategyFamily: 'momentum',
-            ts: exitTs,
-            exitReason: reason.toUpperCase(),
-            entryTs,
-            maxPnlPct: position.maxPnlPct ?? null,
-            tradeId: order.id,  // Link to trade immediately
-          },
-        });
-
-        // 3. Create Trade record
-        await tx.trade.create({
+        // 2. Create Trade record FIRST (Fill has foreign key to Trade)
+        // V5.78 FIX: Must create Trade before Fill to satisfy Fill_tradeId_fkey constraint
+        const trade = await tx.trade.create({
           data: {
             id: order.id,  // Use exitOrderId as tradeId
             sessionId: this.config.sessionId,
@@ -5154,6 +5164,27 @@ export class SimpleAgent {
             maxPnlPct: position.maxPnlPct ?? null,
             entryTs,
             exitTs,
+          },
+        });
+
+        // 3. Create Fill record linked to Order AND Trade
+        const fill = await tx.fill.create({
+          data: {
+            orderId: order.id,
+            sessionId: this.config.sessionId,
+            symbol: position.symbol,
+            price: exitPrice,
+            qty: position.qty,
+            side: exitSide,
+            realizedPnl: pnlUsd,
+            fee: calculatedFee,
+            strategyUsed: 'momentum_simple',
+            strategyFamily: 'momentum',
+            ts: exitTs,
+            exitReason: reason.toUpperCase(),
+            entryTs,
+            maxPnlPct: position.maxPnlPct ?? null,
+            tradeId: trade.id,  // Link to trade (now exists)
           },
         });
 
@@ -5185,8 +5216,11 @@ export class SimpleAgent {
 
       logger.info(`💾 [${this.config.symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%), Fee: $${calculatedFee.toFixed(2)}`);
 
+      return true;  // V5.78: Success - safe to send notification
+
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Failed to save exit to DB:`, error);
+      return false;  // V5.78: Failed - do NOT send notification, position may still exist
     }
   }
   
