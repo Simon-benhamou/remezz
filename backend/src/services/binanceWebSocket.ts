@@ -2119,24 +2119,59 @@ class BinanceWebSocketManager {
     }
   }
 
+  /**
+   * Seed historical candles - MERGES with existing WebSocket data (V5.79)
+   * Only adds older candles, never overwrites recent real-time data
+   */
   seedKlines(symbol: string, interval: string, ohlcv: number[][]): void {
     if (!Array.isArray(ohlcv) || !ohlcv.length) return;
 
     const cacheSymbol = this.normalizeCacheSymbol(symbol);
     const key = this.klineCacheKey(cacheSymbol, interval);
     const limited = ohlcv.slice(-500);
-    const seeded = limited.map((row) => ({
-      symbol: cacheSymbol,
-      timeframe: interval,
-      timestamp: Number(row[0]),
-      open: Number(row[1]),
-      high: Number(row[2]),
-      low: Number(row[3]),
-      close: Number(row[4]),
-      volume: Number(row[5]),
-    } satisfies BinanceKlineData));
 
-    this.klinesCache.set(key, seeded);
+    // Get existing cache (from WebSocket real-time updates)
+    const existing = this.klinesCache.get(key) || [];
+
+    if (existing.length > 0) {
+      // MERGE MODE: Only add candles older than what WebSocket has
+      const oldestExistingTs = existing[0].timestamp;
+
+      // Filter seeded candles to only those OLDER than our cache
+      const olderCandles = limited
+        .filter(row => Number(row[0]) < oldestExistingTs)
+        .map((row) => ({
+          symbol: cacheSymbol,
+          timeframe: interval,
+          timestamp: Number(row[0]),
+          open: Number(row[1]),
+          high: Number(row[2]),
+          low: Number(row[3]),
+          close: Number(row[4]),
+          volume: Number(row[5]),
+        } satisfies BinanceKlineData));
+
+      if (olderCandles.length > 0) {
+        // Prepend older history, keep recent WebSocket data intact
+        const merged = [...olderCandles, ...existing].slice(-500);
+        this.klinesCache.set(key, merged);
+      }
+      // If no older candles needed, don't touch the cache at all
+    } else {
+      // FULL SEED: No existing data (startup), do full replacement
+      const seeded = limited.map((row) => ({
+        symbol: cacheSymbol,
+        timeframe: interval,
+        timestamp: Number(row[0]),
+        open: Number(row[1]),
+        high: Number(row[2]),
+        low: Number(row[3]),
+        close: Number(row[4]),
+        volume: Number(row[5]),
+      } satisfies BinanceKlineData));
+
+      this.klinesCache.set(key, seeded);
+    }
   }
 
   /**
