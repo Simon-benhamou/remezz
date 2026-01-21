@@ -2399,8 +2399,10 @@ export class SimpleAgent {
           ? entryPrice * (1 - slPct / 100)  // V5.64: Use entryPrice (may be wick breakout price)
           : entryPrice * (1 + slPct / 100),
         stopLossPct: slPct,                    // V5.7: Store SL percentage used
-        highWaterMark: side === 'long' ? entryPrice : undefined,   // V5.64: Use entryPrice
-        lowWaterMark: side === 'short' ? entryPrice : undefined,   // V5.64: Use entryPrice
+        // HWM tracks gains from YOUR entry price (not candle extremes)
+        // Paper/live may diverge due to entry slippage - this is expected behavior
+        highWaterMark: side === 'long' ? entryPrice : undefined,
+        lowWaterMark: side === 'short' ? entryPrice : undefined,
         // V5.30: Multi-position tracking
         positionId: multiPlan?.enabled ? `${this.config.sessionId}_0` : undefined,
         groupId: multiPlan?.enabled ? `group_${Date.now()}_${symbol}` : undefined,
@@ -2796,6 +2798,7 @@ export class SimpleAgent {
             : filledPrice! * (1 + slPct / 100),
           stopLossPct: slPct,                    // V5.7: Store SL percentage used
           orderId: orderId,
+          // HWM tracks gains from YOUR fill price (not candle extremes)
           highWaterMark: side === 'long' ? filledPrice! : undefined,
           lowWaterMark: side === 'short' ? filledPrice! : undefined,
           // V5.30: Multi-position tracking
@@ -3240,7 +3243,22 @@ export class SimpleAgent {
             trailingStopPrice
           );
 
-          logger.info(`🔴 [${symbol}] 15m TRAILING BREACH | NFS=${nfsResult.score.toFixed(0)} (${nfsResult.confidence}) | breaches=${breachCount} | close=${currentPrice.toFixed(4)} | stop=${trailingStopPrice.toFixed(4)}`);
+          // V5.80: Enhanced logging for paper/live parity debugging
+          // Log all inputs that could cause NFS score divergence between paper and live
+          const hwm = this.position!.side === 'long' ? this.position!.highWaterMark : this.position!.lowWaterMark;
+          logger.info(
+            `🔴 [${symbol}] 15m TRAILING BREACH | NFS=${nfsResult.score.toFixed(0)} (${nfsResult.confidence}) | ` +
+            `breaches=${breachCount} | close=${currentPrice.toFixed(4)} | stop=${trailingStopPrice.toFixed(4)} | ` +
+            `hwm=${hwm?.toFixed(4) ?? 'N/A'} | entry=${this.position!.entryPrice.toFixed(4)} | mode=${this.config.mode}`
+          );
+          // Log NFS components for detailed comparison
+          logger.debug(
+            `[${symbol}] NFS components: breachATR=${nfsResult.components.breachATRRatio.toFixed(4)} ` +
+            `breachDepth=${nfsResult.components.breachDepthPct.toFixed(4)}% ` +
+            `vol=${nfsResult.components.volumeRatio.toFixed(2)}x ` +
+            `body=${nfsResult.components.candleBodyRatio.toFixed(2)} ` +
+            `roc5=${nfsResult.components.momentumROC5.toFixed(4)}%`
+          );
 
           if (nfsResult.shouldExitImmediately) {
             // HIGH confidence: Exit at trailing stop price
@@ -3608,18 +3626,34 @@ export class SimpleAgent {
         const exitPrice = order.average || order.price || currentPrice;
 
         // ═══════════════════════════════════════════════════════════════════════════
-        // V5.79: PARTIAL FILL DETECTION AND RETRY
-        // Market orders can partially fill, leaving a "ghost" position on exchange
+        // V5.80: PARTIAL FILL DETECTION AND RETRY (BUG FIX)
+        //
+        // Previous bug: Compared order.filled against position.qty, but we sent formattedQty.
+        // If formattedQty < position.qty (due to floor rounding), the check would pass even
+        // when a residual remains. Example:
+        //   - position.qty = 10.0025
+        //   - formattedQty = 10.002 (after floor)
+        //   - order.filled = 10.002 (100% of what we sent)
+        //   - Old ratio = 10.002 / 10.0025 = 99.97% > 99% → no retry triggered!
+        //   - But 0.0005 residual remains on exchange
+        //
+        // Fix: Compare against formattedQty AND check for formatting loss separately.
         // ═══════════════════════════════════════════════════════════════════════════
         const filledQty = order.filled ?? 0;
-        const requestedQty = position.qty;
-        const fillRatio = filledQty / requestedQty;
 
-        if (fillRatio < 0.99) {
-          const remainingQty = requestedQty - filledQty;
+        // Check 1: Did exchange fill what we actually requested?
+        const exchangeFillRatio = filledQty / formattedQty;
+
+        // Check 2: Did formatting lose any quantity? (floor rounding residual)
+        const formattingLoss = position.qty - formattedQty;
+        const hasFormattingResidual = formattingLoss > 0.000001; // Epsilon for float comparison
+
+        if (exchangeFillRatio < 0.99) {
+          // Exchange partial fill - retry for unfilled portion of what we sent
+          const remainingQty = formattedQty - filledQty;
           logger.warn(
-            `⚠️ [${symbol}] PARTIAL FILL DETECTED! ` +
-            `Requested=${requestedQty} Filled=${filledQty} (${(fillRatio * 100).toFixed(1)}%) ` +
+            `⚠️ [${symbol}] EXCHANGE PARTIAL FILL! ` +
+            `Sent=${formattedQty} Filled=${filledQty} (${(exchangeFillRatio * 100).toFixed(1)}%) ` +
             `Remaining=${remainingQty.toFixed(6)}`
           );
 
@@ -3662,6 +3696,16 @@ export class SimpleAgent {
           } catch (retryError: any) {
             logger.error(`❌ [${symbol}] Partial fill retry error: ${retryError.message}`);
           }
+        }
+
+        // V5.80: Warn about formatting residual even if exchange filled 100% of our request
+        // This residual (position.qty - formattedQty) was never sent to exchange due to floor rounding
+        if (hasFormattingResidual && exchangeFillRatio >= 0.99) {
+          logger.warn(
+            `⚠️ [${symbol}] FORMATTING RESIDUAL: position.qty=${position.qty.toFixed(6)} but ` +
+            `only sent formattedQty=${formattedQty.toFixed(6)} (loss=${formattingLoss.toFixed(6)}). ` +
+            `This residual may remain on exchange and sync back. Consider using REDUCE_ONLY with full position close.`
+          );
         }
 
         // ═══════════════════════════════════════════════════════════════════════════

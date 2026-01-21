@@ -198,26 +198,41 @@ function checkSignalAtEntry(
   entryTs: number,
   side: 'long' | 'short'
 ): SignalCheckResult {
-  // V5.62 FIX: Correct candle selection to match live behavior
+  // V5.80 FIX: Correct candle selection to match live behavior EXACTLY
   //
   // CRITICAL: Live records entryTime as lastCandle.timestamp (V5.46)
   // This is the timestamp of the candle that JUST CLOSED and triggered the entry.
   //
-  // Example: If entryTs = 10:00:00
-  //   - Live detected the 10:00 candle closed (isFinal=true)
-  //   - Signal was checked using candles UP TO AND INCLUDING 10:00
-  //   - Entry time was recorded as 10:00:00 (lastCandle.timestamp)
+  // Understanding Binance timestamps:
+  //   - Candle timestamp = OPEN time (e.g., 09:45:00 for 09:45-10:00 candle)
+  //   - Candle CLOSES at timestamp + 15 minutes (e.g., 10:00:00)
+  //   - At 10:00:01, the 09:45 candle has isFinal=true, the 10:00 candle is forming
   //
-  // Previous bug: We subtracted CANDLE_MS thinking 10:00 was "in progress"
-  // This caused parity to use candles only up to 09:45, missing the 10:00 candle!
+  // Example: If trade entered at 10:00:02 (2 seconds after 09:45 candle closed)
+  //   - lastCandle.timestamp = 09:45:00 (the candle that just closed)
+  //   - entryTime stored in DB = 09:45:00
+  //   - Live used candles with timestamp <= 09:45:00
   //
-  // Fix: Use entryTs directly as the last closed candle timestamp
+  // So if entryTs = 09:45:00 (candle OPEN time), the candle IS included (correct)
+  // This matches live behavior since live stores lastCandle.timestamp
   const CANDLE_MS = 15 * 60 * 1000; // 15-minute candles
   const lastClosedCandleTs = Math.floor(entryTs / CANDLE_MS) * CANDLE_MS;
 
   // V5.61 FIX: Apply same filter to BOTH symbol and BTC candles
+  // V5.80: Use < instead of <= to exclude the candle AT lastClosedCandleTs if it's still forming
+  // But since entryTs is the OPEN time of the closed candle (not the close time), we use <=
   const windowCandles = candles.filter(c => c.timestamp <= lastClosedCandleTs);
   const btcWindow = btcCandles.filter(c => c.timestamp <= lastClosedCandleTs);
+
+  // V5.80: Log for debugging parity issues
+  const lastSymbolCandle = windowCandles[windowCandles.length - 1];
+  const lastBtcCandle = btcWindow[btcWindow.length - 1];
+  logger.debug(
+    `[Parity] ${symbol} entry @ ${new Date(entryTs).toISOString()} | ` +
+    `lastClosedCandleTs=${new Date(lastClosedCandleTs).toISOString()} | ` +
+    `symbolCandles=${windowCandles.length} (last=${new Date(lastSymbolCandle?.timestamp || 0).toISOString()}, close=${lastSymbolCandle?.close?.toFixed(6)}) | ` +
+    `btcCandles=${btcWindow.length} (last=${new Date(lastBtcCandle?.timestamp || 0).toISOString()})`
+  );
 
   if (windowCandles.length < 50 || btcWindow.length < 50) {
     return { wouldEnter: false, strength: null, reason: 'Insufficient candle data' };
