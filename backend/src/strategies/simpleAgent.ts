@@ -2151,14 +2151,27 @@ export class SimpleAgent {
         // Use proximityScore as approximation of signal quality (0-100)
         const rejectReason = signal.reason || 'no_signal';
         // Only track meaningful rejections (not waiting_new_candle or cooldown)
-        if (!rejectReason.startsWith('waiting_') && !rejectReason.startsWith('cooldown')) {
+        if (f && !rejectReason.startsWith('waiting_') && !rejectReason.startsWith('cooldown')) {
+          // Calculate regime and proximity from features (same logic as radar update block)
+          const regime = f.btcInBullRegime ? 'BULL' : (f.btcInBearRegime ? 'BEAR' : 'NEUTRAL');
+          const bbDistance = f.btcInBullRegime
+            ? ((currentPrice - (f.bbUpper || currentPrice)) / currentPrice) * 100
+            : (((f.bbLower || currentPrice) - currentPrice) / currentPrice) * 100;
+          const radarFeatures: SignalFeatures = {
+            roc: f.roc || 0,
+            volRatio: f.volRatio,
+            bbDistance,
+            atrPct: 0,
+            trendStrength: 0,
+          };
+          const score = calculateProximityScore(radarFeatures, regime, !!this.position);
           // Estimate side from regime
-          const estimatedSide: 'long' | 'short' = currentRegime === 'BULL' ? 'long' : 'short';
+          const estimatedSide: 'long' | 'short' = regime === 'BULL' ? 'long' : 'short';
           trackRejectedSignal({
             timestamp: Date.now(),
             symbol,
             side: estimatedSide,
-            score: Math.round(proximityScore),
+            score: Math.round(score),
             reason: rejectReason,
             price: currentPrice,
           });
