@@ -66,7 +66,8 @@ import {
   notifySyncFailure,
   notifySignalDetected,
 } from '../services/notificationService.js';
-import { notifyPositionOpened, notifyPositionClosed, notifySlippageAlert } from '../utils/notifications.js';
+import { notifyPositionOpened, notifyPositionClosed } from '../utils/notifications.js';
+import { trackRejectedSignal, recordTrade, updateAgentState } from '../services/telegramReporter.js';
 import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
 import { calculateOrderPriority } from '../services/orderPriority.js';
 import { exchangeAPIDeduplicator, makeFetchMyTradesKey } from '../services/apiDeduplicator.js';
@@ -1708,6 +1709,22 @@ export class SimpleAgent {
         timestamp: now,
       });
 
+      // V5.79: Update agent state for Telegram heartbeat (every tick)
+      const positionInfo = this.position ? {
+        side: this.position.side,
+        entryPrice: this.position.entryPrice,
+        pnlPct: this.position.side === 'long'
+          ? ((currentPrice - this.position.entryPrice) / this.position.entryPrice) * 100
+          : ((this.position.entryPrice - currentPrice) / this.position.entryPrice) * 100,
+      } : null;
+      updateAgentState({
+        symbol,
+        mode: this.config.mode,
+        balance: this.config.capitalPool.getTotalCapital(),
+        position: positionInfo,
+        lastUpdate: Date.now(),
+      });
+
       // ═══════════════════════════════════════════════════════════════════════════
       // V5.71: Real-time Signal Radar - Calculate proximity on every tick
       // This detects when price approaches signal thresholds and logs only changes
@@ -2129,6 +2146,23 @@ export class SimpleAgent {
       } else {
         // Store reject reason for tick log
         this.lastRejectReason = signal.reason || 'no_signal';
+
+        // Track rejected signal for periodic Telegram report
+        // Use proximityScore as approximation of signal quality (0-100)
+        const rejectReason = signal.reason || 'no_signal';
+        // Only track meaningful rejections (not waiting_new_candle or cooldown)
+        if (!rejectReason.startsWith('waiting_') && !rejectReason.startsWith('cooldown')) {
+          // Estimate side from regime
+          const estimatedSide: 'long' | 'short' = currentRegime === 'BULL' ? 'long' : 'short';
+          trackRejectedSignal({
+            timestamp: Date.now(),
+            symbol,
+            side: estimatedSide,
+            score: Math.round(proximityScore),
+            reason: rejectReason,
+            price: currentPrice,
+          });
+        }
       }
       
     } catch (error) {
@@ -2760,18 +2794,7 @@ export class SimpleAgent {
             `expected=$${expectedPrice.toFixed(4)} | filled=$${filledPrice!.toFixed(4)} | ` +
             `slippage=${entrySlippage.toFixed(2)}% (max=${maxEntrySlippage}%)`
           );
-
-          if (slippageAlertEnabled) {
-            notifySlippageAlert?.({
-              symbol,
-              side,
-              type: 'entry',
-              expectedPrice,
-              filledPrice: filledPrice!,
-              slippagePct: entrySlippage,
-              maxSlippagePct: maxEntrySlippage,
-            });
-          }
+          // Slippage alert removed from Telegram (V5.79) - log only
         } else if (entrySlippage > 0.1) {
           // Log notable slippage but don't alert
           logger.info(`📊 [${symbol}] Entry slippage: ${entrySlippage.toFixed(3)}%`);
@@ -3545,6 +3568,9 @@ export class SimpleAgent {
       const isWinner = (totalPnlUsd - paperFeeUsd) > 0;
       this.config.capitalPool.recordTradeResult(isWinner, symbol);
 
+      // V5.79: Record trade for daily Telegram report
+      recordTrade(totalPnlUsd - paperFeeUsd);
+
     } else {
       // Live close
       try {
@@ -3725,18 +3751,7 @@ export class SimpleAgent {
             `expected=$${expectedExitPrice.toFixed(4)} | filled=$${exitPrice.toFixed(4)} | ` +
             `slippage=${exitSlippage.toFixed(2)}% (max=${maxExitSlippage}%)`
           );
-
-          if (slippageAlertEnabled) {
-            notifySlippageAlert?.({
-              symbol,
-              side: position.side,
-              type: 'exit',
-              expectedPrice: expectedExitPrice,
-              filledPrice: exitPrice,
-              slippagePct: exitSlippage,
-              maxSlippagePct: maxExitSlippage,
-            });
-          }
+          // Slippage alert removed from Telegram (V5.79) - log only
         } else if (exitSlippage > 0.1) {
           logger.info(`📊 [${symbol}] Exit slippage: ${exitSlippage.toFixed(3)}%`);
         }
@@ -3883,6 +3898,9 @@ export class SimpleAgent {
         // Winner = positive net PnL after fees
         const isWinnerLive = (actualPnlUsd - liveFeeUsd) > 0;
         this.config.capitalPool.recordTradeResult(isWinnerLive, symbol);
+
+        // V5.79: Record trade for daily Telegram report
+        recordTrade(actualPnlUsd - liveFeeUsd);
 
         this.config.onTrade?.({
           symbol,

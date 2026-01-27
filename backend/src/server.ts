@@ -34,6 +34,7 @@ import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDe
 import { orderQueue } from "./services/orderQueue.js";
 import { binanceRestQueue, BINANCE_WEIGHTS } from "./services/binanceRestQueue.js";
 import { seedFromLocalFiles, seedFreshCandles, startCandleRefreshJob, stopCandleRefreshJob } from "./services/candleCache.js";
+import { startTelegramReporter, stopTelegramReporter } from "./services/telegramReporter.js";
 
 // Strategy
 import {
@@ -4087,4 +4088,7 @@ runStartupSequence().catch(error => {
 server.listen(cfg.PORT, () => {
   logger.info(`✅ Server listening on :${cfg.PORT}`);
   logger.info(`📈 Strategy: Momentum Simple (Vol 5x + BTC MA50 + 2h Mom)`);
+
+  // V5.79: Start Telegram reporter for periodic heartbeats and daily reports
+  startTelegramReporter();
 });

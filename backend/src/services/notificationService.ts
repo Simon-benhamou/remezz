@@ -19,7 +19,7 @@
  */
 
 import { createLogger } from '../utils/logger.js';
-import { notifyRegimeChangeTelegram } from '../utils/notifications.js';
+// V5.79: notifyRegimeChangeTelegram removed - regime changes no longer sent to Telegram
 
 const logger = createLogger('notifications');
 
@@ -313,8 +313,7 @@ export function notifyRegimeChange(params: {
     broadcastFn('trade_notification', notification);
   }
 
-  // V5.71: Send to Telegram
-  notifyRegimeChangeTelegram(params);
+  // V5.79: Regime change removed from Telegram (noise reduction) - kept in WebSocket only
 }
 
 // =============================================================================

@@ -30,7 +30,7 @@ import { createLogger } from '../utils/logger.js';
 import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
 import { calculateOrderPriority, getPriorityTier } from './orderPriority.js';
 import type { OrderPriorityContext } from './orderPriority.js';
-import { notifyOrderSubmitted, notifyOrderFilled, notifyOrderFailed } from '../utils/notifications.js';
+import { notifyOrderFailed } from '../utils/notifications.js';
 import { validateOrderComplete, adjustQtyToStepSize, getSymbolLimits, logValidationError } from './orderValidation.js';
 
 const logger = createLogger('order-queue');
@@ -259,20 +259,7 @@ export class OrderQueue {
         `queueSize=${this.queue.length}/${this.MAX_QUEUE_SIZE}`
       );
 
-      // Notify Telegram (only for high priority orders to avoid spam)
-      if (request.priority >= 70) {
-        void notifyOrderSubmitted({
-          id: request.id,
-          agentId: request.agentId,
-          symbol: request.symbol,
-          side: request.side,
-          type: request.type,
-          quantity: request.quantity,
-          price: request.price,
-          reason: request.reason,
-          priority: request.priority,
-        });
-      }
+      // V5.79: Order submitted notification removed from Telegram (noise reduction)
     });
   }
 
@@ -617,17 +604,7 @@ export class OrderQueue {
         `executionTime=${executionTimeMs}ms`
       );
 
-      // Notify Telegram (skip entry orders - they're combined with position opened notification)
-      void notifyOrderFilled({
-        id: order.id || id,
-        symbol: symbol,
-        side: side,
-        filled: order.filled || quantity,
-        average: order.average,
-        price: order.price,
-        status: order.status,
-        isEntry: request.isEntry, // Entry orders are skipped to avoid duplicate with notifyPositionOpened
-      });
+      // V5.79: Order filled notification removed from Telegram (redundant with position notifications)
 
       resolve(result);
 
