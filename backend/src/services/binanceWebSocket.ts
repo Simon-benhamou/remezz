@@ -3587,6 +3587,50 @@ export function seedKlinesFromWebSocket(symbol: string, interval: string, ohlcv:
 }
 
 /**
+ * 🛡️ Strip candles before the last gap in a kline series.
+ * When REST historical candles are merged with WS live candles and there's a gap
+ * (missing candles), indicators like SMA200/ATR would be calculated on non-contiguous
+ * data, producing wrong values and bad trading decisions.
+ * Returns only the most recent contiguous block of candles.
+ */
+function stripGappedPrefix(klines: BinanceKlineData[], interval: string): BinanceKlineData[] {
+  if (klines.length <= 1) return klines;
+
+  const intervalMsMap: Record<string, number> = {
+    '1m': 60_000,
+    '3m': 3 * 60_000,
+    '5m': 5 * 60_000,
+    '15m': 15 * 60_000,
+    '30m': 30 * 60_000,
+    '1h': 3_600_000,
+    '2h': 2 * 3_600_000,
+    '4h': 4 * 3_600_000,
+    '1d': 86_400_000,
+  };
+  const intervalMs = intervalMsMap[interval];
+  if (!intervalMs) return klines;
+
+  // Allow 1.5x interval tolerance for slight timestamp drift
+  const maxGap = intervalMs * 1.5;
+
+  for (let i = klines.length - 1; i > 0; i--) {
+    const diff = klines[i].timestamp - klines[i - 1].timestamp;
+    if (diff > maxGap) {
+      const missingCandles = Math.round(diff / intervalMs) - 1;
+      const gapMinutes = Math.round(diff / 60_000);
+      console.warn(
+        `[WS][GAP_STRIPPED] ${interval}: ${missingCandles} candles missing ` +
+        `(${gapMinutes}min gap) at ${new Date(klines[i - 1].timestamp).toISOString()} -> ` +
+        `${new Date(klines[i].timestamp).toISOString()}, ` +
+        `keeping ${klines.length - i} contiguous candles (dropped ${i} old)`
+      );
+      return klines.slice(i);
+    }
+  }
+  return klines;
+}
+
+/**
  * V5.50: Get klines with metadata (including isFinal) for accurate candle close detection
  * This preserves the isFinal flag from WebSocket which is essential for matching backtest timing
  */
@@ -3594,7 +3638,7 @@ export function getKlinesWithMeta(symbol: string, interval: string): { timestamp
   const ws = getBinanceWebSocket();
   const klines = ws.getKlines(symbol, interval);
   if (!klines?.length) return null;
-  
+
   // Same staleness check as getKlinesOhlcvFromWebSocket
   const lastKline = klines[klines.length - 1];
   const lastBarAge = Date.now() - lastKline.timestamp;
@@ -3614,8 +3658,11 @@ export function getKlinesWithMeta(symbol: string, interval: string): { timestamp
     console.warn(`[WS][STALE_CACHE] ${symbol} ${interval}: Last bar is ${Math.round(lastBarAge / 60_000)}min old (max: ${Math.round(MAX_STALE_MS / 60_000)}min), cache stale`);
     return null;
   }
-  
-  return klines.map(k => ({
+
+  // 🛡️ GAP DETECTION: Strip candles before any gap to prevent corrupt indicators (SMA200, ATR, etc.)
+  const contiguous = stripGappedPrefix(klines, interval);
+
+  return contiguous.map(k => ({
     timestamp: k.timestamp,
     open: k.open,
     high: k.high,
@@ -3660,8 +3707,11 @@ export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): n
     return null;
   }
   
-  // ✅ Data is fresh - return ALL klines (historical + recent)
-  return klines.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
+  // 🛡️ GAP DETECTION: Strip candles before any gap to prevent corrupt indicators
+  const contiguous = stripGappedPrefix(klines, interval);
+
+  // ✅ Data is fresh - return contiguous klines only
+  return contiguous.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
 }
 
 /**
