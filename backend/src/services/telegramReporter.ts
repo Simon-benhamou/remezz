@@ -153,149 +153,26 @@ export function updateDailyPnlPct(pnlPct: number): void {
  * Send heartbeat report (agent status)
  */
 async function sendHeartbeat(): Promise<void> {
-  const uptimeHours = Math.floor((Date.now() - startTime) / (1000 * 60 * 60));
-  const uptimeMinutes = Math.floor((Date.now() - startTime) / (1000 * 60)) % 60;
-
-  const agents = Array.from(agentStates.values());
-  if (agents.length === 0) {
-    // No agents registered yet
-    return;
-  }
-
-  // Aggregate balance from all agents
-  const totalBalance = agents.reduce((sum, a) => sum + a.balance, 0);
-
-  // Find active positions
-  const activePositions = agents.filter(a => a.position !== null);
-
-  let positionInfo = 'Aucune position ouverte';
-  if (activePositions.length > 0) {
-    positionInfo = activePositions.map(a => {
-      const pos = a.position!;
-      const pnlSign = pos.pnlPct >= 0 ? '+' : '';
-      return `${a.symbol} ${pos.side.toUpperCase()} (${pnlSign}${pos.pnlPct.toFixed(2)}%)`;
-    }).join('\n');
-  }
-
-  const message = `
-📊 HEARTBEAT
-
-Actif depuis ${uptimeHours}h${uptimeMinutes.toString().padStart(2, '0')}
-Balance: $${totalBalance.toFixed(2)}
-
-${positionInfo}
-
-⏰ ${new Date().toLocaleTimeString('fr-FR', { timeZone: 'Asia/Jerusalem' })}
-  `.trim();
-
-  await sendTelegramMessage(message);
+  // Disabled: only entry/exit notifications are sent to Telegram
   lastHeartbeat = Date.now();
-  logger.info(`[TelegramReporter] Heartbeat sent`);
+  return;
 }
 
 /**
  * Send top 3 rejected signals report
  */
 async function sendRejectedSignalsReport(): Promise<void> {
-  const fourHoursAgo = Date.now() - (4 * 60 * 60 * 1000);
-
-  // Filter signals from last 4h
-  const recentSignals = rejectedSignals.filter(s => s.timestamp > fourHoursAgo);
-
-  if (recentSignals.length === 0) {
-    // No signals to report
-    logger.debug(`[TelegramReporter] No rejected signals in last 4h`);
-    return;
-  }
-
-  // Sort by score descending and take top 3
-  const top3 = recentSignals
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 3);
-
-  // Format reason for display
-  const formatReason = (reason: string): string => {
-    // Extract key part: "bull_regime:vol_low(1.1x < 1.15x)" -> "vol_low (1.1x < 1.15x)"
-    const parts = reason.split(':');
-    const mainReason = parts[parts.length - 1] || reason;
-    return mainReason.replace('_', ' ').replace('(', ' (');
-  };
-
-  const signalsList = top3.map((s, i) => {
-    return `${i + 1}. ${s.symbol} ${s.side.toUpperCase()} (score: ${s.score})
-   ${formatReason(s.reason)}`;
-  }).join('\n\n');
-
-  // Count reasons for summary
-  const reasonCounts = new Map<string, number>();
-  for (const s of recentSignals) {
-    const key = s.reason.split(':')[0] || s.reason.split('(')[0] || 'other';
-    reasonCounts.set(key, (reasonCounts.get(key) || 0) + 1);
-  }
-
-  const message = `
-📋 SIGNAUX REJETÉS (4h)
-
-${recentSignals.length} signaux analysés
-
-Top 3:
-${signalsList}
-
-⏰ ${new Date().toLocaleTimeString('fr-FR', { timeZone: 'Asia/Jerusalem' })}
-  `.trim();
-
-  await sendTelegramMessage(message);
+  // Disabled: only entry/exit notifications are sent to Telegram
   lastRejectReport = Date.now();
-
-  // Clear old signals
-  const cutoff = Date.now() - (4 * 60 * 60 * 1000);
-  while (rejectedSignals.length > 0 && rejectedSignals[0].timestamp < cutoff) {
-    rejectedSignals.shift();
-  }
-
-  logger.info(`[TelegramReporter] Rejected signals report sent (${recentSignals.length} signals)`);
+  return;
 }
 
 /**
  * Send daily report at 20h Israel time
  */
 async function sendDailyReport(): Promise<void> {
-  const today = new Date().toLocaleDateString('fr-FR', { timeZone: 'Asia/Jerusalem' });
-
-  // Avoid sending twice on same day
-  if (lastDailyReportDate === today) {
-    return;
-  }
-
-  const agents = Array.from(agentStates.values());
-  const totalBalance = agents.reduce((sum, a) => sum + a.balance, 0);
-
-  const winRate = dailyStats.trades > 0
-    ? ((dailyStats.wins / dailyStats.trades) * 100).toFixed(0)
-    : '0';
-
-  const pnlSign = dailyStats.pnlUsd >= 0 ? '+' : '';
-  const pnlPctSign = dailyStats.pnlPct >= 0 ? '+' : '';
-
-  const message = `
-📈 RAPPORT JOURNALIER
-${today}
-
-Trades: ${dailyStats.trades} (${dailyStats.wins}W / ${dailyStats.losses}L)
-PnL: ${pnlSign}$${dailyStats.pnlUsd.toFixed(2)} (${pnlPctSign}${dailyStats.pnlPct.toFixed(2)}%)
-Win Rate: ${winRate}%
-Balance: $${totalBalance.toFixed(2)}
-
-⏰ 20:00 Israel
-  `.trim();
-
-  await sendTelegramMessage(message);
-  lastDailyReportDate = today;
-
-  // Reset daily stats for next day
-  dailyStats = { trades: 0, wins: 0, losses: 0, pnlUsd: 0, pnlPct: 0 };
-
-  logger.info(`[TelegramReporter] Daily report sent`);
+  // Disabled: only entry/exit notifications are sent to Telegram
+  return;
 }
 
 // ============================================================================

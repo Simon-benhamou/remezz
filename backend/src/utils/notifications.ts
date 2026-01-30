@@ -58,7 +58,7 @@ async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' | 'HTML
 /**
  * Notify when a new order is submitted to the queue
  */
-export async function notifyOrderSubmitted(order: {
+export async function notifyOrderSubmitted(_order: {
   id: string;
   agentId: string;
   symbol: string;
@@ -69,25 +69,8 @@ export async function notifyOrderSubmitted(order: {
   reason: string;
   priority: number;
 }): Promise<void> {
-  if (!isEnabled) return;
-
-  const priceInfo = order.price ? `\nPrice: $${order.price.toFixed(2)}` : '';
-  const priorityEmoji = order.priority >= 90 ? '🔴' : order.priority >= 70 ? '🟠' : '🟡';
-
-  const message = `
-📝 ORDER QUEUED ${priorityEmoji}
-
-Symbol: ${order.symbol}
-Side: ${order.side.toUpperCase()}
-Type: ${order.type}
-Qty: ${order.quantity}${priceInfo}
-Reason: ${order.reason}
-Priority: ${order.priority}
-
-Agent: ${order.agentId.substring(0, 8)}
-  `.trim();
-
-  await sendTelegramMessage(message);
+  // Disabled: only entry/exit notifications are sent to Telegram
+  return;
 }
 
 /**
@@ -95,7 +78,7 @@ Agent: ${order.agentId.substring(0, 8)}
  * NOTE: For entry orders, we skip this and let notifyPositionOpened handle it
  * to avoid duplicate notifications. Only used for exit orders in orderQueue.
  */
-export async function notifyOrderFilled(order: {
+export async function notifyOrderFilled(_order: {
   id: string;
   symbol: string;
   side: string;
@@ -103,33 +86,16 @@ export async function notifyOrderFilled(order: {
   average?: number;
   price?: number;
   status?: string;
-  isEntry?: boolean; // If true, skip notification (will be handled by notifyPositionOpened)
+  isEntry?: boolean;
 }): Promise<void> {
-  if (!isEnabled) return;
-  
-  // Skip entry order notifications - they'll be combined with position opened
-  if (order.isEntry) return;
-
-  const executionPrice = order.average || order.price || 0;
-  const priceStr = executionPrice > 0 ? `$${executionPrice.toFixed(2)}` : 'Market';
-
-  const message = `
-✅ ORDER FILLED
-
-Symbol: ${order.symbol}
-Side: ${order.side.toUpperCase()}
-Qty: ${order.filled}
-Price: ${priceStr}
-Time: ${new Date().toLocaleTimeString()}
-  `.trim();
-
-  await sendTelegramMessage(message);
+  // Disabled: only entry/exit notifications are sent to Telegram
+  return;
 }
 
 /**
  * Notify when an order fails
  */
-export async function notifyOrderFailed(order: {
+export async function notifyOrderFailed(_order: {
   id: string;
   symbol: string;
   side: string;
@@ -138,20 +104,8 @@ export async function notifyOrderFailed(order: {
   retriesUsed?: number;
   isEntry?: boolean;
 }): Promise<void> {
-  if (!isEnabled) return;
-
-  const orderType = order.isEntry ? 'ENTRY' : 'EXIT';
-  const message = `
-❌ ORDER FAILED (${orderType})
-
-Symbol: ${order.symbol}
-Side: ${order.side.toUpperCase()}
-Qty: ${order.quantity}
-Error: ${order.error}
-Retries: ${order.retriesUsed ?? 0}
-  `.trim();
-
-  await sendTelegramMessage(message);
+  // Disabled: only entry/exit notifications are sent to Telegram
+  return;
 }
 
 /**
@@ -236,29 +190,19 @@ Reason: ${position.reason}${balanceInfo}
 /**
  * Notify critical system events
  */
-export async function notifySystemAlert(alert: {
+export async function notifySystemAlert(_alert: {
   level: 'warning' | 'error' | 'critical';
   title: string;
   message: string;
 }): Promise<void> {
-  if (!isEnabled) return;
-
-  const emoji = alert.level === 'critical' ? '🚨' : alert.level === 'error' ? '⚠️' : '⚡';
-
-  const message = `
-${emoji} SYSTEM ALERT
-
-${alert.title}
-${alert.message}
-  `.trim();
-
-  await sendTelegramMessage(message);
+  // Disabled: only entry/exit notifications are sent to Telegram
+  return;
 }
 
 /**
  * V5.65: Notify when slippage exceeds threshold
  */
-export async function notifySlippageAlert(data: {
+export async function notifySlippageAlert(_data: {
   symbol: string;
   side: string;
   type: 'entry' | 'exit';
@@ -267,30 +211,8 @@ export async function notifySlippageAlert(data: {
   slippagePct: number;
   maxSlippagePct: number;
 }): Promise<void> {
-  if (!isEnabled) return;
-
-  const emoji = data.slippagePct > data.maxSlippagePct * 2 ? '🚨' : '⚠️';
-  const lossDirection = data.type === 'entry'
-    ? (data.side === 'long' ? 'Higher' : 'Lower')
-    : (data.side === 'long' ? 'Lower' : 'Higher');
-
-  const message = `
-${emoji} HIGH SLIPPAGE ALERT
-
-Symbol: ${data.symbol}
-Type: ${data.type.toUpperCase()}
-Side: ${data.side.toUpperCase()}
-
-Expected: $${data.expectedPrice.toFixed(4)}
-Filled: $${data.filledPrice.toFixed(4)}
-${lossDirection} by: ${data.slippagePct.toFixed(2)}%
-
-⚠️ Exceeds max: ${data.maxSlippagePct.toFixed(1)}%
-
-⏰ ${new Date().toLocaleTimeString()}
-  `.trim();
-
-  await sendTelegramMessage(message);
+  // Disabled: only entry/exit notifications are sent to Telegram
+  return;
 }
 
 /**
@@ -327,29 +249,11 @@ Time: ${new Date().toLocaleString()}
 /**
  * V5.71: Notify when BTC regime changes (goes to Telegram)
  */
-export async function notifyRegimeChangeTelegram(params: {
+export async function notifyRegimeChangeTelegram(_params: {
   newRegime: 'bull' | 'bear';
   btcPrice: number;
   sma200: number;
 }): Promise<void> {
-  if (!isEnabled) return;
-
-  const isBull = params.newRegime === 'bull';
-  const emoji = isBull ? '🐂' : '🐻';
-  const direction = isBull ? 'BULL' : 'BEAR';
-  const action = isBull ? 'crossed above' : 'dropped below';
-
-  const message = `
-${emoji} REGIME CHANGE → ${direction}
-
-BTC ${action} SMA200
-Price: $${params.btcPrice.toFixed(0)}
-SMA200: $${params.sma200.toFixed(0)}
-
-Strategy: ${isBull ? 'LONG only' : 'SHORT only'}
-
-⏰ ${new Date().toLocaleTimeString()}
-  `.trim();
-
-  await sendTelegramMessage(message);
+  // Disabled: only entry/exit notifications are sent to Telegram
+  return;
 }
