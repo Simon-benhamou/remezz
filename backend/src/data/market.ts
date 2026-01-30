@@ -449,14 +449,52 @@ function prepareOhlcvSeries(
   allowPartial: boolean,
 ): PreparedOhlcvSeries {
   if (!Array.isArray(raw)) return { series: [], synthetic: false };
-  
+
   // 🛡️ SAFETY: Filter out invalid candles (price <= 0) to prevent indicator corruption
   const sorted = raw.slice()
     .filter(r => Array.isArray(r) && r.length >= 5 && Number(r[4]) > 0)
     .sort((a, b) => Number(a[0]) - Number(b[0]));
-    
+
   if (!sorted.length) return { series: [], synthetic: false };
-  const trimmed = dropPartialLastBar(sorted, tf, allowPartial);
+
+  // 🛡️ DEDUPLICATE: Remove candles with duplicate timestamps (keep last occurrence = freshest data)
+  const deduped: number[][] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (i + 1 < sorted.length && Number(sorted[i][0]) === Number(sorted[i + 1][0])) {
+      continue; // skip duplicate, keep the later one
+    }
+    deduped.push(sorted[i]);
+  }
+
+  // 🛡️ GAP DETECTION: Find the longest contiguous series from the end.
+  // When WS cache has gaps (e.g. REST historical + gap + WS live), the chart
+  // would show misleading price jumps across missing candles.
+  // Fix: only return the most recent contiguous block of candles.
+  const intervalMs = timeframeToMs(tf);
+  let contiguousStart = 0;
+  if (intervalMs > 0 && deduped.length > 1) {
+    // Allow up to 1.5x interval tolerance (for slight timestamp drift)
+    const maxGap = intervalMs * 1.5;
+    for (let i = deduped.length - 1; i > 0; i--) {
+      const diff = Number(deduped[i][0]) - Number(deduped[i - 1][0]);
+      if (diff > maxGap) {
+        // Gap found - only keep candles from index i onward
+        const gapMinutes = Math.round(diff / 60_000);
+        const missingCandles = Math.round(diff / intervalMs) - 1;
+        console.warn(
+          `[OHLCV][GAP_DETECTED] ${tf}: ${missingCandles} candles missing ` +
+          `(${gapMinutes}min gap) at ${new Date(Number(deduped[i - 1][0])).toISOString()} -> ` +
+          `${new Date(Number(deduped[i][0])).toISOString()}, ` +
+          `keeping ${deduped.length - i} contiguous candles from end`
+        );
+        contiguousStart = i;
+        break;
+      }
+    }
+  }
+  const contiguous = contiguousStart > 0 ? deduped.slice(contiguousStart) : deduped;
+
+  const trimmed = dropPartialLastBar(contiguous, tf, allowPartial);
   const clipped = trimmed.slice(-limit);
   const synthetic = isSyntheticSeries(clipped);
   if (synthetic) {
