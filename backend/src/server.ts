@@ -3943,16 +3943,10 @@ async function runStartupSequence(): Promise<void> {
     return;
   }
 
-  // STEP 4: Seed candles - local files first (instant), then fresh REST via queue
+  // STEP 4: Seed candles from REST API (fresh data only)
   logger.info('📊 Step 3/5: Seeding candles...');
 
-  // 4a. Local files first (instant, gives us data while REST fetches)
-  const { seeded: localSeeded } = await seedFromLocalFiles();
-  if (localSeeded > 0) {
-    logger.info(`✅ Local cache: ${localSeeded} candles (instant)`);
-  }
-
-  // 4b. Fresh candles via REST queue (rate-limited automatically)
+  // Fresh candles via REST queue (rate-limited automatically)
   logger.info('📥 Step 4/5: Fetching fresh candles via queue...');
   const { seeded: freshSeeded, failed } = await seedFreshCandles();
   logger.info(`✅ Fresh candles: ${freshSeeded} symbols seeded, ${failed} failed`);
