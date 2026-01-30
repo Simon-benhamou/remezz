@@ -2144,7 +2144,7 @@ class BinanceWebSocketManager {
 
   /**
    * Seed historical candles - MERGES with existing WebSocket data (V5.79)
-   * Only adds older candles, never overwrites recent real-time data
+   * Adds both older AND newer candles, never overwrites existing timestamps
    */
   seedKlines(symbol: string, interval: string, ohlcv: number[][]): void {
     if (!Array.isArray(ohlcv) || !ohlcv.length) return;
@@ -2157,12 +2157,13 @@ class BinanceWebSocketManager {
     const existing = this.klinesCache.get(key) || [];
 
     if (existing.length > 0) {
-      // MERGE MODE: Only add candles older than what WebSocket has
+      // MERGE MODE: Add candles older AND newer than what we have
       const oldestExistingTs = existing[0].timestamp;
+      const newestExistingTs = existing[existing.length - 1].timestamp;
+      const existingTimestamps = new Set(existing.map(k => k.timestamp));
 
-      // Filter seeded candles to only those OLDER than our cache
-      const olderCandles = limited
-        .filter(row => Number(row[0]) < oldestExistingTs)
+      const toMerge = limited
+        .filter(row => !existingTimestamps.has(Number(row[0])))
         .map((row) => ({
           symbol: cacheSymbol,
           timeframe: interval,
@@ -2174,12 +2175,13 @@ class BinanceWebSocketManager {
           volume: Number(row[5]),
         } satisfies BinanceKlineData));
 
-      if (olderCandles.length > 0) {
-        // Prepend older history, keep recent WebSocket data intact
-        const merged = [...olderCandles, ...existing].slice(-500);
+      if (toMerge.length > 0) {
+        // Merge all candles, sort by timestamp, keep last 500
+        const merged = [...existing, ...toMerge]
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .slice(-500);
         this.klinesCache.set(key, merged);
       }
-      // If no older candles needed, don't touch the cache at all
     } else {
       // FULL SEED: No existing data (startup), do full replacement
       const seeded = limited.map((row) => ({
