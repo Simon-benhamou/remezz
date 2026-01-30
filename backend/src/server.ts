@@ -33,7 +33,7 @@ import { setRadarBroadcast, getRecentRadarEvents } from "./services/signalRadarS
 import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDeduplicator.js";
 import { orderQueue } from "./services/orderQueue.js";
 import { binanceRestQueue, BINANCE_WEIGHTS } from "./services/binanceRestQueue.js";
-import { seedFromLocalFiles, seedFreshCandles, startCandleRefreshJob, stopCandleRefreshJob, backfillBtcCandles } from "./services/candleCache.js";
+import { seedFreshCandles, startCandleRefreshJob, stopCandleRefreshJob, backfillBtcCandles } from "./services/candleCache.js";
 import { startTelegramReporter, stopTelegramReporter } from "./services/telegramReporter.js";
 
 // Strategy
