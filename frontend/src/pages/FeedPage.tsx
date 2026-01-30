@@ -232,9 +232,9 @@ export default function FeedPage() {
                   gap: 8,
                 }}
               >
-                <div style={{ width: 6, height: 6, borderRadius: '50%', background: agent.hasPosition ? '#4ade80' : '#60a5fa' }} />
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: agent.hasPosition ? '#4ade80' : '#06b6d4' }} />
                 <Text style={{ color: '#f8fafc', fontWeight: 500, fontSize: 13 }}>{agent.symbol}</Text>
-                <Text style={{ color: agent.hasPosition ? '#4ade80' : '#60a5fa', fontSize: 11 }}>
+                <Text style={{ color: agent.hasPosition ? '#4ade80' : '#06b6d4', fontSize: 11 }}>
                   {agent.hasPosition ? `Trading ${agent.bias?.toUpperCase()}` : 'Watching'}
                 </Text>
               </div>
@@ -256,7 +256,7 @@ export default function FeedPage() {
                   cursor: 'pointer',
                   background: filterType === f ? 'rgba(59, 130, 246, 0.2)' : 'rgba(148, 163, 184, 0.08)',
                   border: filterType === f ? '1px solid rgba(59, 130, 246, 0.4)' : '1px solid transparent',
-                  color: filterType === f ? '#60a5fa' : '#94a3b8',
+                  color: filterType === f ? '#06b6d4' : '#94a3b8',
                   borderRadius: 6,
                   fontSize: 12,
                   textTransform: 'capitalize',
@@ -281,7 +281,7 @@ export default function FeedPage() {
                     ? b === 'long' ? 'rgba(34, 197, 94, 0.4)' : b === 'short' ? 'rgba(239, 68, 68, 0.4)' : 'rgba(59, 130, 246, 0.4)'
                     : 'transparent',
                   color: biasFilter === b
-                    ? b === 'long' ? '#4ade80' : b === 'short' ? '#f87171' : '#60a5fa'
+                    ? b === 'long' ? '#4ade80' : b === 'short' ? '#f87171' : '#06b6d4'
                     : '#94a3b8',
                   borderRadius: 6,
                   fontSize: 12,

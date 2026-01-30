@@ -123,7 +123,7 @@ export default function PositionInfoCard({
       content: (
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
           <Text>This will immediately close your {isLong ? 'LONG' : 'SHORT'} position:</Text>
-          <div style={{ padding: 12, background: '#fafafa', borderRadius: 6, marginTop: 8 }}>
+          <div style={{ padding: 12, background: 'rgba(6, 182, 212, 0.06)', borderRadius: 6, marginTop: 8 }}>
             <Space direction="vertical" size={4} style={{ width: '100%' }}>
               <Text strong>{qty.toFixed(4)} {symbol || ''}</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>

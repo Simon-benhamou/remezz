@@ -423,9 +423,9 @@ export function NotificationSettings() {
           style={{
             padding: '8px 16px',
             borderRadius: 8,
-            border: '1px solid #60a5fa',
+            border: '1px solid #06b6d4',
             background: 'transparent',
-            color: '#60a5fa',
+            color: '#06b6d4',
             cursor: 'pointer',
             marginTop: 8,
           }}

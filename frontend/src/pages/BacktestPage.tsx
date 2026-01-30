@@ -833,7 +833,7 @@ export default function BacktestPage() {
                   value={result.summary.finalCapital}
                   precision={0}
                   prefix="$"
-                  valueStyle={{ color: '#60a5fa' }}
+                  valueStyle={{ color: '#06b6d4' }}
                 />
                 <Text style={{ color: '#64748b', fontSize: 12 }}>
                   Started with ${result.params.initialCapital.toLocaleString()}
@@ -871,7 +871,7 @@ export default function BacktestPage() {
                 <Statistic
                   title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Long Trades</Text>}
                   value={result.summary.longTrades}
-                  valueStyle={{ color: '#60a5fa', fontSize: 18 }}
+                  valueStyle={{ color: '#06b6d4', fontSize: 18 }}
                 />
               </Card>
             </Col>

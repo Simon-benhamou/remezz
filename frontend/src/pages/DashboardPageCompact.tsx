@@ -56,15 +56,15 @@ type Trade = {
 
 // Styles
 const cardStyle: React.CSSProperties = {
-  background: '#0f172a',
+  background: 'var(--bg-card, rgba(17, 24, 39, 0.92))',
   borderRadius: 16,
-  border: '1px solid rgba(148, 163, 184, 0.15)',
+  border: '1px solid var(--border-color, rgba(30, 58, 95, 0.4))',
 };
 
 const statCardStyle: React.CSSProperties = {
-  background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.9))',
+  background: 'var(--card-gradient, linear-gradient(135deg, rgba(17, 24, 39, 0.9), rgba(30, 41, 59, 0.9)))',
   borderRadius: 12,
-  border: '1px solid rgba(148, 163, 184, 0.15)',
+  border: '1px solid var(--border-color, rgba(30, 58, 95, 0.4))',
   padding: '16px 20px',
 };
 
@@ -179,7 +179,7 @@ export default function DashboardPageCompact() {
   const watchingCount = (ov?.sessions || []).filter((s: any) => s.state === 'WATCHING').length;
 
   return (
-    <div style={{ padding: '20px', maxWidth: 1400, margin: '0 auto', background: '#020617', minHeight: '100vh' }}>
+    <div style={{ padding: '20px', maxWidth: 1400, margin: '0 auto', background: 'transparent', minHeight: '100vh' }}>
       
       {/* Top Stats Bar */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
@@ -483,11 +483,11 @@ export default function DashboardPageCompact() {
                         const value = payload[0]?.value as number;
                         return (
                           <div style={{
-                            background: '#1e293b',
+                            background: 'var(--bg-elevated, #1e293b)',
                             padding: '10px 14px',
                             borderRadius: 8,
-                            border: '1px solid rgba(148, 163, 184, 0.2)',
-                            color: '#f8fafc',
+                            border: '1px solid var(--border-color, rgba(30, 58, 95, 0.4))',
+                            color: 'var(--text-primary, #f1f5f9)',
                           }}>
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
                             <div style={{ color: value >= 0 ? '#34d399' : '#f87171' }}>

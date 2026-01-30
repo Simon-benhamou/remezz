@@ -53,9 +53,9 @@ export default function PerfBreakdownPanel({ sessionId, api }: { sessionId?: str
       size="small"
       title={
         <Flex align="center" gap={8}>
-          <BarChart3 size={16} style={{ color: '#60a5fa' }} />
+          <BarChart3 size={16} style={{ color: '#06b6d4' }} />
           <span style={{ color: '#e2e8f0', fontWeight: 600 }}>Performance</span>
-          <Tag style={{ marginLeft: 'auto', background: 'rgba(96, 165, 250, 0.15)', border: 'none', color: '#60a5fa' }}>
+          <Tag style={{ marginLeft: 'auto', background: 'rgba(6, 182, 212, 0.15)', border: 'none', color: '#06b6d4' }}>
             {data.sample} trades
           </Tag>
         </Flex>
@@ -166,14 +166,14 @@ export default function PerfBreakdownPanel({ sessionId, api }: { sessionId?: str
           style={{
             marginTop: 12,
             padding: '8px 12px',
-            background: 'rgba(96, 165, 250, 0.08)',
+            background: 'rgba(6, 182, 212, 0.08)',
             borderRadius: 8,
-            border: '1px solid rgba(96, 165, 250, 0.15)',
+            border: '1px solid rgba(6, 182, 212, 0.15)',
           }}
         >
-          <Target size={14} style={{ color: '#60a5fa' }} />
+          <Target size={14} style={{ color: '#06b6d4' }} />
           <span style={{ color: 'rgba(148, 163, 184, 0.8)', fontSize: 12 }}>Risk</span>
-          <span style={{ color: '#60a5fa', fontWeight: 600 }}>
+          <span style={{ color: '#06b6d4', fontWeight: 600 }}>
             {(adaptive.riskPct || 0).toFixed(2)}%
           </span>
           {adaptive.appliedSymbolMultiplier && adaptive.appliedSymbolMultiplier !== 1 && (

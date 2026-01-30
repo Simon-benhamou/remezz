@@ -166,9 +166,9 @@ export default function MarketContextCard({ market, symbol, loading }: Props) {
         {/* Volume Insights */}
         <div style={{ 
           padding: 8, 
-          background: market.volumeRatio >= 1.2 ? '#f0fdf4' : market.volumeRatio < 0.8 ? '#fef2f2' : '#f8fafc',
+          background: market.volumeRatio >= 1.2 ? 'rgba(16, 185, 129, 0.08)' : market.volumeRatio < 0.8 ? 'rgba(239, 68, 68, 0.08)' : 'rgba(6, 182, 212, 0.06)',
           borderRadius: 4,
-          border: `1px solid ${market.volumeRatio >= 1.2 ? '#86efac' : market.volumeRatio < 0.8 ? '#fca5a5' : '#e2e8f0'}`
+          border: `1px solid ${market.volumeRatio >= 1.2 ? 'rgba(16, 185, 129, 0.25)' : market.volumeRatio < 0.8 ? 'rgba(239, 68, 68, 0.25)' : 'var(--border-color, rgba(30, 58, 95, 0.4))'}`
         }}>
           <Text style={{ fontSize: 11 }}>
             {market.volumeRatio >= 1.5 && '🔥 Exceptional volume activity - Strong market interest'}

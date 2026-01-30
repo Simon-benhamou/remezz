@@ -249,7 +249,7 @@ export default function ExecutionLedgerPageNew() {
               <Tag style={{
                 fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 4, border: 'none',
                 background: trade.sessionMode === 'live' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                color: trade.sessionMode === 'live' ? '#4ade80' : '#60a5fa',
+                color: trade.sessionMode === 'live' ? '#4ade80' : '#06b6d4',
               }}>
                 {(trade.sessionMode || 'unknown').toUpperCase()}
               </Tag>

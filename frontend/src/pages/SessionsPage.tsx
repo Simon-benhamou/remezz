@@ -286,7 +286,7 @@ export default function SessionsPage() {
                       borderRadius: 4,
                       border: 'none',
                       background: session.mode === 'live' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(59, 130, 246, 0.12)',
-                      color: session.mode === 'live' ? '#f87171' : '#60a5fa',
+                      color: session.mode === 'live' ? '#f87171' : '#06b6d4',
                       fontSize: 10,
                       padding: '2px 6px',
                       lineHeight: 1.4,
@@ -311,7 +311,7 @@ export default function SessionsPage() {
                   </Tag>
 
                   {/* Capital Source */}
-                  <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', fontSize: 11 }}>
+                  <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(59, 130, 246, 0.1)', color: '#06b6d4', fontSize: 11 }}>
                     Shared pool
                   </Tag>
 
@@ -423,7 +423,7 @@ export default function SessionsPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
                     <div>
                       <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 16, display: 'block' }}>{resolveAgentLabel(session)}</Text>
-                      <Tag style={{ marginTop: 6, borderRadius: 4, border: 'none', background: session.mode === 'live' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(59, 130, 246, 0.12)', color: session.mode === 'live' ? '#f87171' : '#60a5fa', fontSize: 10 }}>
+                      <Tag style={{ marginTop: 6, borderRadius: 4, border: 'none', background: session.mode === 'live' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(59, 130, 246, 0.12)', color: session.mode === 'live' ? '#f87171' : '#06b6d4', fontSize: 10 }}>
                         {session.mode?.toUpperCase()}
                       </Tag>
                     </div>

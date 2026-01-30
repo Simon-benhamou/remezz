@@ -63,9 +63,9 @@ export default function NotificationBell() {
                 width: '100%',
                 padding: '6px 12px',
                 borderRadius: 6,
-                border: '1px solid #60a5fa',
-                background: 'rgba(96, 165, 250, 0.1)',
-                color: '#60a5fa',
+                border: '1px solid #06b6d4',
+                background: 'rgba(6, 182, 212, 0.1)',
+                color: '#06b6d4',
                 cursor: 'pointer',
                 fontSize: 12,
               }}
@@ -108,7 +108,7 @@ export default function NotificationBell() {
               // Get icon/color based on notification type
               const getTypeInfo = () => {
                 switch (item.type) {
-                  case 'trade_entry': return { icon: '🚀', color: '#60a5fa' };
+                  case 'trade_entry': return { icon: '🚀', color: '#06b6d4' };
                   case 'trade_exit': return { icon: isWin ? '✅' : '❌', color: isWin ? '#52c41a' : '#ff4d4f' };
                   case 'stop_loss_hit': return { icon: '🛑', color: '#ff4d4f' };
                   case 'take_profit_hit': return { icon: '🎯', color: '#52c41a' };
@@ -197,7 +197,7 @@ export default function NotificationBell() {
         >
           <Bell style={{ 
             fontSize: 18, 
-            color: enabled ? '#60a5fa' : 'rgba(148, 163, 184, 0.6)' 
+            color: enabled ? '#06b6d4' : 'rgba(148, 163, 184, 0.6)' 
           }} />
         </div>
       </Badge>

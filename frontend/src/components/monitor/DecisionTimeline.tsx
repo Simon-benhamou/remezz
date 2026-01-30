@@ -135,7 +135,7 @@ export default function DecisionTimeline({ sessionId, decisions, loading }: Deci
                       <summary style={{ cursor: 'pointer' }}>Details</summary>
                       <pre style={{ 
                         fontSize: 10, 
-                        background: '#fafafa', 
+                        background: 'rgba(6, 182, 212, 0.06)', 
                         padding: 8, 
                         borderRadius: 4,
                         marginTop: 4,

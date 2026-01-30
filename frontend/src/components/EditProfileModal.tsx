@@ -94,11 +94,11 @@ export default function EditProfileModal({ visible, onClose, userInfo, onUserUpd
             help="Username cannot be changed"
           >
             <Input 
-              prefix={<UserOutlined style={{ color: '#667eea' }} />}
+              prefix={<UserOutlined style={{ color: '#06b6d4' }} />}
               disabled 
               style={{ 
-                backgroundColor: '#f5f5f5',
-                borderColor: '#d9d9d9'
+                backgroundColor: 'rgba(6, 182, 212, 0.06)',
+                borderColor: 'var(--border-color, rgba(30, 58, 95, 0.4))'
               }}
             />
           </Form.Item>
@@ -112,7 +112,7 @@ export default function EditProfileModal({ visible, onClose, userInfo, onUserUpd
             ]}
           >
             <Input 
-              prefix={<MailOutlined style={{ color: '#667eea' }} />}
+              prefix={<MailOutlined style={{ color: '#06b6d4' }} />}
               placeholder="Enter your email"
             />
           </Form.Item>
@@ -123,7 +123,7 @@ export default function EditProfileModal({ visible, onClose, userInfo, onUserUpd
               htmlType="submit"
               loading={loading}
               style={{
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                background: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)',
                 border: 'none'
               }}
             >
@@ -132,7 +132,7 @@ export default function EditProfileModal({ visible, onClose, userInfo, onUserUpd
           </Form.Item>
         </Form>
 
-        <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: '24px' }}>
+        <div style={{ borderTop: '1px solid var(--border-color, rgba(30, 58, 95, 0.4))', paddingTop: '24px' }}>
           <Title level={4}>Change Password</Title>
           <Text type="secondary">
             Update your password to keep your account secure.
@@ -150,7 +150,7 @@ export default function EditProfileModal({ visible, onClose, userInfo, onUserUpd
               rules={[{ required: true, message: 'Please enter your current password' }]}
             >
               <Input.Password 
-                prefix={<LockOutlined style={{ color: '#667eea' }} />}
+                prefix={<LockOutlined style={{ color: '#06b6d4' }} />}
                 placeholder="Enter current password"
               />
             </Form.Item>
@@ -164,7 +164,7 @@ export default function EditProfileModal({ visible, onClose, userInfo, onUserUpd
               ]}
             >
               <Input.Password 
-                prefix={<LockOutlined style={{ color: '#667eea' }} />}
+                prefix={<LockOutlined style={{ color: '#06b6d4' }} />}
                 placeholder="Enter new password"
               />
             </Form.Item>
@@ -186,7 +186,7 @@ export default function EditProfileModal({ visible, onClose, userInfo, onUserUpd
               ]}
             >
               <Input.Password 
-                prefix={<LockOutlined style={{ color: '#667eea' }} />}
+                prefix={<LockOutlined style={{ color: '#06b6d4' }} />}
                 placeholder="Confirm new password"
               />
             </Form.Item>
@@ -197,8 +197,8 @@ export default function EditProfileModal({ visible, onClose, userInfo, onUserUpd
                 htmlType="submit"
                 loading={changingPassword}
                 style={{
-                  borderColor: '#667eea',
-                  color: '#667eea'
+                  borderColor: '#06b6d4',
+                  color: '#06b6d4'
                 }}
               >
                 Change Password

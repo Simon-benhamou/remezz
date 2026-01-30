@@ -174,7 +174,7 @@ const loadingStyles = `
     transition: all 0.2s;
     background: rgba(59, 130, 246, 0.2);
     border: 1px solid rgba(59, 130, 246, 0.3);
-    color: #60a5fa;
+    color: #06b6d4;
   }
 
   .cockpit-loading-btn:hover {

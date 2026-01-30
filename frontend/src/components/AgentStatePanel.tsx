@@ -194,35 +194,35 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, margin, sess
         <section className='agent-diagnostics__section'>
           <div className='agent-diagnostics__section-title'>Symbol Profile · {symbol}</div>
           <div className='agent-diagnostics__grid' style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
-            <div style={{ padding: '8px', background: '#f5f5f5', borderRadius: '4px' }}>
-              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>Volatility</div>
+            <div style={{ padding: '8px', background: 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginBottom: '4px' }}>Volatility</div>
               <div style={{ fontWeight: 600, fontSize: '13px' }}>
                 {symbolProfile.volatilityRegime} 
-                <span style={{ fontSize: '11px', color: '#999', marginLeft: '4px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginLeft: '4px' }}>
                   ({(symbolProfile.atrPct * 100).toFixed(2)}%)
                 </span>
               </div>
             </div>
-            <div style={{ padding: '8px', background: '#f5f5f5', borderRadius: '4px' }}>
-              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>Direction</div>
+            <div style={{ padding: '8px', background: 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginBottom: '4px' }}>Direction</div>
               <div style={{ fontWeight: 600, fontSize: '13px', color: symbolProfile.directionBias === 'long' ? '#52c41a' : symbolProfile.directionBias === 'short' ? '#ff4d4f' : '#666' }}>
                 {symbolProfile.directionBias}
               </div>
             </div>
-            <div style={{ padding: '8px', background: '#f5f5f5', borderRadius: '4px' }}>
-              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>Trend</div>
+            <div style={{ padding: '8px', background: 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginBottom: '4px' }}>Trend</div>
               <div style={{ fontWeight: 600, fontSize: '13px' }}>
                 {symbolProfile.trendingRanging}
-                <span style={{ fontSize: '11px', color: '#999', marginLeft: '4px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginLeft: '4px' }}>
                   (ADX {symbolProfile.adx.toFixed(1)})
                 </span>
               </div>
             </div>
-            <div style={{ padding: '8px', background: '#f5f5f5', borderRadius: '4px' }}>
-              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>RSI</div>
+            <div style={{ padding: '8px', background: 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginBottom: '4px' }}>RSI</div>
               <div style={{ fontWeight: 600, fontSize: '13px', color: symbolProfile.rsi < 30 ? '#ff4d4f' : symbolProfile.rsi > 70 ? '#52c41a' : '#666' }}>
                 {symbolProfile.rsi.toFixed(1)}
-                <span style={{ fontSize: '11px', color: '#999', marginLeft: '4px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginLeft: '4px' }}>
                   {symbolProfile.rsi < 30 ? 'Oversold' : symbolProfile.rsi > 70 ? 'Overbought' : 'Neutral'}
                 </span>
               </div>
@@ -236,27 +236,27 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, margin, sess
         <section className='agent-diagnostics__section'>
           <div className='agent-diagnostics__section-title'>
             AI Predictor · {predictor.decision.toUpperCase()}
-            <span style={{ marginLeft: '8px', fontSize: '12px', color: '#999' }}>
+            <span style={{ marginLeft: '8px', fontSize: '12px', color: 'var(--text-secondary, #94a3b8)' }}>
               (Confidence: {(predictor.confidence * 100).toFixed(0)}%)
             </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div>
-              <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px' }}>Probabilities</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginBottom: '8px' }}>Probabilities</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: predictor.decision === 'long' ? '#e6f7e6' : '#f5f5f5', borderRadius: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: predictor.decision === 'long' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
                   <span style={{ fontSize: '12px', fontWeight: predictor.decision === 'long' ? 600 : 400 }}>LONG</span>
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#52c41a' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#10b981' }}>
                     {(predictor.probLong * 100).toFixed(1)}%
                   </span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: predictor.decision === 'short' ? '#ffe6e6' : '#f5f5f5', borderRadius: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: predictor.decision === 'short' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
                   <span style={{ fontSize: '12px', fontWeight: predictor.decision === 'short' ? 600 : 400 }}>SHORT</span>
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#ff4d4f' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#ef4444' }}>
                     {(predictor.probShort * 100).toFixed(1)}%
                   </span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: predictor.decision === 'none' ? '#fff7e6' : '#f5f5f5', borderRadius: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: predictor.decision === 'none' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
                   <span style={{ fontSize: '12px', fontWeight: predictor.decision === 'none' ? 600 : 400 }}>NONE</span>
                   <span style={{ fontSize: '12px', fontWeight: 600, color: '#faad14' }}>
                     {(predictor.probNone * 100).toFixed(1)}%
@@ -265,7 +265,7 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, margin, sess
               </div>
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px' }}>Metrics</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginBottom: '8px' }}>Metrics</div>
               <ul className='agent-diagnostics__list' style={{ margin: 0 }}>
                 <li>
                   <span>Edge</span>

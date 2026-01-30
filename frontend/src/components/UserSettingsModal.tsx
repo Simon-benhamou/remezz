@@ -301,8 +301,8 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
                     style={{ 
                       fontSize: '14px', 
                       fontWeight: '600', 
-                      color: '#1890ff',
-                      backgroundColor: '#f0f8ff',
+                      color: 'var(--accent, #06b6d4)',
+                      backgroundColor: 'rgba(6, 182, 212, 0.08)',
                       padding: '4px 8px',
                       borderRadius: '4px',
                       border: '1px solid #d4edda'
@@ -315,8 +315,8 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
               type="warning"
               showIcon
               style={{
-                backgroundColor: '#fff7e6',
-                border: '1px solid #ffd591'
+                backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                border: '1px solid rgba(245, 158, 11, 0.3)'
               }}
             />
 
@@ -384,7 +384,7 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
                         style={{ 
                           fontSize: '13px', 
                           fontWeight: '600', 
-                          color: '#1890ff',
+                          color: 'var(--accent, #06b6d4)',
                           marginTop: '4px',
                           display: 'inline-block'
                         }}
@@ -392,7 +392,7 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
                         208.77.244.15
                       </Text>
                       <br />
-                      <Text style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                      <Text style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginTop: '4px' }}>
                         Go to Crypto.com → API Management → Edit your API → IP Whitelist
                       </Text>
                     </div>
@@ -400,8 +400,8 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
                   type="info"
                   showIcon={false}
                   style={{
-                    background: '#f6ffed',
-                    border: '1px solid #b7eb8f',
+                    background: 'rgba(16, 185, 129, 0.08)',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
                     borderRadius: '6px',
                     marginBottom: '16px'
                   }}
@@ -428,7 +428,7 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
                     <Card
                       key={key.id}
                       size="small"
-                      style={{ backgroundColor: '#fafafa' }}
+                      style={{ backgroundColor: 'rgba(6, 182, 212, 0.04)' }}
                       extra={
                         <Space>
                           <Button

@@ -127,18 +127,18 @@ export default function UserDropdown() {
             alignItems: 'center',
             gap: '10px',
             borderRadius: '12px',
-            border: '1px solid rgba(96, 165, 250, 0.25)',
+            border: '1px solid rgba(6, 182, 212, 0.25)',
             transition: 'all 0.2s ease',
             background: 'rgba(15, 23, 42, 0.6)',
             color: '#e2e8f0',
           }}
           onMouseEnter={(e) => {
             e.currentTarget.style.backgroundColor = 'rgba(37, 99, 235, 0.18)';
-            e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.55)';
+            e.currentTarget.style.borderColor = 'rgba(6, 182, 212, 0.55)';
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.6)';
-            e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.25)';
+            e.currentTarget.style.borderColor = 'rgba(6, 182, 212, 0.25)';
           }}
         >
           <Space>

@@ -795,7 +795,7 @@ const styles = `
 
   .otp-tab__count--active {
     background: rgba(59, 130, 246, 0.3);
-    color: #60a5fa;
+    color: #06b6d4;
   }
 
   .otp-filters {

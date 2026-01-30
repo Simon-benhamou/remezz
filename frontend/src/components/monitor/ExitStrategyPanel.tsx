@@ -134,8 +134,8 @@ export default function ExitStrategyPanel({
                 key={idx}
                 style={{
                   padding: '8px 12px',
-                  background: target.reached ? '#f6ffed' : '#fafafa',
-                  border: `1px solid ${target.reached ? '#b7eb8f' : '#d9d9d9'}`,
+                  background: target.reached ? 'rgba(16, 185, 129, 0.1)' : 'rgba(6, 182, 212, 0.06)',
+                  border: `1px solid ${target.reached ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-color, rgba(30, 58, 95, 0.4))'}`,
                   borderRadius: 4,
                   display: 'flex',
                   justifyContent: 'space-between',

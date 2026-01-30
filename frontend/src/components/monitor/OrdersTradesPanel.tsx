@@ -278,7 +278,7 @@ export function OrdersTradesPanel({
             <Progress
               percent={Number(percent.toFixed(1))}
               size="small"
-              strokeColor={percent >= 100 ? '#22c55e' : '#60a5fa'}
+              strokeColor={percent >= 100 ? '#22c55e' : '#06b6d4'}
               showInfo={false}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
