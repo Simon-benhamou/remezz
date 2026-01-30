@@ -56,8 +56,8 @@ interface NotificationContextValue {
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
 // Storage keys
-const STORAGE_KEY_ENABLED = 'quantai_notifications_enabled';
-const STORAGE_KEY_SOUND = 'quantai_notifications_sound';
+const STORAGE_KEY_ENABLED = 'remezz_notifications_enabled';
+const STORAGE_KEY_SOUND = 'remezz_notifications_sound';
 
 // Fallback: Create sounds programmatically
 function playBeep(frequency: number = 800, duration: number = 200, volume: number = 0.3) {

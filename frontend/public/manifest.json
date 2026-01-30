@@ -1,7 +1,7 @@
 {
-  "name": "QuantAI Trading Agent",
-  "short_name": "QuantAI",
-  "description": "Monitor, test and operate the QuantAI trading agent in real time",
+  "name": "Remezz Trading Agent",
+  "short_name": "Remezz",
+  "description": "Monitor, test and operate the Remezz trading agent in real time",
   "theme_color": "#2563eb",
   "background_color": "#ffffff",
   "display": "standalone",

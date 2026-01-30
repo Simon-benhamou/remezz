@@ -1,4 +1,4 @@
-# 🤖 QuantAI Trading Agent V5.34
+# 🤖 Remezz Trading Agent V5.34
 
 **An intelligent, momentum-based cryptocurrency trading system with regime-adaptive strategy and shared architecture design**
 
@@ -53,7 +53,7 @@ See [Architecture](#-architecture) section for detailed explanation.
 
 ## 🎯 Overview
 
-QuantAI Trading Agent is a sophisticated algorithmic trading platform for cryptocurrency futures markets. The system uses a **momentum breakout strategy** with **BTC regime filtering** and **intelligent exit management** to execute trades on Binance Futures.
+Remezz Trading Agent is a sophisticated algorithmic trading platform for cryptocurrency futures markets. The system uses a **momentum breakout strategy** with **BTC regime filtering** and **intelligent exit management** to execute trades on Binance Futures.
 
 ### What Makes This System Unique?
 
@@ -388,7 +388,7 @@ Cooldown periods after consecutive losses:
 ### System Overview
 
 ```
-QuantAILabs/
+Remezz/
 ├── backend/
 │   ├── src/
 │   │   ├── strategies/
@@ -605,7 +605,7 @@ See [docs/CODE_CONSISTENCY_REPORT.md](docs/CODE_CONSISTENCY_REPORT.md) for full 
 
 ```bash
 git clone <repository-url>
-cd QuantAILabs
+cd Remezz
 
 # Install backend
 cd backend && npm install
@@ -618,7 +618,7 @@ cd ../frontend && npm install
 
 ```bash
 # Create database
-createdb quantailabs
+createdb Remezz
 
 # Run migrations
 cd backend
@@ -632,7 +632,7 @@ Create `backend/.env`:
 
 ```bash
 # Database
-DATABASE_URL="postgresql://user:password@localhost:5432/quantailabs"
+DATABASE_URL="postgresql://user:password@localhost:5432/Remezz"
 
 # Binance Futures (required for live mode)
 BINANCE_API_KEY="your_api_key"
@@ -663,7 +663,7 @@ cd frontend && npm run dev
 
 - **Frontend**: http://localhost:5173
 - **Backend API**: http://localhost:3000
-- **Database**: postgres://localhost:5432/quantailabs
+- **Database**: postgres://localhost:5432/Remezz
 
 ### 6. First Run
 
@@ -796,7 +796,7 @@ Integrates machine learning for signal quality prediction:
 npm install -g @anthropic/claude-code
 
 # 2. Navigate to project directory
-cd QuantAILabs
+cd Remezz
 
 # 3. Run a skill
 /backtest-analyzer

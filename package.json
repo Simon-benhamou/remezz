@@ -1,8 +1,11 @@
 {
-  "name": "quantailabs",
+  "name": "Remezz",
   "private": true,
   "workspaces": [
     "backend",
     "frontend"
-  ]
+  ],
+  "dependencies": {
+    "ccxt": "^4.5.26"
+  }
 }

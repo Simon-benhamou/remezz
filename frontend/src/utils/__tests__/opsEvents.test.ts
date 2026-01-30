@@ -8,7 +8,7 @@ import {
 
 describe('opsEvents utilities', () => {
   it('formats event messages by expanding underscores', () => {
-    expect(formatOpsEventMessage('quantai_entry_rejected')).toBe('Quantai Entry Rejected');
+    expect(formatOpsEventMessage('quantai_entry_rejected')).toBe('Remezz Entry Rejected');
     expect(formatOpsEventMessage(undefined)).toBe('Agent Update');
   });
 

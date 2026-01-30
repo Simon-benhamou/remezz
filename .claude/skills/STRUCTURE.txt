@@ -23,7 +23,7 @@
 │       ├── Recommandations priorisées
 │       ├── Validation pré-déploiement
 │       ├── Monte Carlo simulation
-│       └── Intégration QuantAI-specific
+│       └── Intégration Remezz-specific
 │
 └── 📁 code-consistency-checker/
     └── 📄 SKILL.md (Skill Principal - 1,100 lignes)
@@ -78,7 +78,7 @@ Impact attendu: -93% temps d'analyse, +150% itérations/semaine
 
 [✓] Skills créés avec YAML frontmatter valide
 [✓] Documentation complète avec exemples
-[✓] Spécialisé pour QuantAI (Binance, momentum, 15m, intrabar)
+[✓] Spécialisé pour Remezz (Binance, momentum, 15m, intrabar)
 [✓] Testé sur structure réelle (backtestService.ts, simpleAgent.ts)
 [✓] Prêt pour utilisation immédiate
 [✓] Partageable via Git

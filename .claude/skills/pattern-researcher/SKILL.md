@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Grep, Glob, Bash(python:*), Bash(node:*), Bash
 
 # Pattern Researcher
 
-Systematically discovers, tests, and validates new trading patterns to improve strategy performance. Automates the pattern discovery process used to evolve QuantAI from V5.0 → V5.34.
+Systematically discovers, tests, and validates new trading patterns to improve strategy performance. Automates the pattern discovery process used to evolve Remezz from V5.0 → V5.34.
 
 ## Purpose
 

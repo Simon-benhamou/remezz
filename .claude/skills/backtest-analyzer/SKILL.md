@@ -10,7 +10,7 @@ Analyzes cryptocurrency futures trading strategy backtest results with comprehen
 
 ## Purpose
 
-This skill is specialized for analyzing the QuantAI trading system backtests, which:
+This skill is specialized for analyzing the Remezz trading system backtests, which:
 - Test momentum breakout strategies on crypto futures
 - Use 15m timeframe with 1m intrabar simulation
 - Include realistic costs (fees, slippage, funding)
@@ -478,7 +478,7 @@ Always structure your analysis as follows:
 - Signal ranking: [Enabled/Disabled]
 ```
 
-## Special Considerations for QuantAI System
+## Special Considerations for Remezz System
 
 ### Strategy Version Detection
 

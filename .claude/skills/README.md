@@ -1,6 +1,6 @@
-# Claude Code Skills for QuantAI Trading System
+# Claude Code Skills for Remezz Trading System
 
-This directory contains custom Claude Code skills designed specifically for the QuantAI cryptocurrency trading system. These skills help automate analysis, validation, and optimization of trading strategies.
+This directory contains custom Claude Code skills designed specifically for the Remezz cryptocurrency trading system. These skills help automate analysis, validation, and optimization of trading strategies.
 
 ## 📚 Available Skills
 
@@ -661,7 +661,7 @@ Or modify SKILL.md to be more concise by default.
 - [Claude Code Skills Official Docs](https://code.claude.com/docs/en/skills.md)
 - [Agent Skills Best Practices](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/best-practices)
 
-### QuantAI System Documentation
+### Remezz System Documentation
 
 - Backend Strategy: `backend/src/strategies/README.md` (if exists)
 - Backtest Service: `backend/src/services/backtestService.ts` (inline comments)

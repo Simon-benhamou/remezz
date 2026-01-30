@@ -1,7 +1,7 @@
 import React from 'react';
 
-export const STOP_ALL_LOCK_STORAGE_KEY = 'quantai.stopAll.lock';
-export const STOP_ALL_LOCK_EVENT = 'quantai:stopAllLockChanged';
+export const STOP_ALL_LOCK_STORAGE_KEY = 'remezz.stopAll.lock';
+export const STOP_ALL_LOCK_EVENT = 'remezz:stopAllLockChanged';
 
 function readLockState(): boolean {
   if (typeof window === 'undefined') return false;

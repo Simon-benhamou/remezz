@@ -1,7 +1,56 @@
-:root {
+:root,
+[data-theme='dark'] {
   color-scheme: dark;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background-color: #050b1b;
+  --bg-primary: #0a0e1a;
+  --bg-card: rgba(17, 24, 39, 0.92);
+  --bg-elevated: #1e293b;
+  --border-color: rgba(30, 58, 95, 0.4);
+  --border-subtle: rgba(30, 58, 95, 0.25);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --accent: #06b6d4;
+  --accent-secondary: #3b82f6;
+  --success: #10b981;
+  --error: #ef4444;
+  --warning: #f59e0b;
+  --card-gradient: linear-gradient(155deg, rgba(17, 24, 39, 0.94) 0%, rgba(10, 14, 26, 0.94) 100%);
+  --card-shadow: 0 18px 45px -30px rgba(2, 6, 23, 0.9);
+  --card-hover-shadow: 0 24px 60px -28px rgba(6, 182, 212, 0.2);
+  --table-header-bg: rgba(17, 24, 39, 0.88);
+  --modal-bg: rgba(10, 14, 26, 0.98);
+  --modal-border: rgba(6, 182, 212, 0.2);
+  --scrollbar-track: rgba(17, 24, 39, 0.6);
+  --scrollbar-thumb: rgba(148, 163, 184, 0.35);
+  --scrollbar-thumb-hover: rgba(148, 163, 184, 0.55);
+  background-color: #0a0e1a;
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --bg-primary: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-elevated: #f1f5f9;
+  --border-color: #e2e8f0;
+  --border-subtle: #f1f5f9;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --accent: #0891b2;
+  --accent-secondary: #2563eb;
+  --success: #059669;
+  --error: #dc2626;
+  --warning: #d97706;
+  --card-gradient: linear-gradient(155deg, #ffffff 0%, #f8fafc 100%);
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --card-hover-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+  --table-header-bg: #f8fafc;
+  --modal-bg: #ffffff;
+  --modal-border: #e2e8f0;
+  --scrollbar-track: #f1f5f9;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+  background-color: #f8fafc;
 }
 
 * {
@@ -34,19 +83,19 @@ body,
 
 body {
   margin: 0;
-  background: radial-gradient(circle at top, #102045 0%, #050b1b 55%, #02050f 100%);
-  color: #e2e8f0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 a {
-  color: #60a5fa;
+  color: var(--accent);
 }
 
 a:hover {
-  color: #93c5fd;
+  color: var(--accent-secondary);
 }
 
 ::-webkit-scrollbar {
@@ -55,16 +104,16 @@ a:hover {
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.6);
+  background: var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.35);
+  background: var(--scrollbar-thumb);
   border-radius: 8px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.55);
+  background: var(--scrollbar-thumb-hover);
 }
 
 .ant-layout,
@@ -77,25 +126,25 @@ a:hover {
 
 .ant-card {
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: linear-gradient(155deg, rgba(15, 23, 42, 0.94) 0%, rgba(2, 8, 23, 0.94) 100%);
-  box-shadow: 0 18px 45px -30px rgba(2, 6, 23, 0.9);
+  border: 1px solid var(--border-color);
+  background: var(--card-gradient);
+  box-shadow: var(--card-shadow);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .ant-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 24px 60px -28px rgba(15, 118, 228, 0.25);
+  box-shadow: var(--card-hover-shadow);
 }
 
 .ant-card-head {
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  border-bottom: 1px solid var(--border-subtle);
   padding: 20px 24px;
 }
 
 .ant-card-head-title {
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--text-primary);
   font-size: 16px;
 }
 
@@ -105,47 +154,47 @@ a:hover {
 
 .ant-table {
   background: transparent;
-  color: #e2e8f0;
+  color: var(--text-primary);
 }
 
 .ant-table-thead > tr > th {
-  background: rgba(15, 23, 42, 0.88) !important;
-  color: rgba(226, 232, 240, 0.78);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--table-header-bg) !important;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
   text-transform: uppercase;
   font-size: 12px;
   letter-spacing: 0.06em;
 }
 
 .ant-table-tbody > tr > td {
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .ant-table-tbody > tr:hover > td {
-  background: rgba(30, 64, 175, 0.18) !important;
+  background: rgba(6, 182, 212, 0.08) !important;
 }
 
 .ant-modal-content {
-  background: rgba(11, 22, 45, 0.98);
-  border: 1px solid rgba(96, 165, 250, 0.25);
+  background: var(--modal-bg);
+  border: 1px solid var(--modal-border);
   border-radius: 18px;
-  box-shadow: 0 30px 80px -32px rgba(2, 6, 23, 0.8);
+  box-shadow: 0 30px 80px -32px rgba(0, 0, 0, 0.3);
 }
 
 .ant-modal-header,
 .ant-modal-footer {
   background: transparent;
-  border-color: rgba(148, 163, 184, 0.18);
+  border-color: var(--border-color);
 }
 
 .ant-form-item-label > label {
-  color: rgba(226, 232, 240, 0.85);
+  color: var(--text-primary);
 }
 
 .auth-layout {
   display: flex;
   min-height: 100vh;
-  background: radial-gradient(circle at top left, #111f3c 0%, #050b1b 50%, #020510 100%);
+  background: var(--bg-primary);
   padding: 48px 32px;
   gap: 48px;
   align-items: stretch;
@@ -164,9 +213,9 @@ a:hover {
   justify-content: center;
   padding: 48px;
   border-radius: 28px;
-  background: linear-gradient(160deg, rgba(37, 99, 235, 0.35) 0%, rgba(56, 189, 248, 0.08) 55%, rgba(99, 102, 241, 0.12) 100%);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  box-shadow: 0 40px 90px -32px rgba(14, 116, 144, 0.35);
+  background: linear-gradient(160deg, rgba(6, 182, 212, 0.2) 0%, rgba(59, 130, 246, 0.08) 55%, rgba(99, 102, 241, 0.1) 100%);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 40px 90px -32px rgba(6, 182, 212, 0.2);
 }
 
 .auth-panel__badge {
@@ -176,8 +225,8 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
-  color: #0f172a;
+  background: linear-gradient(135deg, #06b6d4 0%, #6366f1 100%);
+  color: #ffffff;
   font-weight: 700;
   font-size: 28px;
   margin-bottom: 24px;
@@ -202,8 +251,8 @@ a:hover {
 }
 
 .auth-panel__metric {
-  background: rgba(15, 23, 42, 0.5);
-  border: 1px solid rgba(96, 165, 250, 0.18);
+  background: rgba(6, 182, 212, 0.06);
+  border: 1px solid var(--border-color);
   border-radius: 16px;
   padding: 18px;
 }
@@ -238,20 +287,20 @@ a:hover {
   gap: 14px;
   padding: 16px 18px;
   border-radius: 16px;
-  background: rgba(15, 23, 42, 0.45);
-  border: 1px solid rgba(96, 165, 250, 0.18);
-  box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.12);
+  background: rgba(6, 182, 212, 0.06);
+  border: 1px solid var(--border-color);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .auth-panel__feature-icon {
   width: 32px;
   height: 32px;
   border-radius: 12px;
-  background: rgba(59, 130, 246, 0.18);
+  background: rgba(6, 182, 212, 0.15);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #60a5fa;
+  color: var(--accent);
   font-size: 16px;
   font-weight: 600;
 }
@@ -278,9 +327,9 @@ a:hover {
   width: 100%;
   padding: 48px;
   border-radius: 28px;
-  background: linear-gradient(160deg, rgba(15, 23, 42, 0.92) 0%, rgba(2, 8, 23, 0.92) 100%);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  box-shadow: 0 45px 80px -40px rgba(2, 6, 23, 0.9);
+  background: var(--card-gradient);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--card-shadow);
 }
 
 .auth-form-card h2 {
@@ -293,7 +342,7 @@ a:hover {
   height: 48px;
   font-size: 15px;
   border-radius: 12px;
-  background: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
+  background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
   border: none;
 }
 
@@ -301,8 +350,8 @@ a:hover {
   height: 48px;
   font-size: 15px;
   border-radius: 12px;
-  border-color: rgba(96, 165, 250, 0.4);
-  color: #93c5fd;
+  border-color: rgba(6, 182, 212, 0.3);
+  color: var(--accent);
   background: transparent;
 }
 
@@ -355,9 +404,9 @@ a:hover {
 .agent-summary-card {
   padding: 18px 20px;
   border-radius: 18px;
-  border: 1px solid rgba(96, 165, 250, 0.22);
-  background: linear-gradient(165deg, rgba(15, 23, 42, 0.8) 0%, rgba(2, 8, 23, 0.92) 100%);
-  box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.08);
+  border: 1px solid var(--border-color);
+  background: var(--card-gradient);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .agent-summary-label {
@@ -388,13 +437,13 @@ a:hover {
 
 .agent-card {
   border-radius: 20px;
-  border: 1px solid rgba(96, 165, 250, 0.16);
-  background: linear-gradient(175deg, rgba(15, 23, 42, 0.88) 0%, rgba(2, 8, 23, 0.9) 100%);
+  border: 1px solid var(--border-color);
+  background: var(--card-gradient);
   padding: 22px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  box-shadow: 0 24px 60px -32px rgba(2, 6, 23, 0.75);
+  box-shadow: var(--card-shadow);
 }
 
 .agent-card__header {
@@ -457,13 +506,13 @@ a:hover {
 }
 
 .agent-card__actions .ant-btn-primary {
-  background: linear-gradient(135deg, #34d399 0%, #10b981 100%);
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   border: none;
 }
 
 .agent-card__actions .ant-btn-default {
-  border-color: rgba(248, 113, 113, 0.5);
-  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--error);
 }
 
 @media (max-width: 768px) {

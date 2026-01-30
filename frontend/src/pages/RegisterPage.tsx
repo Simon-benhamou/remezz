@@ -77,8 +77,8 @@ export default function RegisterPage() {
   return (
     <div className='auth-layout'>
       <div className='auth-panel'>
-        <div className='auth-panel__badge'>⚡</div>
-        <h1 className='auth-panel__title'>QuantAI</h1>
+        <img src="/remezz-logo.svg" alt="Remezz" style={{ height: 36, marginBottom: 16 }} />
+        <h1 className='auth-panel__title'>Remezz</h1>
         <p className='auth-panel__subtitle'>
           Build resilient algorithmic strategies with AI copilots that supervise risk, analyse market regimes, and execute with precision.
         </p>
@@ -114,7 +114,7 @@ export default function RegisterPage() {
               Create your account
             </Title>
             <Text type='secondary' style={{ color: 'rgba(148, 163, 184, 0.75)' }}>
-              Join the QuantAI platform in minutes
+              Join the Remezz platform in minutes
             </Text>
           </div>
 
@@ -135,7 +135,7 @@ export default function RegisterPage() {
               ]}
             >
               <Input
-                prefix={<KeyOutlined style={{ color: '#60a5fa' }} />}
+                prefix={<KeyOutlined style={{ color: '#06b6d4' }} />}
                 placeholder='Enter your registration code'
                 autoComplete='one-time-code'
               />
@@ -155,7 +155,7 @@ export default function RegisterPage() {
               ]}
             >
               <Input
-                prefix={<UserOutlined style={{ color: '#60a5fa' }} />}
+                prefix={<UserOutlined style={{ color: '#06b6d4' }} />}
                 placeholder='Choose a username'
                 autoComplete='username'
               />
@@ -170,7 +170,7 @@ export default function RegisterPage() {
               ]}
             >
               <Input
-                prefix={<MailOutlined style={{ color: '#60a5fa' }} />}
+                prefix={<MailOutlined style={{ color: '#06b6d4' }} />}
                 placeholder='name@example.com'
                 autoComplete='email'
               />
@@ -186,7 +186,7 @@ export default function RegisterPage() {
               hasFeedback
             >
               <Input.Password
-                prefix={<LockOutlined style={{ color: '#60a5fa' }} />}
+                prefix={<LockOutlined style={{ color: '#06b6d4' }} />}
                 placeholder='Create a strong password'
                 autoComplete='new-password'
               />
@@ -210,7 +210,7 @@ export default function RegisterPage() {
               ]}
             >
               <Input.Password
-                prefix={<LockOutlined style={{ color: '#60a5fa' }} />}
+                prefix={<LockOutlined style={{ color: '#06b6d4' }} />}
                 placeholder='Re-enter your password'
                 autoComplete='new-password'
               />
@@ -239,7 +239,7 @@ export default function RegisterPage() {
             }}
             message={
               <Text style={{ color: 'rgba(226, 232, 240, 0.85)' }}>
-                A valid registration code is required to onboard new desks. Contact your QuantAI administrator if you need access.
+                A valid registration code is required to onboard new desks. Contact your Remezz administrator if you need access.
               </Text>
             }
           />
@@ -259,8 +259,8 @@ export default function RegisterPage() {
 
           <div style={{ marginTop: 24, fontSize: 12, color: 'rgba(148, 163, 184, 0.6)' }}>
             By continuing, you agree to the{' '}
-            <a href='https://quantai.ai/terms' target='_blank' rel='noreferrer'>Terms of Service</a> and{' '}
-            <a href='https://quantai.ai/privacy' target='_blank' rel='noreferrer'>Privacy Policy</a>.
+            <a href='https://remezz.io/terms' target='_blank' rel='noreferrer'>Terms of Service</a> and{' '}
+            <a href='https://remezz.io/privacy' target='_blank' rel='noreferrer'>Privacy Policy</a>.
           </div>
 
           <Divider style={{ borderColor: 'rgba(148, 163, 184, 0.25)' }} />

@@ -2,7 +2,7 @@
 
 ## 🎯 Mission Accomplie
 
-J'ai créé **2 skills Claude Code personnalisés** pour optimiser votre projet de trading QuantAI, basés sur l'analyse complète de votre codebase.
+J'ai créé **2 skills Claude Code personnalisés** pour optimiser votre projet de trading Remezz, basés sur l'analyse complète de votre codebase.
 
 ---
 
@@ -335,7 +335,7 @@ Les skills incluent des checks automatiques:
 Les skills sont dans `.claude/skills/` → **Commiter dans Git**:
 
 ```bash
-cd /Users/simon-davidbenhamou/Desktop/QuantAILabs
+cd /Users/simon-davidbenhamou/Desktop/Remezz
 git add .claude/skills/
 git commit -m "Add Claude Code skills: backtest-analyzer and code-consistency-checker"
 git push

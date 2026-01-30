@@ -34,7 +34,7 @@ When checking backtest-production code parity:
 
 ### 1. Identify Code Locations
 
-**QuantAI Trading System Structure:**
+**Remezz Trading System Structure:**
 
 **Backtest Code:**
 - Main engine: `backend/src/services/backtestService.ts` (~1,613 lines)
@@ -773,7 +773,7 @@ const roc = calculateROC(closes, 10); // Match backtest
 5. **Before deployment**: Re-run this checker to confirm parity
 ```
 
-## Special Patterns for QuantAI System
+## Special Patterns for Remezz System
 
 ### Shared Strategy File Validation
 

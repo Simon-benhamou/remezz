@@ -5,7 +5,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
 import { AUTH_FEATURES, HERO_METRICS } from './authContent';
-import { Zap } from 'lucide-react';
 
 const { Title, Text } = Typography;
 
@@ -38,21 +37,8 @@ export default function LoginPage() {
   return (
     <div className='auth-layout'>
       <div className='auth-panel'>
-       <div style={{
-                width: 32,
-                height: 32,
-                borderRadius: 8,
-                background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#ffffff',
-                fontSize: 14,
-                fontWeight: 600
-              }}>
-               <Zap className='w-5 h-5' />
-              </div>
-        <h1 className='auth-panel__title'>QuantAI</h1>
+        <img src="/remezz-logo.svg" alt="Remezz" style={{ height: 36, marginBottom: 16 }} />
+        <h1 className='auth-panel__title'>Remezz</h1>
         <p className='auth-panel__subtitle'>
           Trade smarter with AI agents that monitor markets 24/7, react instantly to volatility, and keep risk under control.
         </p>
@@ -106,7 +92,7 @@ export default function LoginPage() {
               rules={[{ required: true, message: 'Please enter your email' }]}
             >
               <Input
-                prefix={<UserOutlined style={{ color: '#60a5fa' }} />}
+                prefix={<UserOutlined style={{ color: '#06b6d4' }} />}
                 placeholder='name@example.com'
                 autoComplete='username'
               />
@@ -118,7 +104,7 @@ export default function LoginPage() {
               rules={[{ required: true, message: 'Please enter your password' }]}
             >
               <Input.Password
-                prefix={<LockOutlined style={{ color: '#60a5fa' }} />}
+                prefix={<LockOutlined style={{ color: '#06b6d4' }} />}
                 placeholder='Enter your password'
                 autoComplete='current-password'
               />
@@ -156,8 +142,8 @@ export default function LoginPage() {
 
           <div style={{ marginTop: 24, fontSize: 12, color: 'rgba(148, 163, 184, 0.6)' }}>
             By continuing, you agree to the{' '}
-            <a href='https://quantai.ai/terms' target='_blank' rel='noreferrer'>Terms of Service</a> and{' '}
-            <a href='https://quantai.ai/privacy' target='_blank' rel='noreferrer'>Privacy Policy</a>.
+            <a href='https://remezz.io/terms' target='_blank' rel='noreferrer'>Terms of Service</a> and{' '}
+            <a href='https://remezz.io/privacy' target='_blank' rel='noreferrer'>Privacy Policy</a>.
           </div>
         </Card>
       </div>

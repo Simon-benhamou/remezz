@@ -5,6 +5,7 @@ import type { SelectorSnapshot } from './types/selector';
 
 // Types
 export type AppMode = 'live' | 'paper';
+export type ThemeMode = 'dark' | 'light';
 
 export interface User {
   id: string;
@@ -22,6 +23,7 @@ export interface AuthState {
 
 export interface AppState {
   mode: AppMode;
+  themeMode: ThemeMode;
   isInitialized: boolean;
   globalLoading: boolean;
   lastUpdate: number | null;
@@ -97,6 +99,8 @@ export const useAuthStore = create<AuthStore>()(
 // App Store
 interface AppStore extends AppState {
   setMode: (mode: AppMode) => void;
+  setThemeMode: (themeMode: ThemeMode) => void;
+  toggleTheme: () => void;
   setInitialized: (initialized: boolean) => void;
   setGlobalLoading: (loading: boolean) => void;
   updateLastUpdate: () => void;
@@ -107,12 +111,15 @@ export const useAppStore = create<AppStore>()(
     (set, get) => ({
       // Initial state
       mode: 'live',
+      themeMode: 'dark',
       isInitialized: false,
       globalLoading: false,
       lastUpdate: null,
 
       // Actions
       setMode: (mode: AppMode) => set({ mode }),
+      setThemeMode: (themeMode: ThemeMode) => set({ themeMode }),
+      toggleTheme: () => set((state) => ({ themeMode: state.themeMode === 'dark' ? 'light' : 'dark' })),
       setInitialized: (initialized: boolean) => set({ isInitialized: initialized }),
       setGlobalLoading: (globalLoading: boolean) => set({ globalLoading }),
       updateLastUpdate: () => set({ lastUpdate: Date.now() }),
@@ -122,6 +129,7 @@ export const useAppStore = create<AppStore>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state: AppStore) => ({
         mode: state.mode,
+        themeMode: state.themeMode,
       }),
     }
   )

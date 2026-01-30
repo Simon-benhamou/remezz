@@ -15,7 +15,7 @@ import SessionCockpitPage from './pages/SessionCockpitPageNew';
 import FeedPage from './pages/FeedPage';
 import BacktestPage from './pages/BacktestPage';
 import { useAppStore } from './store';
-import { Activity, BarChart, Bot, ListChecks, Radio, Zap, LineChart } from 'lucide-react';
+import { Activity, BarChart, Bot, ListChecks, Radio, LineChart, Sun, Moon } from 'lucide-react';
 import { api } from './api';
 import { TradeNotificationProvider } from './providers/TradeNotificationProvider';
 import NotificationBell from './components/NotificationBell';
@@ -36,7 +36,7 @@ const { Header, Content, Footer } = Layout;
 function AuthenticatedApp() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { mode, setMode } = useAppStore();
+  const { mode, setMode, themeMode, toggleTheme } = useAppStore();
   const { overview, loadOverview } = useDashboard();
   const [balanceModalOpen, setBalanceModalOpen] = React.useState(false);
   const [paperCapital, setPaperCapital] = React.useState<{ totalUSD: number; freeUSD: number; reservedUSD: number; inPositionsUSD: number } | null>(null);
@@ -112,17 +112,25 @@ function AuthenticatedApp() {
     <Layout
       style={{
         minHeight: '100vh',
-        background: 'radial-gradient(circle at top, #102045 0%, #050b1b 60%, #02050f 100%)',
+        background: themeMode === 'dark'
+          ? 'radial-gradient(circle at top, #0f1729 0%, #0a0e1a 60%, #060910 100%)'
+          : '#f8fafc',
       }}
     >
       <Layout.Sider
         breakpoint='lg'
         collapsedWidth={72}
-        theme='dark'
+        theme={themeMode}
         style={{
-          background: 'linear-gradient(180deg, #111c44 0%, #0b1120 100%)',
-          borderRight: '1px solid rgba(148, 163, 184, 0.18)',
-          boxShadow: '0 12px 35px -18px rgba(2, 6, 23, 0.9)',
+          background: themeMode === 'dark'
+            ? 'linear-gradient(180deg, #111827 0%, #0a0e1a 100%)'
+            : '#ffffff',
+          borderRight: themeMode === 'dark'
+            ? '1px solid rgba(30, 58, 95, 0.4)'
+            : '1px solid #e2e8f0',
+          boxShadow: themeMode === 'dark'
+            ? '0 12px 35px -18px rgba(2, 6, 23, 0.9)'
+            : '0 1px 3px rgba(0, 0, 0, 0.08)',
           zIndex: 100,
         }}
       >
@@ -130,29 +138,11 @@ function AuthenticatedApp() {
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 8,
-            padding: '24px 20px',
+            padding: '20px 16px',
             borderBottom: '1px solid rgba(148, 163, 184, 0.12)'
           }}
         >
-          <div style={{
-            width: 32,
-            height: 32,
-            borderRadius: 8,
-            background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#ffffff',
-            fontSize: 14,
-            fontWeight: 600
-          }}>
-           <Zap className='w-5 h-5' />
-          </div>
-          <div>
-            <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16, lineHeight: 1.2 }}>QuantAI</div>
-            <div style={{ color: '#60a5fa', fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.6 }}>Labs</div>
-          </div>
+          <img src="/remezz-logo.svg" alt="Remezz" style={{ height: 32 }} />
         </div>
         <Menu
           theme='dark'
@@ -169,8 +159,8 @@ function AuthenticatedApp() {
           }}
         />
         <div style={{ padding: '18px', borderTop: '1px solid rgba(148, 163, 184, 0.12)', marginTop: 'auto' }}>
-          <div style={{ color: '#60a5fa', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Pulse Engine</div>
-          <div style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, lineHeight: 1.4 }}>Live trade intelligence & AI risk governance</div>
+          <div style={{ color: '#06b6d4', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Signal Engine</div>
+          <div style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, lineHeight: 1.4 }}>Detect the signal. Trade the momentum.</div>
         </div>
       </Layout.Sider>
       <Layout>
@@ -180,9 +170,9 @@ function AuthenticatedApp() {
             justifyContent: 'space-between',
             alignItems: 'center',
             gap: 20,
-            background: 'rgba(8, 15, 35, 0.92)',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.14)',
-            boxShadow: '0 12px 25px -18px rgba(2, 6, 23, 0.8)',
+            background: themeMode === 'dark' ? 'rgba(10, 14, 26, 0.92)' : '#ffffff',
+            borderBottom: themeMode === 'dark' ? '1px solid rgba(30, 58, 95, 0.4)' : '1px solid #e2e8f0',
+            boxShadow: themeMode === 'dark' ? '0 12px 25px -18px rgba(2, 6, 23, 0.8)' : '0 1px 3px rgba(0, 0, 0, 0.06)',
             padding: '0 28px',
             height: 72,
             minHeight: 72,
@@ -207,8 +197,8 @@ function AuthenticatedApp() {
                 cursor: 'pointer',
                 padding: '6px 14px',
                 borderRadius: 10,
-                border: '1px solid rgba(96, 165, 250, 0.25)',
-                background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.22), rgba(59, 130, 246, 0.28))',
+                border: themeMode === 'dark' ? '1px solid rgba(6, 182, 212, 0.25)' : '1px solid #e2e8f0',
+                background: themeMode === 'dark' ? 'linear-gradient(135deg, rgba(6, 182, 212, 0.15), rgba(59, 130, 246, 0.2))' : 'linear-gradient(135deg, rgba(6, 182, 212, 0.08), rgba(59, 130, 246, 0.08))',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
@@ -217,7 +207,7 @@ function AuthenticatedApp() {
               <span style={{ fontSize: 10, color: 'rgba(226, 232, 240, 0.7)', letterSpacing: 0.5, textTransform: 'uppercase' }}>
                 {mode === 'live' ? 'LIVE' : 'PAPER'}
               </span>
-              <span style={{ fontSize: 17, fontWeight: 700, color: '#f8fafc' }}>{formattedBalance}</span>
+              <span style={{ fontSize: 17, fontWeight: 700, color: themeMode === 'dark' ? '#f8fafc' : '#0f172a' }}>{formattedBalance}</span>
             </div>
             {/* Today's PnL - matches Binance daily view */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -233,16 +223,26 @@ function AuthenticatedApp() {
             </div>
           </div>
           <Space size={18} align='center'>
+            <div
+              role='button'
+              tabIndex={0}
+              onClick={toggleTheme}
+              onKeyDown={(e) => { if (e.key === 'Enter') toggleTheme(); }}
+              style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 6, borderRadius: 8, opacity: 0.7 }}
+              title={themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {themeMode === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </div>
             <NotificationBell />
             <Segmented
               size='small'
               value={mode}
               options={[
-                { label: <span style={{ fontWeight: 600, color: mode === 'paper' ? '#60a5fa' : '#cbd5f5' }}>Paper</span>, value: 'paper' },
-                { label: <span style={{ fontWeight: 600, color: mode === 'live' ? '#f87171' : '#cbd5f5' }}>Live</span>, value: 'live' },
+                { label: <span style={{ fontWeight: 600, color: mode === 'paper' ? '#06b6d4' : undefined }}>Paper</span>, value: 'paper' },
+                { label: <span style={{ fontWeight: 600, color: mode === 'live' ? '#ef4444' : undefined }}>Live</span>, value: 'live' },
               ]}
               onChange={(val) => setMode(val as 'live' | 'paper')}
-              style={{ background: 'rgba(15, 23, 42, 0.85)', color: '#e2e8f0', borderRadius: 999, padding: 2 }}
+              style={{ background: themeMode === 'dark' ? 'rgba(17, 24, 39, 0.85)' : '#f1f5f9', borderRadius: 999, padding: 2 }}
             />
             {mode === 'live' && (
               <Tag color='error' style={{ borderRadius: 12, padding: '4px 10px', fontWeight: 600 }}>
@@ -276,14 +276,14 @@ function AuthenticatedApp() {
         <Footer
           style={{
             textAlign: 'center',
-            background: 'rgba(8, 15, 35, 0.92)',
-            borderTop: '1px solid rgba(148, 163, 184, 0.14)',
-            color: 'rgba(148, 163, 184, 0.72)',
+            background: themeMode === 'dark' ? 'rgba(10, 14, 26, 0.92)' : '#ffffff',
+            borderTop: themeMode === 'dark' ? '1px solid rgba(30, 58, 95, 0.4)' : '1px solid #e2e8f0',
+            color: themeMode === 'dark' ? 'rgba(148, 163, 184, 0.72)' : '#94a3b8',
             fontSize: 12,
             padding: '18px 24px',
           }}
         >
-          Realtime AI Trade Engine · Adaptive Risk Governance · Storyboarded Insights
+          Remezz · Signal Detection · Momentum Trading · AI Risk Governance
         </Footer>
         <PortfolioBalanceModal
           open={balanceModalOpen}
@@ -313,7 +313,7 @@ function AppInner() {
         justifyContent: 'center', 
         alignItems: 'center', 
         height: '100vh', 
-        color: '#60a5fa' 
+        color: '#06b6d4'
       }}>
         Loading…
       </div>
@@ -337,58 +337,107 @@ function AppInner() {
   );
 }
 
+const remezzDarkTheme: ThemeConfig = {
+  algorithm: theme.darkAlgorithm,
+  token: {
+    colorPrimary: '#06b6d4',
+    colorInfo: '#3b82f6',
+    colorSuccess: '#10b981',
+    colorWarning: '#f59e0b',
+    colorError: '#ef4444',
+    colorBgLayout: '#0a0e1a',
+    colorBgContainer: 'rgba(17, 24, 39, 0.92)',
+    colorBgElevated: 'rgba(17, 24, 39, 0.95)',
+    colorBorder: 'rgba(30, 58, 95, 0.6)',
+    colorBorderSecondary: 'rgba(30, 58, 95, 0.35)',
+    colorText: '#f1f5f9',
+    colorTextSecondary: '#94a3b8',
+    borderRadius: 12,
+    wireframe: false,
+  },
+  components: {
+    Layout: {
+      headerBg: 'rgba(10, 14, 26, 0.92)',
+      bodyBg: 'transparent',
+    },
+    Menu: {
+      darkItemBg: 'transparent',
+      darkItemSelectedBg: 'rgba(6, 182, 212, 0.15)',
+      darkItemSelectedColor: '#06b6d4',
+      darkItemColor: 'rgba(241, 245, 249, 0.85)',
+    },
+    Card: {
+      colorBgContainer: 'rgba(17, 24, 39, 0.92)',
+      colorBorderSecondary: 'rgba(30, 58, 95, 0.4)',
+      headerBg: 'rgba(17, 24, 39, 0.92)',
+      paddingLG: 24,
+      borderRadiusLG: 18,
+    },
+    Table: {
+      headerBg: 'rgba(17, 24, 39, 0.95)',
+      colorBgContainer: 'rgba(17, 24, 39, 0.92)',
+      borderColor: 'rgba(30, 58, 95, 0.35)',
+    },
+    Tag: {
+      defaultBg: 'rgba(6, 182, 212, 0.12)',
+      colorBorder: 'transparent',
+    },
+  },
+};
+
+const remezzLightTheme: ThemeConfig = {
+  algorithm: theme.defaultAlgorithm,
+  token: {
+    colorPrimary: '#0891b2',
+    colorInfo: '#2563eb',
+    colorSuccess: '#059669',
+    colorWarning: '#d97706',
+    colorError: '#dc2626',
+    colorBgLayout: '#f8fafc',
+    colorBgContainer: '#ffffff',
+    colorBgElevated: '#ffffff',
+    colorBorder: '#e2e8f0',
+    colorBorderSecondary: '#f1f5f9',
+    colorText: '#0f172a',
+    colorTextSecondary: '#64748b',
+    borderRadius: 12,
+    wireframe: false,
+  },
+  components: {
+    Layout: {
+      headerBg: '#ffffff',
+      bodyBg: '#f8fafc',
+    },
+    Card: {
+      colorBgContainer: '#ffffff',
+      colorBorderSecondary: '#e2e8f0',
+      headerBg: '#ffffff',
+      paddingLG: 24,
+      borderRadiusLG: 18,
+    },
+    Table: {
+      headerBg: '#f8fafc',
+      colorBgContainer: '#ffffff',
+      borderColor: '#e2e8f0',
+    },
+    Tag: {
+      defaultBg: 'rgba(6, 182, 212, 0.08)',
+      colorBorder: 'transparent',
+    },
+  },
+};
+
 export default function App() {
-  const neoDarkTheme: ThemeConfig = {
-    algorithm: theme.darkAlgorithm,
-    token: {
-      colorPrimary: '#60a5fa',
-      colorInfo: '#38bdf8',
-      colorSuccess: '#34d399',
-      colorWarning: '#fbbf24',
-      colorError: '#f87171',
-      colorBgLayout: '#050b1b',
-      colorBgContainer: 'rgba(15, 23, 42, 0.92)',
-      colorBgElevated: 'rgba(15, 23, 42, 0.92)',
-      colorBorder: 'rgba(148, 163, 184, 0.22)',
-      colorBorderSecondary: 'rgba(148, 163, 184, 0.14)',
-      colorText: '#e2e8f0',
-      colorTextSecondary: 'rgba(148, 163, 184, 0.78)',
-      borderRadius: 12,
-      wireframe: false,
-    },
-    components: {
-      Layout: {
-        headerBg: 'rgba(8, 15, 35, 0.92)',
-        bodyBg: 'transparent',
-      },
-      Menu: {
-        darkItemBg: 'transparent',
-        darkItemSelectedBg: 'rgba(96, 165, 250, 0.2)',
-        darkItemSelectedColor: '#60a5fa',
-        darkItemColor: 'rgba(226, 232, 240, 0.85)',
-      },
-      Card: {
-        colorBgContainer: 'rgba(15, 23, 42, 0.92)',
-        colorBorderSecondary: 'rgba(148, 163, 184, 0.16)',
-        headerBg: 'rgba(15, 23, 42, 0.92)',
-        paddingLG: 24,
-        borderRadiusLG: 18,
-      },
-      Table: {
-        headerBg: 'rgba(15, 23, 42, 0.95)',
-        colorBgContainer: 'rgba(15, 23, 42, 0.92)',
-        borderColor: 'rgba(148, 163, 184, 0.14)',
-      },
-      Tag: {
-        defaultBg: 'rgba(148, 163, 184, 0.14)',
-        colorBorder: 'transparent',
-      },
-    },
-  };
+  const themeMode = useAppStore((s) => s.themeMode);
+  const activeTheme = themeMode === 'dark' ? remezzDarkTheme : remezzLightTheme;
+
+  React.useEffect(() => {
+    document.documentElement.setAttribute('data-theme', themeMode);
+  }, [themeMode]);
 
   return (
     <BrowserRouter>
-      <ConfigProvider theme={neoDarkTheme}>
+      <ConfigProvider theme={activeTheme}>
         <AppInner />
       </ConfigProvider>
     </BrowserRouter>

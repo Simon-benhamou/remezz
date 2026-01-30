@@ -1,7 +1,7 @@
-# 🎨 QuantAI Favicon System
+# 🎨 Remezz Favicon System
 
 ## Overview
-The QuantAI trading platform uses a modern favicon system that matches the brand identity with the "Q" logo from the sidebar.
+The Remezz trading platform uses a modern favicon system that matches the brand identity with the "Q" logo from the sidebar.
 
 ## Files Structure
 
@@ -58,7 +58,7 @@ The favicon system is implemented in `index.html`:
 ## PWA Support
 
 The `manifest.json` file enables Progressive Web App capabilities:
-- App name: "QuantAI Trading Agent"
+- App name: "Remezz Trading Agent"
 - Theme color: `#2563eb`
 - Display mode: Standalone
 - Multiple icon sizes for different devices

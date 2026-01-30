@@ -2,7 +2,7 @@
 
 ## 🎉 MISE À JOUR: 5 Skills Maintenant Disponibles !
 
-J'ai créé **5 skills Claude Code personnalisés** pour optimiser votre projet de trading QuantAI.
+J'ai créé **5 skills Claude Code personnalisés** pour optimiser votre projet de trading Remezz.
 
 ---
 

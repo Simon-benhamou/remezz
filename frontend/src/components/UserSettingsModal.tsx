@@ -27,6 +27,7 @@ import {
   UserOutlined,
 } from '../icons';
 import { api } from '../api';
+import { useAppStore } from '../store';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -53,6 +54,71 @@ interface UserSetting {
   key: string;
   value: string;
   category: string;
+}
+
+function PreferencesTab() {
+  const { themeMode, toggleTheme } = useAppStore();
+
+  return (
+    <div style={{ padding: '20px 0' }}>
+      <Card>
+        <Space direction="vertical" style={{ width: '100%' }} size="large">
+          <div>
+            <Title level={4}>Preferences</Title>
+            <Paragraph type="secondary">
+              Configure your display and notification settings.
+            </Paragraph>
+          </div>
+
+          <Form layout="vertical">
+            <Form.Item label="Appearance">
+              <Space>
+                <Switch
+                  checked={themeMode === 'dark'}
+                  onChange={toggleTheme}
+                  checkedChildren="Dark"
+                  unCheckedChildren="Light"
+                />
+                <Text>{themeMode === 'dark' ? 'Dark mode' : 'Light mode'}</Text>
+              </Space>
+            </Form.Item>
+
+            <Form.Item label="Default Trading Mode">
+              <Select defaultValue="paper" options={[
+                { label: 'Paper Trading', value: 'paper' },
+                { label: 'Live Trading', value: 'live' },
+              ]} />
+            </Form.Item>
+
+            <Form.Item label="Risk Level">
+              <Select defaultValue="moderate" options={[
+                { label: 'Conservative', value: 'conservative' },
+                { label: 'Moderate', value: 'moderate' },
+                { label: 'Aggressive', value: 'aggressive' },
+              ]} />
+            </Form.Item>
+
+            <Form.Item label="Notifications">
+              <Space direction="vertical">
+                <Space>
+                  <Switch defaultChecked />
+                  <Text>Trade alerts</Text>
+                </Space>
+                <Space>
+                  <Switch defaultChecked />
+                  <Text>Daily reports</Text>
+                </Space>
+                <Space>
+                  <Switch />
+                  <Text>Email notifications</Text>
+                </Space>
+              </Space>
+            </Form.Item>
+          </Form>
+        </Space>
+      </Card>
+    </div>
+  );
 }
 
 interface Props {
@@ -427,54 +493,7 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
           Preferences
         </Space>
       ),
-      children: (
-        <div style={{ padding: '20px 0' }}>
-          <Card>
-            <Space direction="vertical" style={{ width: '100%' }} size="large">
-              <div>
-                <Title level={4}>Trading Preferences</Title>
-                <Paragraph type="secondary">
-                  Configure your trading preferences and notification settings.
-                </Paragraph>
-              </div>
-              
-              <Form layout="vertical">
-                <Form.Item label="Default Trading Mode">
-                  <Select defaultValue="paper" options={[
-                    { label: 'Paper Trading', value: 'paper' },
-                    { label: 'Live Trading', value: 'live' },
-                  ]} />
-                </Form.Item>
-                
-                <Form.Item label="Risk Level">
-                  <Select defaultValue="moderate" options={[
-                    { label: 'Conservative', value: 'conservative' },
-                    { label: 'Moderate', value: 'moderate' },
-                    { label: 'Aggressive', value: 'aggressive' },
-                  ]} />
-                </Form.Item>
-                
-                <Form.Item label="Notifications">
-                  <Space direction="vertical">
-                    <Space>
-                      <Switch defaultChecked />
-                      <Text>Trade alerts</Text>
-                    </Space>
-                    <Space>
-                      <Switch defaultChecked />
-                      <Text>Daily reports</Text>
-                    </Space>
-                    <Space>
-                      <Switch />
-                      <Text>Email notifications</Text>
-                    </Space>
-                  </Space>
-                </Form.Item>
-              </Form>
-            </Space>
-          </Card>
-        </div>
-      ),
+      children: <PreferencesTab />,
     },
   ];
 
