@@ -200,6 +200,54 @@ export async function seedFreshCandles(symbols?: string[]): Promise<{ seeded: nu
 }
 
 /**
+ * Lightweight BTC-only backfill for WebSocket reconnect gaps.
+ * Uses the REST queue to avoid IP bans. Only fetches BTC 15m + 1h.
+ */
+export async function backfillBtcCandles(): Promise<void> {
+  const exchange = await getCachedExchange();
+  if (!exchange) {
+    logger.warn('⚠️ No exchange available for BTC backfill');
+    return;
+  }
+
+  logger.info('📥 Backfilling BTC candles after WebSocket reconnect...');
+
+  try {
+    const ohlcv15m = await binanceRestQueue.enqueue<number[][]>(
+      () => exchange.fetchOHLCV('BTC/USDT:USDT', '15m', undefined, CANDLES_TO_FETCH),
+      {
+        weight: BINANCE_WEIGHTS.FETCH_OHLCV,
+        priority: 'high',
+        tag: 'reconnect_BTC_15m',
+      }
+    );
+    if (ohlcv15m && ohlcv15m.length > 0) {
+      seedKlinesFromWebSocket('BTCUSDT', '15m', ohlcv15m);
+      logger.info(`✅ BTC 15m backfill: ${ohlcv15m.length} candles`);
+    }
+  } catch (error: any) {
+    logger.warn(`⚠️ BTC 15m backfill failed: ${error?.message}`);
+  }
+
+  try {
+    const ohlcv1h = await binanceRestQueue.enqueue<number[][]>(
+      () => exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 100),
+      {
+        weight: BINANCE_WEIGHTS.FETCH_OHLCV,
+        priority: 'high',
+        tag: 'reconnect_BTC_1h',
+      }
+    );
+    if (ohlcv1h && ohlcv1h.length > 0) {
+      seedKlinesFromWebSocket('BTCUSDT', '1h', ohlcv1h);
+      logger.info(`✅ BTC 1h backfill: ${ohlcv1h.length} candles`);
+    }
+  } catch (error: any) {
+    logger.warn(`⚠️ BTC 1h backfill failed: ${error?.message}`);
+  }
+}
+
+/**
  * Start background refresh job
  */
 export function startCandleRefreshJob(): void {

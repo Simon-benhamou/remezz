@@ -3759,14 +3759,50 @@ export class SimpleAgent {
           }
         }
 
-        // V5.80: Warn about formatting residual even if exchange filled 100% of our request
-        // This residual (position.qty - formattedQty) was never sent to exchange due to floor rounding
+        // V5.81: Close formatting residual (floor rounding left dust on exchange)
+        // Previously this only warned; now we send a second reduceOnly order to fully close.
         if (hasFormattingResidual && exchangeFillRatio >= 0.99) {
           logger.warn(
             `⚠️ [${symbol}] FORMATTING RESIDUAL: position.qty=${position.qty.toFixed(6)} but ` +
-            `only sent formattedQty=${formattedQty.toFixed(6)} (loss=${formattingLoss.toFixed(6)}). ` +
-            `This residual may remain on exchange and sync back. Consider using REDUCE_ONLY with full position close.`
+            `only sent formattedQty=${formattedQty.toFixed(6)} (residual=${formattingLoss.toFixed(6)}). ` +
+            `Sending cleanup order...`
           );
+
+          try {
+            const residualQty = this.formatQtyForExchange(symbol, formattingLoss);
+            if (residualQty > 0) {
+              const residualOrder: OrderRequest = {
+                id: uuidv4(),
+                agentId: this.config.sessionId,
+                userId: this.config.userId || 'unknown',
+                priority: 95, // CRITICAL priority for cleanup
+                symbol,
+                side: closeSide,
+                type: 'market',
+                quantity: residualQty,
+                params: { reduceOnly: true },
+                isEntry: false,
+                reason: 'formatting_residual_cleanup',
+                priorityContext: { isEntry: false, reason: 'formatting_residual_cleanup' as any },
+                submittedAt: Date.now(),
+                retries: 0,
+                timeoutMs: 30_000,
+              };
+
+              logger.info(`🧹 [${symbol}] Submitting residual cleanup order for ${residualQty} qty`);
+              const residualResult = await orderQueue.submitOrder(residualOrder);
+
+              if (residualResult.success) {
+                logger.info(`✅ [${symbol}] Residual cleanup SUCCESS | filled=${residualResult.order?.filled}`);
+              } else {
+                logger.error(`❌ [${symbol}] Residual cleanup FAILED: ${residualResult.error}`);
+              }
+            } else {
+              logger.warn(`⚠️ [${symbol}] Residual ${formattingLoss.toFixed(6)} too small to close (below step size)`);
+            }
+          } catch (residualError: any) {
+            logger.error(`❌ [${symbol}] Residual cleanup error: ${residualError.message}`);
+          }
         }
 
         // ═══════════════════════════════════════════════════════════════════════════
@@ -4882,6 +4918,47 @@ export class SimpleAgent {
       
       // Case 2: Exchange has position but we don't know about it
       else if (!this.position && exchangeQty > 0) {
+        // V5.82: Close dust positions on exchange (residual from floor rounding on exit)
+        // If notional value < $5, this is dust — close it on exchange to prevent re-adoption
+        const dustNotional = exchangeQty * entryPrice;
+        if (dustNotional < 5) {
+          logger.info(`🧹 [${symbol}] SYNC: Dust position detected (${exchangeSide} ${exchangeQty}, notional=$${dustNotional.toFixed(2)}) — closing on exchange`);
+          try {
+            const closeSide = exchangeSide === 'long' ? 'sell' : 'buy';
+            const dustFormattedQty = this.formatQtyForExchange(symbol, exchangeQty);
+            if (dustFormattedQty > 0) {
+              const dustOrder: OrderRequest = {
+                id: uuidv4(),
+                agentId: this.config.sessionId,
+                userId: this.config.userId || 'unknown',
+                priority: 95,
+                symbol,
+                side: closeSide,
+                type: 'market',
+                quantity: dustFormattedQty,
+                params: { reduceOnly: true },
+                isEntry: false,
+                reason: 'dust_position_cleanup',
+                priorityContext: { isEntry: false, reason: 'dust_position_cleanup' as any },
+                submittedAt: Date.now(),
+                retries: 0,
+                timeoutMs: 30_000,
+              };
+              const dustResult = await orderQueue.submitOrder(dustOrder);
+              if (dustResult.success) {
+                logger.info(`✅ [${symbol}] Dust cleanup SUCCESS | filled=${dustResult.order?.filled}`);
+              } else {
+                logger.warn(`⚠️ [${symbol}] Dust cleanup FAILED: ${dustResult.error}`);
+              }
+            } else {
+              logger.info(`🧹 [${symbol}] Dust qty ${exchangeQty} below step size — cannot close via order`);
+            }
+          } catch (dustErr: any) {
+            logger.warn(`⚠️ [${symbol}] Dust cleanup error: ${dustErr?.message}`);
+          }
+          return;
+        }
+
         logger.info(`⚠️ [${symbol}] SYNC: Found unexpected position on exchange (${exchangeSide} ${exchangeQty})`);
         
         if (entryPrice > 0) {

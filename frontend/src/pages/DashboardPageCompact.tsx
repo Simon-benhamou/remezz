@@ -266,7 +266,7 @@ export default function DashboardPageCompact() {
             </Col>
             <Col xs={12} sm={6}>
               <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
-                BTC 24H Momentum
+                BTC 6H Momentum
               </Text>
               <Text style={{ 
                 color: (marketConditions.btcMomentum6h || 0) >= 0 ? '#34d399' : '#f87171', 

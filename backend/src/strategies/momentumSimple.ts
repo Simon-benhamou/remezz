@@ -704,8 +704,16 @@ export function getMarketConditions(btcCandles: Candle[]): MarketConditions {
   const btcAboveMa50 = btcNow > btcMa50;
   const btcAboveSma200 = btcNow > btcSma200;
   
-  // BTC momentum 6h (legacy, for display)
-  const btc6hAgoIndex = Math.max(0, btcCloses.length - MomentumConfig.ENTRY.BTC_MOMENTUM_PERIOD - 1);
+  // BTC momentum 6h — timestamp-based lookback to handle candle gaps correctly
+  const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+  const targetTs = btcCandles[btcCandles.length - 1].timestamp - SIX_HOURS_MS;
+  let btc6hAgoIndex = 0;
+  for (let i = btcCandles.length - 1; i >= 0; i--) {
+    if (btcCandles[i].timestamp <= targetTs) {
+      btc6hAgoIndex = i;
+      break;
+    }
+  }
   const btc6hAgo = btcCloses[btc6hAgoIndex];
   const btcMomentum6h = btc6hAgo > 0 ? ((btcNow - btc6hAgo) / btc6hAgo) * 100 : 0;
   
@@ -1298,8 +1306,16 @@ export function checkMomentumSignal(
   const btcInBullRegime = btcNow > btcSma200;
   const btcInBearRegime = btcNow < btcSma200;
   
-  // Calcul legacy pour compatibilité features
-  const btc6hAgoIndex = Math.max(0, btcCloses.length - MomentumConfig.ENTRY.BTC_MOMENTUM_PERIOD - 1);
+  // Calcul legacy pour compatibilité features — timestamp-based to handle candle gaps
+  const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+  const targetTs = btcCandles[btcCandles.length - 1].timestamp - SIX_HOURS_MS;
+  let btc6hAgoIndex = 0;
+  for (let i = btcCandles.length - 1; i >= 0; i--) {
+    if (btcCandles[i].timestamp <= targetTs) {
+      btc6hAgoIndex = i;
+      break;
+    }
+  }
   const btc6hAgo = btcCloses[btc6hAgoIndex];
   const btcMomentum6h = btc6hAgo > 0 ? ((btcNow - btc6hAgo) / btc6hAgo) * 100 : 0;
   const ma20 = calcMA(closes, 20);

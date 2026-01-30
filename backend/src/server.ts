@@ -33,7 +33,7 @@ import { setRadarBroadcast, getRecentRadarEvents } from "./services/signalRadarS
 import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDeduplicator.js";
 import { orderQueue } from "./services/orderQueue.js";
 import { binanceRestQueue, BINANCE_WEIGHTS } from "./services/binanceRestQueue.js";
-import { seedFromLocalFiles, seedFreshCandles, startCandleRefreshJob, stopCandleRefreshJob } from "./services/candleCache.js";
+import { seedFromLocalFiles, seedFreshCandles, startCandleRefreshJob, stopCandleRefreshJob, backfillBtcCandles } from "./services/candleCache.js";
 import { startTelegramReporter, stopTelegramReporter } from "./services/telegramReporter.js";
 
 // Strategy
@@ -453,13 +453,22 @@ app.get("/api/market-conditions", async (req, res) => {
       const btcCloses = btcCandles.map((c: any) => c[4]);
       const btcNow = btcCloses[btcCloses.length - 1];
       
-      // MA50
-      const ma50Slice = btcCloses.slice(-50);
-      const btcMa50 = ma50Slice.reduce((a: number, b: number) => a + b, 0) / 50;
-      const btcAboveMa50 = btcNow > btcMa50;
+      // SMA200 — aligned with agent regime logic (V5.3)
+      const sma200Slice = btcCloses.slice(-200);
+      const btcSma200 = sma200Slice.reduce((a: number, b: number) => a + b, 0) / sma200Slice.length;
+      const btcAboveMa50 = btcNow > btcSma200; // Field name kept for API compat, but uses SMA200
       
-      // 6h momentum (24 candles of 15m)
-      const btc6hAgoIndex = Math.max(0, btcCloses.length - 25);
+      // 6h momentum — timestamp-based lookback to handle candle gaps
+      const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+      const lastTs = Number(btcCandles[btcCandles.length - 1][0]);
+      const targetTs = lastTs - SIX_HOURS_MS;
+      let btc6hAgoIndex = 0;
+      for (let i = btcCandles.length - 1; i >= 0; i--) {
+        if (Number(btcCandles[i][0]) <= targetTs) {
+          btc6hAgoIndex = i;
+          break;
+        }
+      }
       const btc6hAgo = btcCloses[btc6hAgoIndex];
       const btcMomentum6h = btc6hAgo > 0 ? ((btcNow - btc6hAgo) / btc6hAgo) * 100 : 0;
       
@@ -468,31 +477,27 @@ app.get("/api/market-conditions", async (req, res) => {
       const ALLOWED_DAYS = [0, 1, 2, 3, 4, 5, 6]; // All days
       const isTradingDay = ALLOWED_DAYS.includes(dayOfWeek);
       
-      // Determine trend
+      // Determine trend — aligned with agent V5.3 regime (SMA200 only, no momentum threshold)
       let btcTrend: 'bullish' | 'bearish' | 'neutral' = 'neutral';
-      const MIN_MOMENTUM = 0.75;
-      if (btcMomentum6h > MIN_MOMENTUM && btcAboveMa50) {
+      if (btcAboveMa50) {
         btcTrend = 'bullish';
-      } else if (btcMomentum6h < -MIN_MOMENTUM && !btcAboveMa50) {
+      } else {
         btcTrend = 'bearish';
       }
-      
-      // Overall status
+
+      // Overall status — matches agent logic exactly
       let status: string = 'neutral';
       let reason = '';
-      
+
       if (!isTradingDay) {
         status = 'unfavorable';
         reason = `Not a trading day (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]})`;
-      } else if (btcTrend === 'bullish') {
+      } else if (btcAboveMa50) {
         status = 'favorable_long';
-        reason = `BTC bullish: +${btcMomentum6h.toFixed(2)}% (6h), above MA50`;
-      } else if (btcTrend === 'bearish') {
-        status = 'favorable_short';
-        reason = `BTC bearish: ${btcMomentum6h.toFixed(2)}% (6h), below MA50`;
+        reason = `V5.3 BULL: BTC ${btcNow.toFixed(0)} > SMA200 ${btcSma200.toFixed(0)} → LONG only`;
       } else {
-        status = 'neutral';
-        reason = `BTC sideways: ${btcMomentum6h.toFixed(2)}% (6h) - waiting for momentum`;
+        status = 'favorable_short';
+        reason = `V5.3 BEAR: BTC ${btcNow.toFixed(0)} < SMA200 ${btcSma200.toFixed(0)} → SHORT only`;
       }
       
       return res.json({
@@ -3967,6 +3972,19 @@ async function runStartupSequence(): Promise<void> {
 
   // Start background refresh job
   startCandleRefreshJob();
+
+  // Register BTC candle backfill on WebSocket reconnect (fills gaps from disconnects)
+  try {
+    const ws = getBinanceWebSocket();
+    ws.onReconnect(() => {
+      backfillBtcCandles().catch(err => {
+        logger.warn('⚠️ BTC reconnect backfill failed:', err?.message || err);
+      });
+    });
+    logger.info('✅ Registered BTC candle backfill on WebSocket reconnect');
+  } catch (error) {
+    logger.warn('⚠️ Failed to register reconnect backfill:', error);
+  }
 
   logger.info('✅ Startup complete - BinanceRestQueue managing all REST calls');
   logger.info(`📊 Queue stats: ${JSON.stringify(binanceRestQueue.getStats())}`);

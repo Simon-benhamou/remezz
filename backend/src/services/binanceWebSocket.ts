@@ -451,6 +451,8 @@ class BinanceWebSocketManager {
   private readonly shardReconnectJitterMs = 700;
   private klineZeroLogTs = new Map<string, number>();
   private readonly klineZeroLogIntervalMs = 60_000;
+  private reconnectCallbacks: Array<() => void> = [];
+  private hasConnectedBefore = false;
 
   private readonly endpoints = BINANCE_ENDPOINTS;
 
@@ -833,6 +835,7 @@ class BinanceWebSocketManager {
 
       this.ws.on('open', () => {
         console.log('✅ Binance WebSocket connected');
+        const isReconnect = this.hasConnectedBefore;
         this.isConnected = true;
         this.isConnecting = false;
         this.shuttingDown = false;
@@ -849,6 +852,18 @@ class BinanceWebSocketManager {
         this.subscribeToAllTickers();
         this.subscribeToBookTickers();
         this.resubscribeKlines();
+
+        this.hasConnectedBefore = true;
+
+        // Fire reconnect callbacks to backfill candle gaps
+        if (isReconnect && this.reconnectCallbacks.length > 0) {
+          console.log(`🔄 WebSocket reconnected — triggering ${this.reconnectCallbacks.length} backfill callback(s)`);
+          for (const cb of this.reconnectCallbacks) {
+            try { cb(); } catch (err) {
+              console.error('❌ Reconnect callback error:', err);
+            }
+          }
+        }
       });
 
       this.ws.on('message', (data: Buffer) => {
@@ -1987,6 +2002,14 @@ class BinanceWebSocketManager {
    */
   onKline(callback: (kline: BinanceKlineData) => void): void {
     this.klineCallbacks.push(callback);
+  }
+
+  /**
+   * Register a callback to fire after WebSocket reconnects (not on first connect).
+   * Used to trigger REST backfill for candle gaps.
+   */
+  onReconnect(callback: () => void): void {
+    this.reconnectCallbacks.push(callback);
   }
 
   /**
