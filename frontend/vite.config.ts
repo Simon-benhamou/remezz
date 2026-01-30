@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: { host: true},
    preview: {
-     allowedHosts: ['quantai.up.railway.app']
+     allowedHosts: ['remezz.up.railway.app']
    },
   test: {
     environment: 'jsdom',
