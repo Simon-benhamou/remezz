@@ -1917,7 +1917,7 @@ export class SimpleAgent {
       // V5.80: Skip stale candles on restart to avoid re-processing old data
       // After redeployment, the first candle detected may be old (detected +600s etc.)
       // Skip entry signals for stale candles (>10s) to prevent false entries/exits
-      const STALE_CANDLE_THRESHOLD_SEC = 10;
+      const STALE_CANDLE_THRESHOLD_SEC = 120;
       if (isFirstCheck && detectionDelaySec > STALE_CANDLE_THRESHOLD_SEC) {
         logger.info(`⏭️ [${shortSymbol}] Skipping stale candle on startup [${candleStartTime}-${candleEndTime} UTC] | Detected +${detectionDelaySec}s (>${STALE_CANDLE_THRESHOLD_SEC}s threshold)`);
         this.lastProcessedCandleTs = lastClosedCandleTs;
@@ -3153,7 +3153,7 @@ export class SimpleAgent {
       const CANDLE_INTERVAL_MS_EXIT = 15 * 60 * 1000;
       const exitDetectionDelayMs = Date.now() - (latestClosedCandle.timestamp + CANDLE_INTERVAL_MS_EXIT);
       const exitDetectionDelaySec = Math.round(exitDetectionDelayMs / 1000);
-      const isStaleExitCandle = this.lastProcessedExitCandleTs === 0 && exitDetectionDelaySec > 10;
+      const isStaleExitCandle = this.lastProcessedExitCandleTs === 0 && exitDetectionDelaySec > 120;
       if (isStaleExitCandle) {
         logger.info(`⏭️ [${symbol}] Stale candle on startup for exit check (Detected +${exitDetectionDelaySec}s) - using close price instead of wick for SL`);
       }
