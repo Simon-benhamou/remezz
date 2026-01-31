@@ -187,7 +187,7 @@ export default function SessionsPage() {
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div>
-            <Title level={3} style={{ margin: 0, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Title level={3} style={{ margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 12 }}>
               AI Trading Agents
               <Tag color={currentMode === 'live' ? 'error' : 'blue'}>{currentMode?.toUpperCase()}</Tag>
             </Title>
@@ -214,15 +214,15 @@ export default function SessionsPage() {
         <Space size={16}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#4ade80' }} />
-            <Text style={{ color: '#94a3b8', fontSize: 13 }}>{activeSessions.length} Active</Text>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{activeSessions.length} Active</Text>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#fbbf24' }} />
-            <Text style={{ color: '#94a3b8', fontSize: 13 }}>{pausedSessions.length} Paused</Text>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{pausedSessions.length} Paused</Text>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#64748b' }} />
-            <Text style={{ color: '#94a3b8', fontSize: 13 }}>{stoppedSessions.length} Stopped</Text>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-secondary)' }} />
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{stoppedSessions.length} Stopped</Text>
           </div>
         </Space>
       </div>
@@ -251,7 +251,7 @@ export default function SessionsPage() {
 
           {enrichedSessions.length === 0 ? (
             <div style={{ padding: 48, textAlign: 'center' }}>
-              <Empty description={<Text style={{ color: '#94a3b8' }}>No agents yet</Text>}>
+              <Empty description={<Text style={{ color: 'var(--text-secondary)' }}>No agents yet</Text>}>
                 <Button type="primary" onClick={() => setCreateModalOpen(true)}>Create Your First Agent</Button>
               </Empty>
             </div>
@@ -281,7 +281,7 @@ export default function SessionsPage() {
                 >
                   {/* Agent */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 14 }}>{resolveAgentLabel(session)}</Text>
+                    <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 14 }}>{resolveAgentLabel(session)}</Text>
                     <Tag style={{
                       borderRadius: 4,
                       border: 'none',
@@ -296,14 +296,14 @@ export default function SessionsPage() {
                   </div>
 
                   {/* Selection */}
-                  <Text style={{ color: '#94a3b8', fontSize: 13 }}>{session.isSmartAgent ? 'Smart Auto' : 'Manual'}</Text>
+                  <Text style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{session.isSmartAgent ? 'Smart Auto' : 'Manual'}</Text>
 
                   {/* Status */}
                   <Tag style={{
                     borderRadius: 4,
                     border: 'none',
                     background: isActive ? (hasPosition ? 'rgba(34, 197, 94, 0.12)' : 'rgba(251, 191, 36, 0.12)') : 'rgba(148, 163, 184, 0.1)',
-                    color: isActive ? (hasPosition ? '#4ade80' : '#fbbf24') : '#94a3b8',
+                    color: isActive ? (hasPosition ? '#4ade80' : '#fbbf24') : 'var(--text-secondary)',
                     fontSize: 11,
                     padding: '3px 8px',
                   }}>
@@ -336,7 +336,7 @@ export default function SessionsPage() {
                   </Text>
 
                   {/* Trades */}
-                  <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center', display: 'block' }}>
+                  <Text style={{ color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center', display: 'block' }}>
                     {session.totalTrades ?? 0}
                   </Text>
 
@@ -389,7 +389,7 @@ export default function SessionsPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
           {enrichedSessions.length === 0 ? (
             <div style={{ gridColumn: '1 / -1', padding: 48, textAlign: 'center' }}>
-              <Empty description={<Text style={{ color: '#94a3b8' }}>No agents yet</Text>}>
+              <Empty description={<Text style={{ color: 'var(--text-secondary)' }}>No agents yet</Text>}>
                 <Button type="primary" onClick={() => setCreateModalOpen(true)}>Create Your First Agent</Button>
               </Empty>
             </div>
@@ -422,12 +422,12 @@ export default function SessionsPage() {
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
                     <div>
-                      <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 16, display: 'block' }}>{resolveAgentLabel(session)}</Text>
+                      <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 16, display: 'block' }}>{resolveAgentLabel(session)}</Text>
                       <Tag style={{ marginTop: 6, borderRadius: 4, border: 'none', background: session.mode === 'live' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(59, 130, 246, 0.12)', color: session.mode === 'live' ? '#f87171' : '#06b6d4', fontSize: 10 }}>
                         {session.mode?.toUpperCase()}
                       </Tag>
                     </div>
-                    <Tag style={{ borderRadius: 4, border: 'none', background: isActive ? (hasPosition ? 'rgba(34, 197, 94, 0.12)' : 'rgba(251, 191, 36, 0.12)') : 'rgba(148, 163, 184, 0.1)', color: isActive ? (hasPosition ? '#4ade80' : '#fbbf24') : '#94a3b8', height: 'fit-content' }}>
+                    <Tag style={{ borderRadius: 4, border: 'none', background: isActive ? (hasPosition ? 'rgba(34, 197, 94, 0.12)' : 'rgba(251, 191, 36, 0.12)') : 'rgba(148, 163, 184, 0.1)', color: isActive ? (hasPosition ? '#4ade80' : '#fbbf24') : 'var(--text-secondary)', height: 'fit-content' }}>
                       {isActive ? (hasPosition ? 'Trading' : 'Watching') : session.haltedAt ? 'Paused' : 'Stopped'}
                     </Tag>
                   </div>

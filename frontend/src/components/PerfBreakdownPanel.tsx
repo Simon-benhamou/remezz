@@ -54,7 +54,7 @@ export default function PerfBreakdownPanel({ sessionId, api }: { sessionId?: str
       title={
         <Flex align="center" gap={8}>
           <BarChart3 size={16} style={{ color: '#06b6d4' }} />
-          <span style={{ color: '#e2e8f0', fontWeight: 600 }}>Performance</span>
+          <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Performance</span>
           <Tag style={{ marginLeft: 'auto', background: 'rgba(6, 182, 212, 0.15)', border: 'none', color: '#06b6d4' }}>
             {data.sample} trades
           </Tag>

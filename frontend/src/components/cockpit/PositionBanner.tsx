@@ -84,9 +84,9 @@ const getHealthInfo = (
       };
     default:
       return {
-        color: '#94a3b8',
+        color: 'var(--text-secondary)',
         label: 'Unknown',
-        icon: <Eye size={14} color="#94a3b8" />,
+        icon: <Eye size={14} color="var(--text-secondary)" />,
       };
   }
 };

@@ -65,7 +65,7 @@ export default function UserDropdown() {
       key: 'profile',
       label: (
         <div style={{ padding: '8px 0', borderBottom: '1px solid rgba(148, 163, 184, 0.18)' }}>
-          <div style={{ fontWeight: 600, fontSize: '14px', color: '#e2e8f0' }}>
+          <div style={{ fontWeight: 600, fontSize: '14px', color: 'var(--text-primary)' }}>
             {userInfo?.username || 'User'}
           </div>
           <div style={{ fontSize: '12px', color: 'rgba(148, 163, 184, 0.78)' }}>
@@ -130,7 +130,7 @@ export default function UserDropdown() {
             border: '1px solid rgba(6, 182, 212, 0.25)',
             transition: 'all 0.2s ease',
             background: 'rgba(15, 23, 42, 0.6)',
-            color: '#e2e8f0',
+            color: 'var(--text-primary)',
           }}
           onMouseEnter={(e) => {
             e.currentTarget.style.backgroundColor = 'rgba(37, 99, 235, 0.18)';
@@ -157,7 +157,7 @@ export default function UserDropdown() {
               <div style={{
                 fontSize: '13px',
                 fontWeight: '600',
-                color: '#e2e8f0',
+                color: 'var(--text-primary)',
                 maxWidth: '120px',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',

@@ -70,7 +70,7 @@ export default function LoginPage() {
       <div className='auth-form-wrapper'>
         <Card className='auth-form-card' bordered={false}>
           <div style={{ marginBottom: 32 }}>
-            <Title level={2} style={{ color: '#e2e8f0', marginBottom: 8 }}>
+            <Title level={2} style={{ color: 'var(--text-primary)', marginBottom: 8 }}>
               Welcome back
             </Title>
             <Text type='secondary' style={{ color: 'rgba(148, 163, 184, 0.75)' }}>

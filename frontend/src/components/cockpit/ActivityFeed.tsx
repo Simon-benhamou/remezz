@@ -119,7 +119,7 @@ const getEventConfig = (kind: string, level: string): EventConfig => {
     case 'market_regime':
       return {
         icon: <TrendingUp size={14} />,
-        color: '#64748b',
+        color: 'var(--text-secondary)',
         tagColor: 'default',
         label: 'REGIME',
       };
@@ -140,7 +140,7 @@ const getEventConfig = (kind: string, level: string): EventConfig => {
     default:
       return {
         icon: <Info size={14} />,
-        color: '#94a3b8',
+        color: 'var(--text-secondary)',
         tagColor: 'default',
         label: kind.toUpperCase(),
       };

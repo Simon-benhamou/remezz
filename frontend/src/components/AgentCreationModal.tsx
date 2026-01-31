@@ -196,7 +196,7 @@ export default function AgentCreationModal({
       dataIndex: 'symbol',
       key: 'symbol',
       render: (symbol: string) => (
-        <Text strong style={{ color: '#f8fafc' }}>
+        <Text strong style={{ color: 'var(--text-primary)' }}>
           {symbol}
         </Text>
       ),
@@ -248,7 +248,7 @@ export default function AgentCreationModal({
       key: 'opportunity',
       render: (_, record) => (
         <Space direction="vertical" size={2}>
-          <Text style={{ fontSize: 12, color: '#e2e8f0' }}>
+          <Text style={{ fontSize: 12, color: 'var(--text-primary)' }}>
             {record.opportunity.type}
           </Text>
           <Tag
@@ -379,10 +379,10 @@ export default function AgentCreationModal({
                           bodyStyle={{ padding: 14 }}
                         >
                           <div style={{ fontSize: 28, marginBottom: 6 }}>{crypto.icon}</div>
-                          <Text strong style={{ color: '#f8fafc', display: 'block', marginBottom: 2 }}>
+                          <Text strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: 2 }}>
                             {crypto.symbol.replace('/USDT', '')}
                           </Text>
-                          <Text style={{ color: '#94a3b8', fontSize: 11, display: 'block', marginBottom: 6 }}>
+                          <Text style={{ color: 'var(--text-secondary)', fontSize: 11, display: 'block', marginBottom: 6 }}>
                             {crypto.name}
                           </Text>
                           <Tag
@@ -449,10 +449,10 @@ export default function AgentCreationModal({
                           bodyStyle={{ padding: 14 }}
                         >
                           <div style={{ fontSize: 28, marginBottom: 6 }}>{crypto.icon}</div>
-                          <Text strong style={{ color: '#94a3b8', display: 'block', marginBottom: 2 }}>
+                          <Text strong style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: 2 }}>
                             {crypto.symbol.replace('/USDT', '')}
                           </Text>
-                          <Text style={{ color: '#64748b', fontSize: 11, display: 'block', marginBottom: 6 }}>
+                          <Text style={{ color: 'var(--text-secondary)', fontSize: 11, display: 'block', marginBottom: 6 }}>
                             {crypto.name}
                           </Text>
                           <Tag
@@ -510,13 +510,13 @@ export default function AgentCreationModal({
                 {loadingRanking ? (
                   <div style={{ textAlign: 'center', padding: 48 }}>
                     <Spin size="large" />
-                    <Text style={{ display: 'block', marginTop: 16, color: '#94a3b8' }}>
+                    <Text style={{ display: 'block', marginTop: 16, color: 'var(--text-secondary)' }}>
                       Analyzing market opportunities...
                     </Text>
                   </div>
                 ) : rankedCryptos.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: 48 }}>
-                    <Text style={{ color: '#94a3b8' }}>No ranking data available</Text>
+                    <Text style={{ color: 'var(--text-secondary)' }}>No ranking data available</Text>
                     <br />
                     <Button
                       type="primary"
@@ -573,9 +573,9 @@ export default function AgentCreationModal({
             <Form.Item
               label={
                 <Space>
-                  <Text style={{ color: '#e2e8f0' }}>Max Leverage</Text>
+                  <Text style={{ color: 'var(--text-primary)' }}>Max Leverage</Text>
                   <Tooltip title="Maximum leverage the agent can use for trades">
-                    <InfoCircleOutlined style={{ color: '#94a3b8' }} />
+                    <InfoCircleOutlined style={{ color: 'var(--text-secondary)' }} />
                   </Tooltip>
                 </Space>
               }
@@ -607,37 +607,37 @@ export default function AgentCreationModal({
           }}
         >
           <div style={{ flex: 1 }}>
-            <Text style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 12, display: 'block', marginBottom: 4 }}>
               Position Size
             </Text>
-            <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 18 }}>
+            <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 18 }}>
               40%
             </Text>
           </div>
           <div style={{ flex: 1 }}>
-            <Text style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 12, display: 'block', marginBottom: 4 }}>
               Stop Loss
             </Text>
             <Text style={{ color: '#f87171', fontWeight: 600, fontSize: 18 }}>
               1.5%
             </Text>
-            <Text style={{ color: '#64748b', fontSize: 10, display: 'block' }}>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 10, display: 'block' }}>
               ≈7.5% avec 5x lev
             </Text>
           </div>
           <div style={{ flex: 1 }}>
-            <Text style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 12, display: 'block', marginBottom: 4 }}>
               Take Profit
             </Text>
             <Text style={{ color: '#4ade80', fontWeight: 600, fontSize: 18 }}>
               3.0%
             </Text>
-            <Text style={{ color: '#64748b', fontSize: 10, display: 'block' }}>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 10, display: 'block' }}>
               ≈15% avec 5x lev
             </Text>
           </div>
           <div style={{ flex: 1 }}>
-            <Text style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 12, display: 'block', marginBottom: 4 }}>
               Strategy
             </Text>
             <Text style={{ color: '#4ade80', fontWeight: 600, fontSize: 18 }}>

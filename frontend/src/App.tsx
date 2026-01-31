@@ -1,4 +1,4 @@
-import { ConfigProvider, Layout, Menu, Segmented, Space, Tag, theme, ThemeConfig } from 'antd';
+import { ConfigProvider, Drawer, Grid, Layout, Menu, Segmented, Space, Tag, theme, ThemeConfig } from 'antd';
 import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import UserDropdown from './components/UserDropdown';
@@ -15,7 +15,7 @@ import SessionCockpitPage from './pages/SessionCockpitPageNew';
 import FeedPage from './pages/FeedPage';
 import BacktestPage from './pages/BacktestPage';
 import { useAppStore } from './store';
-import { Activity, BarChart, Bot, ListChecks, Radio, LineChart, Sun, Moon } from 'lucide-react';
+import { Activity, BarChart, Bot, ChevronLeft, ChevronRight, ListChecks, Radio, LineChart, Menu as MenuIcon, Sun, Moon } from 'lucide-react';
 import { api } from './api';
 import { TradeNotificationProvider } from './providers/TradeNotificationProvider';
 import NotificationBell from './components/NotificationBell';
@@ -38,6 +38,12 @@ function AuthenticatedApp() {
   const location = useLocation();
   const { mode, setMode, themeMode, toggleTheme } = useAppStore();
   const { overview, loadOverview } = useDashboard();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md; // md = 768px
+  const [siderCollapsed, setSiderCollapsed] = React.useState(() => {
+    try { return localStorage.getItem('siderCollapsed') === 'true'; } catch { return false; }
+  });
+  const [mobileDrawerOpen, setMobileDrawerOpen] = React.useState(false);
   const [balanceModalOpen, setBalanceModalOpen] = React.useState(false);
   const [paperCapital, setPaperCapital] = React.useState<{ totalUSD: number; freeUSD: number; reservedUSD: number; inPositionsUSD: number } | null>(null);
   const [liveCapital, setLiveCapital] = React.useState<{ totalUSD: number; freeUSD: number; reservedUSD: number; inPositionsUSD: number } | null>(null);
@@ -56,6 +62,16 @@ function AuthenticatedApp() {
   }, []);
 
   const activeMenuKey = resolveActiveMenuKey(location.pathname);
+
+  // Persist collapsed state
+  React.useEffect(() => {
+    try { localStorage.setItem('siderCollapsed', String(siderCollapsed)); } catch {}
+  }, [siderCollapsed]);
+
+  // Auto-close mobile drawer on route change
+  React.useEffect(() => {
+    setMobileDrawerOpen(false);
+  }, [location.pathname]);
 
   React.useEffect(() => {
     void loadCapital();
@@ -117,33 +133,106 @@ function AuthenticatedApp() {
           : '#f8fafc',
       }}
     >
-      <Layout.Sider
-        breakpoint='lg'
-        collapsedWidth={72}
-        theme={themeMode}
-        style={{
-          background: themeMode === 'dark'
-            ? 'linear-gradient(180deg, #111827 0%, #0a0e1a 100%)'
-            : '#ffffff',
-          borderRight: themeMode === 'dark'
-            ? '1px solid rgba(30, 58, 95, 0.4)'
-            : '1px solid #e2e8f0',
-          boxShadow: themeMode === 'dark'
-            ? '0 12px 35px -18px rgba(2, 6, 23, 0.9)'
-            : '0 1px 3px rgba(0, 0, 0, 0.08)',
-          zIndex: 100,
-        }}
-      >
-        <div
+      {/* Desktop sidebar */}
+      {!isMobile && (
+        <Layout.Sider
+          collapsed={siderCollapsed}
+          onCollapse={setSiderCollapsed}
+          collapsedWidth={72}
+          width={220}
+          theme={themeMode}
           style={{
+            background: themeMode === 'dark'
+              ? 'linear-gradient(180deg, #111827 0%, #0a0e1a 100%)'
+              : '#ffffff',
+            borderRight: themeMode === 'dark'
+              ? '1px solid rgba(30, 58, 95, 0.4)'
+              : '1px solid #e2e8f0',
+            boxShadow: themeMode === 'dark'
+              ? '0 12px 35px -18px rgba(2, 6, 23, 0.9)'
+              : '0 1px 3px rgba(0, 0, 0, 0.08)',
+            zIndex: 100,
             display: 'flex',
-            alignItems: 'center',
-            padding: '20px 16px',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.12)'
+            flexDirection: 'column',
           }}
         >
-          <img src="/remezz-logo.svg" alt="Remezz" style={{ height: 32 }} />
-        </div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: siderCollapsed ? 'center' : 'flex-start',
+              padding: siderCollapsed ? '20px 0' : '20px 16px',
+              borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
+            }}
+          >
+            {siderCollapsed
+              ? <img src="/favicon.svg" alt="Remezz" style={{ height: 28, width: 28 }} />
+              : <img src="/remezz-logo.svg" alt="Remezz" style={{ height: 32 }} />
+            }
+          </div>
+          <Menu
+            theme='dark'
+            mode='inline'
+            inlineCollapsed={siderCollapsed}
+            selectedKeys={[activeMenuKey]}
+            items={menuItems}
+            onClick={({ key }) => navigate(String(key))}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              fontSize: 14,
+              color: '#e2e8f0',
+              padding: '12px 8px',
+              flex: 1,
+            }}
+          />
+          {!siderCollapsed && (
+            <div style={{ padding: '18px', borderTop: '1px solid rgba(148, 163, 184, 0.12)' }}>
+              <div style={{ color: '#06b6d4', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Signal Engine</div>
+              <div style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, lineHeight: 1.4 }}>Detect the signal. Trade the momentum.</div>
+            </div>
+          )}
+          <div
+            role='button'
+            tabIndex={0}
+            onClick={() => setSiderCollapsed((c) => !c)}
+            onKeyDown={(e) => { if (e.key === 'Enter') setSiderCollapsed((c) => !c); }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '12px 0',
+              cursor: 'pointer',
+              borderTop: '1px solid rgba(148, 163, 184, 0.12)',
+              color: 'rgba(148, 163, 184, 0.72)',
+            }}
+            title={siderCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {siderCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+          </div>
+        </Layout.Sider>
+      )}
+
+      {/* Mobile drawer */}
+      <Drawer
+        placement='left'
+        open={mobileDrawerOpen}
+        onClose={() => setMobileDrawerOpen(false)}
+        width={260}
+        styles={{
+          body: {
+            padding: 0,
+            background: themeMode === 'dark'
+              ? 'linear-gradient(180deg, #111827 0%, #0a0e1a 100%)'
+              : '#ffffff',
+          },
+          header: {
+            background: themeMode === 'dark' ? '#111827' : '#ffffff',
+            borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
+          },
+        }}
+        title={<img src="/remezz-logo.svg" alt="Remezz" style={{ height: 28 }} />}
+      >
         <Menu
           theme='dark'
           mode='inline'
@@ -162,7 +251,7 @@ function AuthenticatedApp() {
           <div style={{ color: '#06b6d4', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Signal Engine</div>
           <div style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, lineHeight: 1.4 }}>Detect the signal. Trade the momentum.</div>
         </div>
-      </Layout.Sider>
+      </Drawer>
       <Layout>
         <Header
           style={{
@@ -182,6 +271,18 @@ function AuthenticatedApp() {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, height: '100%' }}>
+            {isMobile && (
+              <div
+                role='button'
+                tabIndex={0}
+                onClick={() => setMobileDrawerOpen(true)}
+                onKeyDown={(e) => { if (e.key === 'Enter') setMobileDrawerOpen(true); }}
+                style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 4 }}
+                title='Open menu'
+              >
+                <MenuIcon size={22} />
+              </div>
+            )}
             {/* Equity compact chip */}
             <div
               role='button'

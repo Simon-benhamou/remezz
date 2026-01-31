@@ -1174,7 +1174,7 @@ export default function SessionCockpitPage() {
                               <Tag>{log?.symbol || symbol}</Tag>
                               {timeLabel && <Text type="secondary" style={{ fontSize: 12 }}>{timeLabel}</Text>}
                             </Space>
-                            <Text style={{ color: '#e2e8f0' }}>
+                            <Text style={{ color: 'var(--text-primary)' }}>
                               {log?.message || '—'}
                             </Text>
                           </Space>
@@ -1204,7 +1204,7 @@ export default function SessionCockpitPage() {
                           <Space direction="vertical" size={4} style={{ width: '100%' }}>
                             <Space size={8} align="center" wrap>
                               <Tag color={color}>{(evt?.level || 'INFO').toUpperCase()}</Tag>
-                              <Text style={{ color: '#e2e8f0', fontWeight: 500 }}>{evt?.source || 'Agent'}</Text>
+                              <Text style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{evt?.source || 'Agent'}</Text>
                               {timeLabel && <Text type="secondary" style={{ fontSize: 12 }}>{timeLabel}</Text>}
                             </Space>
                             <Text style={{ color: '#cbd5f5' }}>

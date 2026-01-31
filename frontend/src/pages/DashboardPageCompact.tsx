@@ -189,7 +189,7 @@ export default function DashboardPageCompact() {
               <Bot size={14} color="#38bdf8" />
               <Text style={{ color: '#38bdf8', fontSize: 12, fontWeight: 500 }}>Active Agents</Text>
             </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: '#f8fafc' }}>{ov?.activeCount || 0}</div>
+            <div style={{ fontSize: 32, fontWeight: 700, color: 'var(--text-primary)' }}>{ov?.activeCount || 0}</div>
             <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>{tradingCount} Trading Now</Text>
           </div>
         </Col>
@@ -211,7 +211,7 @@ export default function DashboardPageCompact() {
               <span style={{ color: '#fbbf24', fontSize: 14 }}>%</span>
               <Text style={{ color: '#fbbf24', fontSize: 12, fontWeight: 500 }}>Today Win Rate</Text>
             </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: stats.todayWinRate >= 50 ? '#34d399' : stats.todayTrades > 0 ? '#f87171' : '#94a3b8' }}>
+            <div style={{ fontSize: 32, fontWeight: 700, color: stats.todayWinRate >= 50 ? '#34d399' : stats.todayTrades > 0 ? '#f87171' : 'var(--text-secondary)' }}>
               {stats.todayTrades > 0 ? `${stats.todayWinRate.toFixed(0)}%` : '—'}
             </div>
             <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>All-time: {stats.winRate.toFixed(0)}% ({stats.wins}W/{stats.losses}L)</Text>
@@ -223,7 +223,7 @@ export default function DashboardPageCompact() {
               <Activity size={14} color="#a78bfa" />
               <Text style={{ color: '#a78bfa', fontSize: 12, fontWeight: 500 }}>Total Trades</Text>
             </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: '#f8fafc' }}>{trades.length}</div>
+            <div style={{ fontSize: 32, fontWeight: 700, color: 'var(--text-primary)' }}>{trades.length}</div>
             <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>Avg ROE: {stats.avgRoe >= 0 ? '+' : ''}{stats.avgRoe.toFixed(1)}%</Text>
           </div>
         </Col>
@@ -232,7 +232,7 @@ export default function DashboardPageCompact() {
       {/* Market Conditions */}
       {marketConditions && (
         <Card style={{ ...cardStyle, marginBottom: 20, padding: '20px 24px' }} bodyStyle={{ padding: 0 }}>
-          <Text style={{ color: '#f8fafc', fontSize: 16, fontWeight: 600, display: 'block', marginBottom: 20 }}>
+          <Text style={{ color: 'var(--text-primary)', fontSize: 16, fontWeight: 600, display: 'block', marginBottom: 20 }}>
             Market Conditions
           </Text>
           <Row gutter={[32, 16]} align="middle">
@@ -260,7 +260,7 @@ export default function DashboardPageCompact() {
                   <Text style={{ color: '#f87171', fontSize: 16, fontWeight: 700 }}>UNFAVORABLE</Text>
                 )}
                 {marketConditions.status === 'unknown' && (
-                  <Text style={{ color: '#94a3b8', fontSize: 16, fontWeight: 700 }}>UNKNOWN</Text>
+                  <Text style={{ color: 'var(--text-secondary)', fontSize: 16, fontWeight: 700 }}>UNKNOWN</Text>
                 )}
               </div>
             </Col>
@@ -296,7 +296,7 @@ export default function DashboardPageCompact() {
                 style={{ 
                   background: marketConditions.tradingRecommended ? 'rgba(52, 211, 153, 0.15)' : 'rgba(148, 163, 184, 0.15)',
                   border: marketConditions.tradingRecommended ? '1px solid #34d399' : '1px solid rgba(148, 163, 184, 0.3)',
-                  color: marketConditions.tradingRecommended ? '#34d399' : '#94a3b8',
+                  color: marketConditions.tradingRecommended ? '#34d399' : 'var(--text-secondary)',
                   fontSize: 13,
                   fontWeight: 600,
                   padding: '6px 16px',
@@ -318,7 +318,7 @@ export default function DashboardPageCompact() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Space>
               <Bot size={16} color="#38bdf8" />
-              <Text style={{ color: '#f8fafc', fontSize: 15, fontWeight: 600 }}>Active Agents</Text>
+              <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600 }}>Active Agents</Text>
               <Tag color="gold" style={{ marginLeft: 8 }}>{tradingCount} Trading</Tag>
             </Space>
             <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 13 }}>{watchingCount} watching</Text>
@@ -331,7 +331,7 @@ export default function DashboardPageCompact() {
             <Spin size="large" />
           </div>
         ) : (ov?.sessions || []).length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>
+          <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
             <Bot size={48} style={{ marginBottom: 16, opacity: 0.5 }} />
             <div>No active agents</div>
             <Button type="primary" style={{ marginTop: 16 }} onClick={() => navigate('/agents')}>
@@ -363,7 +363,7 @@ export default function DashboardPageCompact() {
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                    <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 14 }}>
+                    <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 14 }}>
                       {session.symbol?.replace('/USDT', '').replace(':USDT', '')}
                     </Text>
                     <Tag 
@@ -407,14 +407,14 @@ export default function DashboardPageCompact() {
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                  <Text style={{ color: '#f8fafc', fontSize: 15, fontWeight: 600, display: 'block' }}>Performance Overview</Text>
+                  <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600, display: 'block' }}>Performance Overview</Text>
                   <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Cumulative PnL across all sessions</Text>
                 </div>
                 <Button 
                   type="text" 
                   icon={<RefreshCw size={16} className={tradesLoading ? 'spin' : ''} />} 
                   onClick={loadTrades}
-                  style={{ color: '#94a3b8' }}
+                  style={{ color: 'var(--text-secondary)' }}
                 />
               </div>
             }
@@ -447,7 +447,7 @@ export default function DashboardPageCompact() {
                   display: 'flex', 
                   alignItems: 'center', 
                   justifyContent: 'center',
-                  color: '#94a3b8' 
+                  color: 'var(--text-secondary)' 
                 }}>
                   No trade data available
                 </div>
@@ -467,11 +467,11 @@ export default function DashboardPageCompact() {
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.1)" />
                     <XAxis 
                       dataKey="date" 
-                      tick={{ fill: '#94a3b8', fontSize: 11 }} 
+                      tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} 
                       axisLine={{ stroke: 'rgba(148, 163, 184, 0.2)' }}
                     />
                     <YAxis 
-                      tick={{ fill: '#94a3b8', fontSize: 11 }} 
+                      tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} 
                       axisLine={{ stroke: 'rgba(148, 163, 184, 0.2)' }}
                       tickFormatter={(v) => `$${v}`}
                       width={60}
@@ -513,7 +513,7 @@ export default function DashboardPageCompact() {
             <Row gutter={[24, 12]} style={{ marginTop: 20, borderTop: '1px solid rgba(148, 163, 184, 0.1)', paddingTop: 16 }}>
               <Col xs={6}>
                 <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block', marginBottom: 4 }}>Sample Size</Text>
-                <Text style={{ color: '#f8fafc', fontSize: 18, fontWeight: 700 }}>{trades.length}</Text>
+                <Text style={{ color: 'var(--text-primary)', fontSize: 18, fontWeight: 700 }}>{trades.length}</Text>
               </Col>
               <Col xs={6}>
                 <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block', marginBottom: 4 }}>Avg ROE</Text>
@@ -523,11 +523,11 @@ export default function DashboardPageCompact() {
               </Col>
               <Col xs={6}>
                 <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block', marginBottom: 4 }}>Avg Leverage</Text>
-                <Text style={{ color: '#f8fafc', fontSize: 18, fontWeight: 700 }}>{stats.avgLev.toFixed(2)}x</Text>
+                <Text style={{ color: 'var(--text-primary)', fontSize: 18, fontWeight: 700 }}>{stats.avgLev.toFixed(2)}x</Text>
               </Col>
               <Col xs={6}>
                 <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block', marginBottom: 4 }}>Direction</Text>
-                <Text style={{ color: '#f8fafc', fontSize: 18, fontWeight: 700 }}>{stats.longs}L / {stats.shorts}S</Text>
+                <Text style={{ color: 'var(--text-primary)', fontSize: 18, fontWeight: 700 }}>{stats.longs}L / {stats.shorts}S</Text>
               </Col>
             </Row>
           </Card>
@@ -540,7 +540,7 @@ export default function DashboardPageCompact() {
             bodyStyle={{ padding: 16 }}
             title={
               <div>
-                <Text style={{ color: '#f8fafc', fontSize: 15, fontWeight: 600, display: 'block' }}>Recent Trades</Text>
+                <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600, display: 'block' }}>Recent Trades</Text>
                 <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Last {recentTrades.length} executions</Text>
               </div>
             }
@@ -548,7 +548,7 @@ export default function DashboardPageCompact() {
           >
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
               {recentTrades.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>
+                <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
                   No recent trades
                 </div>
               ) : (
@@ -563,7 +563,7 @@ export default function DashboardPageCompact() {
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 14 }}>
+                      <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 14 }}>
                         {trade.symbol?.replace('/USDT', '').replace(':USDT', '')}
                       </Text>
                       <Space size={4}>
@@ -584,11 +584,11 @@ export default function DashboardPageCompact() {
                     <Row gutter={16}>
                       <Col span={8}>
                         <Text style={{ color: 'rgba(148, 163, 184, 0.5)', fontSize: 10, display: 'block' }}>Entry</Text>
-                        <Text style={{ color: '#f8fafc', fontSize: 12 }}>{(trade.entryPrice || 0).toFixed(4)}</Text>
+                        <Text style={{ color: 'var(--text-primary)', fontSize: 12 }}>{(trade.entryPrice || 0).toFixed(4)}</Text>
                       </Col>
                       <Col span={8}>
                         <Text style={{ color: 'rgba(148, 163, 184, 0.5)', fontSize: 10, display: 'block' }}>Exit</Text>
-                        <Text style={{ color: '#f8fafc', fontSize: 12 }}>{(trade.exitPrice || 0).toFixed(4)}</Text>
+                        <Text style={{ color: 'var(--text-primary)', fontSize: 12 }}>{(trade.exitPrice || 0).toFixed(4)}</Text>
                       </Col>
                       <Col span={8} style={{ textAlign: 'right' }}>
                         <Text style={{ color: 'rgba(148, 163, 184, 0.5)', fontSize: 10, display: 'block' }}>&nbsp;</Text>
@@ -625,7 +625,7 @@ export default function DashboardPageCompact() {
             style={{ 
               background: 'rgba(30, 41, 59, 0.8)', 
               borderColor: 'rgba(148, 163, 184, 0.2)',
-              color: '#f8fafc'
+              color: 'var(--text-primary)'
             }}
           >
             All Sessions
@@ -642,7 +642,7 @@ export default function DashboardPageCompact() {
             style={{ 
               background: 'rgba(30, 41, 59, 0.8)', 
               borderColor: 'rgba(148, 163, 184, 0.2)',
-              color: '#f8fafc'
+              color: 'var(--text-primary)'
             }}
           >
             Agent Feed

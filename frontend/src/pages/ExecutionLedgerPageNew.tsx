@@ -132,20 +132,20 @@ export default function ExecutionLedgerPageNew() {
     <div style={{ padding: '0 24px 24px', maxWidth: 1600, margin: '0 auto' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <Title level={3} style={{ margin: 0, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Title level={3} style={{ margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 20 }}>📊</span> Execution Ledger
         </Title>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           {/* 🆕 Mode Filter */}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <Text style={{ color: '#94a3b8', fontSize: 12 }}>Mode:</Text>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Mode:</Text>
             <div style={{ display: 'flex', gap: 4 }}>
          
             </div>
           </div>
           <Input
             placeholder="Search..."
-            prefix={<SearchOutlined style={{ color: '#64748b' }} />}
+            prefix={<SearchOutlined style={{ color: 'var(--text-secondary)' }} />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             style={{ width: 200, background: 'rgba(15, 23, 42, 0.8)', borderColor: 'rgba(148, 163, 184, 0.2)' }}
@@ -161,11 +161,11 @@ export default function ExecutionLedgerPageNew() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 16, marginBottom: 24 }}>
           <div style={cardStyle}>
             <div style={headerStyle}>Total Trades</div>
-            <div style={{ color: '#f8fafc', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.total}</div>
+            <div style={{ color: 'var(--text-primary)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.total}</div>
           </div>
           <div style={cardStyle}>
             <div style={headerStyle}>Win / Losses</div>
-            <div style={{ color: '#f8fafc', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.wins} / {summary.losses}</div>
+            <div style={{ color: 'var(--text-primary)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.wins} / {summary.losses}</div>
           </div>
           <div style={cardStyle}>
             <div style={headerStyle}>Win Rate</div>
@@ -232,8 +232,8 @@ export default function ExecutionLedgerPageNew() {
             >
               {/* Date */}
               <div style={{ whiteSpace: 'nowrap' }}>
-                <div style={{ color: '#f8fafc', fontSize: 11 }}>{dayjs(trade.createdAt).format('YYYY-MM-DD')}</div>
-                <div style={{ color: '#64748b', fontSize: 9 }}>{dayjs(trade.createdAt).format('HH:mm:ss')}</div>
+                <div style={{ color: 'var(--text-primary)', fontSize: 11 }}>{dayjs(trade.createdAt).format('YYYY-MM-DD')}</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: 9 }}>{dayjs(trade.createdAt).format('HH:mm:ss')}</div>
               </div>
 
               {/* Outcome */}
@@ -256,11 +256,11 @@ export default function ExecutionLedgerPageNew() {
 
               {/* Session */}
               <div style={{ whiteSpace: 'nowrap' }}>
-                <div style={{ color: '#f8fafc', fontSize: 11 }}>{trade.sessionSymbol?.replace('/USDT:USDT', '')}</div>
+                <div style={{ color: 'var(--text-primary)', fontSize: 11 }}>{trade.sessionSymbol?.replace('/USDT:USDT', '')}</div>
               </div>
 
               {/* Symbol */}
-              <Text style={{ color: '#f8fafc', fontSize: 11, whiteSpace: 'nowrap' }}>{trade.symbol?.replace('/USDT:USDT', '/USDT')}</Text>
+              <Text style={{ color: 'var(--text-primary)', fontSize: 11, whiteSpace: 'nowrap' }}>{trade.symbol?.replace('/USDT:USDT', '/USDT')}</Text>
 
               {/* Side */}
               <Tag style={{ borderRadius: 3, border: 'none', background: trade.positionSide === 'long' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)', color: trade.positionSide === 'long' ? '#4ade80' : '#f87171', fontSize: 9, fontWeight: 600, padding: '2px 4px' }}>
@@ -268,13 +268,13 @@ export default function ExecutionLedgerPageNew() {
               </Tag>
 
               {/* Quantity */}
-              <Text style={{ color: '#94a3b8', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.qty?.toFixed(4)}</Text>
+              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.qty?.toFixed(4)}</Text>
 
               {/* Entry */}
-              <Text style={{ color: '#94a3b8', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.entryPrice?.toFixed(4)}</Text>
+              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.entryPrice?.toFixed(4)}</Text>
 
               {/* Exit */}
-              <Text style={{ color: '#94a3b8', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.exitPrice?.toFixed(4)}</Text>
+              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.exitPrice?.toFixed(4)}</Text>
 
               {/* P&L */}
               <Text style={{ color: pnl >= 0 ? '#4ade80' : '#f87171', fontSize: 12, fontWeight: 600, textAlign: 'right', display: 'block' }}>
@@ -287,15 +287,15 @@ export default function ExecutionLedgerPageNew() {
               </Text>
 
               {/* Notional */}
-              <Text style={{ color: '#94a3b8', fontSize: 11, textAlign: 'right', display: 'block' }}>
+              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>
                 ${(trade.notionalUsd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </Text>
 
               {/* Leverage */}
-              <Text style={{ color: '#94a3b8', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.leverage?.toFixed(1)}x</Text>
+              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.leverage?.toFixed(1)}x</Text>
 
               {/* Duration */}
-              <Text style={{ color: '#94a3b8', fontSize: 10, textAlign: 'right', display: 'block' }}>{formatDuration(trade.durationMinutes)}</Text>
+              <Text style={{ color: 'var(--text-secondary)', fontSize: 10, textAlign: 'right', display: 'block' }}>{formatDuration(trade.durationMinutes)}</Text>
 
               {/* Exit Type */}
               {trade.exitReason ? (
@@ -306,10 +306,10 @@ export default function ExecutionLedgerPageNew() {
                 }}>
                   {trade.exitReason.includes('trailing_stop_exchange') ? '🎯 TRAILING STOP' : trade.exitReason.replace(/_/g, ' ').toUpperCase()}
                 </Tag>
-              ) : <Text style={{ color: '#64748b', fontSize: 10 }}>-</Text>}
+              ) : <Text style={{ color: 'var(--text-secondary)', fontSize: 10 }}>-</Text>}
 
               {/* Max P&L */}
-              <Text style={{ color: '#94a3b8', fontSize: 10, textAlign: 'right', display: 'block' }}>
+              <Text style={{ color: 'var(--text-secondary)', fontSize: 10, textAlign: 'right', display: 'block' }}>
                 {trade.maxPnlPct != null ? `+${trade.maxPnlPct.toFixed(1)}%` : '-'}
               </Text>
 
@@ -322,7 +322,7 @@ export default function ExecutionLedgerPageNew() {
         })}
 
         {!loading && filteredTrades.length === 0 && (
-          <div style={{ padding: 48, textAlign: 'center', color: '#64748b' }}>No trades found</div>
+          <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>No trades found</div>
         )}
       </div>
     </div>

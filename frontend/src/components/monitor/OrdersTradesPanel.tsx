@@ -631,7 +631,7 @@ export function OrdersTradesPanel({
           {summaryCards.map((meta) => (
             <div key={meta.key} style={{ minWidth: 120 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>{meta.label}</Text>
-              <div style={{ fontSize: 20, fontWeight: 600, color: '#e2e8f0' }}>{meta.value}</div>
+              <div style={{ fontSize: 20, fontWeight: 600, color: 'var(--text-primary)' }}>{meta.value}</div>
               {typeof meta.extra === 'number' && Number.isFinite(meta.extra) && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   Net PnL: {meta.extra >= 0 ? '+' : ''}{meta.extra.toFixed(2)} USDT

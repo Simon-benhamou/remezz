@@ -121,7 +121,7 @@ export default function StrategyChecklistCard({ strategy }: Props) {
               >
                 <Space size={8} align="start">
                   <Tag color={statusTagColor(item.status)}>{item.status}</Tag>
-                  <span style={{ color: '#e2e8f0' }}>{item.label}</span>
+                  <span style={{ color: 'var(--text-primary)' }}>{item.label}</span>
                 </Space>
                 {item.reason && (
                   <Text type="secondary" style={{ fontSize: 12, textAlign: 'right', maxWidth: '55%' }}>

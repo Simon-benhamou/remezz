@@ -198,7 +198,7 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
   const areaD = pathD + ` L ${xScale(data.length - 1)} ${height - padding.bottom} L ${padding.left} ${height - padding.bottom} Z`;
   
   return (
-    <svg width={width} height={height} style={{ background: '#0f172a', borderRadius: 8 }}>
+    <svg width={width} height={height} style={{ background: 'var(--bg-primary)', borderRadius: 8 }}>
       {/* Grid lines */}
       {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => (
         <g key={i}>
@@ -207,13 +207,13 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
             x2={width - padding.right}
             y1={padding.top + pct * chartHeight}
             y2={padding.top + pct * chartHeight}
-            stroke="#1e293b"
+            stroke="var(--bg-elevated)"
             strokeDasharray="3,3"
           />
           <text
             x={padding.left - 5}
             y={padding.top + pct * chartHeight + 4}
-            fill="#64748b"
+            fill="var(--text-secondary)"
             fontSize={10}
             textAnchor="end"
           >
@@ -263,7 +263,7 @@ const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }
   const areaD = `M ${padding.left} ${padding.top} ` + pathD.substring(2) + ` L ${xScale(data.length - 1)} ${padding.top} Z`;
   
   return (
-    <svg width={width} height={height} style={{ background: '#0f172a', borderRadius: 8 }}>
+    <svg width={width} height={height} style={{ background: 'var(--bg-primary)', borderRadius: 8 }}>
       {/* Area fill */}
       <defs>
         <linearGradient id="ddGradient" x1="0" x2="0" y1="0" y2="1">
@@ -522,7 +522,7 @@ export default function BacktestPage() {
       align: 'right',
       render: (_, r: BacktestTrade) => (
         <Tooltip title={`Before: $${r.capitalBefore.toFixed(0)} → After: $${r.capitalAfter.toFixed(0)}`}>
-          <span style={{ color: '#94a3b8' }}>${r.capitalAfter.toFixed(0)}</span>
+          <span style={{ color: 'var(--text-secondary)' }}>${r.capitalAfter.toFixed(0)}</span>
         </Tooltip>
       ),
     },
@@ -618,16 +618,16 @@ export default function BacktestPage() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1600, margin: '0 auto' }}>
-      <Title level={2} style={{ color: '#e2e8f0', marginBottom: 24 }}>
+      <Title level={2} style={{ color: 'var(--text-primary)', marginBottom: 24 }}>
         <LineChartOutlined style={{ marginRight: 12 }} />
         Strategy Backtester
       </Title>
 
       {/* History */}
       <Card
-        style={{ marginBottom: 24, background: '#1e293b', border: '1px solid #334155' }}
+        style={{ marginBottom: 24, background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}
         bodyStyle={{ padding: 16 }}
-        title={<Text style={{ color: '#e2e8f0' }}>Recent Backtests (cached)</Text>}
+        title={<Text style={{ color: 'var(--text-primary)' }}>Recent Backtests (cached)</Text>}
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => void refreshRuns()} loading={runsLoading}>
@@ -640,7 +640,7 @@ export default function BacktestPage() {
         }
       >
         {runs.length === 0 ? (
-          <Empty description={<Text style={{ color: '#94a3b8' }}>No cached runs yet</Text>} />
+          <Empty description={<Text style={{ color: 'var(--text-secondary)' }}>No cached runs yet</Text>} />
         ) : (
           <List
             loading={runsLoading}
@@ -650,21 +650,21 @@ export default function BacktestPage() {
               return (
                 <List.Item
                   style={{
-                    border: '1px solid #334155',
+                    border: '1px solid var(--border-color)',
                     borderRadius: 8,
                     marginBottom: 8,
                     padding: 12,
-                    background: isSelected ? '#0f172a' : 'transparent',
+                    background: isSelected ? 'var(--bg-primary)' : 'transparent',
                     cursor: 'pointer',
                   }}
                   onClick={() => void handleLoadRun(r.id)}
                 >
                   <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                     <Space direction="vertical" size={0}>
-                      <Text style={{ color: '#e2e8f0' }}>
+                      <Text style={{ color: 'var(--text-primary)' }}>
                         {dayjs(r.createdAt).format('DD/MM/YY HH:mm')} · ${r.params.initialCapital.toLocaleString()} · {r.params.leverage}x
                       </Text>
-                      <Text style={{ color: '#94a3b8', fontSize: 12 }}>
+                      <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                         {dayjs(r.params.startDate).format('YYYY-MM-DD')} → {dayjs(r.params.endDate).format('YYYY-MM-DD')} · {r.params.symbols.length} symbols
                       </Text>
                     </Space>
@@ -672,7 +672,7 @@ export default function BacktestPage() {
                       <Text style={{ color: r.summary.totalPnlUsd >= 0 ? '#10b981' : '#ef4444' }}>
                         {formatCurrency(r.summary.totalPnlUsd)} ({formatPercent(r.summary.totalPnlPct)})
                       </Text>
-                      <Text style={{ color: '#94a3b8', fontSize: 12 }}>
+                      <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                         {r.summary.totalTrades} trades · WR {r.summary.winRate.toFixed(1)}% · DD {r.summary.maxDrawdownPct.toFixed(1)}%
                       </Text>
                     </Space>
@@ -686,7 +686,7 @@ export default function BacktestPage() {
       
       {/* Form */}
       <Card 
-        style={{ marginBottom: 24, background: '#1e293b', border: '1px solid #334155' }}
+        style={{ marginBottom: 24, background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}
         bodyStyle={{ padding: 24 }}
       >
         <Form
@@ -704,7 +704,7 @@ export default function BacktestPage() {
         >
           <Form.Item
             name="dateRange"
-            label={<Text style={{ color: '#94a3b8' }}>Period</Text>}
+            label={<Text style={{ color: 'var(--text-secondary)' }}>Period</Text>}
             rules={[{ required: true }]}
           >
             <RangePicker 
@@ -715,7 +715,7 @@ export default function BacktestPage() {
           
           <Form.Item
             name="initialCapital"
-            label={<Text style={{ color: '#94a3b8' }}>Capital ($)</Text>}
+            label={<Text style={{ color: 'var(--text-secondary)' }}>Capital ($)</Text>}
             rules={[{ required: true }]}
           >
             <InputNumber
@@ -729,7 +729,7 @@ export default function BacktestPage() {
           
           <Form.Item
             name="leverage"
-            label={<Text style={{ color: '#94a3b8' }}>Leverage</Text>}
+            label={<Text style={{ color: 'var(--text-secondary)' }}>Leverage</Text>}
             rules={[{ required: true }]}
           >
             <Select style={{ width: 80 }}>
@@ -742,7 +742,7 @@ export default function BacktestPage() {
           
           <Form.Item
             name="symbols"
-            label={<Text style={{ color: '#94a3b8' }}>Symbols</Text>}
+            label={<Text style={{ color: 'var(--text-secondary)' }}>Symbols</Text>}
             rules={[{ required: true }]}
           >
             <Select
@@ -769,9 +769,9 @@ export default function BacktestPage() {
       
       {/* Loading */}
       {loading && (
-        <Card style={{ marginBottom: 24, background: '#1e293b', border: '1px solid #334155', textAlign: 'center', padding: 48 }}>
+        <Card style={{ marginBottom: 24, background: 'var(--bg-elevated)', border: '1px solid var(--border-color)', textAlign: 'center', padding: 48 }}>
           <Spin size="large" />
-          <Paragraph style={{ color: '#94a3b8', marginTop: 16 }}>
+          <Paragraph style={{ color: 'var(--text-secondary)', marginTop: 16 }}>
             Fetching market data and running simulation...
           </Paragraph>
           <Progress percent={30} status="active" style={{ maxWidth: 400, margin: '0 auto' }} />
@@ -784,58 +784,58 @@ export default function BacktestPage() {
           {/* Summary Stats */}
           <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
             <Col xs={24} sm={12} md={6}>
-              <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8' }}>Total PnL</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)' }}>Total PnL</Text>}
                   value={result.summary.totalPnlUsd}
                   precision={2}
                   prefix="$"
                   valueStyle={{ color: result.summary.totalPnlUsd >= 0 ? '#10b981' : '#ef4444' }}
                 />
-                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                   {formatPercent(result.summary.totalPnlPct)} ROI
                 </Text>
               </Card>
             </Col>
             <Col xs={24} sm={12} md={6}>
-              <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8' }}>Win Rate</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)' }}>Win Rate</Text>}
                   value={result.summary.winRate}
                   precision={1}
                   suffix="%"
                   valueStyle={{ color: result.summary.winRate >= 50 ? '#10b981' : '#ef4444' }}
                 />
-                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                   {result.summary.wins}W / {result.summary.losses}L ({result.summary.totalTrades} total)
                 </Text>
               </Card>
             </Col>
             <Col xs={24} sm={12} md={6}>
-              <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8' }}>Max Drawdown</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)' }}>Max Drawdown</Text>}
                   value={result.summary.maxDrawdownPct}
                   precision={1}
                   suffix="%"
                   valueStyle={{ color: '#ef4444' }}
                   prefix={<WarningOutlined />}
                 />
-                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                   Profit Factor: {result.summary.profitFactor.toFixed(2)}
                 </Text>
               </Card>
             </Col>
             <Col xs={24} sm={12} md={6}>
-              <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8' }}>Final Capital</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)' }}>Final Capital</Text>}
                   value={result.summary.finalCapital}
                   precision={0}
                   prefix="$"
                   valueStyle={{ color: '#06b6d4' }}
                 />
-                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                   Started with ${result.params.initialCapital.toLocaleString()}
                 </Text>
               </Card>
@@ -845,9 +845,9 @@ export default function BacktestPage() {
           {/* Additional Stats Row */}
           <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
             <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Avg Win</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Avg Win</Text>}
                   value={result.summary.avgWinUsd}
                   precision={2}
                   prefix="$"
@@ -856,9 +856,9 @@ export default function BacktestPage() {
               </Card>
             </Col>
             <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Avg Loss</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Avg Loss</Text>}
                   value={result.summary.avgLossUsd}
                   precision={2}
                   prefix="$"
@@ -867,27 +867,27 @@ export default function BacktestPage() {
               </Card>
             </Col>
             <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Long Trades</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Long Trades</Text>}
                   value={result.summary.longTrades}
                   valueStyle={{ color: '#06b6d4', fontSize: 18 }}
                 />
               </Card>
             </Col>
             <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Short Trades</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Short Trades</Text>}
                   value={result.summary.shortTrades}
                   valueStyle={{ color: '#f472b6', fontSize: 18 }}
                 />
               </Card>
             </Col>
             <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Avg Hold</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Avg Hold</Text>}
                   value={(result.summary.avgHoldMinutes / 60).toFixed(1)}
                   suffix="h"
                   valueStyle={{ color: '#a78bfa', fontSize: 18 }}
@@ -895,9 +895,9 @@ export default function BacktestPage() {
               </Card>
             </Col>
             <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
-                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Total Fees</Text>}
+                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Total Fees</Text>}
                   value={result.summary.totalFeesUsd}
                   precision={0}
                   prefix="$"
@@ -911,16 +911,16 @@ export default function BacktestPage() {
           <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
             <Col xs={24} lg={12}>
               <Card 
-                title={<Text style={{ color: '#e2e8f0' }}>Equity Curve</Text>}
-                style={{ background: '#1e293b', border: '1px solid #334155' }}
+                title={<Text style={{ color: 'var(--text-primary)' }}>Equity Curve</Text>}
+                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}
               >
                 <MiniEquityChart data={result.equityCurve} />
               </Card>
             </Col>
             <Col xs={24} lg={12}>
               <Card 
-                title={<Text style={{ color: '#e2e8f0' }}>Drawdown</Text>}
-                style={{ background: '#1e293b', border: '1px solid #334155' }}
+                title={<Text style={{ color: 'var(--text-primary)' }}>Drawdown</Text>}
+                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}
               >
                 <MiniDrawdownChart data={result.drawdownCurve} />
               </Card>
@@ -928,7 +928,7 @@ export default function BacktestPage() {
           </Row>
           
           {/* Tabs for Monthly/Trades */}
-          <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+          <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
             <Tabs
               defaultActiveKey="monthly"
               items={[
@@ -957,7 +957,7 @@ export default function BacktestPage() {
                     <>
                       {/* Filters */}
                       <Space style={{ marginBottom: 16 }} wrap>
-                        <Text style={{ color: '#94a3b8' }}><FilterOutlined /> Filters:</Text>
+                        <Text style={{ color: 'var(--text-secondary)' }}><FilterOutlined /> Filters:</Text>
                         <Select
                           value={selectedMonth}
                           onChange={setSelectedMonth}
@@ -1020,10 +1020,10 @@ export default function BacktestPage() {
       
       {/* Empty state */}
       {!result && !loading && (
-        <Card style={{ background: '#1e293b', border: '1px solid #334155', textAlign: 'center', padding: 48 }}>
+        <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)', textAlign: 'center', padding: 48 }}>
           <Empty
             description={
-              <Text style={{ color: '#94a3b8' }}>
+              <Text style={{ color: 'var(--text-secondary)' }}>
                 Configure backtest parameters and click "Run Backtest" to analyze historical performance
               </Text>
             }

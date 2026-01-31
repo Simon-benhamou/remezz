@@ -89,8 +89,8 @@ export default function ProfessionalChart({
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: '#0f172a' },
-        textColor: '#94a3b8',
+        background: { type: ColorType.Solid, color: 'var(--bg-primary)' },
+        textColor: 'var(--text-secondary)',
         fontSize: 12,
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       },
@@ -519,10 +519,10 @@ export default function ProfessionalChart({
         borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
       }}>
         <div>
-          <div style={{ fontSize: '18px', fontWeight: 700, color: '#f1f5f9' }}>
+          <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>
             {symbol}
           </div>
-          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
             {chartData.length > 0 ? `${chartData.length} candles` : 'No data'}
           </div>
         </div>
@@ -565,7 +565,7 @@ export default function ProfessionalChart({
                 borderRadius: 999,
                 padding: '4px 10px',
                 fontSize: '12px',
-                color: item.color || '#e2e8f0',
+                color: item.color || 'var(--text-primary)',
                 display: 'flex',
                 gap: '6px',
                 letterSpacing: '0.2px',

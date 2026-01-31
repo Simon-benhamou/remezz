@@ -145,9 +145,9 @@ export default function FeedPage() {
       case 'exit': return { icon: <DollarOutlined />, color: isWin ? '#4ade80' : '#f87171', bg: isWin ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', label: isWin ? 'WIN' : 'LOSS' };
       case 'signal': return { icon: <Target size={14} />, color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.1)', label: 'SIGNAL' };
       case 'order': return { icon: <SyncOutlined />, color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.1)', label: 'ORDER' };
-      case 'tick': return { icon: <Clock size={14} />, color: '#64748b', bg: 'rgba(100, 116, 139, 0.08)', label: 'WATCH' };
+      case 'tick': return { icon: <Clock size={14} />, color: 'var(--text-secondary)', bg: 'rgba(100, 116, 139, 0.08)', label: 'WATCH' };
       case 'error': return { icon: <AlertTriangle size={14} />, color: '#f87171', bg: 'rgba(239, 68, 68, 0.1)', label: 'ERROR' };
-      default: return { icon: <EyeOutlined />, color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', label: log.kind.toUpperCase() };
+      default: return { icon: <EyeOutlined />, color: 'var(--text-secondary)', bg: 'rgba(148, 163, 184, 0.08)', label: log.kind.toUpperCase() };
     }
   };
 
@@ -158,13 +158,13 @@ export default function FeedPage() {
         const score = event.data?.newScore as number | undefined;
         if (score && score >= 70) return { icon: <FireOutlined />, color: '#f97316', bg: 'rgba(249, 115, 22, 0.1)', label: 'HOT' };
         if (score && score >= 50) return { icon: <Thermometer size={14} />, color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.1)', label: 'WARM' };
-        return { icon: <Activity size={14} />, color: '#64748b', bg: 'rgba(100, 116, 139, 0.08)', label: 'PROXIMITY' };
+        return { icon: <Activity size={14} />, color: 'var(--text-secondary)', bg: 'rgba(100, 116, 139, 0.08)', label: 'PROXIMITY' };
       case 'market_regime':
         const isBull = event.data?.newRegime === 'BULL';
         return { icon: isBull ? <RiseOutlined /> : <FallOutlined />, color: isBull ? '#4ade80' : '#f87171', bg: isBull ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', label: isBull ? 'BULL' : 'BEAR' };
       case 'market_volatility':
         const isHigh = event.data?.newVolatility === 'HIGH';
-        return { icon: <Zap size={14} />, color: isHigh ? '#f97316' : '#64748b', bg: isHigh ? 'rgba(249, 115, 22, 0.1)' : 'rgba(100, 116, 139, 0.08)', label: 'VOLATILITY' };
+        return { icon: <Zap size={14} />, color: isHigh ? '#f97316' : 'var(--text-secondary)', bg: isHigh ? 'rgba(249, 115, 22, 0.1)' : 'rgba(100, 116, 139, 0.08)', label: 'VOLATILITY' };
       case 'position_update':
         return { icon: <ThunderboltOutlined />, color: event.severity === 'success' ? '#4ade80' : '#fbbf24', bg: event.severity === 'success' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(251, 191, 36, 0.1)', label: 'POSITION' };
       case 'opportunity_alert':
@@ -200,7 +200,7 @@ export default function FeedPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
-          <Title level={3} style={{ margin: 0, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Title level={3} style={{ margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 10 }}>
             <Zap size={24} /> Agent Feed
             <Tag color={mode === 'live' ? 'error' : 'blue'}>{mode?.toUpperCase()}</Tag>
           </Title>
@@ -216,7 +216,7 @@ export default function FeedPage() {
         <div style={{ ...cardStyle, padding: 16, marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <Zap size={14} style={{ color: '#fbbf24' }} />
-            <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 13 }}>Active Agents</Text>
+            <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 13 }}>Active Agents</Text>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             {agentStates.map((agent) => (
@@ -233,7 +233,7 @@ export default function FeedPage() {
                 }}
               >
                 <div style={{ width: 6, height: 6, borderRadius: '50%', background: agent.hasPosition ? '#4ade80' : '#06b6d4' }} />
-                <Text style={{ color: '#f8fafc', fontWeight: 500, fontSize: 13 }}>{agent.symbol}</Text>
+                <Text style={{ color: 'var(--text-primary)', fontWeight: 500, fontSize: 13 }}>{agent.symbol}</Text>
                 <Text style={{ color: agent.hasPosition ? '#4ade80' : '#06b6d4', fontSize: 11 }}>
                   {agent.hasPosition ? `Trading ${agent.bias?.toUpperCase()}` : 'Watching'}
                 </Text>
@@ -247,7 +247,7 @@ export default function FeedPage() {
       <div style={{ ...cardStyle, padding: 12, marginBottom: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Text style={{ color: '#64748b', fontSize: 12 }}>Filter by:</Text>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Filter by:</Text>
             {(['all', 'futures', 'exits', 'orders', 'triggers'] as FilterType[]).map((f) => (
               <Tag
                 key={f}
@@ -256,7 +256,7 @@ export default function FeedPage() {
                   cursor: 'pointer',
                   background: filterType === f ? 'rgba(59, 130, 246, 0.2)' : 'rgba(148, 163, 184, 0.08)',
                   border: filterType === f ? '1px solid rgba(59, 130, 246, 0.4)' : '1px solid transparent',
-                  color: filterType === f ? '#06b6d4' : '#94a3b8',
+                  color: filterType === f ? '#06b6d4' : 'var(--text-secondary)',
                   borderRadius: 6,
                   fontSize: 12,
                   textTransform: 'capitalize',
@@ -282,7 +282,7 @@ export default function FeedPage() {
                     : 'transparent',
                   color: biasFilter === b
                     ? b === 'long' ? '#4ade80' : b === 'short' ? '#f87171' : '#06b6d4'
-                    : '#94a3b8',
+                    : 'var(--text-secondary)',
                   borderRadius: 6,
                   fontSize: 12,
                   textTransform: 'capitalize',
@@ -300,20 +300,20 @@ export default function FeedPage() {
         <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(148, 163, 184, 0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Activity size={14} style={{ color: '#f97316' }} />
-            <Text style={{ color: '#f8fafc', fontWeight: 600 }}>Signal Radar</Text>
+            <Text style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Signal Radar</Text>
             <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(249, 115, 22, 0.1)', color: '#f97316', fontSize: 10, margin: 0 }}>
               LIVE
             </Tag>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#f97316', animation: 'pulse 2s infinite' }} />
-            <Text style={{ color: '#64748b', fontSize: 11 }}>WebSocket</Text>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>WebSocket</Text>
           </div>
         </div>
 
         {radarEvents.length === 0 ? (
           <div style={{ padding: 24, textAlign: 'center' }}>
-            <Text style={{ color: '#64748b', fontSize: 13 }}>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
               Waiting for market events... Signal changes will appear here in real-time.
             </Text>
           </div>
@@ -338,13 +338,13 @@ export default function FeedPage() {
                   onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                 >
                   {/* Time */}
-                  <Text style={{ color: '#64748b', fontSize: 11, minWidth: 65, fontFamily: 'monospace' }}>
+                  <Text style={{ color: 'var(--text-secondary)', fontSize: 11, minWidth: 65, fontFamily: 'monospace' }}>
                     {formatRadarTime(event.timestamp)}
                   </Text>
 
                   {/* Symbol Tag (if present) */}
                   {symbol && (
-                    <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(148, 163, 184, 0.1)', color: '#f8fafc', fontSize: 10, fontWeight: 600, margin: 0 }}>
+                    <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(148, 163, 184, 0.1)', color: 'var(--text-primary)', fontSize: 10, fontWeight: 600, margin: 0 }}>
                       {symbol}
                     </Tag>
                   )}
@@ -357,9 +357,9 @@ export default function FeedPage() {
 
                   {/* Content */}
                   <div style={{ flex: 1 }}>
-                    <Text style={{ color: '#f8fafc', fontSize: 12 }}>{event.title.replace(/\[.*?\]\s*/, '')}</Text>
+                    <Text style={{ color: 'var(--text-primary)', fontSize: 12 }}>{event.title.replace(/\[.*?\]\s*/, '')}</Text>
                     <div style={{ marginTop: 2 }}>
-                      <Text style={{ color: '#94a3b8', fontSize: 11 }}>{event.message}</Text>
+                      <Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>{event.message}</Text>
                     </div>
                   </div>
                 </div>
@@ -373,12 +373,12 @@ export default function FeedPage() {
       <div style={{ ...cardStyle, padding: 0 }}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(148, 163, 184, 0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Clock size={14} style={{ color: '#64748b' }} />
-            <Text style={{ color: '#f8fafc', fontWeight: 600 }}>Activity Feed</Text>
+            <Clock size={14} style={{ color: 'var(--text-secondary)' }} />
+            <Text style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Activity Feed</Text>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', animation: 'pulse 2s infinite' }} />
-            <Text style={{ color: '#64748b', fontSize: 11 }}>Live updates</Text>
+            <Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Live updates</Text>
           </div>
         </div>
 
@@ -386,7 +386,7 @@ export default function FeedPage() {
           <div style={{ padding: 48 }}>
             <Empty
               description={
-                <Text style={{ color: '#64748b' }}>
+                <Text style={{ color: 'var(--text-secondary)' }}>
                   {agentStates.length === 0 ? 'No active agents. Start an agent to see the feed.' : 'No activity yet. Waiting for market events...'}
                 </Text>
               }
@@ -415,12 +415,12 @@ export default function FeedPage() {
                   onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                 >
                   {/* Time */}
-                  <Text style={{ color: '#64748b', fontSize: 12, minWidth: 70, fontFamily: 'monospace' }}>
+                  <Text style={{ color: 'var(--text-secondary)', fontSize: 12, minWidth: 70, fontFamily: 'monospace' }}>
                     {formatTime(log.timestamp)}
                   </Text>
 
                   {/* Symbol Tag */}
-                  <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(148, 163, 184, 0.1)', color: '#f8fafc', fontSize: 11, fontWeight: 600, margin: 0 }}>
+                  <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(148, 163, 184, 0.1)', color: 'var(--text-primary)', fontSize: 11, fontWeight: 600, margin: 0 }}>
                     {log.symbol?.replace('/USDT:USDT', '').replace('/USDT', '')}
                   </Tag>
 
@@ -434,7 +434,7 @@ export default function FeedPage() {
                   <div style={{ flex: 1 }}>
                     {log.kind === 'tick' && tickStatus ? (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <Text style={{ color: '#f8fafc', fontWeight: 500 }}>{log.symbol?.replace('/USDT:USDT', '/USDT')}</Text>
+                        <Text style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{log.symbol?.replace('/USDT:USDT', '/USDT')}</Text>
                         <Text style={{ color: '#4ade80', fontWeight: 600 }}>${tickStatus.price}</Text>
                         {tickStatus.bias && (
                           <Tag style={{
@@ -449,7 +449,7 @@ export default function FeedPage() {
                         )}
                         {tickStatus.sinceCandle && (
                           <Tooltip title="Time since last valid candle">
-                            <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(148, 163, 184, 0.06)', color: '#64748b', fontSize: 10, margin: 0 }}>
+                            <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(148, 163, 184, 0.06)', color: 'var(--text-secondary)', fontSize: 10, margin: 0 }}>
                               🕯 {tickStatus.sinceCandle}
                             </Tag>
                           </Tooltip>
@@ -457,10 +457,10 @@ export default function FeedPage() {
                       </div>
                     ) : log.kind === 'signal' ? (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Text style={{ color: '#f8fafc' }}>{log.message}</Text>
+                        <Text style={{ color: 'var(--text-primary)' }}>{log.message}</Text>
                       </div>
                     ) : (
-                      <Text style={{ color: isLoss ? '#f87171' : '#f8fafc', fontWeight: log.kind === 'entry' || log.kind === 'exit' ? 500 : 400 }}>
+                      <Text style={{ color: isLoss ? '#f87171' : 'var(--text-primary)', fontWeight: log.kind === 'entry' || log.kind === 'exit' ? 500 : 400 }}>
                         {log.message}
                       </Text>
                     )}
@@ -468,13 +468,13 @@ export default function FeedPage() {
                     {/* Entry/Exit Details */}
                     {(log.kind === 'entry' || log.kind === 'exit') && log.details && (
                       <div style={{ marginTop: 6, display: 'flex', gap: 12 }}>
-                        {log.details.price && <Text style={{ color: '#64748b', fontSize: 11 }}>Price: ${log.details.price}</Text>}
+                        {log.details.price && <Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Price: ${log.details.price}</Text>}
                         {log.details.pnl != null && (
                           <Text style={{ color: log.details.pnl >= 0 ? '#4ade80' : '#f87171', fontSize: 11, fontWeight: 600 }}>
                             PnL: {log.details.pnl >= 0 ? '+' : ''}${log.details.pnl.toFixed(2)}
                           </Text>
                         )}
-                        {log.details.leverage && <Text style={{ color: '#64748b', fontSize: 11 }}>Leverage: {log.details.leverage}x</Text>}
+                        {log.details.leverage && <Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Leverage: {log.details.leverage}x</Text>}
                       </div>
                     )}
                   </div>
