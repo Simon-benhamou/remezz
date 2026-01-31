@@ -158,8 +158,8 @@ function AuthenticatedApp() {
             }}
           >
             {siderCollapsed
-              ? <img src="/favicon.svg" alt="Remezz" style={{ height: 28, width: 28 }} />
-              : <img src="/remezz-logo.svg" alt="Remezz" style={{ height: 32 }} />
+              ? <img src="/favicon.svg" alt="Remezz" style={{ height: 28, width: 28, filter: themeMode === 'light' ? 'invert(1)' : undefined }} />
+              : <img src="/remezz-logo.svg" alt="Remezz" style={{ height: 32, filter: themeMode === 'light' ? 'invert(1)' : undefined }} />
             }
           </div>
           <Menu
@@ -221,10 +221,10 @@ function AuthenticatedApp() {
             borderBottom: '1px solid var(--border-subtle)',
           },
         }}
-        title={<img src="/remezz-logo.svg" alt="Remezz" style={{ height: 28 }} />}
+        title={<img src="/remezz-logo.svg" alt="Remezz" style={{ height: 28, filter: themeMode === 'light' ? 'invert(1)' : undefined }} />}
       >
         <Menu
-          theme='dark'
+          theme={themeMode}
           mode='inline'
           selectedKeys={[activeMenuKey]}
           items={menuItems}

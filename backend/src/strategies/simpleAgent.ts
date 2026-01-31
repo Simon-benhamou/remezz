@@ -806,7 +806,7 @@ export class SimpleAgent {
   } | null = null;
 
   // V5.71: Cache last known BTC regime for real-time Signal Radar
-  private lastKnownRegime: 'BULL' | 'BEAR' | 'NEUTRAL' = 'NEUTRAL';
+  private lastKnownRegime: 'BULL' | 'BEAR' | 'NEUTRAL' | null = null; // null = not yet calculated
   
   // Track trailing stop activation (to notify only once)
   private trailingNotified: boolean = false;
@@ -1753,9 +1753,14 @@ export class SimpleAgent {
           const rocPrice = candles[candles.length - 1 - rocPeriod]?.close || currentPrice;
           const roc = rocPrice > 0 ? ((currentPrice - rocPrice) / rocPrice) * 100 : 0;
 
-          // Use last known regime from signal features or default to NEUTRAL
-          // (Real regime is determined in checkEntry when analyzing BTC, we reuse that)
-          const currentRegime = this.lastKnownRegime || 'NEUTRAL';
+          // Use last known regime from signal features (calculated in checkEntry from BTC data)
+          // Skip radar update if regime hasn't been calculated yet to avoid flip-flopping
+          // between NEUTRAL (default) and the real regime from another agent (paper/live)
+          if (!this.lastKnownRegime) {
+            // Regime not yet calculated - skip radar update to prevent false regime change logs
+            return;
+          }
+          const currentRegime = this.lastKnownRegime;
 
           const radarFeatures: SignalFeatures = {
             roc,
@@ -1775,18 +1780,22 @@ export class SimpleAgent {
               : ((this.position.entryPrice - currentPrice) / this.position.entryPrice) * 100;
           }
 
-          // Update Signal Radar - it will log only when significant changes occur
-          updateSymbolState({
-            symbol,
-            proximityScore,
-            regime: currentRegime,
-            features: radarFeatures,
-            lastUpdate: Date.now(),
-            inPosition: !!this.position,
-            positionSide: this.position?.side,
-            positionPnlPct,
-            trailingActive: this.position?.trailingActive,
-          });
+          // V5.80: Only one agent per symbol updates the radar to prevent paper/live flip-flop
+          // Priority: live > paper. Paper only updates if no live agent exists for this symbol.
+          const isRadarOwner = this.config.mode === 'live' || !getCapitalPool(this.config.userId, undefined, 'live');
+          if (isRadarOwner) {
+            updateSymbolState({
+              symbol,
+              proximityScore,
+              regime: currentRegime,
+              features: radarFeatures,
+              lastUpdate: Date.now(),
+              inPosition: !!this.position,
+              positionSide: this.position?.side,
+              positionPnlPct,
+              trailingActive: this.position?.trailingActive,
+            });
+          }
         }
       } catch (radarError) {
         // Don't let radar errors crash the tick
@@ -2051,17 +2060,21 @@ export class SimpleAgent {
             : ((this.position.entryPrice - currentPrice) / this.position.entryPrice) * 100;
         }
 
-        updateSymbolState({
-          symbol,
-          proximityScore,
-          regime: currentRegime,
-          features: radarFeatures,
-          lastUpdate: Date.now(),
-          inPosition: !!this.position,
-          positionSide: this.position?.side,
-          positionPnlPct,
-          trailingActive: this.position?.trailingActive,
-        });
+        // V5.80: Only one agent per symbol updates the radar to prevent paper/live flip-flop
+        const isRadarOwnerEntry = this.config.mode === 'live' || !getCapitalPool(this.config.userId, undefined, 'live');
+        if (isRadarOwnerEntry) {
+          updateSymbolState({
+            symbol,
+            proximityScore,
+            regime: currentRegime,
+            features: radarFeatures,
+            lastUpdate: Date.now(),
+            inPosition: !!this.position,
+            positionSide: this.position?.side,
+            positionPnlPct,
+            trailingActive: this.position?.trailingActive,
+          });
+        }
       }
 
       if (signal.valid && signal.side) {
