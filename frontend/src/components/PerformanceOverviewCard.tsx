@@ -308,15 +308,15 @@ const PerformanceOverviewCard: React.FC<Props> = ({
   const { token } = theme.useToken();
   const base = token.colorBgBase.toLowerCase();
   const isDarkTheme = !['#ffffff', '#fff', '#fafafa'].includes(base);
-  const cardBg = isDarkTheme ? '#0f172a' : token.colorBgContainer;
-  const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
-  const mutedText = isDarkTheme ? 'rgba(226, 232, 240, 0.7)' : token.colorTextSecondary;
+  const cardBg = 'var(--bg-primary)';
+  const borderColor = 'var(--border-subtle)';
+  const mutedText = 'var(--text-muted)';
   const accentColor = isDarkTheme ? '#38bdf8' : token.colorPrimary;
   const areaFillFrom = isDarkTheme ? 'rgba(56, 189, 248, 0.8)' : `${accentColor}CC`;
   const areaFillTo = isDarkTheme ? 'rgba(56, 189, 248, 0)' : `${accentColor}11`;
-  const statCardBg = isDarkTheme ? 'rgba(15, 23, 42, 0.55)' : token.colorFillTertiary;
-  const statCardBorder = isDarkTheme ? 'rgba(56, 189, 248, 0.25)' : token.colorBorderSecondary;
-  const subtleSurface = isDarkTheme ? 'rgba(30, 41, 59, 0.8)' : token.colorFillQuaternary;
+  const statCardBg = 'var(--bg-primary)';
+  const statCardBorder = 'var(--border-subtle)';
+  const subtleSurface = 'var(--bg-elevated)';
 
   const headerTitle = title ?? 'Performance Overview';
   const headerTag = tagLabel ?? 'Realtime';
@@ -327,7 +327,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
       style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: cardBg }}
       styles={{ body: { padding: 24 } }}
       title={
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: subtitle ? 'flex-start' : 'center', color: isDarkTheme ? '#f8fafc' : token.colorText }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: subtitle ? 'flex-start' : 'center', color: 'var(--text-primary)' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 16, fontWeight: 600 }}>{headerTitle}</span>
             {subtitle && <span style={{ color: mutedText, fontSize: 12 }}>{subtitle}</span>}
@@ -341,7 +341,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
         <Col xs={12} sm={6}>
           <div style={{ padding: 16, borderRadius: 12, background: statCardBg, border: `1px solid ${statCardBorder}` }}>
             <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Realized PnL</Text>
-            <div style={{ fontSize: 24, fontWeight: 700, color: stats.totalPnl >= 0 ? '#34d399' : '#f87171', marginTop: 4 }}>
+            <div style={{ fontSize: 24, fontWeight: 700, color: stats.totalPnl >= 0 ? 'var(--success)' : 'var(--error)', marginTop: 4 }}>
               {stats.totalPnl >= 0 ? '+' : ''}{formatUsd(stats.totalPnl)}
             </div>
           </div>
@@ -349,7 +349,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
         <Col xs={12} sm={6}>
           <div style={{ padding: 16, borderRadius: 12, background: statCardBg, border: `1px solid ${statCardBorder}` }}>
             <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Win Rate</Text>
-            <div style={{ fontSize: 24, fontWeight: 700, color: stats.winRate >= 50 ? '#34d399' : '#fbbf24', marginTop: 4 }}>
+            <div style={{ fontSize: 24, fontWeight: 700, color: stats.winRate >= 50 ? 'var(--success)' : 'var(--warning)', marginTop: 4 }}>
               {formatPercent(stats.winRate)}
             </div>
             <Text style={{ color: mutedText, fontSize: 11 }}>{stats.wins}W / {stats.losses}L</Text>
@@ -358,7 +358,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
         <Col xs={12} sm={6}>
           <div style={{ padding: 16, borderRadius: 12, background: statCardBg, border: `1px solid ${statCardBorder}` }}>
             <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Profit Factor</Text>
-            <div style={{ fontSize: 24, fontWeight: 700, color: stats.profitFactor >= 1.5 ? '#34d399' : stats.profitFactor >= 1 ? '#fbbf24' : '#f87171', marginTop: 4 }}>
+            <div style={{ fontSize: 24, fontWeight: 700, color: stats.profitFactor >= 1.5 ? 'var(--success)' : stats.profitFactor >= 1 ? 'var(--warning)' : 'var(--error)', marginTop: 4 }}>
               {stats.profitFactor === Infinity ? '∞' : stats.profitFactor.toFixed(2)}
             </div>
           </div>
@@ -366,7 +366,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
         <Col xs={12} sm={6}>
           <div style={{ padding: 16, borderRadius: 12, background: statCardBg, border: `1px solid ${statCardBorder}` }}>
             <Text style={{ color: mutedText, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>Streak</Text>
-            <div style={{ fontSize: 24, fontWeight: 700, color: stats.currentStreak >= 0 ? '#34d399' : '#f87171', marginTop: 4 }}>
+            <div style={{ fontSize: 24, fontWeight: 700, color: stats.currentStreak >= 0 ? 'var(--success)' : 'var(--error)', marginTop: 4 }}>
               {stats.currentStreak >= 0 ? '+' : ''}{stats.currentStreak}
             </div>
             <Text style={{ color: mutedText, fontSize: 11 }}>Max: {stats.maxStreak}</Text>
@@ -405,7 +405,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                       <stop offset='95%' stopColor={areaFillTo} stopOpacity={0.2} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray='3 3' stroke={isDarkTheme ? 'rgba(148, 163, 184, 0.1)' : '#e5e7eb'} />
+                  <CartesianGrid strokeDasharray='3 3' stroke={'var(--border-subtle)'} />
                   <XAxis dataKey='label' tick={{ fill: mutedText, fontSize: 11 }} interval='preserveStartEnd' minTickGap={40} />
                   <YAxis tick={{ fill: mutedText, fontSize: 11 }} width={70} tickFormatter={(value) => `$${value}`}/>
                   <RechartsTooltip
@@ -420,14 +420,14 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                             padding: '12px 16px',
                             borderRadius: 12,
                             border: `1px solid ${accentColor}33`,
-                            color: isDarkTheme ? '#e2e8f0' : token.colorText,
+                            color: 'var(--text-primary)',
                           }}
                         >
                           <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                          <div>Cumulative: <span style={{ color: point?.pnl >= 0 ? '#34d399' : '#f87171', fontWeight: 600 }}>${point?.pnl?.toFixed?.(2)}</span></div>
+                          <div>Cumulative: <span style={{ color: point?.pnl >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 600 }}>${point?.pnl?.toFixed?.(2)}</span></div>
                           {point?.tradePnl !== 0 && (
                             <div style={{ opacity: 0.8, fontSize: 12 }}>
-                              Trade: <span style={{ color: point?.tradePnl >= 0 ? '#34d399' : '#f87171' }}>{point?.tradePnl >= 0 ? '+' : ''}${point?.tradePnl?.toFixed?.(2)}</span>
+                              Trade: <span style={{ color: point?.tradePnl >= 0 ? 'var(--success)' : 'var(--error)' }}>{point?.tradePnl >= 0 ? '+' : ''}${point?.tradePnl?.toFixed?.(2)}</span>
                             </div>
                           )}
                         </div>
@@ -464,7 +464,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
             ) : (
               <ResponsiveContainer width='100%' height='100%'>
                 <BarChart data={dailyData}>
-                  <CartesianGrid strokeDasharray='3 3' stroke={isDarkTheme ? 'rgba(148, 163, 184, 0.1)' : '#e5e7eb'} />
+                  <CartesianGrid strokeDasharray='3 3' stroke={'var(--border-subtle)'} />
                   <XAxis dataKey='date' tick={{ fill: mutedText, fontSize: 10 }} />
                   <YAxis tick={{ fill: mutedText, fontSize: 10 }} width={60} tickFormatter={(value) => `$${value}`} />
                   <RechartsTooltip
@@ -477,10 +477,10 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                           padding: '10px 14px',
                           borderRadius: 10,
                           border: `1px solid ${borderColor}`,
-                          color: isDarkTheme ? '#e2e8f0' : token.colorText,
+                          color: 'var(--text-primary)',
                         }}>
                           <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                          <div>PnL: <span style={{ color: data?.pnl >= 0 ? '#34d399' : '#f87171', fontWeight: 600 }}>${data?.pnl?.toFixed(2)}</span></div>
+                          <div>PnL: <span style={{ color: data?.pnl >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 600 }}>${data?.pnl?.toFixed(2)}</span></div>
                           <div style={{ fontSize: 11, opacity: 0.8 }}>{data?.trades} trades ({data?.wins}W)</div>
                         </div>
                       );
@@ -488,7 +488,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                   />
                   <Bar dataKey='pnl' radius={[4, 4, 0, 0]}>
                     {dailyData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.pnl >= 0 ? '#34d399' : '#f87171'} />
+                      <Cell key={`cell-${index}`} fill={entry.pnl >= 0 ? 'var(--success)' : 'var(--error)'} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -511,17 +511,17 @@ const PerformanceOverviewCard: React.FC<Props> = ({
             <Progress
               percent={stats.wins + stats.losses > 0 ? (stats.wins / (stats.wins + stats.losses)) * 100 : 0}
               showInfo={false}
-              strokeColor='#34d399'
-              trailColor='#f87171'
+              strokeColor='var(--success)'
+              trailColor='var(--error)'
               style={{ marginBottom: 8 }}
             />
             <Row>
               <Col span={12}>
-                <Text style={{ color: '#34d399', fontSize: 13, fontWeight: 600 }}>{stats.wins} wins</Text>
+                <Text style={{ color: 'var(--success)', fontSize: 13, fontWeight: 600 }}>{stats.wins} wins</Text>
                 <div style={{ color: mutedText, fontSize: 11 }}>Avg: {formatUsd(stats.avgWin)}</div>
               </Col>
               <Col span={12} style={{ textAlign: 'right' }}>
-                <Text style={{ color: '#f87171', fontSize: 13, fontWeight: 600 }}>{stats.losses} losses</Text>
+                <Text style={{ color: 'var(--error)', fontSize: 13, fontWeight: 600 }}>{stats.losses} losses</Text>
                 <div style={{ color: mutedText, fontSize: 11 }}>Avg: -{formatUsd(stats.avgLoss)}</div>
               </Col>
             </Row>
@@ -537,18 +537,18 @@ const PerformanceOverviewCard: React.FC<Props> = ({
             <Row gutter={16}>
               <Col span={12}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <TrendingUp size={16} color="#34d399" />
+                  <TrendingUp size={16} color="var(--success)" />
                   <div>
-                    <div style={{ fontSize: 18, fontWeight: 700, color: isDarkTheme ? '#f8fafc' : token.colorText }}>{stats.longs}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>{stats.longs}</div>
                     <div style={{ color: mutedText, fontSize: 11 }}>Longs</div>
                   </div>
                 </div>
               </Col>
               <Col span={12}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <TrendingDown size={16} color="#f87171" />
+                  <TrendingDown size={16} color="var(--error)" />
                   <div>
-                    <div style={{ fontSize: 18, fontWeight: 700, color: isDarkTheme ? '#f8fafc' : token.colorText }}>{stats.shorts}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>{stats.shorts}</div>
                     <div style={{ color: mutedText, fontSize: 11 }}>Shorts</div>
                   </div>
                 </div>
@@ -570,15 +570,15 @@ const PerformanceOverviewCard: React.FC<Props> = ({
             </Text>
             <Space direction='vertical' size={6} style={{ width: '100%' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={{ color: isDarkTheme ? '#f8fafc' : token.colorText }}>🎯 Take Profit</Text>
+                <Text style={{ color: 'var(--text-primary)' }}>🎯 Take Profit</Text>
                 <Tag color='success'>{stats.tpCount}</Tag>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={{ color: isDarkTheme ? '#f8fafc' : token.colorText }}>📈 Trailing Stop</Text>
+                <Text style={{ color: 'var(--text-primary)' }}>📈 Trailing Stop</Text>
                 <Tag color='blue'>{stats.trailCount}</Tag>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={{ color: isDarkTheme ? '#f8fafc' : token.colorText }}>🛑 Stop Loss</Text>
+                <Text style={{ color: 'var(--text-primary)' }}>🛑 Stop Loss</Text>
                 <Tag color='error'>{stats.slCount}</Tag>
               </div>
             </Space>
@@ -593,10 +593,10 @@ const PerformanceOverviewCard: React.FC<Props> = ({
         <Col xs={24} sm={8}>
           <div style={{ padding: 14, borderRadius: 12, background: 'rgba(52, 211, 153, 0.1)', border: '1px solid rgba(52, 211, 153, 0.3)' }}>
             <Space size={8} align='center'>
-              <Trophy size={18} color="#34d399" />
+              <Trophy size={18} color="var(--success)" />
               <div>
                 <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>Best Trade</Text>
-                <Text style={{ color: '#34d399', fontWeight: 700, fontSize: 16 }}>
+                <Text style={{ color: 'var(--success)', fontWeight: 700, fontSize: 16 }}>
                   {stats.bestTrade ? `+${formatUsd(stats.bestTrade.realizedPnlUsd)}` : '—'}
                 </Text>
                 {stats.bestTrade && (
@@ -611,10 +611,10 @@ const PerformanceOverviewCard: React.FC<Props> = ({
         <Col xs={24} sm={8}>
           <div style={{ padding: 14, borderRadius: 12, background: 'rgba(248, 113, 113, 0.1)', border: '1px solid rgba(248, 113, 113, 0.3)' }}>
             <Space size={8} align='center'>
-              <Flame size={18} color="#f87171" />
+              <Flame size={18} color="var(--error)" />
               <div>
                 <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>Worst Trade</Text>
-                <Text style={{ color: '#f87171', fontWeight: 700, fontSize: 16 }}>
+                <Text style={{ color: 'var(--error)', fontWeight: 700, fontSize: 16 }}>
                   {stats.worstTrade ? formatUsd(stats.worstTrade.realizedPnlUsd) : '—'}
                 </Text>
                 {stats.worstTrade && (
@@ -631,7 +631,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>Last Trade</Text>
-                <Text style={{ color: isDarkTheme ? '#f8fafc' : token.colorText, fontWeight: 600, fontSize: 14 }}>
+                <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 14 }}>
                   {latestTrade ? latestTrade.symbol?.replace('/USDT', '') || '—' : 'No trades'}
                 </Text>
                 <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>
@@ -641,7 +641,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
               <div style={{ textAlign: 'right' }}>
                 <Text style={{ color: mutedText, fontSize: 11, display: 'block' }}>PnL</Text>
                 <Text style={{ 
-                  color: (latestTrade?.realizedPnlUsd ?? 0) >= 0 ? '#34d399' : '#f87171', 
+                  color: (latestTrade?.realizedPnlUsd ?? 0) >= 0 ? 'var(--success)' : 'var(--error)', 
                   fontWeight: 700, 
                   fontSize: 16 
                 }}>

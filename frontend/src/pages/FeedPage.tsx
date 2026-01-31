@@ -141,12 +141,12 @@ export default function FeedPage() {
     const isLoss = log.kind === 'exit' && (log.details?.pnl ?? 0) < 0;
     const isWin = log.kind === 'exit' && (log.details?.pnl ?? 0) > 0;
     switch (log.kind) {
-      case 'entry': return { icon: <ThunderboltOutlined />, color: '#4ade80', bg: 'rgba(34, 197, 94, 0.1)', label: 'ENTRY' };
-      case 'exit': return { icon: <DollarOutlined />, color: isWin ? '#4ade80' : '#f87171', bg: isWin ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', label: isWin ? 'WIN' : 'LOSS' };
-      case 'signal': return { icon: <Target size={14} />, color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.1)', label: 'SIGNAL' };
+      case 'entry': return { icon: <ThunderboltOutlined />, color: 'var(--success)', bg: 'rgba(34, 197, 94, 0.1)', label: 'ENTRY' };
+      case 'exit': return { icon: <DollarOutlined />, color: isWin ? 'var(--success)' : 'var(--error)', bg: isWin ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', label: isWin ? 'WIN' : 'LOSS' };
+      case 'signal': return { icon: <Target size={14} />, color: 'var(--warning)', bg: 'rgba(251, 191, 36, 0.1)', label: 'SIGNAL' };
       case 'order': return { icon: <SyncOutlined />, color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.1)', label: 'ORDER' };
       case 'tick': return { icon: <Clock size={14} />, color: 'var(--text-secondary)', bg: 'rgba(100, 116, 139, 0.08)', label: 'WATCH' };
-      case 'error': return { icon: <AlertTriangle size={14} />, color: '#f87171', bg: 'rgba(239, 68, 68, 0.1)', label: 'ERROR' };
+      case 'error': return { icon: <AlertTriangle size={14} />, color: 'var(--error)', bg: 'rgba(239, 68, 68, 0.1)', label: 'ERROR' };
       default: return { icon: <EyeOutlined />, color: 'var(--text-secondary)', bg: 'rgba(148, 163, 184, 0.08)', label: log.kind.toUpperCase() };
     }
   };
@@ -156,17 +156,17 @@ export default function FeedPage() {
     switch (event.type) {
       case 'symbol_proximity':
         const score = event.data?.newScore as number | undefined;
-        if (score && score >= 70) return { icon: <FireOutlined />, color: '#f97316', bg: 'rgba(249, 115, 22, 0.1)', label: 'HOT' };
-        if (score && score >= 50) return { icon: <Thermometer size={14} />, color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.1)', label: 'WARM' };
+        if (score && score >= 70) return { icon: <FireOutlined />, color: 'var(--warning)', bg: 'rgba(249, 115, 22, 0.1)', label: 'HOT' };
+        if (score && score >= 50) return { icon: <Thermometer size={14} />, color: 'var(--warning)', bg: 'rgba(251, 191, 36, 0.1)', label: 'WARM' };
         return { icon: <Activity size={14} />, color: 'var(--text-secondary)', bg: 'rgba(100, 116, 139, 0.08)', label: 'PROXIMITY' };
       case 'market_regime':
         const isBull = event.data?.newRegime === 'BULL';
-        return { icon: isBull ? <RiseOutlined /> : <FallOutlined />, color: isBull ? '#4ade80' : '#f87171', bg: isBull ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', label: isBull ? 'BULL' : 'BEAR' };
+        return { icon: isBull ? <RiseOutlined /> : <FallOutlined />, color: isBull ? 'var(--success)' : 'var(--error)', bg: isBull ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', label: isBull ? 'BULL' : 'BEAR' };
       case 'market_volatility':
         const isHigh = event.data?.newVolatility === 'HIGH';
-        return { icon: <Zap size={14} />, color: isHigh ? '#f97316' : 'var(--text-secondary)', bg: isHigh ? 'rgba(249, 115, 22, 0.1)' : 'rgba(100, 116, 139, 0.08)', label: 'VOLATILITY' };
+        return { icon: <Zap size={14} />, color: isHigh ? 'var(--warning)' : 'var(--text-secondary)', bg: isHigh ? 'rgba(249, 115, 22, 0.1)' : 'rgba(100, 116, 139, 0.08)', label: 'VOLATILITY' };
       case 'position_update':
-        return { icon: <ThunderboltOutlined />, color: event.severity === 'success' ? '#4ade80' : '#fbbf24', bg: event.severity === 'success' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(251, 191, 36, 0.1)', label: 'POSITION' };
+        return { icon: <ThunderboltOutlined />, color: event.severity === 'success' ? 'var(--success)' : 'var(--warning)', bg: event.severity === 'success' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(251, 191, 36, 0.1)', label: 'POSITION' };
       case 'opportunity_alert':
         return { icon: <Target size={14} />, color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.1)', label: 'OPPORTUNITY' };
     }
@@ -190,9 +190,9 @@ export default function FeedPage() {
   };
 
   const cardStyle: React.CSSProperties = {
-    background: 'rgba(15, 23, 42, 0.6)',
+    background: 'var(--bg-primary)',
     borderRadius: 12,
-    border: '1px solid rgba(148, 163, 184, 0.1)',
+    border: '1px solid var(--border-subtle)',
   };
 
   return (
@@ -204,7 +204,7 @@ export default function FeedPage() {
             <Zap size={24} /> Agent Feed
             <Tag color={mode === 'live' ? 'error' : 'blue'}>{mode?.toUpperCase()}</Tag>
           </Title>
-          <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 13 }}>
+          <Text style={{ color: 'var(--text-muted)', fontSize: 13 }}>
             {agentStates.length} active session(s) • Real-time agent activity ({mode})
           </Text>
         </div>
@@ -215,7 +215,7 @@ export default function FeedPage() {
       {agentStates.length > 0 && (
         <div style={{ ...cardStyle, padding: 16, marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <Zap size={14} style={{ color: '#fbbf24' }} />
+            <Zap size={14} style={{ color: 'var(--warning)' }} />
             <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 13 }}>Active Agents</Text>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
@@ -232,9 +232,9 @@ export default function FeedPage() {
                   gap: 8,
                 }}
               >
-                <div style={{ width: 6, height: 6, borderRadius: '50%', background: agent.hasPosition ? '#4ade80' : '#06b6d4' }} />
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: agent.hasPosition ? 'var(--success)' : 'var(--accent)' }} />
                 <Text style={{ color: 'var(--text-primary)', fontWeight: 500, fontSize: 13 }}>{agent.symbol}</Text>
-                <Text style={{ color: agent.hasPosition ? '#4ade80' : '#06b6d4', fontSize: 11 }}>
+                <Text style={{ color: agent.hasPosition ? 'var(--success)' : 'var(--accent)', fontSize: 11 }}>
                   {agent.hasPosition ? `Trading ${agent.bias?.toUpperCase()}` : 'Watching'}
                 </Text>
               </div>
@@ -256,7 +256,7 @@ export default function FeedPage() {
                   cursor: 'pointer',
                   background: filterType === f ? 'rgba(59, 130, 246, 0.2)' : 'rgba(148, 163, 184, 0.08)',
                   border: filterType === f ? '1px solid rgba(59, 130, 246, 0.4)' : '1px solid transparent',
-                  color: filterType === f ? '#06b6d4' : 'var(--text-secondary)',
+                  color: filterType === f ? 'var(--accent)' : 'var(--text-secondary)',
                   borderRadius: 6,
                   fontSize: 12,
                   textTransform: 'capitalize',
@@ -281,7 +281,7 @@ export default function FeedPage() {
                     ? b === 'long' ? 'rgba(34, 197, 94, 0.4)' : b === 'short' ? 'rgba(239, 68, 68, 0.4)' : 'rgba(59, 130, 246, 0.4)'
                     : 'transparent',
                   color: biasFilter === b
-                    ? b === 'long' ? '#4ade80' : b === 'short' ? '#f87171' : '#06b6d4'
+                    ? b === 'long' ? 'var(--success)' : b === 'short' ? 'var(--error)' : 'var(--accent)'
                     : 'var(--text-secondary)',
                   borderRadius: 6,
                   fontSize: 12,
@@ -297,16 +297,16 @@ export default function FeedPage() {
 
       {/* V5.71: Signal Radar - Real-time market intelligence */}
       <div style={{ ...cardStyle, padding: 0, marginBottom: 20 }}>
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(148, 163, 184, 0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Activity size={14} style={{ color: '#f97316' }} />
+            <Activity size={14} style={{ color: 'var(--warning)' }} />
             <Text style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Signal Radar</Text>
-            <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(249, 115, 22, 0.1)', color: '#f97316', fontSize: 10, margin: 0 }}>
+            <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(249, 115, 22, 0.1)', color: 'var(--warning)', fontSize: 10, margin: 0 }}>
               LIVE
             </Tag>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#f97316', animation: 'pulse 2s infinite' }} />
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--warning)', animation: 'pulse 2s infinite' }} />
             <Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>WebSocket</Text>
           </div>
         </div>
@@ -371,13 +371,13 @@ export default function FeedPage() {
 
       {/* Activity Feed */}
       <div style={{ ...cardStyle, padding: 0 }}>
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(148, 163, 184, 0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Clock size={14} style={{ color: 'var(--text-secondary)' }} />
             <Text style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Activity Feed</Text>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', animation: 'pulse 2s infinite' }} />
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--success)', animation: 'pulse 2s infinite' }} />
             <Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Live updates</Text>
           </div>
         </div>
@@ -435,12 +435,12 @@ export default function FeedPage() {
                     {log.kind === 'tick' && tickStatus ? (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <Text style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{log.symbol?.replace('/USDT:USDT', '/USDT')}</Text>
-                        <Text style={{ color: '#4ade80', fontWeight: 600 }}>${tickStatus.price}</Text>
+                        <Text style={{ color: 'var(--success)', fontWeight: 600 }}>${tickStatus.price}</Text>
                         {tickStatus.bias && (
                           <Tag style={{
                             borderRadius: 4, border: 'none', fontSize: 10, margin: 0,
                             background: tickStatus.bias === 'LONG' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                            color: tickStatus.bias === 'LONG' ? '#4ade80' : '#f87171',
+                            color: tickStatus.bias === 'LONG' ? 'var(--success)' : 'var(--error)',
                             display: 'flex', alignItems: 'center', gap: 4,
                           }}>
                             {tickStatus.bias === 'LONG' ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
@@ -460,7 +460,7 @@ export default function FeedPage() {
                         <Text style={{ color: 'var(--text-primary)' }}>{log.message}</Text>
                       </div>
                     ) : (
-                      <Text style={{ color: isLoss ? '#f87171' : 'var(--text-primary)', fontWeight: log.kind === 'entry' || log.kind === 'exit' ? 500 : 400 }}>
+                      <Text style={{ color: isLoss ? 'var(--error)' : 'var(--text-primary)', fontWeight: log.kind === 'entry' || log.kind === 'exit' ? 500 : 400 }}>
                         {log.message}
                       </Text>
                     )}
@@ -470,7 +470,7 @@ export default function FeedPage() {
                       <div style={{ marginTop: 6, display: 'flex', gap: 12 }}>
                         {log.details.price && <Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Price: ${log.details.price}</Text>}
                         {log.details.pnl != null && (
-                          <Text style={{ color: log.details.pnl >= 0 ? '#4ade80' : '#f87171', fontSize: 11, fontWeight: 600 }}>
+                          <Text style={{ color: log.details.pnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 11, fontWeight: 600 }}>
                             PnL: {log.details.pnl >= 0 ? '+' : ''}${log.details.pnl.toFixed(2)}
                           </Text>
                         )}
@@ -486,7 +486,7 @@ export default function FeedPage() {
                         borderRadius: 4,
                         border: 'none',
                         background: 'rgba(251, 191, 36, 0.1)',
-                        color: '#fbbf24',
+                        color: 'var(--warning)',
                         fontSize: 10,
                         fontWeight: 500,
                         margin: 0,

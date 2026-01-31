@@ -170,7 +170,7 @@ export default function JobsStatusPanel({ jobs = [], loading, onRefresh, condens
                 </div>
                 {job.healthy === false && meta.color !== 'error' && (
                   <div style={{ marginTop: 12 }}>
-                    <Progress percent={0} status='exception' showInfo={false} strokeColor='#ff4d4f' trailColor='#ffe7e6' />
+                    <Progress percent={0} status='exception' showInfo={false} strokeColor='var(--error)' trailColor='#ffe7e6' />
                   </div>
                 )}
               </div>

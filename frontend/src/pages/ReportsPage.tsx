@@ -339,7 +339,7 @@ function ParityVerificationPanel() {
       width: 90,
       sorter: (a, b) => (a.livePnlPct || 0) - (b.livePnlPct || 0),
       render: (pnl: number) => (
-        <Text strong style={{ color: pnl >= 0 ? '#52c41a' : '#ff4d4f', fontSize: '13px' }}>
+        <Text strong style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: '13px' }}>
           {pnl >= 0 ? '+' : ''}{pnl?.toFixed(2)}%
         </Text>
       ),
@@ -352,7 +352,7 @@ function ParityVerificationPanel() {
       sorter: (a, b) => (a.btPnlPct || 0) - (b.btPnlPct || 0),
       render: (pnl: number | null) => (
         pnl != null ? (
-          <Text style={{ color: pnl >= 0 ? '#52c41a' : '#ff4d4f', fontSize: '12px' }}>
+          <Text style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: '12px' }}>
             {pnl >= 0 ? '+' : ''}{pnl?.toFixed(2)}%
           </Text>
         ) : <Text type="secondary">-</Text>
@@ -419,7 +419,7 @@ function ParityVerificationPanel() {
     return (
       <div style={{ padding: '16px', background: containerBg, borderRadius: 8 }}>
         {/* Category Header */}
-        <div style={{ marginBottom: 16, padding: '12px 16px', background: headerBg, borderRadius: 8, borderLeft: `4px solid ${category === 'MATCH' ? '#52c41a' : category === 'NO_SIGNAL' ? '#faad14' : '#ff4d4f'}` }}>
+        <div style={{ marginBottom: 16, padding: '12px 16px', background: headerBg, borderRadius: 8, borderLeft: `4px solid ${category === 'MATCH' ? 'var(--success)' : category === 'NO_SIGNAL' ? '#faad14' : 'var(--error)'}` }}>
           <Space>
             <Tag icon={config.icon} color={config.color} style={{ fontSize: '13px', padding: '4px 12px' }}>
               {config.label}
@@ -492,7 +492,7 @@ function ParityVerificationPanel() {
                 <Col span={8}>
                   <div style={{ textAlign: 'center' }}>
                     <Text type="secondary" style={{ fontSize: '11px' }}>Live PnL</Text>
-                    <div style={{ fontSize: '18px', fontWeight: 600, color: livePnl >= 0 ? '#52c41a' : '#ff4d4f' }}>
+                    <div style={{ fontSize: '18px', fontWeight: 600, color: livePnl >= 0 ? 'var(--success)' : 'var(--error)' }}>
                       {livePnl >= 0 ? '+' : ''}{livePnl.toFixed(2)}%
                     </div>
                   </div>
@@ -500,7 +500,7 @@ function ParityVerificationPanel() {
                 <Col span={8}>
                   <div style={{ textAlign: 'center' }}>
                     <Text type="secondary" style={{ fontSize: '11px' }}>Backtest PnL</Text>
-                    <div style={{ fontSize: '18px', fontWeight: 600, color: (btPnl ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>
+                    <div style={{ fontSize: '18px', fontWeight: 600, color: (btPnl ?? 0) >= 0 ? 'var(--success)' : 'var(--error)' }}>
                       {btPnl != null ? `${btPnl >= 0 ? '+' : ''}${btPnl.toFixed(2)}%` : '-'}
                     </div>
                   </div>
@@ -508,7 +508,7 @@ function ParityVerificationPanel() {
                 <Col span={8}>
                   <div style={{ textAlign: 'center' }}>
                     <Text type="secondary" style={{ fontSize: '11px' }}>Difference</Text>
-                    <div style={{ fontSize: '18px', fontWeight: 600, color: pnlDiff != null && Math.abs(pnlDiff) <= PNL_TOLERANCE ? '#52c41a' : '#ff4d4f' }}>
+                    <div style={{ fontSize: '18px', fontWeight: 600, color: pnlDiff != null && Math.abs(pnlDiff) <= PNL_TOLERANCE ? 'var(--success)' : 'var(--error)' }}>
                       {pnlDiff != null ? `${Math.abs(pnlDiff).toFixed(2)}%` : '-'}
                     </div>
                   </div>
@@ -551,7 +551,7 @@ function ParityVerificationPanel() {
     return Object.entries(categoryStats).map(([key, value]) => ({
       name: categoryConfig[key as ParityCategory].label,
       value,
-      color: key === 'MATCH' ? '#52c41a' : key === 'NO_SIGNAL' ? '#faad14' : key === 'PNL_VARIANCE' ? '#1890ff' : '#ff4d4f',
+      color: key === 'MATCH' ? 'var(--success)' : key === 'NO_SIGNAL' ? '#faad14' : key === 'PNL_VARIANCE' ? '#1890ff' : 'var(--error)',
     })).filter(d => d.value > 0);
   }, [categoryStats]);
 
@@ -592,7 +592,7 @@ function ParityVerificationPanel() {
                 <Statistic title="Total" value={summary.total} valueStyle={{ color: '#1890ff', fontSize: '24px' }} />
               </Col>
               <Col span={4}>
-                <Statistic title="Match" value={categoryStats.MATCH} valueStyle={{ color: '#52c41a', fontSize: '24px' }} prefix={<CheckCircleOutlined />} />
+                <Statistic title="Match" value={categoryStats.MATCH} valueStyle={{ color: 'var(--success)', fontSize: '24px' }} prefix={<CheckCircleOutlined />} />
               </Col>
               <Col span={4}>
                 <Tooltip title="Live entered but backtest wouldn't">
@@ -601,7 +601,7 @@ function ParityVerificationPanel() {
               </Col>
               <Col span={4}>
                 <Tooltip title="Same entry, different exit">
-                  <Statistic title="Exit Δ" value={categoryStats.EXIT_MISMATCH} valueStyle={{ color: '#ff4d4f', fontSize: '24px' }} prefix={<CloseCircleOutlined />} />
+                  <Statistic title="Exit Δ" value={categoryStats.EXIT_MISMATCH} valueStyle={{ color: 'var(--error)', fontSize: '24px' }} prefix={<CloseCircleOutlined />} />
                 </Tooltip>
               </Col>
               <Col span={4}>
@@ -615,7 +615,7 @@ function ParityVerificationPanel() {
                   value={summary.matchRate}
                   precision={1}
                   suffix="%"
-                  valueStyle={{ color: summary.matchRate >= 90 ? '#52c41a' : summary.matchRate >= 70 ? '#faad14' : '#ff4d4f', fontSize: '24px' }}
+                  valueStyle={{ color: summary.matchRate >= 90 ? 'var(--success)' : summary.matchRate >= 70 ? '#faad14' : 'var(--error)', fontSize: '24px' }}
                 />
               </Col>
             </Row>
@@ -872,7 +872,7 @@ export default function ReportsPage() {
       dataIndex: 'winRate',
       key: 'winRate',
       render: (rate: number) => (
-        <span style={{ color: rate > 0.5 ? '#52c41a' : rate > 0.3 ? '#faad14' : '#ff4d4f' }}>
+        <span style={{ color: rate > 0.5 ? 'var(--success)' : rate > 0.3 ? '#faad14' : 'var(--error)' }}>
           {pct(rate)}
         </span>
       ),
@@ -882,7 +882,7 @@ export default function ReportsPage() {
       dataIndex: 'expectancy',
       key: 'expectancy',
       render: (exp: number) => (
-        <span style={{ color: exp > 0 ? '#52c41a' : '#ff4d4f' }}>
+        <span style={{ color: exp > 0 ? 'var(--success)' : 'var(--error)' }}>
           {exp.toFixed(2)}%
         </span>
       ),
@@ -892,7 +892,7 @@ export default function ReportsPage() {
       dataIndex: 'totalPnl',
       key: 'totalPnl',
       render: (pnl: number) => (
-        <span style={{ color: pnl >= 0 ? '#52c41a' : '#ff4d4f' }}>
+        <span style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)' }}>
           ${pnl.toFixed(2)}
         </span>
       ),
@@ -902,7 +902,7 @@ export default function ReportsPage() {
       dataIndex: 'profitFactor',
       key: 'profitFactor',
       render: (pf: number) => (
-        <span style={{ color: pf > 1 ? '#52c41a' : '#ff4d4f' }}>
+        <span style={{ color: pf > 1 ? 'var(--success)' : 'var(--error)' }}>
           {pf.toFixed(2)}
         </span>
       ),
@@ -936,7 +936,7 @@ export default function ReportsPage() {
                   title="Average Win Rate"
                   value={globalStats.avgWinRate}
                   formatter={(value) => pct(value as number)}
-                  valueStyle={{ color: globalStats.avgWinRate > 0.5 ? '#52c41a' : '#ff4d4f' }}
+                  valueStyle={{ color: globalStats.avgWinRate > 0.5 ? 'var(--success)' : 'var(--error)' }}
                 />
               </Card>
             </Col>
@@ -947,7 +947,7 @@ export default function ReportsPage() {
                   value={globalStats.totalPnl}
                   prefix="$"
                   precision={2}
-                  valueStyle={{ color: globalStats.totalPnl >= 0 ? '#52c41a' : '#ff4d4f' }}
+                  valueStyle={{ color: globalStats.totalPnl >= 0 ? 'var(--success)' : 'var(--error)' }}
                 />
               </Card>
             </Col>
@@ -958,7 +958,7 @@ export default function ReportsPage() {
                   value={globalStats.maxDrawdown}
                   prefix="$"
                   precision={2}
-                  valueStyle={{ color: '#ff4d4f' }}
+                  valueStyle={{ color: 'var(--error)' }}
                 />
               </Card>
             </Col>

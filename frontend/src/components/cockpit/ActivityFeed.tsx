@@ -65,7 +65,7 @@ const getEventConfig = (kind: string, level: string): EventConfig => {
   if (level === 'error') {
     return {
       icon: <XCircle size={14} />,
-      color: '#ef4444',
+      color: 'var(--error)',
       tagColor: 'red',
       label: 'ERROR',
     };
@@ -73,7 +73,7 @@ const getEventConfig = (kind: string, level: string): EventConfig => {
   if (level === 'warn') {
     return {
       icon: <AlertTriangle size={14} />,
-      color: '#f59e0b',
+      color: 'var(--warning)',
       tagColor: 'orange',
       label: 'WARN',
     };
@@ -84,14 +84,14 @@ const getEventConfig = (kind: string, level: string): EventConfig => {
     case 'entry':
       return {
         icon: <ArrowUpCircle size={14} />,
-        color: '#10b981',
+        color: 'var(--success)',
         tagColor: 'green',
         label: 'ENTRY',
       };
     case 'exit':
       return {
         icon: <ArrowDownCircle size={14} />,
-        color: '#3b82f6',
+        color: 'var(--accent-secondary)',
         tagColor: 'blue',
         label: 'EXIT',
       };
@@ -112,7 +112,7 @@ const getEventConfig = (kind: string, level: string): EventConfig => {
     case 'symbol_proximity':
       return {
         icon: <Radio size={14} />,
-        color: '#06b6d4',
+        color: 'var(--accent)',
         tagColor: 'cyan',
         label: 'RADAR',
       };
@@ -237,7 +237,7 @@ const ActivityFeed: React.FC<ActivityFeedProps> = ({ events, loading }) => {
   return (
     <div className="activity-feed">
       <div className="activity-feed__header">
-        <Activity size={16} color="rgba(226, 232, 240, 0.7)" />
+        <Activity size={16} color="var(--text-muted)" />
         <span className="activity-feed__title">Activity</span>
         <span className="activity-feed__count">{events.length} events</span>
       </div>
@@ -282,9 +282,9 @@ const ActivityFeed: React.FC<ActivityFeedProps> = ({ events, loading }) => {
 
 const styles = `
   .activity-feed {
-    background: rgba(15, 23, 42, 0.92);
+    background: var(--bg-primary);
     border-radius: 16px;
-    border: 1px solid rgba(100, 116, 139, 0.18);
+    border: 1px solid var(--border-subtle);
     overflow: hidden;
   }
 
@@ -297,20 +297,20 @@ const styles = `
     align-items: center;
     gap: 8px;
     padding: 12px 16px;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .activity-feed__title {
     font-size: 13px;
     font-weight: 600;
-    color: rgba(226, 232, 240, 0.85);
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
 
   .activity-feed__count {
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
     margin-left: auto;
   }
@@ -320,7 +320,7 @@ const styles = `
   }
 
   .activity-feed__empty .ant-empty-description {
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
   }
 
   .activity-feed__list {
@@ -351,7 +351,7 @@ const styles = `
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: rgba(226, 232, 240, 0.4);
+    color: var(--text-muted);
     font-weight: 600;
   }
 
@@ -397,12 +397,12 @@ const styles = `
   .activity-item__symbol {
     font-size: 11px;
     font-family: 'JetBrains Mono', monospace;
-    color: rgba(226, 232, 240, 0.6);
+    color: var(--text-muted);
   }
 
   .activity-item__time {
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.4);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
     margin-left: auto;
     display: flex;
@@ -412,19 +412,19 @@ const styles = `
 
   .activity-item__rel-time {
     font-size: 10px;
-    color: rgba(226, 232, 240, 0.3);
+    color: var(--text-muted);
   }
 
   .activity-item__message {
     font-size: 12px;
-    color: rgba(226, 232, 240, 0.85);
+    color: var(--text-muted);
     line-height: 1.4;
     word-break: break-word;
   }
 
   .activity-item__details-link {
     font-size: 10px;
-    color: #3b82f6;
+    color: var(--accent-secondary);
     cursor: pointer;
     text-decoration: underline;
     text-decoration-color: transparent;
@@ -432,7 +432,7 @@ const styles = `
   }
 
   .activity-item__details-link:hover {
-    text-decoration-color: #3b82f6;
+    text-decoration-color: var(--accent-secondary);
   }
 
   @media (max-width: 640px) {

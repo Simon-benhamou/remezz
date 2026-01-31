@@ -90,9 +90,9 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
   const { token } = theme.useToken();
   const base = token.colorBgBase.toLowerCase();
   const isDarkTheme = !['#ffffff', '#fff', '#fafafa'].includes(base);
-  const cardBg = isDarkTheme ? '#0f172a' : token.colorBgContainer;
-  const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
-  const mutedText = isDarkTheme ? 'rgba(226, 232, 240, 0.6)' : token.colorTextSecondary;
+  const cardBg = isDarkTheme ? 'var(--bg-primary)' : token.colorBgContainer;
+  const borderColor = isDarkTheme ? 'var(--border-subtle)' : token.colorBorderSecondary;
+  const mutedText = isDarkTheme ? 'var(--text-muted)' : token.colorTextSecondary;
   
   // Sort trades by most recent first
   const sortedTrades = React.useMemo(() => {
@@ -123,9 +123,9 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
         render: (symbol: string, row: TradeRow) => (
           <Space size={6}>
             {row.positionSide === 'long' ? (
-              <TrendingUp size={12} color="#34d399" />
+              <TrendingUp size={12} color="var(--success)" />
             ) : row.positionSide === 'short' ? (
-              <TrendingDown size={12} color="#f87171" />
+              <TrendingDown size={12} color="var(--error)" />
             ) : null}
             <Text strong style={{ fontSize: 13 }}>{symbol?.replace('/USDT', '') || '—'}</Text>
             <Tag 
@@ -158,7 +158,7 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
         align: 'right' as const,
         sorter: (a: TradeRow, b: TradeRow) => (a.roePct || 0) - (b.roePct || 0),
         render: (value: number | null) => {
-          const color = value != null && value >= 0 ? '#34d399' : '#f87171';
+          const color = value != null && value >= 0 ? 'var(--success)' : 'var(--error)';
           return value != null ? (
             <Text style={{ color, fontWeight: 600, fontSize: 13 }}>
               {value >= 0 ? '+' : ''}{formatNumber(value, 1)}%
@@ -175,8 +175,8 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
         sorter: (a: TradeRow, b: TradeRow) => (a.realizedPnlUsd || 0) - (b.realizedPnlUsd || 0),
         render: (value: number) => (
           <Space size={4} style={{ flexWrap: 'nowrap' }}>
-            {value >= 0 ? <TrendingUp size={11} color="#34d399" /> : <TrendingDown size={11} color="#f87171" />}
-            <Text style={{ color: value >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+            {value >= 0 ? <TrendingUp size={11} color="var(--success)" /> : <TrendingDown size={11} color="var(--error)" />}
+            <Text style={{ color: value >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
               {value == null || Number.isNaN(value) ? '$0' : `${value >= 0 ? '+' : ''}$${Math.abs(value).toFixed(2)}`}
             </Text>
           </Space>
@@ -255,7 +255,7 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
       title={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Space size={12}>
-            <span style={{ color: isDarkTheme ? '#f8fafc' : token.colorText, fontSize: 16, fontWeight: 600 }}>Recent Trades</span>
+            <span style={{ color: isDarkTheme ? 'var(--text-primary)' : token.colorText, fontSize: 16, fontWeight: 600 }}>Recent Trades</span>
             <Tag color='blue'>{sortedTrades.length}</Tag>
           </Space>
           
@@ -265,7 +265,7 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
               <Space size={4}>
                 <DollarSign size={12} color={mutedText} />
                 <Text style={{ 
-                  color: summaryStats.totalPnl >= 0 ? '#34d399' : '#f87171', 
+                  color: summaryStats.totalPnl >= 0 ? 'var(--success)' : 'var(--error)', 
                   fontSize: 13, 
                   fontWeight: 600 
                 }}>
@@ -276,7 +276,7 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
             <Tooltip title="Win Rate">
               <Space size={4}>
                 <Target size={12} color={mutedText} />
-                <Text style={{ color: isDarkTheme ? '#f8fafc' : token.colorText, fontSize: 13 }}>
+                <Text style={{ color: isDarkTheme ? 'var(--text-primary)' : token.colorText, fontSize: 13 }}>
                   {summaryStats.wins}W/{summaryStats.losses}L
                 </Text>
               </Space>
@@ -285,7 +285,7 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
               <Space size={4}>
                 <Percent size={12} color={mutedText} />
                 <Text style={{ 
-                  color: summaryStats.avgRoe >= 0 ? '#34d399' : '#f87171', 
+                  color: summaryStats.avgRoe >= 0 ? 'var(--success)' : 'var(--error)', 
                   fontSize: 13 
                 }}>
                   {summaryStats.avgRoe >= 0 ? '+' : ''}{summaryStats.avgRoe.toFixed(1)}%
@@ -318,7 +318,7 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
           rowKey={(row) => row.id}
           pagination={sortedTrades.length > 15 ? { pageSize: 15, size: 'small' } : false}
           loading={loading}
-          style={{ color: isDarkTheme ? '#e2e8f0' : token.colorText }}
+          style={{ color: isDarkTheme ? 'var(--text-primary)' : token.colorText }}
           className="compact-trades-table"
           scroll={{ x: 850 }}
         />
@@ -330,8 +330,8 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
           font-weight: 700 !important;
           text-transform: uppercase;
           letter-spacing: 0.5px;
-          color: ${isDarkTheme ? 'rgba(148, 163, 184, 0.8)' : token.colorTextSecondary} !important;
-          background: ${isDarkTheme ? 'rgba(15, 23, 42, 0.6)' : token.colorFillQuaternary} !important;
+          color: ${isDarkTheme ? 'var(--text-secondary)' : token.colorTextSecondary} !important;
+          background: ${isDarkTheme ? 'var(--bg-primary)' : token.colorFillQuaternary} !important;
         }
         .compact-trades-table .ant-table-tbody > tr > td {
           padding: 8px 12px !important;
@@ -341,7 +341,7 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
           transition: background 0.2s;
         }
         .compact-trades-table .ant-table-tbody > tr:hover {
-          background: ${isDarkTheme ? 'rgba(59, 130, 246, 0.08)' : 'rgba(59, 130, 246, 0.04)'} !important;
+          background: ${isDarkTheme ? 'var(--bg-card-hover)' : 'rgba(59, 130, 246, 0.04)'} !important;
         }
         .compact-trades-table .ant-table-tbody > tr:hover > td {
           background: transparent !important;

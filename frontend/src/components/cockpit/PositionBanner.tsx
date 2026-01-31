@@ -60,27 +60,27 @@ const getHealthInfo = (
   switch (status) {
     case 'progressing':
       return {
-        color: '#10b981',
+        color: 'var(--success)',
         label: 'Progressing',
-        icon: <Zap size={14} color="#10b981" />,
+        icon: <Zap size={14} color="var(--success)" />,
       };
     case 'watching':
       return {
-        color: '#3b82f6',
+        color: 'var(--accent-secondary)',
         label: 'Watching',
-        icon: <Eye size={14} color="#3b82f6" />,
+        icon: <Eye size={14} color="var(--accent-secondary)" />,
       };
     case 'stagnant':
       return {
-        color: '#f59e0b',
+        color: 'var(--warning)',
         label: 'Stagnant',
-        icon: <Timer size={14} color="#f59e0b" />,
+        icon: <Timer size={14} color="var(--warning)" />,
       };
     case 'at_risk':
       return {
-        color: '#ef4444',
+        color: 'var(--error)',
         label: 'At Risk',
-        icon: <AlertTriangle size={14} color="#ef4444" />,
+        icon: <AlertTriangle size={14} color="var(--error)" />,
       };
     default:
       return {
@@ -140,10 +140,10 @@ const HealthGauge: React.FC<HealthGaugeProps> = ({
 
   // Gradient based on position health
   const gradientColors = useMemo(() => {
-    if (percent < 20) return 'linear-gradient(90deg, #ef4444, #f59e0b)';
-    if (percent < 40) return 'linear-gradient(90deg, #f59e0b, #eab308)';
+    if (percent < 20) return 'linear-gradient(90deg, var(--error), var(--warning))';
+    if (percent < 40) return 'linear-gradient(90deg, var(--warning), #eab308)';
     if (percent < 60) return 'linear-gradient(90deg, #eab308, #84cc16)';
-    return 'linear-gradient(90deg, #84cc16, #10b981)';
+    return 'linear-gradient(90deg, #84cc16, var(--success))';
   }, [percent]);
 
   return (
@@ -229,7 +229,7 @@ const TrailingInfo: React.FC<TrailingInfoProps> = ({
   return (
     <div className="trailing-info">
       <div className="trailing-info__header">
-        <Target size={14} color={active ? '#10b981' : '#64748b'} />
+        <Target size={14} color={active ? 'var(--success)' : 'var(--text-secondary)'} />
         <span className={`trailing-info__label ${active ? 'trailing-info__label--active' : ''}`}>
           Trailing Stop
         </span>
@@ -279,8 +279,8 @@ const PositionBanner: React.FC<PositionBannerProps> = ({ position }) => {
   if (!position) return null;
 
   const isLong = position.side === 'long';
-  const pnlColor = position.pnlPct >= 0 ? '#10b981' : '#ef4444';
-  const sideColor = isLong ? '#10b981' : '#ef4444';
+  const pnlColor = position.pnlPct >= 0 ? 'var(--success)' : 'var(--error)';
+  const sideColor = isLong ? 'var(--success)' : 'var(--error)';
   const SideIcon = isLong ? TrendingUp : TrendingDown;
 
   return (
@@ -381,10 +381,10 @@ const styles = `
     display: flex;
     align-items: stretch;
     gap: 16px;
-    background: linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+    background: var(--card-gradient);
     border-radius: 12px;
     padding: 16px 20px;
-    border: 1px solid rgba(100, 116, 139, 0.25);
+    border: 1px solid var(--border-subtle);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
     margin-bottom: 16px;
     flex-wrap: wrap;
@@ -412,7 +412,7 @@ const styles = `
 
   .position-banner__symbol {
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.6);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
     text-align: center;
   }
@@ -434,7 +434,7 @@ const styles = `
 
   .position-banner__price-label {
     font-size: 10px;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
@@ -442,16 +442,16 @@ const styles = `
   .position-banner__price-value {
     font-size: 13px;
     font-family: 'JetBrains Mono', monospace;
-    color: rgba(226, 232, 240, 0.85);
+    color: var(--text-muted);
   }
 
   .position-banner__price-value--current {
-    color: #f8fafc;
+    color: var(--text-primary);
     font-weight: 600;
   }
 
   .position-banner__price-separator {
-    color: rgba(148, 163, 184, 0.4);
+    color: var(--text-secondary);
     font-size: 16px;
   }
 
@@ -463,8 +463,8 @@ const styles = `
     justify-content: center;
     gap: 2px;
     padding: 0 16px;
-    border-left: 1px solid rgba(148, 163, 184, 0.15);
-    border-right: 1px solid rgba(148, 163, 184, 0.15);
+    border-left: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--border-subtle);
     flex: 0 0 auto;
   }
 
@@ -514,7 +514,7 @@ const styles = `
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.6);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
   }
 
@@ -528,20 +528,20 @@ const styles = `
     display: flex;
     justify-content: space-between;
     font-size: 9px;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
   }
 
   .health-gauge__label--stop {
-    color: #ef4444;
+    color: var(--error);
   }
 
   .health-gauge__label--entry {
-    color: #94a3b8;
+    color: var(--text-secondary);
   }
 
   .health-gauge__label--peak {
-    color: #10b981;
+    color: var(--success);
   }
 
   .health-gauge__bar {
@@ -563,7 +563,7 @@ const styles = `
     top: -2px;
     width: 4px;
     height: 12px;
-    background: #f8fafc;
+    background: var(--text-primary);
     border-radius: 2px;
     transform: translateX(-50%);
     box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
@@ -575,7 +575,7 @@ const styles = `
     top: 0;
     width: 2px;
     height: 8px;
-    background: #94a3b8;
+    background: var(--text-secondary);
     transform: translateX(-50%);
     opacity: 0.7;
   }
@@ -600,13 +600,13 @@ const styles = `
 
   .trailing-info__label {
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.6);
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
 
   .trailing-info__label--active {
-    color: #10b981;
+    color: var(--success);
   }
 
   .trailing-info__tag {
@@ -623,7 +623,7 @@ const styles = `
 
   .trailing-info__metric {
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.7);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
     cursor: help;
   }
@@ -633,7 +633,7 @@ const styles = `
     display: flex;
     flex-direction: column;
     gap: 4px;
-    border-left: 1px solid rgba(148, 163, 184, 0.15);
+    border-left: 1px solid var(--border-subtle);
     padding-left: 16px;
     flex: 0 0 auto;
   }
@@ -643,14 +643,14 @@ const styles = `
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: rgba(226, 232, 240, 0.7);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
     cursor: help;
   }
 
   .position-banner__meta-label {
     font-size: 10px;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     text-transform: uppercase;
   }
 

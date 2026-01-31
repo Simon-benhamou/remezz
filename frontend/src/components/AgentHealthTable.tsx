@@ -82,10 +82,10 @@ export default function AgentHealthTable({ data, loading, onRefresh, onReselect,
   const { token } = theme.useToken();
   const base = token.colorBgBase.toLowerCase();
   const isDarkTheme = !['#ffffff', '#fff', '#fafafa'].includes(base);
-  const cardBg = isDarkTheme ? '#0f172a' : token.colorBgContainer;
-  const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
-  const headingColor = isDarkTheme ? '#f8fafc' : token.colorTextHeading;
-  const mutedText = isDarkTheme ? 'rgba(226, 232, 240, 0.65)' : token.colorTextSecondary;
+  const cardBg = 'var(--bg-primary)';
+  const borderColor = 'var(--border-subtle)';
+  const headingColor = 'var(--text-primary)';
+  const mutedText = 'var(--text-muted)';
   const statusCounts = agents.reduce<Record<AgentHealthStatus, number>>((acc, row) => {
     acc[row.status] = (acc[row.status] || 0) + 1;
     return acc;
@@ -231,7 +231,7 @@ export default function AgentHealthTable({ data, loading, onRefresh, onReselect,
                 borderRadius: 12,
                 border: `1px solid ${borderColor}`,
                 padding: 12,
-                background: isDarkTheme ? 'rgba(15, 23, 42, 0.65)' : token.colorFillTertiary,
+                background: 'var(--bg-primary)',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 4,

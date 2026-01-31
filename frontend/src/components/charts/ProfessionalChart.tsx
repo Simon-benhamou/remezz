@@ -87,9 +87,14 @@ export default function ProfessionalChart({
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
-    const computedStyle = getComputedStyle(chartContainerRef.current);
-    const bgPrimary = computedStyle.getPropertyValue('--bg-primary').trim() || '#0a0e1a';
-    const textSecondary = computedStyle.getPropertyValue('--text-secondary').trim() || '#94a3b8';
+    const cs = getComputedStyle(document.documentElement);
+    const resolve = (v: string, fb: string) => cs.getPropertyValue(v).trim() || fb;
+    const bgPrimary = resolve('--bg-primary', '#0a0e1a');
+    const textSecondary = resolve('--text-secondary', '#94a3b8');
+    const borderSubtle = resolve('--border-subtle', 'rgba(148,163,184,0.1)');
+    const success = resolve('--success', '#10b981');
+    const error = resolve('--error', '#ef4444');
+    const accentSecondary = resolve('--accent-secondary', '#2563eb');
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
@@ -126,12 +131,12 @@ export default function ProfessionalChart({
         },
       },
       rightPriceScale: {
-        borderColor: 'rgba(148, 163, 184, 0.1)',
-        textColor: '#cbd5e1',
+        borderColor: borderSubtle,
+        textColor: textSecondary,
         scaleMargins: { top: 0.1, bottom: 0.2 },
       },
       timeScale: {
-        borderColor: 'rgba(148, 163, 184, 0.1)',
+        borderColor: borderSubtle,
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 12,
@@ -152,12 +157,12 @@ export default function ProfessionalChart({
 
     // Candlestick series
     const candleSeries = chart.addCandlestickSeries({
-      upColor: '#10b981',
-      downColor: '#ef4444',
-      borderUpColor: '#10b981',
-      borderDownColor: '#ef4444',
-      wickUpColor: '#10b981',
-      wickDownColor: '#ef4444',
+      upColor: success,
+      downColor: error,
+      borderUpColor: success,
+      borderDownColor: error,
+      wickUpColor: success,
+      wickDownColor: error,
     });
 
     // Volume series
@@ -332,7 +337,7 @@ export default function ProfessionalChart({
     });
     ensureLine(stopLineRef, priceOrNull(position?.stopPrice), {
       title: 'Stop',
-      color: '#ef4444',
+      color: 'var(--error)',
       lineWidth: 2,
     });
     ensureLine(supportLineRef, priceOrNull(primarySupport), {
@@ -364,7 +369,7 @@ export default function ProfessionalChart({
         if (price == null) return;
         const line = candleSeriesRef.current!.createPriceLine({
           price,
-          color: '#22c55e',
+          color: 'var(--success)',
           lineWidth: 1,
           lineStyle: LineStyle.Solid,
           axisLabelVisible: true,
@@ -382,20 +387,20 @@ export default function ProfessionalChart({
     if (entryLabel) items.push({ label: 'Entry', value: entryLabel, color: '#38bdf8' });
 
     const stopLabel = formatPriceLabel(position?.stopPrice);
-    if (stopLabel) items.push({ label: 'Stop', value: stopLabel, color: '#ef4444' });
+    if (stopLabel) items.push({ label: 'Stop', value: stopLabel, color: 'var(--error)' });
 
     if (position?.side) {
       items.push({
         label: 'Side',
         value: position.side.toUpperCase(),
-        color: position.side === 'long' ? '#22c55e' : '#f87171',
+        color: position.side === 'long' ? 'var(--success)' : 'var(--error)',
       });
     }
 
     if (Array.isArray(position?.targets)) {
       position.targets.slice(0, 3).forEach((target, idx) => {
         const label = formatPriceLabel(target);
-        if (label) items.push({ label: `TP${idx + 1}`, value: label, color: '#22c55e' });
+        if (label) items.push({ label: `TP${idx + 1}`, value: label, color: 'var(--success)' });
       });
     }
 
@@ -439,31 +444,32 @@ export default function ProfessionalChart({
     const markers: any[] = [];
 
     // Add markers from orders (both entry and exit)
+    const cs = getComputedStyle(document.documentElement);
+    const resolvedSuccess = cs.getPropertyValue('--success').trim() || '#10b981';
+    const resolvedError = cs.getPropertyValue('--error').trim() || '#ef4444';
+
     orders?.forEach(order => {
       if (!order.createdAt) return;
-      
+
       const time = (new Date(order.createdAt).getTime() / 1000) as UTCTimestamp;
-      // Check for exit: supports both ".exit" (live) and "_exit_" (paper)
       const clientId = order.clientOrderId || '';
       const isExit = clientId.includes('.exit') || clientId.includes('_exit_');
       const isFilled = order.status?.toLowerCase() === 'filled';
-      
+
       if (isFilled) {
         if (isExit) {
-          // EXIT marker (red arrow down)
           markers.push({
             time,
             position: 'aboveBar',
-            color: '#ef4444',
+            color: resolvedError,
             shape: 'arrowDown',
             text: `Exit @ ${formatPriceDisplay(Number(order.price || order.avgPrice || 0))}`,
           });
         } else {
-          // ENTRY marker (green arrow up)
           markers.push({
             time,
             position: 'belowBar',
-            color: '#10b981',
+            color: resolvedSuccess,
             shape: 'arrowUp',
             text: `Entry @ ${formatPriceDisplay(Number(order.price || order.avgPrice || 0))}`,
           });
@@ -491,7 +497,7 @@ export default function ProfessionalChart({
     if (activeOrder && activeOrder.price) {
       const priceLine = candleSeriesRef.current.createPriceLine({
         price: Number(activeOrder.price),
-        color: '#3b82f6',
+        color: 'var(--accent-secondary)',
         lineWidth: 2,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
@@ -519,8 +525,8 @@ export default function ProfessionalChart({
         justifyContent: 'space-between',
         alignItems: 'center',
         padding: '16px',
-        background: 'rgba(15, 23, 42, 0.8)',
-        borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
+        background: 'var(--bg-primary)',
+        borderBottom: '1px solid var(--border-subtle)',
       }}>
         <div>
           <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -539,9 +545,9 @@ export default function ProfessionalChart({
               size="small"
               onClick={() => setTimeframe(btn.value)}
               style={{
-                background: timeframe === btn.value ? '#2563eb' : 'transparent',
-                borderColor: timeframe === btn.value ? '#2563eb' : '#cbd5e1',
-                color: timeframe === btn.value ? '#ffffff' : '#cbd5e1',
+                background: timeframe === btn.value ? 'var(--accent-secondary)' : 'transparent',
+                borderColor: timeframe === btn.value ? 'var(--accent-secondary)' : 'var(--text-secondary)',
+                color: timeframe === btn.value ? '#ffffff' : 'var(--text-secondary)',
               }}
             >
               {btn.label}
@@ -557,15 +563,15 @@ export default function ProfessionalChart({
             flexWrap: 'wrap',
             gap: '8px',
             padding: '12px 16px',
-            background: 'rgba(15, 23, 42, 0.65)',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.08)',
+            background: 'var(--bg-primary)',
+            borderBottom: '1px solid var(--border-subtle)',
           }}
         >
           {infoItems.map((item, idx) => (
             <div
               key={`${item.label}-${idx}`}
               style={{
-                border: `1px solid ${item.color || 'rgba(148, 163, 184, 0.35)'}`,
+                border: `1px solid ${item.color || 'var(--border-subtle)'}`,
                 borderRadius: 999,
                 padding: '4px 10px',
                 fontSize: '12px',
@@ -603,7 +609,7 @@ export default function ProfessionalChart({
             left: '50%',
             transform: 'translate(-50%, -50%)',
             background: 'rgba(239, 68, 68, 0.1)',
-            border: '1px solid #ef4444',
+            border: '1px solid var(--error)',
             borderRadius: '8px',
             padding: '16px 24px',
             color: '#fca5a5',

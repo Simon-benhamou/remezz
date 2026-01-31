@@ -39,7 +39,7 @@ export function StrategyCard({ data }: StrategyCardProps) {
             )}
           </div>
           {data.id && (
-            <div style={{ fontSize: '12px', color: '#8c8c8c', fontFamily: 'monospace' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
               ID: {data.id}
             </div>
           )}
@@ -53,7 +53,7 @@ export function StrategyCard({ data }: StrategyCardProps) {
               valueStyle={{ 
                 fontSize: '14px', 
                 textTransform: 'uppercase',
-                color: data.bias === 'long' ? '#52c41a' : data.bias === 'short' ? '#f5222d' : '#1890ff'
+                color: data.bias === 'long' ? 'var(--success)' : data.bias === 'short' ? 'var(--error)' : '#1890ff'
               }}
             />
           </Col>
@@ -61,7 +61,7 @@ export function StrategyCard({ data }: StrategyCardProps) {
           <Col span={8}>
             <Tooltip title={`Confidence: ${confidencePercent}%`}>
               <div>
-                <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: 4 }}>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: 4 }}>
                   Confidence
                 </div>
                 <Progress
@@ -77,7 +77,7 @@ export function StrategyCard({ data }: StrategyCardProps) {
           <Col span={8}>
             <Tooltip title={`Score: ${scorePercent}%`}>
               <div>
-                <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: 4 }}>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: 4 }}>
                   Score
                 </div>
                 <Progress

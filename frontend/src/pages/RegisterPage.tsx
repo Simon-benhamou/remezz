@@ -113,7 +113,7 @@ export default function RegisterPage() {
             <Title level={2} style={{ color: 'var(--text-primary)', marginBottom: 8 }}>
               Create your account
             </Title>
-            <Text type='secondary' style={{ color: 'rgba(148, 163, 184, 0.75)' }}>
+            <Text type='secondary' style={{ color: 'var(--text-muted)' }}>
               Join the Remezz platform in minutes
             </Text>
           </div>
@@ -135,7 +135,7 @@ export default function RegisterPage() {
               ]}
             >
               <Input
-                prefix={<KeyOutlined style={{ color: '#06b6d4' }} />}
+                prefix={<KeyOutlined style={{ color: 'var(--accent)' }} />}
                 placeholder='Enter your registration code'
                 autoComplete='one-time-code'
               />
@@ -155,7 +155,7 @@ export default function RegisterPage() {
               ]}
             >
               <Input
-                prefix={<UserOutlined style={{ color: '#06b6d4' }} />}
+                prefix={<UserOutlined style={{ color: 'var(--accent)' }} />}
                 placeholder='Choose a username'
                 autoComplete='username'
               />
@@ -170,7 +170,7 @@ export default function RegisterPage() {
               ]}
             >
               <Input
-                prefix={<MailOutlined style={{ color: '#06b6d4' }} />}
+                prefix={<MailOutlined style={{ color: 'var(--accent)' }} />}
                 placeholder='name@example.com'
                 autoComplete='email'
               />
@@ -186,7 +186,7 @@ export default function RegisterPage() {
               hasFeedback
             >
               <Input.Password
-                prefix={<LockOutlined style={{ color: '#06b6d4' }} />}
+                prefix={<LockOutlined style={{ color: 'var(--accent)' }} />}
                 placeholder='Create a strong password'
                 autoComplete='new-password'
               />
@@ -210,7 +210,7 @@ export default function RegisterPage() {
               ]}
             >
               <Input.Password
-                prefix={<LockOutlined style={{ color: '#06b6d4' }} />}
+                prefix={<LockOutlined style={{ color: 'var(--accent)' }} />}
                 placeholder='Re-enter your password'
                 autoComplete='new-password'
               />
@@ -238,13 +238,13 @@ export default function RegisterPage() {
               color: 'rgba(250, 204, 21, 0.95)',
             }}
             message={
-              <Text style={{ color: 'rgba(226, 232, 240, 0.85)' }}>
+              <Text style={{ color: 'var(--text-muted)' }}>
                 A valid registration code is required to onboard new desks. Contact your Remezz administrator if you need access.
               </Text>
             }
           />
 
-          <Divider plain style={{ borderColor: 'rgba(148, 163, 184, 0.25)', color: 'rgba(148, 163, 184, 0.6)' }}>
+          <Divider plain style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
             Or continue with
           </Divider>
 
@@ -257,15 +257,15 @@ export default function RegisterPage() {
             </Button>
           </Space>
 
-          <div style={{ marginTop: 24, fontSize: 12, color: 'rgba(148, 163, 184, 0.6)' }}>
+          <div style={{ marginTop: 24, fontSize: 12, color: 'var(--text-muted)' }}>
             By continuing, you agree to the{' '}
             <a href='https://remezz.io/terms' target='_blank' rel='noreferrer'>Terms of Service</a> and{' '}
             <a href='https://remezz.io/privacy' target='_blank' rel='noreferrer'>Privacy Policy</a>.
           </div>
 
-          <Divider style={{ borderColor: 'rgba(148, 163, 184, 0.25)' }} />
+          <Divider style={{ borderColor: 'var(--border-subtle)' }} />
 
-          <div style={{ textAlign: 'center', color: 'rgba(148, 163, 184, 0.75)' }}>
+          <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
             Already have an account? <Link to='/login'>Sign in</Link>
           </div>
         </Card>

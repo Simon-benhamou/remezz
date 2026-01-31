@@ -1904,7 +1904,17 @@ export class SimpleAgent {
       // Detection delay = time since candle closed (candleEnd = candleStart + 15min)
       const detectionDelayMs = now - (lastClosedCandleTs + CANDLE_INTERVAL_MS);
       const detectionDelaySec = Math.round(detectionDelayMs / 1000);
-      
+
+      // V5.80: Skip stale candles on restart to avoid re-processing old data
+      // After redeployment, the first candle detected may be old (detected +600s etc.)
+      // Skip entry signals for stale candles (>10s) to prevent false entries/exits
+      const STALE_CANDLE_THRESHOLD_SEC = 10;
+      if (isFirstCheck && detectionDelaySec > STALE_CANDLE_THRESHOLD_SEC) {
+        logger.info(`⏭️ [${shortSymbol}] Skipping stale candle on startup [${candleStartTime}-${candleEndTime} UTC] | Detected +${detectionDelaySec}s (>${STALE_CANDLE_THRESHOLD_SEC}s threshold)`);
+        this.lastProcessedCandleTs = lastClosedCandleTs;
+        return;
+      }
+
       if (!isFirstCheck) {
         const closedCandle = candles[candles.length - 1];
         const candleColor = closedCandle.close > closedCandle.open ? '🟢' : '🔴';
@@ -1913,7 +1923,7 @@ export class SimpleAgent {
         // Show candle period (start-end UTC) and detection delay for clarity
         logger.info(`🕯️ [${shortSymbol}] New 15m candle CLOSED [${candleStartTime}-${candleEndTime} UTC] ${candleColor} | $${closedCandle.close.toFixed(2)} (${changeNum > 0 ? '+' : ''}${candleChange}%) | Detected +${detectionDelaySec}s`);
       }
-      
+
       this.lastProcessedCandleTs = lastClosedCandleTs;
 
       // Backtest parity: decrement cooldown once per CLOSED candle.
@@ -2285,7 +2295,7 @@ export class SimpleAgent {
     const openPositionCount = this.config.capitalPool.getOpenPositionCount();
     const maxPositions = this.config.capitalPool.getMaxPositions();
     if (openPositionCount >= maxPositions) {
-      logger.info(`⚠️ [${symbol}] Max positions reached (${openPositionCount}/${maxPositions}) - waiting for existing positions to close`);
+      logger.info(`⚠️ [${symbol}] Max positions reached (${openPositionCount}/${maxPositions}) - waiting for existing positions to close | mode=${this.config.mode}`);
       return;
     }
     
@@ -3123,7 +3133,18 @@ export class SimpleAgent {
       if (latestClosedCandle.timestamp === this.lastProcessedExitCandleTs) {
         return;
       }
-      
+
+      // V5.80: Detect stale candle on restart - use close price instead of wick for SL check
+      // After redeployment, the first candle may be old (detected +600s). The wick of that candle
+      // could trigger a false SL exit even though price has since recovered. Use close price only.
+      const CANDLE_INTERVAL_MS_EXIT = 15 * 60 * 1000;
+      const exitDetectionDelayMs = Date.now() - (latestClosedCandle.timestamp + CANDLE_INTERVAL_MS_EXIT);
+      const exitDetectionDelaySec = Math.round(exitDetectionDelayMs / 1000);
+      const isStaleExitCandle = this.lastProcessedExitCandleTs === 0 && exitDetectionDelaySec > 10;
+      if (isStaleExitCandle) {
+        logger.info(`⏭️ [${symbol}] Stale candle on startup for exit check (Detected +${exitDetectionDelaySec}s) - using close price instead of wick for SL`);
+      }
+
       // V5.48 FIX: Update HWM for ALL skipped candles, not just the latest!
       // If agent tick was slow and multiple candles closed, we must update HWM
       // with the HIGH of each skipped candle to ensure we don't miss a peak.
@@ -3229,10 +3250,13 @@ export class SimpleAgent {
       // - holdMinutes = (nowMs - entryTime) / 60000 = holdBars * 15 (EXACT parity)
       // This ensures trailing stops, stagnant detection, and all time-based exits
       // behave identically between live and backtest.
+      // V5.80: On stale candle restart, use close price for high/low to avoid wick-triggered false SL
+      const exitHigh = isStaleExitCandle ? currentPrice : latestClosedCandle.high;
+      const exitLow = isStaleExitCandle ? currentPrice : latestClosedCandle.low;
       const exitSignal = shouldExitPosition(this.position!, currentPrice, candles, {
         nowMs: calculateExitNowMs(latestClosedCandle.timestamp),
-        priceHigh: latestClosedCandle.high,
-        priceLow: latestClosedCandle.low,
+        priceHigh: exitHigh,
+        priceLow: exitLow,
         btcCandles: btcCandles,
       });
 

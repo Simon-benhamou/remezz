@@ -73,7 +73,7 @@ export default function LoginPage() {
             <Title level={2} style={{ color: 'var(--text-primary)', marginBottom: 8 }}>
               Welcome back
             </Title>
-            <Text type='secondary' style={{ color: 'rgba(148, 163, 184, 0.75)' }}>
+            <Text type='secondary' style={{ color: 'var(--text-muted)' }}>
               Sign in to your account to continue
             </Text>
           </div>
@@ -92,7 +92,7 @@ export default function LoginPage() {
               rules={[{ required: true, message: 'Please enter your email' }]}
             >
               <Input
-                prefix={<UserOutlined style={{ color: '#06b6d4' }} />}
+                prefix={<UserOutlined style={{ color: 'var(--accent)' }} />}
                 placeholder='name@example.com'
                 autoComplete='username'
               />
@@ -104,7 +104,7 @@ export default function LoginPage() {
               rules={[{ required: true, message: 'Please enter your password' }]}
             >
               <Input.Password
-                prefix={<LockOutlined style={{ color: '#06b6d4' }} />}
+                prefix={<LockOutlined style={{ color: 'var(--accent)' }} />}
                 placeholder='Enter your password'
                 autoComplete='current-password'
               />
@@ -127,7 +127,7 @@ export default function LoginPage() {
             </Form.Item>
           </Form>
 
-          <Divider plain style={{ borderColor: 'rgba(148, 163, 184, 0.25)', color: 'rgba(148, 163, 184, 0.6)' }}>
+          <Divider plain style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
             Or continue with
           </Divider>
 
@@ -140,7 +140,7 @@ export default function LoginPage() {
             </Button>
           </Space>
 
-          <div style={{ marginTop: 24, fontSize: 12, color: 'rgba(148, 163, 184, 0.6)' }}>
+          <div style={{ marginTop: 24, fontSize: 12, color: 'var(--text-muted)' }}>
             By continuing, you agree to the{' '}
             <a href='https://remezz.io/terms' target='_blank' rel='noreferrer'>Terms of Service</a> and{' '}
             <a href='https://remezz.io/privacy' target='_blank' rel='noreferrer'>Privacy Policy</a>.

@@ -169,7 +169,7 @@ const ExitReasonTag: React.FC<{ reason: string }> = ({ reason }) => {
 };
 
 const PnlText: React.FC<{ value: number; showCurrency?: boolean }> = ({ value, showCurrency = true }) => (
-  <Text style={{ color: value >= 0 ? '#10b981' : '#ef4444', fontWeight: 600 }}>
+  <Text style={{ color: value >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 600 }}>
     {showCurrency ? formatCurrency(value) : formatPercent(value)}
   </Text>
 );
@@ -225,21 +225,21 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
       {/* Area fill */}
       <defs>
         <linearGradient id="equityGradient" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+          <stop offset="0%" stopColor="var(--success)" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="var(--success)" stopOpacity="0" />
         </linearGradient>
       </defs>
       <path d={areaD} fill="url(#equityGradient)" />
       
       {/* Line */}
-      <path d={pathD} fill="none" stroke="#10b981" strokeWidth={2} />
+      <path d={pathD} fill="none" stroke="var(--success)" strokeWidth={2} />
       
       {/* Final value dot */}
       <circle
         cx={xScale(data.length - 1)}
         cy={yScale(data[data.length - 1].equity)}
         r={4}
-        fill="#10b981"
+        fill="var(--success)"
       />
     </svg>
   );
@@ -267,14 +267,14 @@ const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }
       {/* Area fill */}
       <defs>
         <linearGradient id="ddGradient" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="#ef4444" stopOpacity="0.4" />
-          <stop offset="100%" stopColor="#ef4444" stopOpacity="0" />
+          <stop offset="0%" stopColor="var(--error)" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="var(--error)" stopOpacity="0" />
         </linearGradient>
       </defs>
       <path d={areaD} fill="url(#ddGradient)" />
       
       {/* Line */}
-      <path d={pathD} fill="none" stroke="#ef4444" strokeWidth={2} />
+      <path d={pathD} fill="none" stroke="var(--error)" strokeWidth={2} />
       
       {/* Max DD line */}
       <line
@@ -282,14 +282,14 @@ const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }
         x2={width - padding.right}
         y1={yScale(maxDD)}
         y2={yScale(maxDD)}
-        stroke="#ef4444"
+        stroke="var(--error)"
         strokeDasharray="5,5"
         opacity={0.5}
       />
       <text
         x={width - padding.right}
         y={yScale(maxDD) - 5}
-        fill="#ef4444"
+        fill="var(--error)"
         fontSize={10}
         textAnchor="end"
       >
@@ -549,9 +549,9 @@ export default function BacktestPage() {
       width: 80,
       render: (_, r) => (
         <span>
-          <Text style={{ color: '#10b981' }}>{r.wins}</Text>
+          <Text style={{ color: 'var(--success)' }}>{r.wins}</Text>
           {' / '}
-          <Text style={{ color: '#ef4444' }}>{r.losses}</Text>
+          <Text style={{ color: 'var(--error)' }}>{r.losses}</Text>
         </span>
       ),
     },
@@ -562,7 +562,7 @@ export default function BacktestPage() {
       width: 90,
       align: 'right',
       render: (v: number) => (
-        <Text style={{ color: v >= 50 ? '#10b981' : '#ef4444' }}>
+        <Text style={{ color: v >= 50 ? 'var(--success)' : 'var(--error)' }}>
           {v.toFixed(1)}%
         </Text>
       ),
@@ -596,7 +596,7 @@ export default function BacktestPage() {
       key: 'maxWinUsd',
       width: 90,
       align: 'right',
-      render: (v: number) => <Text style={{ color: '#10b981' }}>${v.toFixed(0)}</Text>,
+      render: (v: number) => <Text style={{ color: 'var(--success)' }}>${v.toFixed(0)}</Text>,
     },
     {
       title: 'Worst',
@@ -604,7 +604,7 @@ export default function BacktestPage() {
       key: 'maxLossUsd',
       width: 90,
       align: 'right',
-      render: (v: number) => <Text style={{ color: '#ef4444' }}>${Math.abs(v).toFixed(0)}</Text>,
+      render: (v: number) => <Text style={{ color: 'var(--error)' }}>${Math.abs(v).toFixed(0)}</Text>,
     },
     {
       title: 'Capital End',
@@ -669,7 +669,7 @@ export default function BacktestPage() {
                       </Text>
                     </Space>
                     <Space direction="vertical" size={0} style={{ textAlign: 'right' }}>
-                      <Text style={{ color: r.summary.totalPnlUsd >= 0 ? '#10b981' : '#ef4444' }}>
+                      <Text style={{ color: r.summary.totalPnlUsd >= 0 ? 'var(--success)' : 'var(--error)' }}>
                         {formatCurrency(r.summary.totalPnlUsd)} ({formatPercent(r.summary.totalPnlPct)})
                       </Text>
                       <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
@@ -790,7 +790,7 @@ export default function BacktestPage() {
                   value={result.summary.totalPnlUsd}
                   precision={2}
                   prefix="$"
-                  valueStyle={{ color: result.summary.totalPnlUsd >= 0 ? '#10b981' : '#ef4444' }}
+                  valueStyle={{ color: result.summary.totalPnlUsd >= 0 ? 'var(--success)' : 'var(--error)' }}
                 />
                 <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                   {formatPercent(result.summary.totalPnlPct)} ROI
@@ -804,7 +804,7 @@ export default function BacktestPage() {
                   value={result.summary.winRate}
                   precision={1}
                   suffix="%"
-                  valueStyle={{ color: result.summary.winRate >= 50 ? '#10b981' : '#ef4444' }}
+                  valueStyle={{ color: result.summary.winRate >= 50 ? 'var(--success)' : 'var(--error)' }}
                 />
                 <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                   {result.summary.wins}W / {result.summary.losses}L ({result.summary.totalTrades} total)
@@ -818,7 +818,7 @@ export default function BacktestPage() {
                   value={result.summary.maxDrawdownPct}
                   precision={1}
                   suffix="%"
-                  valueStyle={{ color: '#ef4444' }}
+                  valueStyle={{ color: 'var(--error)' }}
                   prefix={<WarningOutlined />}
                 />
                 <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
@@ -833,7 +833,7 @@ export default function BacktestPage() {
                   value={result.summary.finalCapital}
                   precision={0}
                   prefix="$"
-                  valueStyle={{ color: '#06b6d4' }}
+                  valueStyle={{ color: 'var(--accent)' }}
                 />
                 <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                   Started with ${result.params.initialCapital.toLocaleString()}
@@ -851,7 +851,7 @@ export default function BacktestPage() {
                   value={result.summary.avgWinUsd}
                   precision={2}
                   prefix="$"
-                  valueStyle={{ color: '#10b981', fontSize: 18 }}
+                  valueStyle={{ color: 'var(--success)', fontSize: 18 }}
                 />
               </Card>
             </Col>
@@ -862,7 +862,7 @@ export default function BacktestPage() {
                   value={result.summary.avgLossUsd}
                   precision={2}
                   prefix="$"
-                  valueStyle={{ color: '#ef4444', fontSize: 18 }}
+                  valueStyle={{ color: 'var(--error)', fontSize: 18 }}
                 />
               </Card>
             </Col>
@@ -871,7 +871,7 @@ export default function BacktestPage() {
                 <Statistic
                   title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Long Trades</Text>}
                   value={result.summary.longTrades}
-                  valueStyle={{ color: '#06b6d4', fontSize: 18 }}
+                  valueStyle={{ color: 'var(--accent)', fontSize: 18 }}
                 />
               </Card>
             </Col>
@@ -995,7 +995,7 @@ export default function BacktestPage() {
                               </span>
                             }
                             type="info"
-                            style={{ padding: '4px 12px', background: '#1e3a5f', border: '1px solid #3b82f6' }}
+                            style={{ padding: '4px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--accent-secondary)' }}
                           />
                         )}
                       </Space>

@@ -163,14 +163,14 @@ export default function SessionsPage() {
 
   // Styles
   const cardStyle: React.CSSProperties = {
-    background: 'rgba(15, 23, 42, 0.6)',
+    background: 'var(--bg-primary)',
     borderRadius: 16,
-    border: '1px solid rgba(148, 163, 184, 0.1)',
+    border: '1px solid var(--border-subtle)',
     overflow: 'hidden',
   };
 
   const headerCellStyle: React.CSSProperties = {
-    color: 'rgba(148, 163, 184, 0.7)',
+    color: 'var(--text-muted)',
     fontSize: 11,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -191,7 +191,7 @@ export default function SessionsPage() {
               AI Trading Agents
               <Tag color={currentMode === 'live' ? 'error' : 'blue'}>{currentMode?.toUpperCase()}</Tag>
             </Title>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 13 }}>
+            <Text style={{ color: 'var(--text-muted)', fontSize: 13 }}>
               Autonomous multi-agent system with intelligent portfolio diversification
             </Text>
           </div>
@@ -203,7 +203,7 @@ export default function SessionsPage() {
                 { value: 'cards', icon: <AppstoreOutlined /> },
                 { value: 'table', icon: <BarsOutlined /> },
               ]}
-              style={{ background: 'rgba(15, 23, 42, 0.8)' }}
+              style={{ background: 'var(--bg-primary)' }}
             />
             <Button icon={<ReloadOutlined />} onClick={() => fetchSessions(true)} loading={loading} />
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
@@ -213,11 +213,11 @@ export default function SessionsPage() {
         </div>
         <Space size={16}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#4ade80' }} />
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--success)' }} />
             <Text style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{activeSessions.length} Active</Text>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#fbbf24' }} />
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--warning)' }} />
             <Text style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{pausedSessions.length} Paused</Text>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -235,8 +235,8 @@ export default function SessionsPage() {
             display: 'grid',
             gridTemplateColumns: '2fr 100px 100px 120px 120px 100px 100px 80px 140px',
             padding: '14px 20px',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
-            background: 'rgba(15, 23, 42, 0.8)',
+            borderBottom: '1px solid var(--border-subtle)',
+            background: 'var(--bg-primary)',
           }}>
             <span style={headerCellStyle}>Agent</span>
             <span style={headerCellStyle}>Selection</span>
@@ -271,12 +271,12 @@ export default function SessionsPage() {
                     display: 'grid',
                     gridTemplateColumns: '2fr 100px 100px 120px 120px 100px 100px 80px 140px',
                     padding: '16px 20px',
-                    borderBottom: '1px solid rgba(148, 163, 184, 0.06)',
+                    borderBottom: '1px solid var(--border-subtle)',
                     cursor: 'pointer',
                     transition: 'background 0.15s',
                     alignItems: 'center',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(148, 163, 184, 0.04)')}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-card-hover)')}
                   onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                 >
                   {/* Agent */}
@@ -286,7 +286,7 @@ export default function SessionsPage() {
                       borderRadius: 4,
                       border: 'none',
                       background: session.mode === 'live' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(59, 130, 246, 0.12)',
-                      color: session.mode === 'live' ? '#f87171' : '#06b6d4',
+                      color: session.mode === 'live' ? 'var(--error)' : 'var(--accent)',
                       fontSize: 10,
                       padding: '2px 6px',
                       lineHeight: 1.4,
@@ -303,7 +303,7 @@ export default function SessionsPage() {
                     borderRadius: 4,
                     border: 'none',
                     background: isActive ? (hasPosition ? 'rgba(34, 197, 94, 0.12)' : 'rgba(251, 191, 36, 0.12)') : 'rgba(148, 163, 184, 0.1)',
-                    color: isActive ? (hasPosition ? '#4ade80' : '#fbbf24') : 'var(--text-secondary)',
+                    color: isActive ? (hasPosition ? 'var(--success)' : 'var(--warning)') : 'var(--text-secondary)',
                     fontSize: 11,
                     padding: '3px 8px',
                   }}>
@@ -311,13 +311,13 @@ export default function SessionsPage() {
                   </Tag>
 
                   {/* Capital Source */}
-                  <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(59, 130, 246, 0.1)', color: '#06b6d4', fontSize: 11 }}>
+                  <Tag style={{ borderRadius: 4, border: 'none', background: 'rgba(59, 130, 246, 0.1)', color: 'var(--accent)', fontSize: 11 }}>
                     Shared pool
                   </Tag>
 
                   {/* PnL */}
                   <div style={{ textAlign: 'right' }}>
-                    <Text style={{ color: pnl >= 0 ? '#4ade80' : '#f87171', fontWeight: 600, fontSize: 14, display: 'block' }}>
+                    <Text style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 600, fontSize: 14, display: 'block' }}>
                       {formatUsd(pnl)}
                     </Text>
                     <Text style={{ color: roi >= 0 ? 'rgba(74, 222, 128, 0.7)' : 'rgba(248, 113, 113, 0.7)', fontSize: 11 }}>
@@ -326,12 +326,12 @@ export default function SessionsPage() {
                   </div>
 
                   {/* ROI */}
-                  <Text style={{ color: roi >= 0 ? '#4ade80' : '#f87171', fontWeight: 500, fontSize: 13, textAlign: 'right', display: 'block' }}>
+                  <Text style={{ color: roi >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 500, fontSize: 13, textAlign: 'right', display: 'block' }}>
                     {formatPercent(roi)}
                   </Text>
 
                   {/* Win Rate */}
-                  <Text style={{ color: winRate >= 50 ? '#4ade80' : '#f87171', fontWeight: 500, fontSize: 13, textAlign: 'right', display: 'block' }}>
+                  <Text style={{ color: winRate >= 50 ? 'var(--success)' : 'var(--error)', fontWeight: 500, fontSize: 13, textAlign: 'right', display: 'block' }}>
                     {formatPercent(winRate)}
                   </Text>
 
@@ -350,7 +350,7 @@ export default function SessionsPage() {
                         onClick={() => handleAction(isActive ? 'stop' : 'start', session)}
                         style={{
                           background: isActive ? 'rgba(239, 68, 68, 0.08)' : 'rgba(34, 197, 94, 0.08)',
-                          color: isActive ? '#f87171' : '#4ade80',
+                          color: isActive ? 'var(--error)' : 'var(--success)',
                           borderRadius: 6,
                           width: 32,
                           height: 32,
@@ -404,9 +404,9 @@ export default function SessionsPage() {
                   key={session.id}
                   onClick={() => navigate(`/agents/${session.id}`)}
                   style={{
-                    background: 'rgba(15, 23, 42, 0.7)',
+                    background: 'var(--bg-primary)',
                     borderRadius: 16,
-                    border: '1px solid rgba(148, 163, 184, 0.1)',
+                    border: '1px solid var(--border-subtle)',
                     padding: 20,
                     cursor: 'pointer',
                     transition: 'all 0.2s',
@@ -416,29 +416,29 @@ export default function SessionsPage() {
                     e.currentTarget.style.transform = 'translateY(-2px)';
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.1)';
+                    e.currentTarget.style.borderColor = 'var(--border-subtle)';
                     e.currentTarget.style.transform = 'translateY(0)';
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
                     <div>
                       <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 16, display: 'block' }}>{resolveAgentLabel(session)}</Text>
-                      <Tag style={{ marginTop: 6, borderRadius: 4, border: 'none', background: session.mode === 'live' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(59, 130, 246, 0.12)', color: session.mode === 'live' ? '#f87171' : '#06b6d4', fontSize: 10 }}>
+                      <Tag style={{ marginTop: 6, borderRadius: 4, border: 'none', background: session.mode === 'live' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(59, 130, 246, 0.12)', color: session.mode === 'live' ? 'var(--error)' : 'var(--accent)', fontSize: 10 }}>
                         {session.mode?.toUpperCase()}
                       </Tag>
                     </div>
-                    <Tag style={{ borderRadius: 4, border: 'none', background: isActive ? (hasPosition ? 'rgba(34, 197, 94, 0.12)' : 'rgba(251, 191, 36, 0.12)') : 'rgba(148, 163, 184, 0.1)', color: isActive ? (hasPosition ? '#4ade80' : '#fbbf24') : 'var(--text-secondary)', height: 'fit-content' }}>
+                    <Tag style={{ borderRadius: 4, border: 'none', background: isActive ? (hasPosition ? 'rgba(34, 197, 94, 0.12)' : 'rgba(251, 191, 36, 0.12)') : 'rgba(148, 163, 184, 0.1)', color: isActive ? (hasPosition ? 'var(--success)' : 'var(--warning)') : 'var(--text-secondary)', height: 'fit-content' }}>
                       {isActive ? (hasPosition ? 'Trading' : 'Watching') : session.haltedAt ? 'Paused' : 'Stopped'}
                     </Tag>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
                     <div>
-                      <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block' }}>PnL</Text>
-                      <Text style={{ color: pnl >= 0 ? '#4ade80' : '#f87171', fontWeight: 700, fontSize: 20 }}>{formatUsd(pnl)}</Text>
+                      <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block' }}>PnL</Text>
+                      <Text style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 700, fontSize: 20 }}>{formatUsd(pnl)}</Text>
                     </div>
                     <div>
-                      <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block' }}>Win Rate</Text>
-                      <Text style={{ color: (session.winRate ?? 0) >= 50 ? '#4ade80' : '#f87171', fontWeight: 600, fontSize: 16 }}>{formatPercent(session.winRate)}</Text>
+                      <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block' }}>Win Rate</Text>
+                      <Text style={{ color: (session.winRate ?? 0) >= 50 ? 'var(--success)' : 'var(--error)', fontWeight: 600, fontSize: 16 }}>{formatPercent(session.winRate)}</Text>
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }} onClick={(e) => e.stopPropagation()}>

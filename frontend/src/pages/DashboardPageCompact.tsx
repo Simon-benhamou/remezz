@@ -190,31 +190,31 @@ export default function DashboardPageCompact() {
               <Text style={{ color: '#38bdf8', fontSize: 12, fontWeight: 500 }}>Active Agents</Text>
             </div>
             <div style={{ fontSize: 32, fontWeight: 700, color: 'var(--text-primary)' }}>{ov?.activeCount || 0}</div>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>{tradingCount} Trading Now</Text>
+            <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>{tradingCount} Trading Now</Text>
           </div>
         </Col>
         <Col xs={12} sm={6}>
           <div style={statCardStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              {(ov?.todayPnlUsd ?? 0) >= 0 ? <TrendingUp size={14} color="#34d399" /> : <TrendingDown size={14} color="#f87171" />}
-              <Text style={{ color: (ov?.todayPnlUsd ?? 0) >= 0 ? '#34d399' : '#f87171', fontSize: 12, fontWeight: 500 }}>Today's PnL</Text>
+              {(ov?.todayPnlUsd ?? 0) >= 0 ? <TrendingUp size={14} color="var(--success)" /> : <TrendingDown size={14} color="var(--error)" />}
+              <Text style={{ color: (ov?.todayPnlUsd ?? 0) >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 12, fontWeight: 500 }}>Today's PnL</Text>
             </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: (ov?.todayPnlUsd ?? 0) >= 0 ? '#34d399' : '#f87171' }}>
+            <div style={{ fontSize: 32, fontWeight: 700, color: (ov?.todayPnlUsd ?? 0) >= 0 ? 'var(--success)' : 'var(--error)' }}>
               {(ov?.todayPnlUsd ?? 0) >= 0 ? '+' : '-'}${Math.abs(ov?.todayPnlUsd ?? 0).toFixed(2)}
             </div>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>{ov?.todayTrades ?? stats.todayTrades} trades today</Text>
+            <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>{ov?.todayTrades ?? stats.todayTrades} trades today</Text>
           </div>
         </Col>
         <Col xs={12} sm={6}>
           <div style={statCardStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ color: '#fbbf24', fontSize: 14 }}>%</span>
-              <Text style={{ color: '#fbbf24', fontSize: 12, fontWeight: 500 }}>Today Win Rate</Text>
+              <span style={{ color: 'var(--warning)', fontSize: 14 }}>%</span>
+              <Text style={{ color: 'var(--warning)', fontSize: 12, fontWeight: 500 }}>Today Win Rate</Text>
             </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: stats.todayWinRate >= 50 ? '#34d399' : stats.todayTrades > 0 ? '#f87171' : 'var(--text-secondary)' }}>
+            <div style={{ fontSize: 32, fontWeight: 700, color: stats.todayWinRate >= 50 ? 'var(--success)' : stats.todayTrades > 0 ? 'var(--error)' : 'var(--text-secondary)' }}>
               {stats.todayTrades > 0 ? `${stats.todayWinRate.toFixed(0)}%` : '—'}
             </div>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>All-time: {stats.winRate.toFixed(0)}% ({stats.wins}W/{stats.losses}L)</Text>
+            <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>All-time: {stats.winRate.toFixed(0)}% ({stats.wins}W/{stats.losses}L)</Text>
           </div>
         </Col>
         <Col xs={12} sm={6}>
@@ -224,7 +224,7 @@ export default function DashboardPageCompact() {
               <Text style={{ color: '#a78bfa', fontSize: 12, fontWeight: 500 }}>Total Trades</Text>
             </div>
             <div style={{ fontSize: 32, fontWeight: 700, color: 'var(--text-primary)' }}>{trades.length}</div>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>Avg ROE: {stats.avgRoe >= 0 ? '+' : ''}{stats.avgRoe.toFixed(1)}%</Text>
+            <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>Avg ROE: {stats.avgRoe >= 0 ? '+' : ''}{stats.avgRoe.toFixed(1)}%</Text>
           </div>
         </Col>
       </Row>
@@ -237,27 +237,27 @@ export default function DashboardPageCompact() {
           </Text>
           <Row gutter={[32, 16]} align="middle">
             <Col xs={24} sm={6}>
-              <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
+              <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
                 Overall Sentiment
               </Text>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 {marketConditions.status === 'favorable_long' && (
                   <>
-                    <TrendingUp size={16} color="#34d399" />
-                    <Text style={{ color: '#34d399', fontSize: 16, fontWeight: 700 }}>FAVORABLE LONG</Text>
+                    <TrendingUp size={16} color="var(--success)" />
+                    <Text style={{ color: 'var(--success)', fontSize: 16, fontWeight: 700 }}>FAVORABLE LONG</Text>
                   </>
                 )}
                 {marketConditions.status === 'favorable_short' && (
                   <>
-                    <TrendingDown size={16} color="#f87171" />
-                    <Text style={{ color: '#f87171', fontSize: 16, fontWeight: 700 }}>FAVORABLE SHORT</Text>
+                    <TrendingDown size={16} color="var(--error)" />
+                    <Text style={{ color: 'var(--error)', fontSize: 16, fontWeight: 700 }}>FAVORABLE SHORT</Text>
                   </>
                 )}
                 {marketConditions.status === 'neutral' && (
-                  <Text style={{ color: '#fbbf24', fontSize: 16, fontWeight: 700 }}>NEUTRAL</Text>
+                  <Text style={{ color: 'var(--warning)', fontSize: 16, fontWeight: 700 }}>NEUTRAL</Text>
                 )}
                 {marketConditions.status === 'unfavorable' && (
-                  <Text style={{ color: '#f87171', fontSize: 16, fontWeight: 700 }}>UNFAVORABLE</Text>
+                  <Text style={{ color: 'var(--error)', fontSize: 16, fontWeight: 700 }}>UNFAVORABLE</Text>
                 )}
                 {marketConditions.status === 'unknown' && (
                   <Text style={{ color: 'var(--text-secondary)', fontSize: 16, fontWeight: 700 }}>UNKNOWN</Text>
@@ -265,11 +265,11 @@ export default function DashboardPageCompact() {
               </div>
             </Col>
             <Col xs={12} sm={6}>
-              <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
+              <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
                 BTC 6H Momentum
               </Text>
-              <Text style={{ 
-                color: (marketConditions.btcMomentum6h || 0) >= 0 ? '#34d399' : '#f87171', 
+              <Text style={{
+                color: (marketConditions.btcMomentum6h || 0) >= 0 ? 'var(--success)' : 'var(--error)',
                 fontSize: 18, 
                 fontWeight: 700 
               }}>
@@ -277,11 +277,11 @@ export default function DashboardPageCompact() {
               </Text>
             </Col>
             <Col xs={12} sm={6}>
-              <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
+              <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
                 BTC vs MA200 (1H)
               </Text>
-              <Text style={{ 
-                color: marketConditions.btcAboveMa50 ? '#34d399' : '#f87171', 
+              <Text style={{
+                color: marketConditions.btcAboveMa50 ? 'var(--success)' : 'var(--error)',
                 fontSize: 18, 
                 fontWeight: 700 
               }}>
@@ -289,14 +289,14 @@ export default function DashboardPageCompact() {
               </Text>
             </Col>
             <Col xs={24} sm={6}>
-              <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
+              <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
                 Trade Signal
               </Text>
-              <Tag 
-                style={{ 
+              <Tag
+                style={{
                   background: marketConditions.tradingRecommended ? 'rgba(52, 211, 153, 0.15)' : 'rgba(148, 163, 184, 0.15)',
-                  border: marketConditions.tradingRecommended ? '1px solid #34d399' : '1px solid rgba(148, 163, 184, 0.3)',
-                  color: marketConditions.tradingRecommended ? '#34d399' : 'var(--text-secondary)',
+                  border: marketConditions.tradingRecommended ? '1px solid var(--success)' : '1px solid rgba(148, 163, 184, 0.3)',
+                  color: marketConditions.tradingRecommended ? 'var(--success)' : 'var(--text-secondary)',
                   fontSize: 13,
                   fontWeight: 600,
                   padding: '6px 16px',
@@ -321,10 +321,10 @@ export default function DashboardPageCompact() {
               <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600 }}>Active Agents</Text>
               <Tag color="gold" style={{ marginLeft: 8 }}>{tradingCount} Trading</Tag>
             </Space>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 13 }}>{watchingCount} watching</Text>
+            <Text style={{ color: 'var(--text-muted)', fontSize: 13 }}>{watchingCount} watching</Text>
           </div>
         }
-        headStyle={{ background: 'transparent', borderBottom: '1px solid rgba(148, 163, 184, 0.1)' }}
+        headStyle={{ background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}
       >
         {loading ? (
           <div style={{ textAlign: 'center', padding: 40 }}>
@@ -345,21 +345,21 @@ export default function DashboardPageCompact() {
                 <div
                   onClick={() => navigate(`/agents/${session.id}`)}
                   style={{
-                    background: 'rgba(15, 23, 42, 0.6)',
+                    background: 'var(--bg-primary)',
                     borderRadius: 12,
-                    border: '1px solid rgba(148, 163, 184, 0.15)',
+                    border: '1px solid var(--border-subtle)',
                     padding: 16,
                     cursor: 'pointer',
                     transition: 'all 0.2s',
                     height: '100%',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'rgba(30, 41, 59, 0.8)';
+                    e.currentTarget.style.background = 'var(--bg-elevated)';
                     e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.3)';
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'rgba(15, 23, 42, 0.6)';
-                    e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.15)';
+                    e.currentTarget.style.background = 'var(--bg-primary)';
+                    e.currentTarget.style.borderColor = 'var(--border-subtle)';
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
@@ -373,19 +373,19 @@ export default function DashboardPageCompact() {
                       {session.state === 'IN_POSITION' ? 'TRADING' : 'WATCHING'}
                     </Tag>
                   </div>
-                  <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block', marginBottom: 8 }}>
+                  <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 8 }}>
                     PnL
                   </Text>
-                  <div style={{ 
-                    color: (session.pnlUsd || 0) >= 0 ? '#34d399' : '#f87171', 
+                  <div style={{
+                    color: (session.pnlUsd || 0) >= 0 ? 'var(--success)' : 'var(--error)',
                     fontSize: 22, 
                     fontWeight: 700,
                     marginBottom: 4
                   }}>
                     {(session.pnlUsd || 0) >= 0 ? '' : '-'}${Math.abs(session.pnlUsd || 0).toFixed(2)}
                   </div>
-                  <Text style={{ 
-                    color: (session.winRate || 0) >= 50 ? '#34d399' : '#f87171', 
+                  <Text style={{
+                    color: (session.winRate || 0) >= 50 ? 'var(--success)' : 'var(--error)',
                     fontSize: 12 
                   }}>
                     Win Rate: {(session.winRate || 0).toFixed(0)}%
@@ -408,7 +408,7 @@ export default function DashboardPageCompact() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600, display: 'block' }}>Performance Overview</Text>
-                  <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Cumulative PnL across all sessions</Text>
+                  <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>Cumulative PnL across all sessions</Text>
                 </div>
                 <Button 
                   type="text" 
@@ -418,22 +418,22 @@ export default function DashboardPageCompact() {
                 />
               </div>
             }
-            headStyle={{ background: 'transparent', borderBottom: '1px solid rgba(148, 163, 184, 0.1)' }}
+            headStyle={{ background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}
           >
             {/* Big PnL Display - use ov.pnlUsd from backend (accurate, includes all trades & fees) */}
             <div style={{ marginBottom: 20 }}>
               <div style={{ marginBottom: 4 }}>
-                <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                   Total PnL (All-Time)
                 </Text>
               </div>
-              <span style={{ fontSize: 36, fontWeight: 700, color: (ov?.pnlUsd ?? 0) >= 0 ? '#34d399' : '#f87171' }}>
+              <span style={{ fontSize: 36, fontWeight: 700, color: (ov?.pnlUsd ?? 0) >= 0 ? 'var(--success)' : 'var(--error)' }}>
                 {(ov?.pnlUsd ?? 0) >= 0 ? '+' : '-'}${Math.abs(ov?.pnlUsd ?? 0).toFixed(2)}
               </span>
               <span style={{ 
                 marginLeft: 12, 
                 fontSize: 16, 
-                color: 'rgba(148, 163, 184, 0.7)'
+                color: 'var(--text-muted)'
               }}>
                 {ov?.totalTrades ?? trades.length} trades · {(ov?.avgWinRate ?? stats.winRate).toFixed(0)}% win rate
               </span>
@@ -456,27 +456,27 @@ export default function DashboardPageCompact() {
                   <AreaChart data={chartData}>
                     <defs>
                       <linearGradient id="pnlGradientPositive" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#34d399" stopOpacity={0.4} />
-                        <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
+                        <stop offset="5%" stopColor="var(--success)" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="var(--success)" stopOpacity={0} />
                       </linearGradient>
                       <linearGradient id="pnlGradientNegative" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#f87171" stopOpacity={0.4} />
-                        <stop offset="95%" stopColor="#f87171" stopOpacity={0} />
+                        <stop offset="5%" stopColor="var(--error)" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="var(--error)" stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.1)" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
                     <XAxis 
                       dataKey="date" 
                       tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} 
-                      axisLine={{ stroke: 'rgba(148, 163, 184, 0.2)' }}
+                      axisLine={{ stroke: 'var(--border-subtle)' }}
                     />
                     <YAxis 
                       tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} 
-                      axisLine={{ stroke: 'rgba(148, 163, 184, 0.2)' }}
+                      axisLine={{ stroke: 'var(--border-subtle)' }}
                       tickFormatter={(v) => `$${v}`}
                       width={60}
                     />
-                    <ReferenceLine y={0} stroke="rgba(148, 163, 184, 0.3)" strokeDasharray="3 3" />
+                    <ReferenceLine y={0} stroke="var(--text-secondary)" strokeDasharray="3 3" />
                     <RechartsTooltip
                       content={({ label, payload }) => {
                         if (!payload || payload.length === 0) return null;
@@ -490,7 +490,7 @@ export default function DashboardPageCompact() {
                             color: 'var(--text-primary, #f1f5f9)',
                           }}>
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                            <div style={{ color: value >= 0 ? '#34d399' : '#f87171' }}>
+                            <div style={{ color: value >= 0 ? 'var(--success)' : 'var(--error)' }}>
                               value : {value >= 0 ? '' : '-'}${Math.abs(value).toFixed(2)}
                             </div>
                           </div>
@@ -500,7 +500,7 @@ export default function DashboardPageCompact() {
                     <Area
                       type="monotone"
                       dataKey="value"
-                      stroke={stats.totalPnl >= 0 ? '#34d399' : '#f87171'}
+                      stroke={stats.totalPnl >= 0 ? 'var(--success)' : 'var(--error)'}
                       strokeWidth={2}
                       fill={stats.totalPnl >= 0 ? 'url(#pnlGradientPositive)' : 'url(#pnlGradientNegative)'}
                     />
@@ -510,23 +510,23 @@ export default function DashboardPageCompact() {
             </div>
 
             {/* Bottom Stats */}
-            <Row gutter={[24, 12]} style={{ marginTop: 20, borderTop: '1px solid rgba(148, 163, 184, 0.1)', paddingTop: 16 }}>
+            <Row gutter={[24, 12]} style={{ marginTop: 20, borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
               <Col xs={6}>
-                <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block', marginBottom: 4 }}>Sample Size</Text>
+                <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 4 }}>Sample Size</Text>
                 <Text style={{ color: 'var(--text-primary)', fontSize: 18, fontWeight: 700 }}>{trades.length}</Text>
               </Col>
               <Col xs={6}>
-                <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block', marginBottom: 4 }}>Avg ROE</Text>
-                <Text style={{ color: stats.avgRoe >= 0 ? '#34d399' : '#f87171', fontSize: 18, fontWeight: 700 }}>
+                <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 4 }}>Avg ROE</Text>
+                <Text style={{ color: stats.avgRoe >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 18, fontWeight: 700 }}>
                   {stats.avgRoe >= 0 ? '+' : ''}{stats.avgRoe.toFixed(1)}%
                 </Text>
               </Col>
               <Col xs={6}>
-                <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block', marginBottom: 4 }}>Avg Leverage</Text>
+                <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 4 }}>Avg Leverage</Text>
                 <Text style={{ color: 'var(--text-primary)', fontSize: 18, fontWeight: 700 }}>{stats.avgLev.toFixed(2)}x</Text>
               </Col>
               <Col xs={6}>
-                <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, display: 'block', marginBottom: 4 }}>Direction</Text>
+                <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 4 }}>Direction</Text>
                 <Text style={{ color: 'var(--text-primary)', fontSize: 18, fontWeight: 700 }}>{stats.longs}L / {stats.shorts}S</Text>
               </Col>
             </Row>
@@ -541,10 +541,10 @@ export default function DashboardPageCompact() {
             title={
               <div>
                 <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600, display: 'block' }}>Recent Trades</Text>
-                <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Last {recentTrades.length} executions</Text>
+                <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>Last {recentTrades.length} executions</Text>
               </div>
             }
-            headStyle={{ background: 'transparent', borderBottom: '1px solid rgba(148, 163, 184, 0.1)' }}
+            headStyle={{ background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}
           >
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
               {recentTrades.length === 0 ? (
@@ -556,10 +556,10 @@ export default function DashboardPageCompact() {
                   <div 
                     key={trade.id}
                     style={{
-                      background: 'rgba(30, 41, 59, 0.5)',
+                      background: 'var(--bg-elevated)',
                       borderRadius: 10,
                       padding: '12px 14px',
-                      border: '1px solid rgba(148, 163, 184, 0.1)',
+                      border: '1px solid var(--border-subtle)',
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -568,12 +568,12 @@ export default function DashboardPageCompact() {
                       </Text>
                       <Space size={4}>
                         {(trade.realizedPnlUsd || 0) >= 0 ? (
-                          <TrendingUp size={12} color="#34d399" />
+                          <TrendingUp size={12} color="var(--success)" />
                         ) : (
-                          <TrendingDown size={12} color="#f87171" />
+                          <TrendingDown size={12} color="var(--error)" />
                         )}
-                        <Text style={{ 
-                          color: (trade.realizedPnlUsd || 0) >= 0 ? '#34d399' : '#f87171', 
+                        <Text style={{
+                          color: (trade.realizedPnlUsd || 0) >= 0 ? 'var(--success)' : 'var(--error)',
                           fontWeight: 700,
                           fontSize: 14
                         }}>
@@ -583,29 +583,29 @@ export default function DashboardPageCompact() {
                     </div>
                     <Row gutter={16}>
                       <Col span={8}>
-                        <Text style={{ color: 'rgba(148, 163, 184, 0.5)', fontSize: 10, display: 'block' }}>Entry</Text>
+                        <Text style={{ color: 'var(--text-muted)', fontSize: 10, display: 'block' }}>Entry</Text>
                         <Text style={{ color: 'var(--text-primary)', fontSize: 12 }}>{(trade.entryPrice || 0).toFixed(4)}</Text>
                       </Col>
                       <Col span={8}>
-                        <Text style={{ color: 'rgba(148, 163, 184, 0.5)', fontSize: 10, display: 'block' }}>Exit</Text>
+                        <Text style={{ color: 'var(--text-muted)', fontSize: 10, display: 'block' }}>Exit</Text>
                         <Text style={{ color: 'var(--text-primary)', fontSize: 12 }}>{(trade.exitPrice || 0).toFixed(4)}</Text>
                       </Col>
                       <Col span={8} style={{ textAlign: 'right' }}>
-                        <Text style={{ color: 'rgba(148, 163, 184, 0.5)', fontSize: 10, display: 'block' }}>&nbsp;</Text>
-                        <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 11 }}>
+                        <Text style={{ color: 'var(--text-muted)', fontSize: 10, display: 'block' }}>&nbsp;</Text>
+                        <Text style={{ color: 'var(--text-muted)', fontSize: 11 }}>
                           {new Date(trade.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} {new Date(trade.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })}
                         </Text>
                       </Col>
                     </Row>
                     <div style={{ marginTop: 8 }}>
-                      <Text style={{ 
-                        color: (trade.roePct || 0) >= 0 ? '#34d399' : '#f87171', 
+                      <Text style={{
+                        color: (trade.roePct || 0) >= 0 ? 'var(--success)' : 'var(--error)',
                         fontSize: 12,
                         marginRight: 12
                       }}>
                         {(trade.roePct || 0) >= 0 ? '+' : ''}{(trade.roePct || 0).toFixed(1)}%
                       </Text>
-                      <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>
+                      <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>
                         {(trade.estLev || 0).toFixed(0)}x
                       </Text>
                     </div>
@@ -623,8 +623,8 @@ export default function DashboardPageCompact() {
           <Button 
             onClick={() => navigate('/agents')}
             style={{ 
-              background: 'rgba(30, 41, 59, 0.8)', 
-              borderColor: 'rgba(148, 163, 184, 0.2)',
+              background: 'var(--bg-elevated)', 
+              borderColor: 'var(--border-subtle)',
               color: 'var(--text-primary)'
             }}
           >
@@ -633,15 +633,15 @@ export default function DashboardPageCompact() {
           <Button 
             type="primary" 
             onClick={() => navigate('/agents')}
-            style={{ background: '#3b82f6' }}
+            style={{ background: 'var(--accent-secondary)' }}
           >
             New Agent
           </Button>
           <Button 
             onClick={() => navigate('/feed')}
             style={{ 
-              background: 'rgba(30, 41, 59, 0.8)', 
-              borderColor: 'rgba(148, 163, 184, 0.2)',
+              background: 'var(--bg-elevated)', 
+              borderColor: 'var(--border-subtle)',
               color: 'var(--text-primary)'
             }}
           >

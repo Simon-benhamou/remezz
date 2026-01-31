@@ -97,7 +97,7 @@ export default function ExitStrategyPanel({
           <Progress 
             percent={progress.percentClosed} 
             status={progress.percentClosed === 100 ? 'success' : 'active'}
-            strokeColor={progress.percentClosed > 0 ? '#52c41a' : '#1890ff'}
+            strokeColor={progress.percentClosed > 0 ? 'var(--success)' : '#1890ff'}
           />
           <Row gutter={8} style={{ marginTop: 8 }}>
             <Col span={12}>
@@ -144,9 +144,9 @@ export default function ExitStrategyPanel({
               >
                 <Space>
                   {target.reached ? (
-                    <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                    <CheckCircleOutlined style={{ color: 'var(--success)' }} />
                   ) : (
-                    <ClockCircleOutlined style={{ color: '#8c8c8c' }} />
+                    <ClockCircleOutlined style={{ color: 'var(--text-secondary)' }} />
                   )}
                   <Text strong={!target.reached}>
                     {(target.exitPct * 100).toFixed(0)}% @ ${target.targetPrice.toFixed(2)}
@@ -214,7 +214,7 @@ export default function ExitStrategyPanel({
           <Text 
             style={{ 
               fontSize: 11, 
-              color: '#8c8c8c',
+              color: 'var(--text-secondary)',
               display: 'block',
               marginTop: 4 
             }}

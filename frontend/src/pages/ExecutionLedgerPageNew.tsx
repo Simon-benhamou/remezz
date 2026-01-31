@@ -125,8 +125,8 @@ export default function ExecutionLedgerPageNew() {
     return trades.filter(t => t.symbol?.toLowerCase().includes(s) || t.sessionSymbol?.toLowerCase().includes(s));
   }, [trades, searchText]);
 
-  const cardStyle: React.CSSProperties = { background: 'rgba(15, 23, 42, 0.6)', borderRadius: 12, border: '1px solid rgba(148, 163, 184, 0.1)', padding: '16px 20px' };
-  const headerStyle: React.CSSProperties = { color: 'rgba(148, 163, 184, 0.6)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 };
+  const cardStyle: React.CSSProperties = { background: 'var(--bg-primary)', borderRadius: 12, border: '1px solid var(--border-subtle)', padding: '16px 20px' };
+  const headerStyle: React.CSSProperties = { color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 };
 
   return (
     <div style={{ padding: '0 24px 24px', maxWidth: 1600, margin: '0 auto' }}>
@@ -148,7 +148,7 @@ export default function ExecutionLedgerPageNew() {
             prefix={<SearchOutlined style={{ color: 'var(--text-secondary)' }} />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 200, background: 'rgba(15, 23, 42, 0.8)', borderColor: 'rgba(148, 163, 184, 0.2)' }}
+            style={{ width: 200, background: 'var(--bg-primary)', borderColor: 'var(--border-subtle)' }}
             allowClear
           />
           <Button icon={<ReloadOutlined />} onClick={loadTrades} loading={loading}>Refresh</Button>
@@ -169,21 +169,21 @@ export default function ExecutionLedgerPageNew() {
           </div>
           <div style={cardStyle}>
             <div style={headerStyle}>Win Rate</div>
-            <div style={{ color: '#38bdf8', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.winRate.toFixed(1)}%</div>
+            <div style={{ color: 'var(--accent)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.winRate.toFixed(1)}%</div>
           </div>
           <div style={cardStyle}>
             <div style={headerStyle}>Total P&L</div>
-            <div style={{ color: summary.totalPnl >= 0 ? '#4ade80' : '#f87171', fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+            <div style={{ color: summary.totalPnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>
               {summary.totalPnl >= 0 ? '+' : '-'}${Math.abs(summary.totalPnl).toFixed(2)}
             </div>
           </div>
           <div style={cardStyle}>
             <div style={headerStyle}>Total Fees</div>
-            <div style={{ color: '#f97316', fontSize: 24, fontWeight: 700, marginTop: 4 }}>-${summary.totalFees.toFixed(2)}</div>
+            <div style={{ color: 'var(--warning)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>-${summary.totalFees.toFixed(2)}</div>
           </div>
           <div style={cardStyle}>
             <div style={headerStyle}>Net P&L</div>
-            <div style={{ color: summary.netPnl >= 0 ? '#4ade80' : '#f87171', fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+            <div style={{ color: summary.netPnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>
               {summary.netPnl >= 0 ? '+' : '-'}${Math.abs(summary.netPnl).toFixed(2)}
             </div>
           </div>
@@ -191,14 +191,14 @@ export default function ExecutionLedgerPageNew() {
       )}
 
       {/* Table */}
-      <div style={{ background: 'rgba(15, 23, 42, 0.6)', borderRadius: 16, border: '1px solid rgba(148, 163, 184, 0.1)', overflow: 'auto' }}>
+      <div style={{ background: 'var(--bg-primary)', borderRadius: 16, border: '1px solid var(--border-subtle)', overflow: 'auto' }}>
         {/* Table Header */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: '90px 55px 55px 55px 95px 50px 70px 70px 70px 75px 55px 65px 45px 50px 110px 55px 55px',
           padding: '12px 16px',
-          borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
-          background: 'rgba(15, 23, 42, 0.8)',
+          borderBottom: '1px solid var(--border-subtle)',
+          background: 'var(--bg-primary)',
           minWidth: 1200,
         }}>
           {['Date', 'Outcome', 'Mode', 'Session', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'P&L', 'ROE%', 'Notional', 'Lev', 'Dur', 'Exit Type', 'MaxP&L', 'Fees'].map((h, i) => (
@@ -222,7 +222,7 @@ export default function ExecutionLedgerPageNew() {
                 display: 'grid',
                 gridTemplateColumns: '90px 55px 55px 55px 95px 50px 70px 70px 70px 75px 55px 65px 45px 50px 110px 55px 55px',
                 padding: '10px 16px',
-                borderBottom: '1px solid rgba(148, 163, 184, 0.05)',
+                borderBottom: '1px solid var(--border-subtle)',
                 alignItems: 'center',
                 transition: 'background 0.15s',
                 minWidth: 1200,
@@ -240,7 +240,7 @@ export default function ExecutionLedgerPageNew() {
               <Tag style={{
                 borderRadius: 4, border: 'none', fontSize: 9, fontWeight: 600, padding: '2px 4px',
                 background: trade.outcome === 'win' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                color: trade.outcome === 'win' ? '#4ade80' : '#f87171',
+                color: trade.outcome === 'win' ? 'var(--success)' : 'var(--error)',
               }}>
                 {trade.outcome?.toUpperCase()}
               </Tag>
@@ -249,7 +249,7 @@ export default function ExecutionLedgerPageNew() {
               <Tag style={{
                 fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 4, border: 'none',
                 background: trade.sessionMode === 'live' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                color: trade.sessionMode === 'live' ? '#4ade80' : '#06b6d4',
+                color: trade.sessionMode === 'live' ? 'var(--success)' : 'var(--accent)',
               }}>
                 {(trade.sessionMode || 'unknown').toUpperCase()}
               </Tag>
@@ -263,7 +263,7 @@ export default function ExecutionLedgerPageNew() {
               <Text style={{ color: 'var(--text-primary)', fontSize: 11, whiteSpace: 'nowrap' }}>{trade.symbol?.replace('/USDT:USDT', '/USDT')}</Text>
 
               {/* Side */}
-              <Tag style={{ borderRadius: 3, border: 'none', background: trade.positionSide === 'long' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)', color: trade.positionSide === 'long' ? '#4ade80' : '#f87171', fontSize: 9, fontWeight: 600, padding: '2px 4px' }}>
+              <Tag style={{ borderRadius: 3, border: 'none', background: trade.positionSide === 'long' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)', color: trade.positionSide === 'long' ? 'var(--success)' : 'var(--error)', fontSize: 9, fontWeight: 600, padding: '2px 4px' }}>
                 {trade.positionSide?.toUpperCase()}
               </Tag>
 
@@ -277,12 +277,12 @@ export default function ExecutionLedgerPageNew() {
               <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.exitPrice?.toFixed(4)}</Text>
 
               {/* P&L */}
-              <Text style={{ color: pnl >= 0 ? '#4ade80' : '#f87171', fontSize: 12, fontWeight: 600, textAlign: 'right', display: 'block' }}>
+              <Text style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 12, fontWeight: 600, textAlign: 'right', display: 'block' }}>
                 {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
               </Text>
 
               {/* ROE */}
-              <Text style={{ color: roe >= 0 ? '#4ade80' : '#f87171', fontSize: 11, fontWeight: 500, textAlign: 'right', display: 'block' }}>
+              <Text style={{ color: roe >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 11, fontWeight: 500, textAlign: 'right', display: 'block' }}>
                 {roe >= 0 ? '+' : ''}{roe.toFixed(1)}%
               </Text>
 
@@ -302,7 +302,7 @@ export default function ExecutionLedgerPageNew() {
                 <Tag style={{
                   borderRadius: 3, border: 'none', fontSize: 8, padding: '2px 4px', whiteSpace: 'nowrap',
                   background: trade.exitReason.includes('PROFIT') || trade.exitReason.includes('TRAILING') ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                  color: trade.exitReason.includes('PROFIT') || trade.exitReason.includes('TRAILING') ? '#4ade80' : '#f87171',
+                  color: trade.exitReason.includes('PROFIT') || trade.exitReason.includes('TRAILING') ? 'var(--success)' : 'var(--error)',
                 }}>
                   {trade.exitReason.includes('trailing_stop_exchange') ? '🎯 TRAILING STOP' : trade.exitReason.replace(/_/g, ' ').toUpperCase()}
                 </Tag>
@@ -314,7 +314,7 @@ export default function ExecutionLedgerPageNew() {
               </Text>
 
               {/* Fees */}
-              <Text style={{ color: '#f97316', fontSize: 10, textAlign: 'right', display: 'block' }}>
+              <Text style={{ color: 'var(--warning)', fontSize: 10, textAlign: 'right', display: 'block' }}>
                 -${(trade.feesUsd ?? 0).toFixed(2)}
               </Text>
             </div>

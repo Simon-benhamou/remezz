@@ -14,6 +14,9 @@
   --success: #10b981;
   --error: #ef4444;
   --warning: #f59e0b;
+  --bg-card-hover: rgba(59, 130, 246, 0.08);
+  --bg-overlay: rgba(15, 23, 42, 0.85);
+  --text-muted: rgba(148, 163, 184, 0.6);
   --card-gradient: linear-gradient(155deg, rgba(17, 24, 39, 0.94) 0%, rgba(10, 14, 26, 0.94) 100%);
   --card-shadow: 0 18px 45px -30px rgba(2, 6, 23, 0.9);
   --card-hover-shadow: 0 24px 60px -28px rgba(6, 182, 212, 0.2);
@@ -41,6 +44,9 @@
   --success: #059669;
   --error: #dc2626;
   --warning: #d97706;
+  --bg-card-hover: rgba(59, 130, 246, 0.04);
+  --bg-overlay: rgba(255, 255, 255, 0.85);
+  --text-muted: rgba(100, 116, 139, 0.7);
   --card-gradient: linear-gradient(155deg, #ffffff 0%, #f8fafc 100%);
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.04);
   --card-hover-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);

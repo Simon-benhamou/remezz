@@ -86,7 +86,7 @@ const loadingStyles = `
     left: 200px;
     right: 0;
     bottom: 0;
-    background: rgba(15, 23, 42, 0.85);
+    background: var(--bg-overlay);
     backdrop-filter: blur(8px);
     display: flex;
     align-items: center;
@@ -102,8 +102,8 @@ const loadingStyles = `
   }
 
   .cockpit-loading-card {
-    background: rgba(30, 41, 59, 0.95);
-    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
     border-radius: 16px;
     padding: 32px;
     min-width: 360px;
@@ -123,7 +123,7 @@ const loadingStyles = `
   .cockpit-loading-icon {
     width: 44px;
     height: 44px;
-    background: linear-gradient(135deg, #3b82f6, #06b6d4);
+    background: linear-gradient(135deg, var(--accent-secondary), var(--accent));
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -133,7 +133,7 @@ const loadingStyles = `
 
   .cockpit-loading-header h3 {
     margin: 0;
-    color: #f8fafc;
+    color: var(--text-primary);
     font-size: 18px;
     font-weight: 600;
   }
@@ -148,13 +148,13 @@ const loadingStyles = `
 
   .cockpit-loading-progress-bar {
     height: 100%;
-    background: linear-gradient(90deg, #3b82f6, #10b981);
+    background: linear-gradient(90deg, var(--accent-secondary), var(--success));
     border-radius: 4px;
     transition: width 0.3s ease;
   }
 
   .cockpit-loading-message {
-    color: rgba(226, 232, 240, 0.7);
+    color: var(--text-muted);
     font-size: 14px;
     margin-bottom: 24px;
   }
@@ -174,7 +174,7 @@ const loadingStyles = `
     transition: all 0.2s;
     background: rgba(59, 130, 246, 0.2);
     border: 1px solid rgba(59, 130, 246, 0.3);
-    color: #06b6d4;
+    color: var(--accent);
   }
 
   .cockpit-loading-btn:hover {
@@ -184,11 +184,11 @@ const loadingStyles = `
   .cockpit-loading-btn--text {
     background: transparent;
     border: none;
-    color: rgba(226, 232, 240, 0.6);
+    color: var(--text-muted);
   }
 
   .cockpit-loading-btn--text:hover {
-    color: rgba(226, 232, 240, 0.9);
+    color: var(--text-primary);
   }
 `;
 
@@ -442,7 +442,7 @@ const pageStyles = `
 
   .cockpit-chart {
     grid-column: 1 / -1;
-    background: rgba(15, 23, 42, 0.92);
+    background: var(--bg-primary);
     border-radius: 16px;
     border: 1px solid rgba(100, 116, 139, 0.18);
     overflow: hidden;

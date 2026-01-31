@@ -120,7 +120,7 @@ export default function EntryTimingPanel({
                   strokeColor={
                     analysis.patience > 0.7 ? '#faad14' : 
                     analysis.patience > 0.3 ? '#1890ff' : 
-                    '#52c41a'
+                    'var(--success)'
                   }
                   format={percent => `${(percent || 0).toFixed(0)}%`}
                 />
@@ -134,8 +134,8 @@ export default function EntryTimingPanel({
                 percent={analysis.aggressiveness * 100} 
                 size="small"
                 strokeColor={
-                  analysis.aggressiveness > 1.2 ? '#ff4d4f' : 
-                  analysis.aggressiveness > 0.8 ? '#52c41a' : 
+                  analysis.aggressiveness > 1.2 ? 'var(--error)' : 
+                  analysis.aggressiveness > 0.8 ? 'var(--success)' : 
                   '#faad14'
                 }
                 format={percent => `${(percent || 0).toFixed(0)}%`}
@@ -154,7 +154,7 @@ export default function EntryTimingPanel({
                 {(analysis.optimalEntryOffset / 100).toFixed(2)}%
               </Tag>
             </Space>
-            <Text style={{ fontSize: 11, color: '#8c8c8c', display: 'block', marginTop: 4 }}>
+            <Text style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginTop: 4 }}>
               {analysis.optimalEntryOffset < 0 
                 ? 'Wait for price to drop before entering'
                 : 'Entry above current price recommended'}
@@ -175,7 +175,7 @@ export default function EntryTimingPanel({
           <Text 
             style={{ 
               fontSize: 11, 
-              color: '#8c8c8c',
+              color: 'var(--text-secondary)',
               display: 'block',
               marginTop: 4 
             }}
@@ -215,9 +215,9 @@ export default function EntryTimingPanel({
                         {isGood ? '+' : ''}{(stats.avgQuality * 100).toFixed(1)}%
                       </Tag>
                       {isGood ? (
-                        <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 12 }} />
+                        <CheckCircleOutlined style={{ color: 'var(--success)', fontSize: 12 }} />
                       ) : (
-                        <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 12 }} />
+                        <CloseCircleOutlined style={{ color: 'var(--error)', fontSize: 12 }} />
                       )}
                     </Space>
                   </Space>

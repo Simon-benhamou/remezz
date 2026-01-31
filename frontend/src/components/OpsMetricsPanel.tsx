@@ -48,13 +48,13 @@ export default function OpsMetricsPanel({ metrics, loading }: Props) {
   const { token } = theme.useToken();
   const base = token.colorBgBase.toLowerCase();
   const isDarkTheme = !['#ffffff', '#fff', '#fafafa'].includes(base);
-  const cardBg = isDarkTheme ? '#0f172a' : token.colorBgContainer;
-  const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
-  const headingColor = isDarkTheme ? '#f8fafc' : token.colorTextHeading;
-  const subtleText = isDarkTheme ? 'rgba(226, 232, 240, 0.72)' : token.colorTextSecondary;
-  const chipBg = isDarkTheme ? 'rgba(30, 41, 59, 0.55)' : token.colorFillTertiary;
-  const highlightBg = isDarkTheme ? 'rgba(15, 23, 42, 0.75)' : token.colorFillQuaternary;
-  const dividerColor = isDarkTheme ? 'rgba(148, 163, 184, 0.25)' : token.colorBorderSecondary;
+  const cardBg = 'var(--bg-primary)';
+  const borderColor = 'var(--border-subtle)';
+  const headingColor = 'var(--text-primary)';
+  const subtleText = 'var(--text-muted)';
+  const chipBg = 'var(--bg-elevated)';
+  const highlightBg = 'var(--bg-primary)';
+  const dividerColor = 'var(--border-subtle)';
 
   if (!metrics) {
     return (

@@ -205,7 +205,7 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, margin, sess
             </div>
             <div style={{ padding: '8px', background: 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
               <div style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginBottom: '4px' }}>Direction</div>
-              <div style={{ fontWeight: 600, fontSize: '13px', color: symbolProfile.directionBias === 'long' ? '#52c41a' : symbolProfile.directionBias === 'short' ? '#ff4d4f' : '#666' }}>
+              <div style={{ fontWeight: 600, fontSize: '13px', color: symbolProfile.directionBias === 'long' ? 'var(--success)' : symbolProfile.directionBias === 'short' ? 'var(--error)' : '#666' }}>
                 {symbolProfile.directionBias}
               </div>
             </div>
@@ -220,7 +220,7 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, margin, sess
             </div>
             <div style={{ padding: '8px', background: 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
               <div style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginBottom: '4px' }}>RSI</div>
-              <div style={{ fontWeight: 600, fontSize: '13px', color: symbolProfile.rsi < 30 ? '#ff4d4f' : symbolProfile.rsi > 70 ? '#52c41a' : '#666' }}>
+              <div style={{ fontWeight: 600, fontSize: '13px', color: symbolProfile.rsi < 30 ? 'var(--error)' : symbolProfile.rsi > 70 ? 'var(--success)' : '#666' }}>
                 {symbolProfile.rsi.toFixed(1)}
                 <span style={{ fontSize: '11px', color: 'var(--text-secondary, #94a3b8)', marginLeft: '4px' }}>
                   {symbolProfile.rsi < 30 ? 'Oversold' : symbolProfile.rsi > 70 ? 'Overbought' : 'Neutral'}
@@ -246,13 +246,13 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, margin, sess
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: predictor.decision === 'long' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
                   <span style={{ fontSize: '12px', fontWeight: predictor.decision === 'long' ? 600 : 400 }}>LONG</span>
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#10b981' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--success)' }}>
                     {(predictor.probLong * 100).toFixed(1)}%
                   </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: predictor.decision === 'short' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(6, 182, 212, 0.06)', borderRadius: '4px' }}>
                   <span style={{ fontSize: '12px', fontWeight: predictor.decision === 'short' ? 600 : 400 }}>SHORT</span>
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#ef4444' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--error)' }}>
                     {(predictor.probShort * 100).toFixed(1)}%
                   </span>
                 </div>

@@ -25,14 +25,14 @@ interface MarketConditions {
 
 const statusConfig = {
   favorable_long: {
-    color: '#52c41a',
+    color: 'var(--success)',
     bgColor: 'rgba(82, 196, 26, 0.1)',
     icon: <ArrowUpOutlined />,
     label: 'FAVORABLE LONG',
     description: 'Conditions idéales pour entrer en position longue',
   },
   favorable_short: {
-    color: '#ff4d4f',
+    color: 'var(--error)',
     bgColor: 'rgba(255, 77, 79, 0.1)',
     icon: <ArrowDownOutlined />,
     label: 'FAVORABLE SHORT',
@@ -46,7 +46,7 @@ const statusConfig = {
     description: 'Conditions mitigées - attendre un signal plus clair',
   },
   unfavorable: {
-    color: '#ff4d4f',
+    color: 'var(--error)',
     bgColor: 'rgba(255, 77, 79, 0.1)',
     icon: <WarningOutlined />,
     label: 'UNFAVORABLE',

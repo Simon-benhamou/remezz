@@ -99,7 +99,7 @@ const Sparkline: React.FC<SparklineProps> = ({ data, width = 120, height = 40 })
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          color: 'rgba(226, 232, 240, 0.4)',
+          color: 'var(--text-muted)',
           fontSize: 11,
         }}
       >
@@ -108,7 +108,7 @@ const Sparkline: React.FC<SparklineProps> = ({ data, width = 120, height = 40 })
     );
   }
 
-  const strokeColor = trend === 'positive' ? '#10b981' : '#ef4444';
+  const strokeColor = trend === 'positive' ? 'var(--success)' : 'var(--error)';
 
   return (
     <ResponsiveContainer width={width} height={height}>
@@ -149,7 +149,7 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
   onRefresh,
   isRefreshing,
 }) => {
-  const pnlColor = netPnl >= 0 ? '#10b981' : '#ef4444';
+  const pnlColor = netPnl >= 0 ? 'var(--success)' : 'var(--error)';
   const pnlEmoji = netPnl >= 0 ? '' : '';
 
   return (
@@ -229,9 +229,9 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
           background: linear-gradient(135deg, rgba(30, 64, 175, 0.92), rgba(12, 74, 110, 0.88));
           border-radius: 16px;
           padding: 20px 24px;
-          color: #f8fafc;
+          color: var(--text-primary);
           box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
-          border: 1px solid rgba(148, 163, 184, 0.18);
+          border: 1px solid var(--border-subtle);
         }
 
         .cockpit-header__main {
@@ -257,7 +257,7 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
 
         .cockpit-header__title {
           margin: 0 !important;
-          color: #f8fafc !important;
+          color: var(--text-primary) !important;
           font-size: 20px !important;
           font-weight: 600 !important;
           white-space: nowrap;
@@ -281,7 +281,7 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
 
         .cockpit-header__symbol {
           font-size: 13px;
-          color: rgba(226, 232, 240, 0.7);
+          color: var(--text-muted);
           font-family: 'JetBrains Mono', 'Menlo', monospace;
         }
 
@@ -303,7 +303,7 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
           font-size: 10px;
           letter-spacing: 0.1em;
           text-transform: uppercase;
-          color: rgba(226, 232, 240, 0.7);
+          color: var(--text-muted);
         }
 
         .cockpit-header__pnl-value {
@@ -323,7 +323,7 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
           background: rgba(15, 23, 42, 0.3);
           border-radius: 8px;
           padding: 4px 8px;
-          border: 1px solid rgba(148, 163, 184, 0.15);
+          border: 1px solid var(--border-subtle);
         }
 
         .cockpit-header__actions {
@@ -333,7 +333,7 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
         .cockpit-header__refresh-btn {
           background: rgba(255, 255, 255, 0.1) !important;
           border-color: rgba(255, 255, 255, 0.2) !important;
-          color: #f8fafc !important;
+          color: var(--text-primary) !important;
         }
 
         .cockpit-header__refresh-btn:hover {

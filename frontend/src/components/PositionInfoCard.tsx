@@ -75,10 +75,10 @@ export default function PositionInfoCard({
   let rMultipleColor = '#999';
   if (initialStopDistance && initialStopDistance > 0) {
     rMultiple = pnlPerUnit / initialStopDistance;
-    if (rMultiple >= 2) rMultipleColor = '#16a34a'; // Green for >= 2R
+    if (rMultiple >= 2) rMultipleColor = 'var(--success)'; // Green for >= 2R
     else if (rMultiple >= 1) rMultipleColor = '#0ea5e9'; // Blue for >= 1R
-    else if (rMultiple >= 0) rMultipleColor = '#f59e0b'; // Orange for breakeven to 1R
-    else rMultipleColor = '#dc2626'; // Red for negative R
+    else if (rMultiple >= 0) rMultipleColor = 'var(--warning)'; // Orange for breakeven to 1R
+    else rMultipleColor = 'var(--error)'; // Red for negative R
   }
 
   // Calculate stop loss distance
@@ -133,7 +133,7 @@ export default function PositionInfoCard({
                 style={{ 
                   fontSize: 13, 
                   fontWeight: 600,
-                  color: pnlTotal >= 0 ? '#16a34a' : '#dc2626' 
+                  color: pnlTotal >= 0 ? 'var(--success)' : 'var(--error)' 
                 }}
               >
                 {pnlTotal >= 0 ? '+' : ''}${pnlTotal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
@@ -219,13 +219,13 @@ export default function PositionInfoCard({
               level={4} 
               style={{ 
                 margin: 0, 
-                color: pnlTotal >= 0 ? '#16a34a' : '#dc2626',
+                color: pnlTotal >= 0 ? 'var(--success)' : 'var(--error)',
                 fontSize: 20,
               }}
             >
               {pnlTotal >= 0 ? '+' : ''}${pnlTotal.toFixed(2)}
             </Title>
-            <Text style={{ fontSize: 12, color: pnlTotal >= 0 ? '#16a34a' : '#dc2626' }}>
+            <Text style={{ fontSize: 12, color: pnlTotal >= 0 ? 'var(--success)' : 'var(--error)' }}>
               {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}% {leverage > 1 && `(${leverage.toFixed(1)}x)`}
             </Text>
           </Space>
@@ -282,7 +282,7 @@ export default function PositionInfoCard({
             value={price}
             precision={4}
             prefix="$"
-            valueStyle={{ fontSize: 14, color: pnlTotal >= 0 ? '#16a34a' : '#dc2626' }}
+            valueStyle={{ fontSize: 14, color: pnlTotal >= 0 ? 'var(--success)' : 'var(--error)' }}
           />
         </div>
 
@@ -377,7 +377,7 @@ export default function PositionInfoCard({
               value={Math.abs(((price - peakPrice) / peakPrice) * 100)}
               precision={2}
               suffix="%"
-              valueStyle={{ fontSize: 13, color: '#dc2626' }}
+              valueStyle={{ fontSize: 13, color: 'var(--error)' }}
             />
           </div>
         )}

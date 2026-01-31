@@ -128,9 +128,7 @@ function AuthenticatedApp() {
     <Layout
       style={{
         minHeight: '100vh',
-        background: themeMode === 'dark'
-          ? 'radial-gradient(circle at top, #0f1729 0%, #0a0e1a 60%, #060910 100%)'
-          : '#f8fafc',
+        background: 'var(--bg-primary)',
       }}
     >
       {/* Desktop sidebar */}
@@ -142,15 +140,9 @@ function AuthenticatedApp() {
           width={220}
           theme={themeMode}
           style={{
-            background: themeMode === 'dark'
-              ? 'linear-gradient(180deg, #111827 0%, #0a0e1a 100%)'
-              : '#ffffff',
-            borderRight: themeMode === 'dark'
-              ? '1px solid rgba(30, 58, 95, 0.4)'
-              : '1px solid #e2e8f0',
-            boxShadow: themeMode === 'dark'
-              ? '0 12px 35px -18px rgba(2, 6, 23, 0.9)'
-              : '0 1px 3px rgba(0, 0, 0, 0.08)',
+            background: 'var(--card-gradient)',
+            borderRight: '1px solid var(--border-color)',
+            boxShadow: 'var(--card-shadow)',
             zIndex: 100,
             display: 'flex',
             flexDirection: 'column',
@@ -162,7 +154,7 @@ function AuthenticatedApp() {
               alignItems: 'center',
               justifyContent: siderCollapsed ? 'center' : 'flex-start',
               padding: siderCollapsed ? '20px 0' : '20px 16px',
-              borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
+              borderBottom: '1px solid var(--border-subtle)',
             }}
           >
             {siderCollapsed
@@ -171,7 +163,7 @@ function AuthenticatedApp() {
             }
           </div>
           <Menu
-            theme='dark'
+            theme={themeMode}
             mode='inline'
             inlineCollapsed={siderCollapsed}
             selectedKeys={[activeMenuKey]}
@@ -181,15 +173,15 @@ function AuthenticatedApp() {
               background: 'transparent',
               border: 'none',
               fontSize: 14,
-              color: '#e2e8f0',
+              color: 'var(--text-primary)',
               padding: '12px 8px',
               flex: 1,
             }}
           />
           {!siderCollapsed && (
-            <div style={{ padding: '18px', borderTop: '1px solid rgba(148, 163, 184, 0.12)' }}>
-              <div style={{ color: '#06b6d4', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Signal Engine</div>
-              <div style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, lineHeight: 1.4 }}>Detect the signal. Trade the momentum.</div>
+            <div style={{ padding: '18px', borderTop: '1px solid var(--border-subtle)' }}>
+              <div style={{ color: 'var(--accent)', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Signal Engine</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.4 }}>Detect the signal. Trade the momentum.</div>
             </div>
           )}
           <div
@@ -203,8 +195,8 @@ function AuthenticatedApp() {
               justifyContent: 'center',
               padding: '12px 0',
               cursor: 'pointer',
-              borderTop: '1px solid rgba(148, 163, 184, 0.12)',
-              color: 'rgba(148, 163, 184, 0.72)',
+              borderTop: '1px solid var(--border-subtle)',
+              color: 'var(--text-muted)',
             }}
             title={siderCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
@@ -222,13 +214,11 @@ function AuthenticatedApp() {
         styles={{
           body: {
             padding: 0,
-            background: themeMode === 'dark'
-              ? 'linear-gradient(180deg, #111827 0%, #0a0e1a 100%)'
-              : '#ffffff',
+            background: 'var(--card-gradient)',
           },
           header: {
-            background: themeMode === 'dark' ? '#111827' : '#ffffff',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
+            background: 'var(--bg-card)',
+            borderBottom: '1px solid var(--border-subtle)',
           },
         }}
         title={<img src="/remezz-logo.svg" alt="Remezz" style={{ height: 28 }} />}
@@ -243,13 +233,13 @@ function AuthenticatedApp() {
             background: 'transparent',
             border: 'none',
             fontSize: 14,
-            color: '#e2e8f0',
+            color: 'var(--text-primary)',
             padding: '12px 8px',
           }}
         />
-        <div style={{ padding: '18px', borderTop: '1px solid rgba(148, 163, 184, 0.12)', marginTop: 'auto' }}>
-          <div style={{ color: '#06b6d4', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Signal Engine</div>
-          <div style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, lineHeight: 1.4 }}>Detect the signal. Trade the momentum.</div>
+        <div style={{ padding: '18px', borderTop: '1px solid var(--border-subtle)', marginTop: 'auto' }}>
+          <div style={{ color: 'var(--accent)', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Signal Engine</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.4 }}>Detect the signal. Trade the momentum.</div>
         </div>
       </Drawer>
       <Layout>
@@ -259,9 +249,9 @@ function AuthenticatedApp() {
             justifyContent: 'space-between',
             alignItems: 'center',
             gap: 20,
-            background: themeMode === 'dark' ? 'rgba(10, 14, 26, 0.92)' : '#ffffff',
-            borderBottom: themeMode === 'dark' ? '1px solid rgba(30, 58, 95, 0.4)' : '1px solid #e2e8f0',
-            boxShadow: themeMode === 'dark' ? '0 12px 25px -18px rgba(2, 6, 23, 0.8)' : '0 1px 3px rgba(0, 0, 0, 0.06)',
+            background: 'var(--bg-card)',
+            borderBottom: '1px solid var(--border-color)',
+            boxShadow: 'var(--card-shadow)',
             padding: '0 28px',
             height: 72,
             minHeight: 72,
@@ -298,26 +288,26 @@ function AuthenticatedApp() {
                 cursor: 'pointer',
                 padding: '6px 14px',
                 borderRadius: 10,
-                border: themeMode === 'dark' ? '1px solid rgba(6, 182, 212, 0.25)' : '1px solid #e2e8f0',
-                background: themeMode === 'dark' ? 'linear-gradient(135deg, rgba(6, 182, 212, 0.15), rgba(59, 130, 246, 0.2))' : 'linear-gradient(135deg, rgba(6, 182, 212, 0.08), rgba(59, 130, 246, 0.08))',
+                border: '1px solid var(--border-color)',
+                background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.12), rgba(59, 130, 246, 0.12))',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
               }}
             >
-              <span style={{ fontSize: 10, color: 'rgba(226, 232, 240, 0.7)', letterSpacing: 0.5, textTransform: 'uppercase' }}>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: 0.5, textTransform: 'uppercase' }}>
                 {mode === 'live' ? 'LIVE' : 'PAPER'}
               </span>
-              <span style={{ fontSize: 17, fontWeight: 700, color: themeMode === 'dark' ? '#f8fafc' : '#0f172a' }}>{formattedBalance}</span>
+              <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>{formattedBalance}</span>
             </div>
             {/* Today's PnL - matches Binance daily view */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }} title={`Total: ${totalPnlValue >= 0 ? '+' : ''}$${totalPnlValue.toFixed(2)}`}>
-                <span style={{ fontSize: 10, color: 'rgba(226, 232, 240, 0.5)', marginRight: 4 }}>TODAY</span>
-                <span style={{ color: todayPnlValue >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 15, fontFamily: "'JetBrains Mono', monospace" }}>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)', marginRight: 4 }}>TODAY</span>
+                <span style={{ color: todayPnlValue >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 600, fontSize: 15, fontFamily: "'JetBrains Mono', monospace" }}>
                   {todayPnlValue >= 0 ? '+' : ''}{todayPnlValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}$
                 </span>
-                <span style={{ color: todayRoiValue >= 0 ? '#34d399' : '#f87171', fontSize: 13, fontWeight: 500 }}>
+                <span style={{ color: todayRoiValue >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 13, fontWeight: 500 }}>
                   ({todayRoiValue >= 0 ? '+' : ''}{todayRoiValue.toFixed(1)}%)
                 </span>
               </div>
@@ -339,11 +329,11 @@ function AuthenticatedApp() {
               size='small'
               value={mode}
               options={[
-                { label: <span style={{ fontWeight: 600, color: mode === 'paper' ? '#06b6d4' : undefined }}>Paper</span>, value: 'paper' },
-                { label: <span style={{ fontWeight: 600, color: mode === 'live' ? '#ef4444' : undefined }}>Live</span>, value: 'live' },
+                { label: <span style={{ fontWeight: 600, color: mode === 'paper' ? 'var(--accent)' : undefined }}>Paper</span>, value: 'paper' },
+                { label: <span style={{ fontWeight: 600, color: mode === 'live' ? 'var(--error)' : undefined }}>Live</span>, value: 'live' },
               ]}
               onChange={(val) => setMode(val as 'live' | 'paper')}
-              style={{ background: themeMode === 'dark' ? 'rgba(17, 24, 39, 0.85)' : '#f1f5f9', borderRadius: 999, padding: 2 }}
+              style={{ background: 'var(--bg-elevated)', borderRadius: 999, padding: 2 }}
             />
             {mode === 'live' && (
               <Tag color='error' style={{ borderRadius: 12, padding: '4px 10px', fontWeight: 600 }}>
@@ -377,9 +367,9 @@ function AuthenticatedApp() {
         <Footer
           style={{
             textAlign: 'center',
-            background: themeMode === 'dark' ? 'rgba(10, 14, 26, 0.92)' : '#ffffff',
-            borderTop: themeMode === 'dark' ? '1px solid rgba(30, 58, 95, 0.4)' : '1px solid #e2e8f0',
-            color: themeMode === 'dark' ? 'rgba(148, 163, 184, 0.72)' : '#94a3b8',
+            background: 'var(--bg-card)',
+            borderTop: '1px solid var(--border-color)',
+            color: 'var(--text-secondary)',
             fontSize: 12,
             padding: '18px 24px',
           }}
@@ -414,7 +404,7 @@ function AppInner() {
         justifyContent: 'center', 
         alignItems: 'center', 
         height: '100vh', 
-        color: '#06b6d4'
+        color: 'var(--accent)'
       }}>
         Loading…
       </div>

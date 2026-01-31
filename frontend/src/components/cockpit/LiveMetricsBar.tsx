@@ -164,9 +164,9 @@ const LiveMetricsBar: React.FC<LiveMetricsBarProps> = ({ symbol, ticker, status 
           value={`$${formatPrice(data?.price || 0)}`}
           icon={
             data?.isPositive ? (
-              <TrendingUp size={16} color="#10b981" />
+              <TrendingUp size={16} color="var(--success)" />
             ) : (
-              <TrendingDown size={16} color="#ef4444" />
+              <TrendingDown size={16} color="var(--error)" />
             )
           }
           color="neutral"
@@ -180,9 +180,9 @@ const LiveMetricsBar: React.FC<LiveMetricsBarProps> = ({ symbol, ticker, status 
           subValue={`$${formatPrice(data?.change || 0)}`}
           icon={
             data?.isPositive ? (
-              <ArrowUp size={14} color="#10b981" />
+              <ArrowUp size={14} color="var(--success)" />
             ) : (
-              <ArrowDown size={14} color="#ef4444" />
+              <ArrowDown size={14} color="var(--error)" />
             )
           }
           color={data?.isPositive ? 'positive' : 'negative'}
@@ -214,7 +214,7 @@ const LiveMetricsBar: React.FC<LiveMetricsBarProps> = ({ symbol, ticker, status 
         <MetricItem
           label="24h Volume"
           value={formatVolume(data?.volume || 0)}
-          icon={<BarChart3 size={14} color="rgba(226, 232, 240, 0.6)" />}
+          icon={<BarChart3 size={14} color="var(--text-muted)" />}
           color="neutral"
           tooltip="Trading volume in last 24 hours"
         />
@@ -224,7 +224,7 @@ const LiveMetricsBar: React.FC<LiveMetricsBarProps> = ({ symbol, ticker, status 
           label="Spread"
           value={`${(data?.spread || 0).toFixed(3)}%`}
           subValue={data?.bid && data?.ask ? `${formatPrice(data.bid)} / ${formatPrice(data.ask)}` : undefined}
-          icon={<Waves size={14} color="rgba(226, 232, 240, 0.6)" />}
+          icon={<Waves size={14} color="var(--text-muted)" />}
           color={
             (data?.spread || 0) < 0.05
               ? 'positive'
@@ -247,9 +247,9 @@ const LiveMetricsBar: React.FC<LiveMetricsBarProps> = ({ symbol, ticker, status 
 
 const styles = `
   .live-metrics {
-    background: rgba(15, 23, 42, 0.85);
+    background: var(--bg-primary);
     border-radius: 12px;
-    border: 1px solid rgba(100, 116, 139, 0.18);
+    border: 1px solid var(--border-subtle);
     padding: 12px 16px;
     margin-bottom: 16px;
   }
@@ -264,7 +264,7 @@ const styles = `
 
   .live-metrics__stale-banner {
     background: rgba(234, 179, 8, 0.15);
-    color: #fbbf24;
+    color: var(--warning);
     padding: 6px 12px;
     border-radius: 6px;
     font-size: 11px;
@@ -274,7 +274,7 @@ const styles = `
   }
 
   .live-metrics__warming {
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     font-size: 12px;
     text-align: center;
     padding: 8px;
@@ -297,13 +297,13 @@ const styles = `
     padding: 8px 12px;
     background: rgba(30, 41, 59, 0.5);
     border-radius: 8px;
-    border: 1px solid rgba(148, 163, 184, 0.1);
+    border: 1px solid var(--border-subtle);
     cursor: default;
     transition: border-color 0.2s;
   }
 
   .live-metrics__item:hover {
-    border-color: rgba(148, 163, 184, 0.25);
+    border-color: var(--border-subtle);
   }
 
   .live-metrics__icon {
@@ -322,34 +322,34 @@ const styles = `
     font-size: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: rgba(226, 232, 240, 0.6);
+    color: var(--text-muted);
   }
 
   .live-metrics__value {
     font-size: 14px;
     font-weight: 600;
     font-family: 'JetBrains Mono', 'Menlo', monospace;
-    color: #f8fafc;
+    color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   .live-metrics__value--positive {
-    color: #10b981 !important;
+    color: var(--success) !important;
   }
 
   .live-metrics__value--negative {
-    color: #ef4444 !important;
+    color: var(--error) !important;
   }
 
   .live-metrics__value--neutral {
-    color: #f8fafc;
+    color: var(--text-primary);
   }
 
   .live-metrics__sub {
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', 'Menlo', monospace;
   }
 
@@ -374,16 +374,16 @@ const styles = `
   .live-metrics__range-high {
     font-size: 11px;
     font-family: 'JetBrains Mono', 'Menlo', monospace;
-    color: rgba(226, 232, 240, 0.7);
+    color: var(--text-muted);
     flex-shrink: 0;
   }
 
   .live-metrics__range-low {
-    color: #ef4444;
+    color: var(--error);
   }
 
   .live-metrics__range-high {
-    color: #10b981;
+    color: var(--success);
   }
 
   .live-metrics__range-bar {
@@ -397,7 +397,7 @@ const styles = `
 
   .live-metrics__range-fill {
     height: 100%;
-    background: linear-gradient(90deg, #ef4444, #fbbf24, #10b981);
+    background: linear-gradient(90deg, var(--error), var(--warning), var(--success));
     border-radius: 3px;
   }
 
@@ -406,7 +406,7 @@ const styles = `
     top: -3px;
     width: 4px;
     height: 12px;
-    background: #f8fafc;
+    background: var(--text-primary);
     border-radius: 2px;
     transform: translateX(-50%);
     box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);

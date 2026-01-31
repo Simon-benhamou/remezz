@@ -30,10 +30,10 @@ interface DecisionTimelineProps {
 const PHASE_ICONS: Record<string, React.ReactNode> = {
   SCANNING: <SearchOutlined style={{ color: '#1890ff' }} />,
   EVALUATING: <ExclamationCircleOutlined style={{ color: '#faad14' }} />,
-  WAITING: <ClockCircleOutlined style={{ color: '#8c8c8c' }} />,
-  ENTERED: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
-  EXITED: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
-  FAILED: <CloseCircleOutlined style={{ color: '#ff4d4f' }} />,
+  WAITING: <ClockCircleOutlined style={{ color: 'var(--text-secondary)' }} />,
+  ENTERED: <CheckCircleOutlined style={{ color: 'var(--success)' }} />,
+  EXITED: <CheckCircleOutlined style={{ color: 'var(--success)' }} />,
+  FAILED: <CloseCircleOutlined style={{ color: 'var(--error)' }} />,
 };
 
 const PHASE_COLORS: Record<string, string> = {
@@ -111,7 +111,7 @@ export default function DecisionTimeline({ sessionId, decisions, loading }: Deci
                     <Text 
                       style={{ 
                         fontSize: 12, 
-                        color: '#595959',
+                        color: 'var(--text-secondary)',
                         display: 'block',
                         marginTop: 4,
                         paddingLeft: 8,
@@ -131,7 +131,7 @@ export default function DecisionTimeline({ sessionId, decisions, loading }: Deci
                   
                   {/* Payload preview (collapsed for older decisions) */}
                   {isRecent && decision.payload && (
-                    <details style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>
+                    <details style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
                       <summary style={{ cursor: 'pointer' }}>Details</summary>
                       <pre style={{ 
                         fontSize: 10, 

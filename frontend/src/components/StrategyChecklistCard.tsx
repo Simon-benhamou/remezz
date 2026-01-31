@@ -14,7 +14,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const BIAS_META: Record<'long' | 'short' | 'both', { label: string; color: string; background: string }> = {
-  long: { label: 'LONG', color: '#22c55e', background: 'rgba(34, 197, 94, 0.12)' },
+  long: { label: 'LONG', color: 'var(--success)', background: 'rgba(34, 197, 94, 0.12)' },
   short: { label: 'SHORT', color: '#f97316', background: 'rgba(249, 115, 22, 0.16)' },
   both: { label: 'BI-DIRECTIONAL', color: '#38bdf8', background: 'rgba(14, 165, 233, 0.16)' },
 };
@@ -80,7 +80,7 @@ export default function StrategyChecklistCard({ strategy }: Props) {
               borderRadius: 12,
               border: 'none',
               background: 'rgba(251, 191, 36, 0.16)',
-              color: '#fbbf24',
+              color: 'var(--warning)',
             }}
           >
             Guardrail active

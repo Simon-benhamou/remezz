@@ -63,9 +63,9 @@ export default function NotificationBell() {
                 width: '100%',
                 padding: '6px 12px',
                 borderRadius: 6,
-                border: '1px solid #06b6d4',
+                border: '1px solid var(--accent)',
                 background: 'rgba(6, 182, 212, 0.1)',
-                color: '#06b6d4',
+                color: 'var(--accent)',
                 cursor: 'pointer',
                 fontSize: 12,
               }}
@@ -75,7 +75,7 @@ export default function NotificationBell() {
           )}
           
           {browserPermission === 'granted' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#52c41a', fontSize: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--success)', fontSize: 12 }}>
               <CheckCircle size={14} />
               Browser notifications enabled
             </div>
@@ -108,11 +108,11 @@ export default function NotificationBell() {
               // Get icon/color based on notification type
               const getTypeInfo = () => {
                 switch (item.type) {
-                  case 'trade_entry': return { icon: '🚀', color: '#06b6d4' };
-                  case 'trade_exit': return { icon: isWin ? '✅' : '❌', color: isWin ? '#52c41a' : '#ff4d4f' };
-                  case 'stop_loss_hit': return { icon: '🛑', color: '#ff4d4f' };
-                  case 'take_profit_hit': return { icon: '🎯', color: '#52c41a' };
-                  case 'agent_started': return { icon: '🤖', color: '#52c41a' };
+                  case 'trade_entry': return { icon: '🚀', color: 'var(--accent)' };
+                  case 'trade_exit': return { icon: isWin ? '✅' : '❌', color: isWin ? 'var(--success)' : 'var(--error)' };
+                  case 'stop_loss_hit': return { icon: '🛑', color: 'var(--error)' };
+                  case 'take_profit_hit': return { icon: '🎯', color: 'var(--success)' };
+                  case 'agent_started': return { icon: '🤖', color: 'var(--success)' };
                   case 'agent_stopped': return { icon: '⏹️', color: '#faad14' };
                   case 'regime_change': return { icon: '🔄', color: '#722ed1' };
                   case 'high_volatility': return { icon: '⚡', color: '#faad14' };
@@ -136,7 +136,7 @@ export default function NotificationBell() {
                         )}
                         <Text strong style={{ fontSize: 12 }}>{formatSymbol(item.symbol)}</Text>
                         {item.side && (
-                          <Text style={{ fontSize: 11, color: item.side === 'long' ? '#52c41a' : '#ff4d4f' }}>
+                          <Text style={{ fontSize: 11, color: item.side === 'long' ? 'var(--success)' : 'var(--error)' }}>
                             {item.side.toUpperCase()}
                           </Text>
                         )}
@@ -149,7 +149,7 @@ export default function NotificationBell() {
                       {isEntry ? (
                         <>Entry @ ${item.price?.toFixed(4) ?? '0'} · ${item.notionalUsd?.toFixed(0) ?? '0'}</>
                       ) : isExit ? (
-                        <span style={{ color: isWin ? '#52c41a' : '#ff4d4f' }}>
+                        <span style={{ color: isWin ? 'var(--success)' : 'var(--error)' }}>
                           {isWin ? '+' : ''}${item.pnlUsd?.toFixed(2) ?? '0'} ({isWin ? '+' : ''}{item.pnlPct?.toFixed(2) ?? '0'}%)
                         </span>
                       ) : (
@@ -197,7 +197,7 @@ export default function NotificationBell() {
         >
           <Bell style={{ 
             fontSize: 18, 
-            color: enabled ? '#06b6d4' : 'rgba(148, 163, 184, 0.6)' 
+            color: enabled ? 'var(--accent)' : 'var(--text-muted)'
           }} />
         </div>
       </Badge>

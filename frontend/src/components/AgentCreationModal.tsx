@@ -206,7 +206,7 @@ export default function AgentCreationModal({
       dataIndex: 'score',
       key: 'score',
       render: (score: number) => (
-        <Text style={{ color: '#4ade80', fontWeight: 600 }}>
+        <Text style={{ color: 'var(--success)', fontWeight: 600 }}>
           {(score * 100).toFixed(0)}%
         </Text>
       ),
@@ -226,7 +226,7 @@ export default function AgentCreationModal({
       dataIndex: 'change24h',
       key: 'change',
       render: (change: number) => (
-        <Text style={{ color: change >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+        <Text style={{ color: change >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 600 }}>
           {change >= 0 ? '+' : ''}{change.toFixed(2)}%
         </Text>
       ),
@@ -265,7 +265,7 @@ export default function AgentCreationModal({
       dataIndex: ['opportunity', 'confidence'],
       key: 'confidence',
       render: (confidence: number) => (
-        <Text style={{ color: confidence >= 0.7 ? '#4ade80' : confidence >= 0.5 ? '#fbbf24' : '#f87171' }}>
+        <Text style={{ color: confidence >= 0.7 ? 'var(--success)' : confidence >= 0.5 ? 'var(--warning)' : 'var(--error)' }}>
           {(confidence * 100).toFixed(0)}%
         </Text>
       ),
@@ -295,7 +295,7 @@ export default function AgentCreationModal({
       cancelButtonProps={{ disabled: creating }}
       title={
         <Space>
-          <RocketOutlined style={{ color: '#3b82f6' }} />
+          <RocketOutlined style={{ color: 'var(--accent-secondary)' }} />
           <span>Create AI Trading Agent</span>
         </Space>
       }
@@ -304,18 +304,18 @@ export default function AgentCreationModal({
       maskClosable={false}
       styles={{
         body: {
-          background: 'linear-gradient(155deg, rgba(15, 23, 42, 0.95) 0%, rgba(15, 23, 42, 0.85) 100%)',
+          background: 'var(--card-gradient)',
           padding: 24,
           maxHeight: '70vh',
           overflowY: 'auto',
         },
         header: {
-          background: 'rgba(15, 23, 42, 0.92)',
-          borderBottom: '1px solid rgba(148, 163, 184, 0.18)',
+          background: 'var(--bg-primary)',
+          borderBottom: '1px solid var(--border-subtle)',
         },
         footer: {
-          background: 'rgba(15, 23, 42, 0.92)',
-          borderTop: '1px solid rgba(148, 163, 184, 0.18)',
+          background: 'var(--bg-primary)',
+          borderTop: '1px solid var(--border-subtle)',
         },
       }}
     >
@@ -353,7 +353,7 @@ export default function AgentCreationModal({
                 />
 
                 {/* V5 RECOMMENDED */}
-                <Text style={{ color: '#4ade80', fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 12 }}>
+                <Text style={{ color: 'var(--success)', fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 12 }}>
                   ✅ TOUTES RECOMMANDÉES - ROI Positif sur 24 mois
                 </Text>
                 <Row gutter={[12, 12]} style={{ marginBottom: 24 }}>
@@ -369,7 +369,7 @@ export default function AgentCreationModal({
                               ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.3), rgba(22, 163, 74, 0.2))'
                               : 'linear-gradient(135deg, rgba(34, 197, 94, 0.08), rgba(30, 41, 59, 0.55))',
                             border: isSelected
-                              ? '2px solid #22c55e'
+                              ? '2px solid var(--success)'
                               : '1px solid rgba(34, 197, 94, 0.3)',
                             borderRadius: 12,
                             textAlign: 'center',
@@ -397,7 +397,7 @@ export default function AgentCreationModal({
                           </Tag>
                           <div>
                             <Text style={{ 
-                              color: crypto.roi.startsWith('+') ? '#4ade80' : '#f87171', 
+                              color: crypto.roi.startsWith('+') ? 'var(--success)' : 'var(--error)', 
                               fontSize: 13, 
                               fontWeight: 700 
                             }}>
@@ -418,7 +418,7 @@ export default function AgentCreationModal({
                   message="ℹ️ Autres Cryptos Disponibles"
                   description="Ces cryptos n'ont pas été testées sur 24 mois avec notre stratégie."
                   style={{
-                    background: 'rgba(59, 130, 246, 0.08)',
+                    background: 'var(--bg-card-hover)',
                     border: '1px solid rgba(59, 130, 246, 0.24)',
                     borderRadius: 12,
                     marginBottom: 12,
@@ -438,7 +438,7 @@ export default function AgentCreationModal({
                               ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.25), rgba(185, 28, 28, 0.15))'
                               : 'rgba(30, 41, 59, 0.4)',
                             border: isSelected
-                              ? '2px solid #ef4444'
+                              ? '2px solid var(--error)'
                               : '1px solid rgba(71, 107, 176, 0.12)',
                             borderRadius: 12,
                             textAlign: 'center',
@@ -467,8 +467,8 @@ export default function AgentCreationModal({
                           </Tag>
                           <div>
                             <Text style={{ 
-                              color: '#f87171', 
-                              fontSize: 12, 
+                              color: 'var(--error)',
+                              fontSize: 12,
                               fontWeight: 600 
                             }}>
                               {crypto.roi}
@@ -534,7 +534,7 @@ export default function AgentCreationModal({
                           title="Opportunities Found"
                           value={rankedCryptos.length}
                           prefix={<TrophyOutlined />}
-                          valueStyle={{ fontSize: 18, color: '#4ade80' }}
+                          valueStyle={{ fontSize: 18, color: 'var(--success)' }}
                         />
                       </Space>
                     </div>
@@ -597,8 +597,8 @@ export default function AgentCreationModal({
 
         <div
           style={{
-            background: 'rgba(30, 41, 59, 0.65)',
-            border: '1px solid rgba(148, 163, 184, 0.22)',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
             borderRadius: 12,
             padding: 16,
             display: 'flex',
@@ -618,7 +618,7 @@ export default function AgentCreationModal({
             <Text style={{ color: 'var(--text-secondary)', fontSize: 12, display: 'block', marginBottom: 4 }}>
               Stop Loss
             </Text>
-            <Text style={{ color: '#f87171', fontWeight: 600, fontSize: 18 }}>
+            <Text style={{ color: 'var(--error)', fontWeight: 600, fontSize: 18 }}>
               1.5%
             </Text>
             <Text style={{ color: 'var(--text-secondary)', fontSize: 10, display: 'block' }}>
@@ -629,7 +629,7 @@ export default function AgentCreationModal({
             <Text style={{ color: 'var(--text-secondary)', fontSize: 12, display: 'block', marginBottom: 4 }}>
               Take Profit
             </Text>
-            <Text style={{ color: '#4ade80', fontWeight: 600, fontSize: 18 }}>
+            <Text style={{ color: 'var(--success)', fontWeight: 600, fontSize: 18 }}>
               3.0%
             </Text>
             <Text style={{ color: 'var(--text-secondary)', fontSize: 10, display: 'block' }}>
@@ -640,7 +640,7 @@ export default function AgentCreationModal({
             <Text style={{ color: 'var(--text-secondary)', fontSize: 12, display: 'block', marginBottom: 4 }}>
               Strategy
             </Text>
-            <Text style={{ color: '#4ade80', fontWeight: 600, fontSize: 18 }}>
+            <Text style={{ color: 'var(--success)', fontWeight: 600, fontSize: 18 }}>
               V5 Momentum
             </Text>
           </div>

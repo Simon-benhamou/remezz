@@ -64,14 +64,14 @@ export default function UserDropdown() {
     {
       key: 'profile',
       label: (
-        <div style={{ padding: '8px 0', borderBottom: '1px solid rgba(148, 163, 184, 0.18)' }}>
+        <div style={{ padding: '8px 0', borderBottom: '1px solid var(--border-subtle)' }}>
           <div style={{ fontWeight: 600, fontSize: '14px', color: 'var(--text-primary)' }}>
             {userInfo?.username || 'User'}
           </div>
-          <div style={{ fontSize: '12px', color: 'rgba(148, 163, 184, 0.78)' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             {userInfo?.email}
           </div>
-          <div style={{ fontSize: '11px', color: 'rgba(148, 163, 184, 0.58)', marginTop: '2px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
             {userInfo?.role === 'admin' ? '👑 Administrator' : '📈 Trader'}
           </div>
         </div>
@@ -129,7 +129,7 @@ export default function UserDropdown() {
             borderRadius: '12px',
             border: '1px solid rgba(6, 182, 212, 0.25)',
             transition: 'all 0.2s ease',
-            background: 'rgba(15, 23, 42, 0.6)',
+            background: 'var(--bg-primary)',
             color: 'var(--text-primary)',
           }}
           onMouseEnter={(e) => {
@@ -137,7 +137,7 @@ export default function UserDropdown() {
             e.currentTarget.style.borderColor = 'rgba(6, 182, 212, 0.55)';
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.6)';
+            e.currentTarget.style.backgroundColor = 'var(--bg-primary)';
             e.currentTarget.style.borderColor = 'rgba(6, 182, 212, 0.25)';
           }}
         >
@@ -167,7 +167,7 @@ export default function UserDropdown() {
               </div>
               <div style={{
                 fontSize: '11px',
-                color: 'rgba(148, 163, 184, 0.78)',
+                color: 'var(--text-muted)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '4px'

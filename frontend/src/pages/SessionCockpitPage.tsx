@@ -1207,7 +1207,7 @@ export default function SessionCockpitPage() {
                               <Text style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{evt?.source || 'Agent'}</Text>
                               {timeLabel && <Text type="secondary" style={{ fontSize: 12 }}>{timeLabel}</Text>}
                             </Space>
-                            <Text style={{ color: '#cbd5f5' }}>
+                            <Text style={{ color: 'var(--text-secondary)' }}>
                               {evt?.message || evt?.details?.message || '—'}
                             </Text>
                           </Space>

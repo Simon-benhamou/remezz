@@ -86,20 +86,20 @@ const ParityStatus: React.FC<ParityStatusProps> = ({ parity }) => {
 
   const statusConfig = {
     healthy: {
-      color: '#10b981',
-      icon: <CheckCircle size={16} color="#10b981" />,
+      color: 'var(--success)',
+      icon: <CheckCircle size={16} color="var(--success)" />,
       label: 'Healthy',
       tagColor: 'green',
     },
     warning: {
-      color: '#f59e0b',
-      icon: <AlertTriangle size={16} color="#f59e0b" />,
+      color: 'var(--warning)',
+      icon: <AlertTriangle size={16} color="var(--warning)" />,
       label: 'Warning',
       tagColor: 'orange',
     },
     critical: {
-      color: '#ef4444',
-      icon: <XCircle size={16} color="#ef4444" />,
+      color: 'var(--error)',
+      icon: <XCircle size={16} color="var(--error)" />,
       label: 'Critical',
       tagColor: 'red',
     },
@@ -202,7 +202,7 @@ const PerformanceSummary: React.FC<PerformanceSummaryProps> = ({
   return (
     <div className="perf-summary">
       <div className="perf-summary__header">
-        <Target size={16} color="rgba(226, 232, 240, 0.7)" />
+        <Target size={16} color="var(--text-muted)" />
         <span className="perf-summary__title">Performance</span>
         {performance && (
           <span className="perf-summary__trades">
@@ -224,9 +224,9 @@ const PerformanceSummary: React.FC<PerformanceSummaryProps> = ({
               subValue={`${performance.wins}W / ${performance.losses}L`}
               icon={
                 performance.winRate >= 50 ? (
-                  <TrendingUp size={16} color="#10b981" />
+                  <TrendingUp size={16} color="var(--success)" />
                 ) : (
-                  <TrendingDown size={16} color="#ef4444" />
+                  <TrendingDown size={16} color="var(--error)" />
                 )
               }
               color={winRateColor}
@@ -238,9 +238,9 @@ const PerformanceSummary: React.FC<PerformanceSummaryProps> = ({
               value={formatPercent(performance.expectancy)}
               icon={
                 performance.expectancy >= 0 ? (
-                  <TrendingUp size={14} color="#10b981" />
+                  <TrendingUp size={14} color="var(--success)" />
                 ) : (
-                  <TrendingDown size={14} color="#ef4444" />
+                  <TrendingDown size={14} color="var(--error)" />
                 )
               }
               color={expectancyColor}
@@ -279,9 +279,9 @@ const PerformanceSummary: React.FC<PerformanceSummaryProps> = ({
 
 const styles = `
   .perf-summary {
-    background: rgba(15, 23, 42, 0.92);
+    background: var(--bg-primary);
     border-radius: 16px;
-    border: 1px solid rgba(100, 116, 139, 0.18);
+    border: 1px solid var(--border-subtle);
     padding: 16px;
   }
 
@@ -299,20 +299,20 @@ const styles = `
   .perf-summary__title {
     font-size: 13px;
     font-weight: 600;
-    color: rgba(226, 232, 240, 0.85);
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
 
   .perf-summary__trades {
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
     margin-left: auto;
   }
 
   .perf-summary__empty {
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     font-size: 13px;
     text-align: center;
     padding: 20px;
@@ -332,13 +332,13 @@ const styles = `
     padding: 12px;
     background: rgba(30, 41, 59, 0.5);
     border-radius: 10px;
-    border: 1px solid rgba(148, 163, 184, 0.1);
+    border: 1px solid var(--border-subtle);
     cursor: help;
     transition: border-color 0.2s;
   }
 
   .perf-metric:hover {
-    border-color: rgba(148, 163, 184, 0.25);
+    border-color: var(--border-subtle);
   }
 
   .perf-metric--positive {
@@ -368,32 +368,32 @@ const styles = `
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
   }
 
   .perf-metric__value {
     font-size: 16px;
     font-weight: 600;
     font-family: 'JetBrains Mono', monospace;
-    color: #f8fafc;
+    color: var(--text-primary);
   }
 
   .perf-metric--positive .perf-metric__value {
-    color: #10b981;
+    color: var(--success);
   }
 
   .perf-metric--negative .perf-metric__value {
-    color: #ef4444;
+    color: var(--error);
   }
 
   .perf-metric__sub {
     font-size: 10px;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
   }
 
   .perf-summary__parity {
-    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    border-top: 1px solid var(--border-subtle);
     padding-top: 16px;
   }
 
@@ -406,7 +406,7 @@ const styles = `
   .parity-status--empty {
     flex-direction: row;
     align-items: center;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
     font-size: 12px;
     gap: 6px;
   }
@@ -420,7 +420,7 @@ const styles = `
   .parity-status__title {
     font-size: 12px;
     font-weight: 600;
-    color: rgba(226, 232, 240, 0.8);
+    color: var(--text-muted);
   }
 
   .parity-status__tag {
@@ -435,7 +435,7 @@ const styles = `
 
   .parity-status__gauge .ant-progress-text {
     font-size: 11px !important;
-    color: rgba(226, 232, 240, 0.7) !important;
+    color: var(--text-muted) !important;
     font-family: 'JetBrains Mono', monospace;
   }
 
@@ -448,17 +448,17 @@ const styles = `
 
   .parity-status__stat {
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.6);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
     cursor: help;
   }
 
   .parity-status__stat--warn {
-    color: #f59e0b;
+    color: var(--warning);
   }
 
   .parity-status__divider {
-    color: rgba(148, 163, 184, 0.3);
+    color: var(--text-secondary);
   }
 
   @media (max-width: 640px) {

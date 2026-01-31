@@ -219,12 +219,12 @@ export function TradeNotificationProvider({ children }: { children: React.ReactN
           </div>
         ),
         icon: data.side === 'long' 
-          ? <RiseOutlined style={{ color: '#52c41a' }} />
-          : <FallOutlined style={{ color: '#ff4d4f' }} />,
+          ? <RiseOutlined style={{ color: 'var(--success)' }} />
+          : <FallOutlined style={{ color: 'var(--error)' }} />,
         duration: 15,
         placement: 'topRight',
         style: { 
-          borderLeft: data.side === 'long' ? '4px solid #52c41a' : '4px solid #ff4d4f',
+          borderLeft: data.side === 'long' ? '4px solid var(--success)' : '4px solid var(--error)',
           background: data.mode === 'live' ? 'rgba(255, 247, 230, 0.95)' : 'rgba(15, 23, 42, 0.95)',
         },
       });
@@ -236,7 +236,7 @@ export function TradeNotificationProvider({ children }: { children: React.ReactN
       
     } else {
       const pnlPrefix = isWin ? '+' : '';
-      const pnlColor = isWin ? '#52c41a' : '#ff4d4f';
+      const pnlColor = isWin ? 'var(--success)' : 'var(--error)';
       const exitType = data.type === 'stop_loss_hit' ? '🛑 STOP LOSS' : 
                        data.type === 'take_profit_hit' ? '🎯 TAKE PROFIT' : 
                        isWin ? '✅ WIN' : '❌ LOSS';
@@ -258,8 +258,8 @@ export function TradeNotificationProvider({ children }: { children: React.ReactN
           </div>
         ),
         icon: isWin 
-          ? <DollarOutlined style={{ color: '#52c41a' }} />
-          : <WarningOutlined style={{ color: '#ff4d4f' }} />,
+          ? <DollarOutlined style={{ color: 'var(--success)' }} />
+          : <WarningOutlined style={{ color: 'var(--error)' }} />,
         duration: 20,
         placement: 'topRight',
         style: { 
@@ -364,7 +364,7 @@ export function NotificationSettings() {
             display: 'inline-block',
             width: 44,
             height: 22,
-            background: enabled ? '#52c41a' : '#e5e5e5',
+            background: enabled ? 'var(--success)' : '#e5e5e5',
             borderRadius: 100,
             position: 'relative',
             transition: 'background 0.3s',
@@ -398,7 +398,7 @@ export function NotificationSettings() {
             display: 'inline-block',
             width: 44,
             height: 22,
-            background: soundEnabled ? '#52c41a' : '#e5e5e5',
+            background: soundEnabled ? 'var(--success)' : '#e5e5e5',
             borderRadius: 100,
             position: 'relative',
             transition: 'background 0.3s',
@@ -423,9 +423,9 @@ export function NotificationSettings() {
           style={{
             padding: '8px 16px',
             borderRadius: 8,
-            border: '1px solid #06b6d4',
+            border: '1px solid var(--accent)',
             background: 'transparent',
-            color: '#06b6d4',
+            color: 'var(--accent)',
             cursor: 'pointer',
             marginTop: 8,
           }}
@@ -435,7 +435,7 @@ export function NotificationSettings() {
       )}
       
       {browserPermission === 'denied' && (
-        <div style={{ color: '#f87171', fontSize: 12 }}>
+        <div style={{ color: 'var(--error)', fontSize: 12 }}>
           Browser notifications are blocked. Please enable them in your browser settings.
         </div>
       )}

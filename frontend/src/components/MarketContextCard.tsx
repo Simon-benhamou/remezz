@@ -37,11 +37,11 @@ const formatVolume = (volume: number) => {
 };
 
 const getVolumeColor = (ratio: number) => {
-  if (ratio >= 1.5) return '#16a34a'; // High volume
-  if (ratio >= 1.2) return '#22c55e'; // Above average
-  if (ratio >= 0.8) return '#94a3b8'; // Normal
-  if (ratio >= 0.5) return '#f59e0b'; // Below average
-  return '#dc2626'; // Low volume
+  if (ratio >= 1.5) return 'var(--success)'; // High volume
+  if (ratio >= 1.2) return 'var(--success)'; // Above average
+  if (ratio >= 0.8) return 'var(--text-secondary)'; // Normal
+  if (ratio >= 0.5) return 'var(--warning)'; // Below average
+  return 'var(--error)'; // Low volume
 };
 
 const getVolumeStatus = (ratio: number) => {
@@ -104,7 +104,7 @@ export default function MarketContextCard({ market, symbol, loading }: Props) {
               valueStyle={{ 
                 fontSize: 18, 
                 fontWeight: 600,
-                color: isPositiveChange ? '#16a34a' : '#dc2626' 
+                color: isPositiveChange ? 'var(--success)' : 'var(--error)' 
               }}
             />
           </Col>

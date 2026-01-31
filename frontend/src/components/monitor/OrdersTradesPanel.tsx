@@ -205,7 +205,7 @@ export function OrdersTradesPanel({
       width: 90,
       render: (_: any, record: any) => {
         const intent = resolveOrderIntent(record);
-        const tone = intent === 'exit' ? { color: '#fb7185', bg: 'rgba(251, 113, 133, 0.12)' } : { color: '#22c55e', bg: 'rgba(34, 197, 94, 0.12)' };
+        const tone = intent === 'exit' ? { color: '#fb7185', bg: 'rgba(251, 113, 133, 0.12)' } : { color: 'var(--success)', bg: 'rgba(34, 197, 94, 0.12)' };
         return (
           <Tag color={tone.color} style={{ background: tone.bg, border: 'none' }}>
             {intent === 'exit' ? 'Exit' : 'Entry'}
@@ -278,7 +278,7 @@ export function OrdersTradesPanel({
             <Progress
               percent={Number(percent.toFixed(1))}
               size="small"
-              strokeColor={percent >= 100 ? '#22c55e' : '#06b6d4'}
+              strokeColor={percent >= 100 ? 'var(--success)' : 'var(--accent)'}
               showInfo={false}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
@@ -446,7 +446,7 @@ export function OrdersTradesPanel({
       align: 'right' as const,
       render: (pnl: number) => (
         <Tooltip title="Profit & Loss">
-          <span style={{ color: pnl >= 0 ? '#52c41a' : '#f5222d', fontWeight: 'bold' }}>
+          <span style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 'bold' }}>
             {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} USDT
           </span>
         </Tooltip>
@@ -459,7 +459,7 @@ export function OrdersTradesPanel({
       width: 100,
       align: 'right' as const,
       render: (roi: number) => {
-        const color = roi >= 0 ? '#52c41a' : '#f5222d';
+        const color = roi >= 0 ? 'var(--success)' : 'var(--error)';
         const bgColor = roi >= 0 ? 'rgba(82, 196, 26, 0.1)' : 'rgba(245, 34, 45, 0.1)';
         return (
           <Tooltip title="Return on Investment">

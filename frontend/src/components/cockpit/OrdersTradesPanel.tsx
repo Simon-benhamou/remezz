@@ -611,7 +611,7 @@ const FiltersBar: React.FC<FiltersBarProps> = ({ filters, onFilterChange, showSi
 
   return (
     <div className="otp-filters">
-      <Filter size={14} color="rgba(226, 232, 240, 0.6)" />
+      <Filter size={14} color="var(--text-muted)" />
 
       {showSideFilter && (
         <Select
@@ -758,9 +758,9 @@ const OrdersTradesPanel: React.FC<OrdersTradesPanelProps> = ({
 
 const styles = `
   .otp-panel {
-    background: rgba(15, 23, 42, 0.92);
+    background: var(--bg-primary);
     border-radius: 16px;
-    border: 1px solid rgba(100, 116, 139, 0.18);
+    border: 1px solid var(--border-subtle);
     overflow: hidden;
   }
 
@@ -770,7 +770,7 @@ const styles = `
     justify-content: space-between;
     gap: 16px;
     padding: 12px 16px;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    border-bottom: 1px solid var(--border-subtle);
     flex-wrap: wrap;
   }
 
@@ -795,7 +795,7 @@ const styles = `
 
   .otp-tab__count--active {
     background: rgba(59, 130, 246, 0.3);
-    color: #06b6d4;
+    color: var(--accent);
   }
 
   .otp-filters {
@@ -810,7 +810,7 @@ const styles = `
 
   .otp-filters__select .ant-select-selector {
     background: rgba(30, 41, 59, 0.8) !important;
-    border-color: rgba(148, 163, 184, 0.2) !important;
+    border-color: var(--border-subtle) !important;
   }
 
   .otp-filters__clear {
@@ -823,7 +823,7 @@ const styles = `
     background: rgba(239, 68, 68, 0.2);
     border-radius: 4px;
     cursor: pointer;
-    color: #ef4444;
+    color: var(--error);
     transition: background 0.2s;
   }
 
@@ -842,8 +842,8 @@ const styles = `
 
   .otp-table .ant-table-thead > tr > th {
     background: rgba(30, 41, 59, 0.6) !important;
-    color: rgba(226, 232, 240, 0.7) !important;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.12) !important;
+    color: var(--text-muted) !important;
+    border-bottom: 1px solid var(--border-subtle) !important;
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -853,19 +853,19 @@ const styles = `
 
   .otp-table .ant-table-tbody > tr > td {
     background: transparent !important;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.08) !important;
-    color: rgba(226, 232, 240, 0.85);
+    border-bottom: 1px solid var(--border-subtle) !important;
+    color: var(--text-muted);
     padding: 6px 8px !important;
   }
 
   .otp-table .ant-table-tbody > tr:hover > td {
-    background: rgba(59, 130, 246, 0.08) !important;
+    background: var(--bg-card-hover) !important;
   }
 
   .otp-table__time {
     font-size: 11px;
     font-family: 'JetBrains Mono', monospace;
-    color: rgba(226, 232, 240, 0.7);
+    color: var(--text-muted);
   }
 
   .otp-table__tag {
@@ -878,21 +878,21 @@ const styles = `
   .otp-table__number {
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.9);
+    color: var(--text-primary);
   }
 
   .otp-table__muted {
     font-family: 'JetBrains Mono', monospace;
     font-size: 10px;
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
   }
 
   .otp-table__number--positive {
-    color: #10b981 !important;
+    color: var(--success) !important;
   }
 
   .otp-table__number--negative {
-    color: #ef4444 !important;
+    color: var(--error) !important;
   }
 
   .otp-table__pnl {
@@ -917,7 +917,7 @@ const styles = `
 
   .otp-table__reason {
     font-size: 11px;
-    color: rgba(226, 232, 240, 0.6);
+    color: var(--text-muted);
     max-width: 100px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -929,12 +929,12 @@ const styles = `
   }
 
   .otp-table .ant-empty-description {
-    color: rgba(226, 232, 240, 0.5);
+    color: var(--text-muted);
   }
 
   .otp-table .ant-table-cell-fix-left,
   .otp-table .ant-table-cell-fix-right {
-    background: rgba(15, 23, 42, 0.98) !important;
+    background: var(--bg-primary) !important;
   }
 
   @media (max-width: 768px) {

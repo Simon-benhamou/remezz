@@ -188,17 +188,17 @@ const sessionsSeed: TradingSession[] = [
 ];
 
 const statusColorMap: Record<SessionStatus, string> = {
-  running: "#22c55e",
+  running: "var(--success)",
   waiting: "#0ea5e9",
   blocked: "#f97316",
-  stopped: "#94a3b8",
+  stopped: "var(--text-secondary)",
 };
 
 const readinessIconMap: Record<
   TradingSession["readiness"],
   { icon: React.ReactNode; color: string }
 > = {
-  ready: { icon: <PlayCircleFilled />, color: "#22c55e" },
+  ready: { icon: <PlayCircleFilled />, color: "var(--success)" },
   waiting: { icon: <ClockCircleOutlined />, color: "#0ea5e9" },
   blocked: { icon: <PauseCircleOutlined />, color: "#f97316" },
 };

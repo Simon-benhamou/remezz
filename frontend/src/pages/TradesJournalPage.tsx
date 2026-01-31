@@ -357,14 +357,14 @@ export default function TradesJournalPage() {
               <Statistic 
                 title="Wins" 
                 value={summary.wins} 
-                valueStyle={{ color: '#52c41a' }}
+                valueStyle={{ color: 'var(--success)' }}
               />
             </Col>
             <Col xs={24} sm={8} md={4}>
               <Statistic 
                 title="Losses" 
                 value={summary.losses} 
-                valueStyle={{ color: '#ff4d4f' }}
+                valueStyle={{ color: 'var(--error)' }}
               />
             </Col>
             <Col xs={24} sm={8} md={4}>
@@ -374,8 +374,8 @@ export default function TradesJournalPage() {
                 suffix="%" 
                 precision={1}
                 valueStyle={{ 
-                  color: summary.winRate >= 0.6 ? '#52c41a' : 
-                         summary.winRate >= 0.5 ? '#faad14' : '#ff4d4f' 
+                  color: summary.winRate >= 0.6 ? 'var(--success)' : 
+                         summary.winRate >= 0.5 ? '#faad14' : 'var(--error)' 
                 }}
               />
             </Col>
@@ -385,7 +385,7 @@ export default function TradesJournalPage() {
                 value={summary.pnl} 
                 precision={2} 
                 prefix="$"
-                valueStyle={{ color: summary.pnl >= 0 ? '#52c41a' : '#ff4d4f' }}
+                valueStyle={{ color: summary.pnl >= 0 ? 'var(--success)' : 'var(--error)' }}
               />
             </Col>
             <Col xs={24} sm={8} md={4}>
@@ -394,7 +394,7 @@ export default function TradesJournalPage() {
                 value={summary.avgRoe} 
                 suffix="%" 
                 precision={2}
-                valueStyle={{ color: summary.avgRoe >= 0 ? '#52c41a' : '#ff4d4f' }}
+                valueStyle={{ color: summary.avgRoe >= 0 ? 'var(--success)' : 'var(--error)' }}
               />
             </Col>
           </Row>
