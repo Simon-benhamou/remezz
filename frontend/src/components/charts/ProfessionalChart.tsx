@@ -87,10 +87,14 @@ export default function ProfessionalChart({
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
+    const computedStyle = getComputedStyle(chartContainerRef.current);
+    const bgPrimary = computedStyle.getPropertyValue('--bg-primary').trim() || '#0a0e1a';
+    const textSecondary = computedStyle.getPropertyValue('--text-secondary').trim() || '#94a3b8';
+
     const chart = createChart(chartContainerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: 'var(--bg-primary)' },
-        textColor: 'var(--text-secondary)',
+        background: { type: ColorType.Solid, color: bgPrimary },
+        textColor: textSecondary,
         fontSize: 12,
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       },
