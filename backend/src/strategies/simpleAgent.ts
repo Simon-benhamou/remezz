@@ -1756,11 +1756,7 @@ export class SimpleAgent {
           // Use last known regime from signal features (calculated in checkEntry from BTC data)
           // Skip radar update if regime hasn't been calculated yet to avoid flip-flopping
           // between NEUTRAL (default) and the real regime from another agent (paper/live)
-          if (!this.lastKnownRegime) {
-            // Regime not yet calculated - skip radar update to prevent false regime change logs
-            return;
-          }
-          const currentRegime = this.lastKnownRegime;
+          const currentRegime = this.lastKnownRegime || 'NEUTRAL';
 
           const radarFeatures: SignalFeatures = {
             roc,
