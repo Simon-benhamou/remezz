@@ -337,7 +337,7 @@ export default function ProfessionalChart({
     });
     ensureLine(stopLineRef, priceOrNull(position?.stopPrice), {
       title: 'Stop',
-      color: 'var(--error)',
+      color: '#ef4444',
       lineWidth: 2,
     });
     ensureLine(supportLineRef, priceOrNull(primarySupport), {
@@ -369,7 +369,7 @@ export default function ProfessionalChart({
         if (price == null) return;
         const line = candleSeriesRef.current!.createPriceLine({
           price,
-          color: 'var(--success)',
+          color: '#22c55e',
           lineWidth: 1,
           lineStyle: LineStyle.Solid,
           axisLabelVisible: true,
