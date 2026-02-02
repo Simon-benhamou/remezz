@@ -1260,12 +1260,13 @@ export class SimpleAgent {
         // V5.36: Use stagnant state from position (set by shouldExitPosition on 15m close)
         // Only check if stagnant is CONFIRMED - the detection itself happens on 15m close
         const isStagnantConfirmed = this.position!.stagnantState?.confirmed && !this.position!.stagnantState?.cancelled;
-        const stagnantTightenSlPct = (MomentumConfig.EXIT as any).STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8;
-        
-        // Use tightened SL if stagnant confirmed (by 15m close logic), otherwise use normal SL
-        const effectiveSlPct = isStagnantConfirmed 
-          ? stagnantTightenSlPct 
-          : (this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT);
+        const stagnantTightenSlRatio = (MomentumConfig.EXIT as any).STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
+        const currentBaseSl = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
+
+        // V5.84: Stagnant SL respects adaptive SL — ratio of current base SL
+        const effectiveSlPct = isStagnantConfirmed
+          ? currentBaseSl * stagnantTightenSlRatio
+          : currentBaseSl;
         
         const fixedSlPrice = this.position!.side === 'long'
           ? this.position!.entryPrice * (1 - effectiveSlPct / 100)
@@ -3454,12 +3455,14 @@ export class SimpleAgent {
       if (this.position!.stagnantState?.confirmed && !this.position!.stagnantState?.cancelled) {
         if (!this.stagnantSlUpdated) {
           this.stagnantSlUpdated = true;
-          const stagnantSlPct = (MomentumConfig.EXIT as any).STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8;
+          const stagnantSlRatio = (MomentumConfig.EXIT as any).STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
+          const baseSl = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
+          const stagnantSlPct = baseSl * stagnantSlRatio;
           const stagnantSlPrice = this.position!.side === 'long'
             ? this.position!.entryPrice * (1 - stagnantSlPct / 100)
             : this.position!.entryPrice * (1 + stagnantSlPct / 100);
 
-          logger.info(`🔧 [${symbol}] V5.81: Stagnant confirmed — updating exchange SL to ${stagnantSlPct}% ($${stagnantSlPrice.toFixed(4)})`);
+          logger.info(`🔧 [${symbol}] V5.84: Stagnant confirmed — updating exchange SL to ${stagnantSlPct.toFixed(2)}% (${stagnantSlRatio}× base ${baseSl}%) ($${stagnantSlPrice.toFixed(4)})`);
 
           if (this.position) {
             this.position.stopLoss = stagnantSlPrice;
