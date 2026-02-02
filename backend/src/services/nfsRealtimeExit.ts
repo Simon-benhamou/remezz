@@ -41,6 +41,10 @@ export interface NfsConfig {
   MAX_SLIPPAGE_PCT: number;           // Alert if exceeded
   PARTIAL_FILL_MIN_RATIO: number;     // Accept partial if >= this
 
+  // Proactive LIMIT config
+  PROACTIVE_LIMIT_NFS_THRESHOLD: number;  // Min NFS score to place proactive LIMIT (default 50)
+  PROACTIVE_LIMIT_CANCEL_DISTANCE_PCT: number; // Cancel proactive LIMIT if price moves away by this % (default 0.5)
+
   // NFS Weights (from statistical analysis)
   WEIGHTS: {
     breachATR: { threshold: number; weight: number };
@@ -61,6 +65,8 @@ export const DEFAULT_NFS_CONFIG: NfsConfig = {
   PRE_BREACH_DISTANCE_PCT: 0.3,
   MAX_SLIPPAGE_PCT: 2.0,
   PARTIAL_FILL_MIN_RATIO: 0.8,
+  PROACTIVE_LIMIT_NFS_THRESHOLD: 50,
+  PROACTIVE_LIMIT_CANCEL_DISTANCE_PCT: 0.5,
   // V5.69: Weights now match backtest proportions exactly (35:25:20:10:10)
   // Previous: 4:2:2:1:1 = 40:20:20:10:10 (breachATR was overweighted)
   // Now: 7:5:4:2:2 = 35:25:20:10:10 (exact parity with backtest)
@@ -98,14 +104,15 @@ export interface NfsComponents {
 
 // State machine states
 export type NfsExitState =
-  | 'MONITORING'      // Normal state, watching price
-  | 'PRE_BREACH'      // Price approaching trailing (< 0.3%)
-  | 'BREACH_DETECTED' // Price touched trailing, calculating NFS
-  | 'LIMIT_PENDING'   // LIMIT order placed, waiting for fill
-  | 'MARKET_FALLBACK' // LIMIT failed, executing market
-  | 'WAITING_2CLOSE'  // Low NFS, waiting for 2-close confirmation
-  | 'EXITING'         // Exit in progress
-  | 'EXITED';         // Position closed
+  | 'MONITORING'              // Normal state, watching price
+  | 'PRE_BREACH'              // Price approaching trailing (< 0.3%)
+  | 'PROACTIVE_LIMIT_PENDING' // Proactive LIMIT placed BEFORE breach (new V5.82)
+  | 'BREACH_DETECTED'         // Price touched trailing, calculating NFS
+  | 'LIMIT_PENDING'           // LIMIT order placed, waiting for fill
+  | 'MARKET_FALLBACK'         // LIMIT failed, executing market
+  | 'WAITING_2CLOSE'          // Low NFS, waiting for 2-close confirmation
+  | 'EXITING'                 // Exit in progress
+  | 'EXITED';                 // Position closed
 
 export interface NfsStateData {
   state: NfsExitState;
@@ -144,7 +151,7 @@ export interface TrailingExitLog {
   nfsComponents: NfsComponents;
 
   // Execution
-  exitMethod: 'LIMIT_FILLED' | 'LIMIT_PARTIAL' | 'MARKET_FALLBACK' | 'MARKET_DIRECT' | '2CLOSE_FALLBACK';
+  exitMethod: 'LIMIT_FILLED' | 'LIMIT_PARTIAL' | 'MARKET_FALLBACK' | 'MARKET_DIRECT' | '2CLOSE_FALLBACK' | 'PROACTIVE_LIMIT_FILLED';
   orderAttempts: number;
   timeTakenMs: number;
 
@@ -248,6 +255,65 @@ export class NfsCalculator {
       },
       recommendation: 'FALLBACK_2CLOSE',
     };
+  }
+
+  /**
+   * V5.82: Calculate NFS on a PARTIAL (non-final) candle in real-time.
+   * Used during PRE_BREACH to decide whether to place a proactive LIMIT order
+   * BEFORE the trailing stop is actually breached.
+   *
+   * Key difference from calculate():
+   * - Candle is still forming (isFinal=false)
+   * - We use current price as "close" for projection
+   * - breachDepth is calculated as distance TO trailing (not past it)
+   *   since price hasn't breached yet — we measure trend conviction instead
+   * - Returns a score indicating how likely a real breach is coming
+   */
+  calculateRealtime(
+    partialCandle: Candle,
+    prevCandles: Candle[],
+    side: 'long' | 'short',
+    trailingStopPrice: number
+  ): NfsResult {
+    try {
+      if (!partialCandle || !Number.isFinite(partialCandle.close) || partialCandle.close <= 0) {
+        return this.createSafeResult('Invalid partial candle');
+      }
+      if (!Number.isFinite(trailingStopPrice) || trailingStopPrice <= 0) {
+        return this.createSafeResult('Invalid trailing stop price');
+      }
+      if (!Array.isArray(prevCandles) || prevCandles.length === 0) {
+        return this.createSafeResult('No previous candles');
+      }
+
+      // Create a "projected" candle using partial data
+      // The close is the current live price — treat it as if the candle closed now
+      const projectedCandle: Candle = {
+        ...partialCandle,
+        isFinal: false, // keep marked as partial
+      };
+
+      const components = this.computeComponents(projectedCandle, prevCandles, side, trailingStopPrice);
+      const score = this.computeScore(components, side);
+
+      if (!Number.isFinite(score) || score < 0) {
+        return this.createSafeResult('Invalid realtime score');
+      }
+
+      const confidence = this.determineConfidence(score);
+      const recommendation = this.determineRecommendation(score, confidence);
+
+      return {
+        score,
+        confidence,
+        shouldExitImmediately: score >= this.config.HIGH_CONFIDENCE_THRESHOLD,
+        components,
+        recommendation,
+      };
+    } catch (error) {
+      logger.error('[NFS] Error in calculateRealtime():', error);
+      return this.createSafeResult('Realtime calculation error');
+    }
   }
 
   private computeComponents(
@@ -551,6 +617,9 @@ export class NfsExitStateMachine {
         case 'PRE_BREACH':
           return this.handlePreBreach(isBreaching, currentCandle, prevCandles, side, trailingStopPrice);
 
+        case 'PROACTIVE_LIMIT_PENDING':
+          return this.handleProactiveLimitPending(isBreaching, isApproaching, currentCandle, prevCandles, side, trailingStopPrice);
+
         case 'BREACH_DETECTED':
           return this.handleBreachDetected(isBreaching, currentCandle, prevCandles, side, trailingStopPrice);
 
@@ -646,7 +715,97 @@ export class NfsExitStateMachine {
       return { action: 'NONE', reason: 'Moved away from trailing' };
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // V5.82: PROACTIVE LIMIT - Calculate NFS on partial candle in real-time
+    // If NFS is high enough, place LIMIT at trailing stop price BEFORE breach
+    // so the order is already in the book when price reaches it → instant fill
+    // ═══════════════════════════════════════════════════════════════════════
+    if (!candle.isFinal && prevCandles.length > 0) {
+      const realtimeNfs = this.calculator.calculateRealtime(candle, prevCandles, side, trailingStopPrice);
+      this.state.lastNfsResult = realtimeNfs;
+
+      if (realtimeNfs.score >= this.config.PROACTIVE_LIMIT_NFS_THRESHOLD) {
+        this.transition('PROACTIVE_LIMIT_PENDING');
+        logger.info(
+          `[NFS] PROACTIVE LIMIT: NFS=${realtimeNfs.score.toFixed(0)} >= ${this.config.PROACTIVE_LIMIT_NFS_THRESHOLD} | ` +
+          `placing LIMIT @ trailing=${trailingStopPrice.toFixed(4)} BEFORE breach | ` +
+          `dist=${this.state.distanceToTrailingPct?.toFixed(3)}%`
+        );
+        return {
+          action: 'PLACE_PROACTIVE_LIMIT',
+          reason: `NFS realtime ${realtimeNfs.score.toFixed(0)} >= ${this.config.PROACTIVE_LIMIT_NFS_THRESHOLD} - proactive LIMIT`,
+          nfsResult: realtimeNfs,
+          targetPrice: trailingStopPrice,
+        };
+      }
+    }
+
     return { action: 'ALERT', reason: 'Still approaching trailing' };
+  }
+
+  /**
+   * V5.82: Handle PROACTIVE_LIMIT_PENDING state
+   * A LIMIT order has been placed at the trailing stop price BEFORE the breach.
+   * Monitor for:
+   * - Fill (price reached trailing → perfect exit at exact backtest price)
+   * - Price recovery (moved away → cancel LIMIT, back to MONITORING)
+   * - Timeout (shouldn't normally happen since the order sits in the book)
+   */
+  private handleProactiveLimitPending(
+    isBreaching: boolean,
+    isApproaching: boolean,
+    candle: Candle,
+    prevCandles: Candle[],
+    side: 'long' | 'short',
+    trailingStopPrice: number
+  ): NfsEvaluationResult {
+    // If price actually breached → the LIMIT should have filled or will fill imminently
+    // Let the order executor handle the fill detection
+    if (isBreaching) {
+      // Transition to normal LIMIT_PENDING — the proactive limit IS the exit order
+      this.transition('LIMIT_PENDING');
+      this.state.limitOrderPlacedAt = this.state.limitOrderPlacedAt ?? Date.now();
+      return {
+        action: 'NONE',
+        reason: 'Proactive LIMIT in play — price breached trailing, waiting for fill',
+      };
+    }
+
+    // Price moved away from trailing → cancel the proactive LIMIT
+    const distancePct = this.state.distanceToTrailingPct ?? 0;
+    if (distancePct > this.config.PROACTIVE_LIMIT_CANCEL_DISTANCE_PCT) {
+      this.transition('MONITORING');
+      logger.info(
+        `[NFS] PROACTIVE LIMIT CANCELLED: price moved away (dist=${distancePct.toFixed(3)}% > ${this.config.PROACTIVE_LIMIT_CANCEL_DISTANCE_PCT}%)`
+      );
+      return {
+        action: 'CANCEL_PROACTIVE_LIMIT',
+        reason: `Price moved away (${distancePct.toFixed(3)}%) - cancel proactive LIMIT`,
+        orderId: this.state.pendingLimitOrderId ?? undefined,
+      };
+    }
+
+    // Still in the zone — recalculate NFS on partial candle to see if conviction dropped
+    if (!candle.isFinal && prevCandles.length > 0) {
+      const realtimeNfs = this.calculator.calculateRealtime(candle, prevCandles, side, trailingStopPrice);
+      this.state.lastNfsResult = realtimeNfs;
+
+      // If NFS dropped significantly below threshold, cancel
+      if (realtimeNfs.score < this.config.PROACTIVE_LIMIT_NFS_THRESHOLD * 0.6) {
+        this.transition('PRE_BREACH');
+        logger.info(
+          `[NFS] PROACTIVE LIMIT CANCELLED: NFS dropped to ${realtimeNfs.score.toFixed(0)} (< ${(this.config.PROACTIVE_LIMIT_NFS_THRESHOLD * 0.6).toFixed(0)})`
+        );
+        return {
+          action: 'CANCEL_PROACTIVE_LIMIT',
+          reason: `NFS dropped to ${realtimeNfs.score.toFixed(0)} - cancel proactive LIMIT`,
+          orderId: this.state.pendingLimitOrderId ?? undefined,
+          nfsResult: realtimeNfs,
+        };
+      }
+    }
+
+    return { action: 'NONE', reason: 'Proactive LIMIT in place, waiting for breach' };
   }
 
   private handleBreachDetected(
@@ -745,6 +904,16 @@ export class NfsExitStateMachine {
     this.transition('LIMIT_PENDING');
   }
 
+  /**
+   * V5.82: Track a proactive LIMIT order placed before breach
+   */
+  setProactiveLimitOrderPending(orderId: string, price: number): void {
+    this.state.pendingLimitOrderId = orderId;
+    this.state.limitOrderPlacedAt = Date.now();
+    this.state.limitOrderPrice = price;
+    // Don't transition — we're already in PROACTIVE_LIMIT_PENDING from evaluate()
+  }
+
   onLimitOrderFilled(): void {
     this.state.pendingLimitOrderId = null;
     this.transition('EXITED');
@@ -772,7 +941,7 @@ export class NfsExitStateMachine {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface NfsEvaluationResult {
-  action: 'NONE' | 'ALERT' | 'PLACE_LIMIT' | 'EXIT_MARKET' | 'CANCEL_LIMIT' | 'CANCEL_LIMIT_AND_MARKET' | 'WAIT';
+  action: 'NONE' | 'ALERT' | 'PLACE_LIMIT' | 'PLACE_PROACTIVE_LIMIT' | 'EXIT_MARKET' | 'CANCEL_LIMIT' | 'CANCEL_LIMIT_AND_MARKET' | 'CANCEL_PROACTIVE_LIMIT' | 'WAIT';
   reason: string;
   nfsResult?: NfsResult;
   targetPrice?: number;
