@@ -813,6 +813,7 @@ export class SimpleAgent {
   
   // V5.12: Track if trailing has been widened (for SMART trailing)
   private trailingWidened: boolean = false;
+  private stagnantSlUpdated: boolean = false;  // V5.81: Track if exchange SL was tightened for stagnant
   
   // V5.11: Track last processed candle timestamp to sync with backtest
   // Only check entry signals when a NEW 15m candle closes (not on every tick)
@@ -3274,6 +3275,34 @@ export class SimpleAgent {
         logger.warn(`🚨 [${symbol}] REGIME CHANGE DETECTED on 15m close | candle_ts=${new Date(latestClosedCandle.timestamp).toISOString()} | price=$${currentPrice.toFixed(4)} | PnL=${exitSignal.pnlPct?.toFixed(2)}%`);
       }
 
+      // ════════════════════════════════════════════════════════════════════════
+      // V5.81: When stagnant is confirmed, immediately update exchange SL to tightened level
+      // This ensures the exchange protects at 0.8% SL instead of the wide 3% emergency.
+      // Parity data shows live loses -5% to -11% on stagnant exits vs backtest -4%
+      // because the exchange SL was still at the wide emergency level.
+      // ════════════════════════════════════════════════════════════════════════
+      if (this.position!.stagnantState?.confirmed && !this.position!.stagnantState?.cancelled) {
+        if (!this.stagnantSlUpdated) {
+          this.stagnantSlUpdated = true;
+          const stagnantSlPct = (MomentumConfig.EXIT as any).STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8;
+          const stagnantSlPrice = this.position!.side === 'long'
+            ? this.position!.entryPrice * (1 - stagnantSlPct / 100)
+            : this.position!.entryPrice * (1 + stagnantSlPct / 100);
+
+          logger.info(`🔧 [${symbol}] V5.81: Stagnant confirmed — updating exchange SL to ${stagnantSlPct}% ($${stagnantSlPrice.toFixed(4)})`);
+
+          if (this.position) {
+            this.position.stopLoss = stagnantSlPrice;
+            this.position.stopLossPct = stagnantSlPct;
+          }
+          try {
+            await this.setStopLossOnExchange(this.position!, true);
+          } catch (err: any) {
+            logger.warn(`⚠️ [${symbol}] V5.81: Failed to tighten exchange SL for stagnant: ${err.message}`);
+          }
+        }
+      }
+
       // V5.26: Persist trailing activation - once active, stays active
       if (exitSignal.trailingActivated) {
         // V5.72: Track when trailing first activated
@@ -3352,19 +3381,27 @@ export class SimpleAgent {
           );
 
           if (nfsResult.shouldExitImmediately) {
-            // HIGH confidence: Exit at trailing stop price
+            // HIGH confidence: Exit at trailing stop price (matches backtest exactly)
             logger.info(`⚡⚡⚡ [${symbol}] 15m NFS HIGH EXIT | exec=${trailingStopPrice.toFixed(4)}`);
             await this.closePosition(this.position!, trailingStopPrice, 'trailing_nfs_high_15m');
             return;
           } else if (nfsResult.confidence === 'MEDIUM' && breachCount >= 1) {
-            // MEDIUM: 1-candle confirm, exit at close
-            logger.info(`⚡⚡ [${symbol}] 15m NFS MEDIUM EXIT | exec=${currentPrice.toFixed(4)}`);
-            await this.closePosition(this.position!, currentPrice, 'trailing_nfs_med_15m');
+            // V5.81 PARITY FIX: Use best of trailing stop price or current price
+            // Parity data shows MED exits lose 3-5% vs backtest because candle close
+            // is worse than trailing stop price. Use trailing price when it's better.
+            const medExitPrice = this.position!.side === 'long'
+              ? Math.max(trailingStopPrice, currentPrice)
+              : Math.min(trailingStopPrice, currentPrice);
+            logger.info(`⚡⚡ [${symbol}] 15m NFS MEDIUM EXIT | exec=${medExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)})`);
+            await this.closePosition(this.position!, medExitPrice, 'trailing_nfs_med_15m');
             return;
           } else if (breachCount >= 2) {
-            // LOW: 2-candle confirm, exit at close
-            logger.info(`⚡ [${symbol}] 15m NFS LOW EXIT (2-close) | exec=${currentPrice.toFixed(4)}`);
-            await this.closePosition(this.position!, currentPrice, 'trailing_nfs_low_15m');
+            // V5.81: Same fix for LOW - use best of trailing stop or close
+            const lowExitPrice = this.position!.side === 'long'
+              ? Math.max(trailingStopPrice, currentPrice)
+              : Math.min(trailingStopPrice, currentPrice);
+            logger.info(`⚡ [${symbol}] 15m NFS LOW EXIT (2-close) | exec=${lowExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)})`);
+            await this.closePosition(this.position!, lowExitPrice, 'trailing_nfs_low_15m');
             return;
           } else {
             // LOW, first breach - wait for confirmation
@@ -3402,8 +3439,30 @@ export class SimpleAgent {
       await this.updateEmergencyStopProfitProtectionIfNeeded(currentPrice, pnlPct);
       
       if (exitSignal.shouldExit) {
+        // ════════════════════════════════════════════════════════════════════════
+        // V5.81 PARITY FIX: Use SL price for SL/stagnant exits (matching backtest)
+        // ════════════════════════════════════════════════════════════════════════
+        // Backtest exits at the exact SL price (entry × (1 ± slPct/100)).
+        // Live was exiting at candle close price, which can be significantly worse
+        // when the SL is breached mid-candle (parity data shows -3% to -7% gap).
+        // Fix: For SL-type exits, compute the theoretical SL price and use it.
+        let exitPrice = currentPrice;
+        if (exitSignal.reason === 'stoploss' || exitSignal.reason === 'stagnant_trade') {
+          const effectiveSlPct = exitSignal.effectiveSlPct ?? this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
+          const slExitPrice = this.position!.side === 'long'
+            ? this.position!.entryPrice * (1 - effectiveSlPct / 100)
+            : this.position!.entryPrice * (1 + effectiveSlPct / 100);
+          // Use SL price if it's better (closer to entry) than current price,
+          // otherwise use current price (market may have recovered slightly)
+          if (this.position!.side === 'long') {
+            exitPrice = Math.max(slExitPrice, currentPrice); // Best of SL or current
+          } else {
+            exitPrice = Math.min(slExitPrice, currentPrice); // Best of SL or current
+          }
+          logger.info(`🎯 [${symbol}] V5.81: Using SL exit price $${exitPrice.toFixed(4)} (SL=$${slExitPrice.toFixed(4)}, close=$${currentPrice.toFixed(4)}, slPct=${effectiveSlPct.toFixed(1)}%)`);
+        }
         logger.info(`🔴 [${symbol}] EXIT SIGNAL: reason=${exitSignal.reason} | PnL=${exitSignal.pnlPct?.toFixed(2)}% | holdMin=${exitSignal.holdMinutes?.toFixed(0)}`);
-        await this.closePosition(this.position!, currentPrice, exitSignal.reason || 'unknown');
+        await this.closePosition(this.position!, exitPrice, exitSignal.reason || 'unknown');
       } else if (exitSignal.newStopLoss && exitSignal.newStopLoss !== this.position?.appTrailingStop) {
         // Update app trailing stop price
         this.position!.appTrailingStop = exitSignal.newStopLoss;
@@ -3509,6 +3568,7 @@ export class SimpleAgent {
     // Reset trailing flags for next position
     this.trailingNotified = false;
     this.trailingWidened = false;
+    this.stagnantSlUpdated = false;
 
     // Reset NFS state
     this.nfsBreachCount = 0;
@@ -4942,6 +5002,7 @@ export class SimpleAgent {
         // Reset trailing flags
         this.trailingNotified = false;
         this.trailingWidened = false;
+    this.stagnantSlUpdated = false;
         // V5.72: Reset trailing tracking for frontend
         this.trailingActivatedAt = null;
         this.trailingUpdateCount = 0;

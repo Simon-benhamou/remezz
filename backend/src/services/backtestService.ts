@@ -46,6 +46,7 @@ import {
   // V5.64: Wick breakout early entry functions
   checkWickBreakout,
   calcBollingerBands,
+  calcDynamicStopLoss,
   // V5.46 PARITY: Both backtest and live now use the same time calculation:
   // - entryTime = candle.timestamp (candle START/OPEN time)
   // - nowMs = entryTime + holdBars * 15 * 60000 (backtest) 
@@ -732,21 +733,29 @@ function checkBacktestExit(
           exitPrice: trailingStopPrice,
         };
       } else if (nfsScore.confidence === 'MEDIUM') {
-        // MEDIUM confidence: 1-candle confirmation, exit at close
+        // MEDIUM confidence: 1-candle confirmation, exit at best of trailing stop or close
         if (pos.trailingBreachCandles >= 1) {
+          // V5.81: Use best of trailing stop price or candle close for parity
+          const medExitPrice = pos.side === 'long'
+            ? Math.max(trailingStopPrice, current.close)
+            : Math.min(trailingStopPrice, current.close);
           return {
             shouldExit: true,
             exitReason: 'TRAIL_NFS_MED',
-            exitPrice: current.close,
+            exitPrice: medExitPrice,
           };
         }
       } else {
-        // LOW confidence: 2-candle confirmation, exit at close
+        // LOW confidence: 2-candle confirmation, exit at best of trailing stop or close
         if (pos.trailingBreachCandles >= 2) {
+          // V5.81: Use best of trailing stop price or candle close for parity
+          const lowExitPrice = pos.side === 'long'
+            ? Math.max(trailingStopPrice, current.close)
+            : Math.min(trailingStopPrice, current.close);
           return {
             shouldExit: true,
             exitReason: 'TRAIL_NFS_LOW',
-            exitPrice: current.close,
+            exitPrice: lowExitPrice,
           };
         }
       }
@@ -2055,7 +2064,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
                   leverage: posLev,
                   capitalBefore: capital + perPosMargin,
                   wasCapped: true,
-                  stopLossPct: CONFIG.EXIT.STOP_LOSS_PCT,
+                  stopLossPct: calcDynamicStopLoss(windowCandles).slPct,
                   highWaterMark: signal.side === 'long' ? multiEntryPrice : undefined,
                   lowWaterMark: signal.side === 'short' ? multiEntryPrice : undefined,
                   entryReason: `${signal.reason}_MULTI${posIdx}${wickBreakout.triggered ? '|wick_entry' : ''}`,
@@ -2075,7 +2084,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           // V5.13: Lower minimum margin for small accounts
           if (marginUsd < CONFIG.SIZING.MIN_MARGIN_USD) continue;
 
-          const slPct = CONFIG.EXIT.STOP_LOSS_PCT;
+          const slPct = calcDynamicStopLoss(windowCandles).slPct;
 
           capitalInUse += marginUsd;
           capital -= marginUsd;

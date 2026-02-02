@@ -377,13 +377,26 @@ export const MomentumConfig = {
   EXIT: {
     HOLD_PERIOD_MAX_MIN: 2880,   // 48 heures max hold
 
-    // V5.14: SL FIXE - 2.5% constant
-    // Layer 3 (Profit Lock) déplacera ce SL vers le haut pour sécuriser gains
-    STOP_LOSS_TYPE: 'fixed' as const,  // 'fixed' | 'atr'
-    STOP_LOSS_PCT: 2.5,              // SL fixe 2.5% (Emergency exchange = min(SL×mult, 3%))
+    // V5.81: DYNAMIC SL based on volatility regime (ATR)
+    // Low vol: tighter SL (less noise), High vol: wider SL (more noise)
+    // Parity data shows fixed 2.5% is too wide in calm markets (unnecessary losses)
+    // and the asymmetry between fixed losses and variable wins hurts expectancy.
+    STOP_LOSS_TYPE: 'dynamic' as const,  // V5.81: 'fixed' | 'atr' | 'dynamic'
+    STOP_LOSS_PCT: 2.5,              // Base SL / fallback when dynamic unavailable
     STOP_LOSS_ATR_MULT: 3.0,         // ATR × 3.0 (was 2.0) - plus large
     STOP_LOSS_MIN_PCT: 1.0,          // Min 1.0% (was 0.8%)
     STOP_LOSS_MAX_PCT: 4.5,          // Max 4.5% (was 3.0%)
+
+    // V5.81: Dynamic SL by volatility regime
+    DYNAMIC_SL_LOW_VOL_PCT: 1.5,     // ATR < 2%: tighter SL, market is calm
+    DYNAMIC_SL_MED_VOL_PCT: 2.0,     // ATR 2-3.5%: standard SL
+    DYNAMIC_SL_HIGH_VOL_PCT: 2.5,    // ATR > 3.5%: wider SL, market is wild
+
+    // V5.81: Breakeven move — eliminate losses on trades that prove direction
+    // When trade reaches +BREAKEVEN_TRIGGER_PCT, move SL to entry + fees
+    BREAKEVEN_ENABLED: true,
+    BREAKEVEN_TRIGGER_PCT: 1.0,       // Move SL to breakeven when +1% profit reached
+    BREAKEVEN_OFFSET_PCT: 0.1,        // Offset above entry to cover fees (0.1%)
 
     PROFIT_TARGET_PCT: 3.0,      // Take Profit 3% → 15% avec 5x leverage
 
@@ -401,7 +414,9 @@ export const MomentumConfig = {
 
     // Emergency Stop Loss (Exchange)
     EMERGENCY_STOP_MULTIPLIER: 2.5,       // Emergency SL = dynamic SL × multiplier, capped
-    EMERGENCY_STOP_MAX_PCT: 3.0,          // Hard cap (user request): max 3% from entry on exchange
+    EMERGENCY_STOP_MAX_PCT: 2.5,          // V5.81: Aligned with logical SL (was 3.0%, now 2.5%)
+                                          // Parity data shows live loses 2-4% more on SL hits because
+                                          // exchange SL was 3% while backtest exits at exactly 2.5%
                                           // Example: ATR SL 2% → Emergency 5%
                                           // Example: ATR SL 3% → Emergency 7.5%
 
@@ -2135,8 +2150,34 @@ export function shouldExitPosition(
   
   // Calculate effective SL % (tightened if stagnant confirmed AND trailing not active)
   const isStagnantConfirmed = !trailingIsActive && position.stagnantState.confirmed && !position.stagnantState.cancelled;
-  const baseSlPct = position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
-  const effectiveSlPct = isStagnantConfirmed ? stagnantTightenSlPct : baseSlPct;
+
+  // V5.81: Dynamic SL based on volatility regime
+  let baseSlPct: number;
+  if (MomentumConfig.EXIT.STOP_LOSS_TYPE === 'dynamic') {
+    if (volatilityRegime.regime === 'LOW') {
+      baseSlPct = (MomentumConfig.EXIT as any).DYNAMIC_SL_LOW_VOL_PCT ?? 1.5;
+    } else if (volatilityRegime.regime === 'HIGH') {
+      baseSlPct = (MomentumConfig.EXIT as any).DYNAMIC_SL_HIGH_VOL_PCT ?? 2.5;
+    } else {
+      baseSlPct = (MomentumConfig.EXIT as any).DYNAMIC_SL_MED_VOL_PCT ?? 2.0;
+    }
+  } else {
+    baseSlPct = position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
+  }
+
+  // V5.81: Breakeven move — when profit reached trigger, SL moves to entry + offset
+  const breakevenEnabled = (MomentumConfig.EXIT as any).BREAKEVEN_ENABLED ?? false;
+  const breakevenTrigger = (MomentumConfig.EXIT as any).BREAKEVEN_TRIGGER_PCT ?? 1.0;
+  const breakevenOffset = (MomentumConfig.EXIT as any).BREAKEVEN_OFFSET_PCT ?? 0.1;
+  const maxPnl = position.maxPnlPct ?? 0;
+
+  let useBreakeven = false;
+  if (breakevenEnabled && maxPnl >= breakevenTrigger && !trailingIsActive) {
+    // Trade proved direction — protect at breakeven instead of full SL
+    useBreakeven = true;
+  }
+
+  const effectiveSlPct = isStagnantConfirmed ? stagnantTightenSlPct : (useBreakeven ? breakevenOffset : baseSlPct);
   
   // ============================================================================
   // V5.38: CHECK SL ON WICK FIRST (like backtest) - BEFORE trailing
@@ -2529,13 +2570,26 @@ export function calcDynamicStopLoss(
   candles: { high: number; low: number; close: number }[]
 ): { slPct: number; atrPct: number | null; isDynamic: boolean } {
   const config = MomentumConfig.EXIT;
-  
-  // V5.14: Fixed SL only (dynamic SL disabled)
-  // Always return fixed SL since STOP_LOSS_TYPE is 'fixed'
-  return { 
-    slPct: config.STOP_LOSS_PCT, 
-    atrPct: null, 
-    isDynamic: false 
+
+  // V5.81: Dynamic SL based on volatility regime
+  if (config.STOP_LOSS_TYPE === 'dynamic') {
+    const regime = determineVolatilityRegime(candles);
+    let slPct: number;
+    if (regime.regime === 'LOW') {
+      slPct = (config as any).DYNAMIC_SL_LOW_VOL_PCT ?? 1.5;
+    } else if (regime.regime === 'HIGH') {
+      slPct = (config as any).DYNAMIC_SL_HIGH_VOL_PCT ?? 2.5;
+    } else {
+      slPct = (config as any).DYNAMIC_SL_MED_VOL_PCT ?? 2.0;
+    }
+    return { slPct, atrPct: regime.atrPct, isDynamic: true };
+  }
+
+  // Fallback: Fixed SL
+  return {
+    slPct: config.STOP_LOSS_PCT,
+    atrPct: null,
+    isDynamic: false
   };
 }
 
