@@ -541,7 +541,7 @@ export const MomentumConfig = {
     STAGNANT_TRADE_OBS_MINUTES: 60,        // V5.34: Shorter observation (45+60=105min)
     STAGNANT_TRADE_MIN_PROFIT_PCT: 0.8,    // Threshold for initial stagnant trigger
     STAGNANT_TRADE_RECOVERY_PCT: 0.6,      // V5.34: Higher recovery threshold
-    STAGNANT_TRADE_TIGHTEN_SL_PCT: 0.8,    // V5.34: Tighter SL from 2.5% to 0.8%
+    STAGNANT_TRADE_TIGHTEN_SL_RATIO: 0.5,   // V5.84: Ratio of adaptive SL (e.g. 0.5 × 2.0% = 1.0%)
     STAGNANT_TRADE_EXIT_IF_PROFIT: false,  // V5.34: DON'T exit, let trade continue!
   },
   
@@ -2130,7 +2130,7 @@ export function shouldExitPosition(
   const stagnantObsMinutes = stagnantConfig.STAGNANT_TRADE_OBS_MINUTES ?? 60;
   const stagnantMinProfitPct = stagnantConfig.STAGNANT_TRADE_MIN_PROFIT_PCT ?? 0.8;
   const stagnantRecoveryPct = stagnantConfig.STAGNANT_TRADE_RECOVERY_PCT ?? 0.6;
-  const stagnantTightenSlPct = stagnantConfig.STAGNANT_TRADE_TIGHTEN_SL_PCT ?? 0.8;
+  const stagnantTightenSlRatio = (stagnantConfig as any).STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
   const stagnantExitIfProfit = stagnantConfig.STAGNANT_TRADE_EXIT_IF_PROFIT ?? false;
   
   const totalStagnantMinutes = stagnantTimeMinutes + stagnantObsMinutes;
@@ -2215,6 +2215,8 @@ export function shouldExitPosition(
     useBreakeven = true;
   }
 
+  // V5.84: Stagnant SL respects adaptive SL — use ratio of current baseSlPct
+  const stagnantTightenSlPct = baseSlPct * stagnantTightenSlRatio;
   const effectiveSlPct = isStagnantConfirmed ? stagnantTightenSlPct : (useBreakeven ? breakevenOffset : baseSlPct);
   
   // ============================================================================
