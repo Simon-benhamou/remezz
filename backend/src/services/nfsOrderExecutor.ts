@@ -56,7 +56,7 @@ export interface OrderStatus {
 export interface NfsExitResult {
   success: boolean;
   exitPrice: number;
-  exitMethod: 'LIMIT_FILLED' | 'LIMIT_PARTIAL' | 'MARKET_FALLBACK' | 'MARKET_DIRECT' | '2CLOSE_FALLBACK';
+  exitMethod: 'LIMIT_FILLED' | 'LIMIT_PARTIAL' | 'MARKET_FALLBACK' | 'MARKET_DIRECT' | '2CLOSE_FALLBACK' | 'PROACTIVE_LIMIT_FILLED';
   slippagePct: number;
   slippageUsd: number;
   filledQty: number;

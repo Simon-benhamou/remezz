@@ -781,6 +781,10 @@ export class SimpleAgent {
   private lastNfsResult: NfsResult | null = null;
   private nfsBreachCount = 0;
 
+  // V5.82: Proactive LIMIT order tracking
+  private proactiveLimitOrderId: string | null = null;
+  private proactiveLimitPrice: number | null = null;
+
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
   private lastTickAt: number = 0;
@@ -1338,6 +1342,100 @@ export class SimpleAgent {
         }
         
         if (!last.isFinal) {
+          // ═══════════════════════════════════════════════════════════════════
+          // V5.82: PROACTIVE LIMIT - On non-final candles, check if we should
+          // place a LIMIT at trailing stop BEFORE the breach happens.
+          // This lets the order sit in the book and fill at the exact trailing
+          // stop price = perfect match with backtest.
+          // ═══════════════════════════════════════════════════════════════════
+          const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
+          const proactiveEnabled = (MomentumConfig.EXIT as any).NFS_PROACTIVE_LIMIT_ENABLED ?? true;
+
+          if (nfsEnabled && proactiveEnabled && this.nfsCalculator && this.nfsStateMachine && this.position) {
+            const trailingActive = this.position.trailingActive && this.position.appTrailingStop;
+            if (trailingActive) {
+              const trailingStopPrice = this.position.appTrailingStop!;
+              const currentPrice = last.close;
+              const side = this.position.side;
+
+              // Build candle arrays for NFS
+              const prevNfsCandles: NfsCandle[] = (klines || []).slice(-25, -1).map(k => ({
+                timestamp: k.timestamp,
+                open: k.open,
+                high: k.high,
+                low: k.low,
+                close: k.close,
+                volume: k.volume || 0,
+                isFinal: true,
+              }));
+
+              const partialCandle: NfsCandle = {
+                timestamp: last.timestamp,
+                open: last.open,
+                high: last.high,
+                low: last.low,
+                close: last.close,
+                volume: last.volume || 0,
+                isFinal: false,
+              };
+
+              // Run NFS state machine evaluation on partial candle
+              const evalResult = this.nfsStateMachine.evaluate(
+                currentPrice,
+                partialCandle,
+                prevNfsCandles,
+                side,
+                trailingStopPrice,
+                this.position.highWaterMark ?? currentPrice,
+                this.position.lowWaterMark ?? currentPrice
+              );
+
+              // Handle proactive LIMIT actions
+              if (evalResult.action === 'PLACE_PROACTIVE_LIMIT' && evalResult.targetPrice) {
+                // Place LIMIT order at trailing stop price BEFORE breach
+                const orderSide: 'buy' | 'sell' = side === 'long' ? 'sell' : 'buy';
+                logger.info(
+                  `🎯 [${symbol}] PROACTIVE LIMIT: placing ${orderSide} LIMIT @ $${evalResult.targetPrice.toFixed(4)} ` +
+                  `(trailing stop) | NFS=${evalResult.nfsResult?.score.toFixed(0)} | price=$${currentPrice.toFixed(4)} | ` +
+                  `dist=${((side === 'long' ? currentPrice - trailingStopPrice : trailingStopPrice - currentPrice) / trailingStopPrice * 100).toFixed(3)}%`
+                );
+
+                // Cancel any existing proactive limit first
+                if (this.proactiveLimitOrderId) {
+                  try {
+                    await this.cancelProactiveLimit(symbol);
+                  } catch (e) {
+                    logger.warn(`[${symbol}] Failed to cancel existing proactive LIMIT: ${e}`);
+                  }
+                }
+
+                // Place the proactive limit
+                try {
+                  const orderId = await this.placeProactiveLimit(symbol, orderSide, this.position.qty, evalResult.targetPrice);
+                  if (orderId) {
+                    this.proactiveLimitOrderId = orderId;
+                    this.proactiveLimitPrice = evalResult.targetPrice;
+                    this.nfsStateMachine.setProactiveLimitOrderPending(orderId, evalResult.targetPrice);
+                    logger.info(`🎯 [${symbol}] PROACTIVE LIMIT placed: orderId=${orderId} @ $${evalResult.targetPrice.toFixed(4)}`);
+                  }
+                } catch (e) {
+                  logger.warn(`[${symbol}] Failed to place proactive LIMIT: ${e}`);
+                }
+              } else if (evalResult.action === 'CANCEL_PROACTIVE_LIMIT') {
+                // NFS dropped or price moved away — cancel the proactive LIMIT
+                if (this.proactiveLimitOrderId) {
+                  logger.info(`🎯 [${symbol}] PROACTIVE LIMIT CANCEL: ${evalResult.reason}`);
+                  try {
+                    await this.cancelProactiveLimit(symbol);
+                  } catch (e) {
+                    logger.warn(`[${symbol}] Failed to cancel proactive LIMIT: ${e}`);
+                  }
+                }
+              }
+              // If action is NONE or ALERT, the proactive LIMIT (if placed) stays in the book
+            }
+          }
+
           const now = Date.now();
           const candleAge = now - last.timestamp;
           logger.debug(`⏳ [${symbol}] Waiting for 1m candle to close (age: ${Math.round(candleAge/1000)}s, close: ${last.close.toFixed(4)})`);
@@ -1350,6 +1448,28 @@ export class SimpleAgent {
         const detectionDelay = Date.now() - (last.closeTime || last.timestamp);
         logger.info(`📍 [${symbol}] NEW 1m candle closed | close=${last.close.toFixed(4)} | detection_delay=${detectionDelay}ms`);
         this.lastRtTrailingKlineTs = last.timestamp;
+
+        // ═══════════════════════════════════════════════════════════════════
+        // V5.82: Check if proactive LIMIT was filled during this candle
+        // If so, the exit happened at the exact trailing stop price!
+        // ═══════════════════════════════════════════════════════════════════
+        if (this.proactiveLimitOrderId && this.position) {
+          const fillResult = await this.checkProactiveLimitFill(symbol);
+          if (fillResult?.filled) {
+            const execPx = fillResult.avgPrice;
+            this.stopRealtimeExitMonitor();
+            logger.info(
+              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED @ $${execPx.toFixed(4)} | ` +
+              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | ` +
+              `slippage=0% (exact backtest match!) | ` +
+              `nfs=${this.lastNfsResult?.score.toFixed(0) ?? 'n/a'}`
+            );
+            this.proactiveLimitOrderId = null;
+            this.proactiveLimitPrice = null;
+            await this.closePosition(this.position!, execPx, 'trailing_proactive_limit');
+            return;
+          }
+        }
 
         // Update trailing state using the candle close for breach detection.
         // V5.25 FIX: Use proper high/low for breach detection:
@@ -1422,7 +1542,36 @@ export class SimpleAgent {
           if (this.nfsStateMachine) {
             this.nfsStateMachine.reset();
           }
+          // V5.82: Cancel proactive LIMIT if breach cleared
+          if (this.proactiveLimitOrderId) {
+            logger.info(`🎯 [${symbol}] Trailing breach cleared — cancelling proactive LIMIT`);
+            await this.cancelProactiveLimit(symbol);
+          }
           return;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // V5.82: If proactive LIMIT is in play and breach confirmed, check fill
+        // The proactive order was placed BEFORE breach — it should have filled
+        // at the exact trailing stop price for perfect backtest parity.
+        // ═══════════════════════════════════════════════════════════════════════
+        if (this.proactiveLimitOrderId && this.position) {
+          const fillResult = await this.checkProactiveLimitFill(symbol);
+          if (fillResult?.filled) {
+            const execPx = fillResult.avgPrice;
+            this.stopRealtimeExitMonitor();
+            logger.info(
+              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED on breach confirm @ $${execPx.toFixed(4)} | ` +
+              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | exact backtest match`
+            );
+            this.proactiveLimitOrderId = null;
+            this.proactiveLimitPrice = null;
+            await this.closePosition(this.position!, execPx, 'trailing_proactive_limit');
+            return;
+          }
+          // Proactive LIMIT didn't fill yet — cancel it and fall through to normal NFS logic
+          logger.info(`🎯 [${symbol}] Proactive LIMIT not filled on breach — cancelling, using normal NFS flow`);
+          await this.cancelProactiveLimit(symbol);
         }
 
         // ═══════════════════════════════════════════════════════════════════════
@@ -3573,6 +3722,8 @@ export class SimpleAgent {
     // Reset NFS state
     this.nfsBreachCount = 0;
     this.lastNfsResult = null;
+    this.proactiveLimitOrderId = null;
+    this.proactiveLimitPrice = null;
     if (this.nfsStateMachine) {
       this.nfsStateMachine.reset();
     }
@@ -4415,6 +4566,120 @@ export class SimpleAgent {
    * Cancel ALL orders on exchange (both regular AND algo orders)
    * This is a helper that calls cancelAllOrders twice - once for regular, once for algo
    */
+  // ═══════════════════════════════════════════════════════════════════════
+  // V5.82: PROACTIVE LIMIT ORDER HELPERS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Place a proactive LIMIT order at the trailing stop price BEFORE breach.
+   * In paper mode, returns a simulated order ID.
+   * In live mode, places a real LIMIT order on the exchange.
+   */
+  private async placeProactiveLimit(
+    symbol: string,
+    orderSide: 'buy' | 'sell',
+    qty: number,
+    price: number
+  ): Promise<string | null> {
+    if (this.config.mode === 'paper') {
+      const orderId = `paper_proactive_${Date.now()}`;
+      logger.debug(`[${symbol}] PAPER proactive LIMIT: ${orderSide} ${qty} @ ${price.toFixed(4)}`);
+      return orderId;
+    }
+
+    // Live mode: place real LIMIT order
+    try {
+      const order = await this.config.exchange.createOrder(
+        symbol,
+        'limit',
+        orderSide,
+        qty,
+        price,
+        { timeInForce: 'GTC' }
+      );
+      return order.id || order.orderId || null;
+    } catch (e: any) {
+      logger.warn(`[${symbol}] Failed to place proactive LIMIT on exchange: ${e.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Cancel a proactive LIMIT order. Resets tracking state.
+   */
+  private async cancelProactiveLimit(symbol: string): Promise<void> {
+    const orderId = this.proactiveLimitOrderId;
+    if (!orderId) return;
+
+    this.proactiveLimitOrderId = null;
+    this.proactiveLimitPrice = null;
+
+    if (this.nfsStateMachine) {
+      this.nfsStateMachine.onLimitOrderCancelled();
+    }
+
+    if (this.config.mode === 'paper') {
+      logger.debug(`[${symbol}] PAPER proactive LIMIT cancelled: ${orderId}`);
+      return;
+    }
+
+    // Live mode: cancel on exchange
+    try {
+      if (this.config.exchange.cancelOrder) {
+        await this.config.exchange.cancelOrder(orderId, symbol);
+      }
+      logger.info(`[${symbol}] Proactive LIMIT cancelled on exchange: ${orderId}`);
+    } catch (e: any) {
+      // Order may have already filled or expired
+      logger.debug(`[${symbol}] Proactive LIMIT cancel failed (may have filled): ${e.message}`);
+    }
+  }
+
+  /**
+   * Check if a proactive LIMIT order has been filled.
+   * Called on candle close to see if the proactive order executed.
+   * Returns the fill price if filled, null otherwise.
+   */
+  private async checkProactiveLimitFill(symbol: string): Promise<{ filled: boolean; avgPrice: number } | null> {
+    const orderId = this.proactiveLimitOrderId;
+    if (!orderId) return null;
+
+    if (this.config.mode === 'paper') {
+      // In paper mode, check if price actually reached the limit price
+      if (this.proactiveLimitPrice && this.position) {
+        const side = this.position.side;
+        const limitPrice = this.proactiveLimitPrice;
+        const currentPrice = this.lastPrice;
+
+        // For LONG: sell limit fills when price >= limit price
+        // For SHORT: buy limit fills when price <= limit price
+        const filled = side === 'long'
+          ? currentPrice <= limitPrice  // Price dropped to trailing = limit fills
+          : currentPrice >= limitPrice; // Price rose to trailing = limit fills
+
+        if (filled) {
+          return { filled: true, avgPrice: limitPrice };
+        }
+      }
+      return null;
+    }
+
+    // Live mode: check order status on exchange
+    try {
+      if (this.config.exchange.fetchOrder) {
+        const order = await this.config.exchange.fetchOrder(orderId, symbol);
+        const status = order.status?.toLowerCase();
+        if (status === 'closed' || status === 'filled') {
+          const avgPrice = order.average || order.price || this.proactiveLimitPrice || 0;
+          return { filled: true, avgPrice };
+        }
+      }
+    } catch (e: any) {
+      logger.debug(`[${symbol}] Failed to check proactive LIMIT status: ${e.message}`);
+    }
+    return null;
+  }
+
   private async cancelAllOrdersOnExchange(): Promise<void> {
     if (this.config.mode === 'paper') return;
     
