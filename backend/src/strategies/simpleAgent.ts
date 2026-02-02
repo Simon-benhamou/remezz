@@ -4687,8 +4687,8 @@ export class SimpleAgent {
 
     // Live mode: check order status on exchange
     try {
-      if (this.config.exchange.fetchOrder) {
-        const order = await this.config.exchange.fetchOrder(orderId, symbol);
+      if ((this.config.exchange as any).fetchOrder) {
+        const order = await (this.config.exchange as any).fetchOrder(orderId, symbol);
         const status = order.status?.toLowerCase();
         if (status === 'closed' || status === 'filled') {
           const avgPrice = order.average || order.price || this.proactiveLimitPrice || 0;
