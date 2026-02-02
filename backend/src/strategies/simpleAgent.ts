@@ -1827,9 +1827,10 @@ export class SimpleAgent {
       
       // Fetch BTC candles for market conditions
       const btcCandles = await this.fetchBtcCandles();
-      
+      const btcCandles1hForConditions = (await this.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
+
       // Update and broadcast market conditions (preserve marketQuality from previous update)
-      const newConditions = getMarketConditions(btcCandles);
+      const newConditions = getMarketConditions(btcCandles, btcCandles1hForConditions);
       this.lastMarketConditions = {
         ...newConditions,
         // Preserve marketQuality from checkEntry() if already set
@@ -2382,25 +2383,40 @@ export class SimpleAgent {
     // V5.56 FIX: Re-validate BTC regime before entering position
     // This catches cases where signal was generated with stale BTC data
     try {
-      const btcCandlesForValidation = await this.fetchBtcCandles();
-      if (btcCandlesForValidation.length >= 201) {
-        const btcCloses = btcCandlesForValidation.map(c => c.close);
-        const btcSma200 = btcCloses.slice(-200).reduce((a, b) => a + b, 0) / 200;
-        const btcNow = btcCloses[btcCloses.length - 1];
+      // V5.82: Use 1h candles for regime validation (same as entry signal)
+      const btcCandles1hVal = (await this.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
+      let btcSma200: number;
+      let btcNow: number;
+      if (btcCandles1hVal.length >= 200) {
+        const btcCloses1h = btcCandles1hVal.map(c => c.close);
+        btcSma200 = btcCloses1h.slice(-200).reduce((a, b) => a + b, 0) / 200;
+        btcNow = btcCloses1h[btcCloses1h.length - 1];
+      } else {
+        // Fallback to 15m
+        const btcCandlesForValidation = await this.fetchBtcCandles();
+        if (btcCandlesForValidation.length >= 201) {
+          const btcCloses = btcCandlesForValidation.map(c => c.close);
+          btcSma200 = btcCloses.slice(-200).reduce((a, b) => a + b, 0) / 200;
+          btcNow = btcCloses[btcCloses.length - 1];
+        } else {
+          logger.warn(`⚠️ [${symbol}] Not enough BTC candles for regime validation`);
+          btcSma200 = 0;
+          btcNow = 0;
+        }
+      }
+      if (btcSma200 > 0 && btcNow > 0) {
         const btcInBullRegime = btcNow > btcSma200;
         const btcInBearRegime = btcNow < btcSma200;
-        
+
         // Block SHORT in BULL regime and LONG in BEAR regime
         if (side === 'short' && btcInBullRegime) {
-          logger.error(`🚫 [${symbol}] BLOCKED: SHORT in BULL regime! BTC=${btcNow.toFixed(0)} > SMA200=${btcSma200.toFixed(0)}`);
+          logger.error(`🚫 [${symbol}] BLOCKED: SHORT in BULL regime! BTC=${btcNow.toFixed(0)} > SMA200(1h)=${btcSma200.toFixed(0)}`);
           return;
         }
         if (side === 'long' && btcInBearRegime) {
-          logger.error(`🚫 [${symbol}] BLOCKED: LONG in BEAR regime! BTC=${btcNow.toFixed(0)} < SMA200=${btcSma200.toFixed(0)}`);
+          logger.error(`🚫 [${symbol}] BLOCKED: LONG in BEAR regime! BTC=${btcNow.toFixed(0)} < SMA200(1h)=${btcSma200.toFixed(0)}`);
           return;
         }
-      } else {
-        logger.warn(`⚠️ [${symbol}] Not enough BTC candles for regime validation (${btcCandlesForValidation.length}/201)`);
       }
     } catch (err) {
       logger.warn(`⚠️ [${symbol}] Failed to validate BTC regime:`, err);
@@ -3288,6 +3304,10 @@ export class SimpleAgent {
       }
       const btcCandles = lastClosedBtcIdx >= 0 ? allBtcCandles.slice(0, lastClosedBtcIdx + 1) : [];
 
+      // V5.82: Fetch BTC 1h candles for regime SMA200
+      const allBtcCandles1h = await this.fetchBtcCandles1h();
+      const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
+
       // Only process exit once per newly-closed candle.
       if (latestClosedCandle.timestamp === this.lastProcessedExitCandleTs) {
         return;
@@ -3417,6 +3437,7 @@ export class SimpleAgent {
         priceHigh: exitHigh,
         priceLow: exitLow,
         btcCandles: btcCandles,
+        btcCandles1h: btcCandles1h,  // V5.82: 1h candles for regime SMA200
       });
 
       // 🔍 DEBUG: Log regime change detection for debugging timing issues
