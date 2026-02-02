@@ -1705,15 +1705,24 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           if (availableCapital < minAvailableCapital) continue;
         }
 
-        // BTC regime: use PRIOR BTC close for regime (avoid look-ahead)
-        const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
-        const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
-        const isBullRegime = btcPriceForRegime > btcSma200;
-
-        // V5.39 FIX: Get BTC 1h window for MTF filter - only CLOSED candles (aligned with live)
-        // Previously included candle in progress, which could cause look-ahead bias
+        // V5.82: BTC regime uses 1h SMA200 (more stable, matches live)
+        // Fallback to 15m if 1h data insufficient
         const CANDLE_1H_INTERVAL_MS = 60 * 60 * 1000;
         const btcCandles1hWindow = btcCandles1h.filter(c => c.timestamp + CANDLE_1H_INTERVAL_MS <= btcCandle.timestamp);
+        let isBullRegime: boolean;
+        if (btcCandles1hWindow.length >= 200) {
+          const btcCloses1h = btcCandles1hWindow.map(c => c.close);
+          const btcSma200_1h = calcSMA(btcCloses1h, 200);
+          const btcNow1h = btcCloses1h[btcCloses1h.length - 1];
+          isBullRegime = btcNow1h > btcSma200_1h;
+        } else {
+          // Fallback to 15m
+          const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
+          const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
+          isBullRegime = btcPriceForRegime > btcSma200;
+        }
+
+        // V5.39 FIX: btcCandles1hWindow already computed above for regime + MTF filter
 
         // V5.36: Use shared checkMomentumSignal (includes MTF + BTC Vol filters)
         // This ensures 100% parity with production signal logic
