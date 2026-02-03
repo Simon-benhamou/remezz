@@ -2607,10 +2607,12 @@ export class SimpleAgent {
     logger.info(`🚀 [${symbol}] OPENING ${side.toUpperCase()} | price=$${currentPrice.toFixed(4)} | qty=${sizing.qty.toFixed(6)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x${liquidityInfo}${slippageInfo}`);
     
     // V5.7: Calculate dynamic stop-loss based on ATR
-    const slCalc = calcDynamicStopLoss(candles);
+    // V5.85: Now includes tier-based SL for different crypto types
+    const slCalc = calcDynamicStopLoss(candles, symbol);
     const slPct = slCalc.slPct;
     if (slCalc.isDynamic) {
-      logger.info(`🎯 [${symbol}] Dynamic SL: ATR=${slCalc.atrPct?.toFixed(2)}% × 2.0 = ${slPct.toFixed(2)}%`);
+      const tierInfo = slCalc.tier ? ` | tier=${slCalc.tier}` : '';
+      logger.info(`🎯 [${symbol}] Dynamic SL: ATR=${slCalc.atrPct?.toFixed(2)}%${tierInfo} → SL=${slPct.toFixed(2)}%`);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
