@@ -5261,7 +5261,12 @@ export class SimpleAgent {
           reason = 'trailing_stop_exchange';
           logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via PnL heuristic (PnL: ${pnlPct.toFixed(2)}%)`);
         }
-        // Priority 4: Fixed stop loss (significant loss or orderType is STOP_MARKET)
+        // Priority 4: V5.85 - Check if stagnant was confirmed (exchange SL was tightened)
+        else if (this.position.stagnantState?.confirmed && !this.position.stagnantState?.cancelled) {
+          reason = 'stagnant_trade';
+          logger.info(`🐌 [${symbol}] Detected STAGNANT TRADE exit (PnL: ${pnlPct.toFixed(2)}%, stagnant SL hit on exchange)`);
+        }
+        // Priority 5: Fixed stop loss (significant loss or orderType is STOP_MARKET)
         else {
           reason = 'stop_loss_exchange';
           logger.info(`🛑 [${symbol}] Detected FIXED SL exit (PnL: ${pnlPct.toFixed(2)}%, type=${orderType})`);
