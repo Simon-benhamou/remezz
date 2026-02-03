@@ -1,9 +1,10 @@
 import React from 'react';
-import { Button, Typography, message, Tag, Input, Spin } from 'antd';
-import { ReloadOutlined, DownloadOutlined, SearchOutlined } from '../icons';
+import { Button, Typography, message, Tag, Input, Spin, Skeleton } from 'antd';
+import { ReloadOutlined, DownloadOutlined, SearchOutlined, SyncOutlined } from '../icons';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
+import { useDataCache } from '../hooks/useDataCache';
 
 const { Title, Text } = Typography;
 
@@ -45,13 +46,53 @@ function formatDuration(minutes?: number | null): string {
 }
 
 export default function ExecutionLedgerPageNew() {
-  const [allTrades, setAllTrades] = React.useState<TradeRow[]>([]);
-  const [loading, setLoading] = React.useState(false);
   const [searchText, setSearchText] = React.useState('');
   const { mode } = useMode();
 
+  // Fetch all trades with caching and parallel loading
+  const fetchAllTrades = React.useCallback(async (): Promise<TradeRow[]> => {
+    // Load ALL sessions (paper + live) to see all trades
+    const sessionsList = await api.listSessions();
+
+    // Fetch trades from all sessions in PARALLEL (not sequential N+1)
+    const tradePromises = sessionsList.map(async (session: any) => {
+      try {
+        const res = await api.getTrades(session.id, { limit: 250 });
+        const sessionTrades = Array.isArray(res) ? res : (res?.trades || []);
+        return sessionTrades.map((t: any) => ({
+          ...t,
+          sessionId: session.id,
+          sessionSymbol: session.symbol,
+          sessionMode: session.mode,
+          outcome: asOutcome(t),
+        }));
+      } catch {
+        return [];
+      }
+    });
+
+    const tradeArrays = await Promise.all(tradePromises);
+    const allTrades = tradeArrays.flat();
+    allTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return allTrades;
+  }, []);
+
+  // Use caching hook - data stays visible while refreshing
+  const {
+    data: allTrades,
+    isInitialLoad,
+    isRefreshing,
+    refresh,
+  } = useDataCache<TradeRow[]>({
+    cacheKey: 'execution-ledger',
+    fetcher: fetchAllTrades,
+    ttlMs: 60000, // 60s TTL
+    autoRefreshMs: 120000, // Auto-refresh every 2 minutes
+    modeAware: false, // We load all modes, filter client-side
+  });
+
   const trades = React.useMemo(() => {
-    return allTrades.filter(t => t.sessionMode === mode);
+    return (allTrades || []).filter(t => t.sessionMode === mode);
   }, [allTrades, mode]);
 
   const summary = React.useMemo(() => {
@@ -69,28 +110,9 @@ export default function ExecutionLedgerPageNew() {
     return { total: trades.length, wins, losses, winRate: trades.length ? (wins / trades.length) * 100 : 0, totalPnl, totalFees, netPnl: totalPnl - totalFees };
   }, [trades]);
 
-  const loadTrades = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      // 🔧 FIX: Load ALL sessions (paper + live) to see all trades
-      const sessionsList = await api.listSessions(); // No mode filter
-      const loadedTrades: TradeRow[] = [];
-      for (const session of sessionsList) {
-        try {
-          const res = await api.getTrades(session.id, { limit: 250 });
-          const sessionTrades = Array.isArray(res) ? res : (res?.trades || []);
-          loadedTrades.push(...sessionTrades.map((t: any) => ({ ...t, sessionId: session.id, sessionSymbol: session.symbol, sessionMode: session.mode, outcome: asOutcome(t) })));
-        } catch {}
-      }
-      loadedTrades.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setAllTrades(loadedTrades);
-    } catch (e: any) {
-      message.error(e?.message || 'Failed to load trades');
-    }
-    setLoading(false);
-  }, []);
-
-  React.useEffect(() => { void loadTrades(); }, [loadTrades]);
+  const handleRefresh = React.useCallback(() => {
+    refresh(true);
+  }, [refresh]);
 
   const exportCsv = () => {
     if (!trades.length) return;
@@ -151,7 +173,10 @@ export default function ExecutionLedgerPageNew() {
             style={{ width: 200, background: 'var(--bg-primary)', borderColor: 'var(--border-subtle)' }}
             allowClear
           />
-          <Button icon={<ReloadOutlined />} onClick={loadTrades} loading={loading}>Refresh</Button>
+          <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={isRefreshing}>Refresh</Button>
+          {isRefreshing && !isInitialLoad && (
+            <Tag color="processing" icon={<SyncOutlined spin />}>Updating...</Tag>
+          )}
           <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!trades.length} type="primary">Export CSV</Button>
         </div>
       </div>
@@ -206,9 +231,9 @@ export default function ExecutionLedgerPageNew() {
           ))}
         </div>
 
-        {/* Loading */}
-        {loading && !trades.length && (
-          <div style={{ padding: 48, textAlign: 'center' }}><Spin size="large" /></div>
+        {/* Loading - only show skeleton on initial load */}
+        {isInitialLoad && (
+          <div style={{ padding: 48, textAlign: 'center' }}><Skeleton active paragraph={{ rows: 8 }} /></div>
         )}
 
         {/* Rows */}
@@ -321,7 +346,7 @@ export default function ExecutionLedgerPageNew() {
           );
         })}
 
-        {!loading && filteredTrades.length === 0 && (
+        {!isInitialLoad && filteredTrades.length === 0 && (
           <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>No trades found</div>
         )}
       </div>

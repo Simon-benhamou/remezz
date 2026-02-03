@@ -20,11 +20,12 @@ import {
   PlayCircleFilled,
   PlusOutlined,
   ReloadOutlined,
+  SyncOutlined,
 } from '../icons';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
-import { useSessionsCache } from '../hooks/useSessionsCache';
+import { useDataCache } from '../hooks/useDataCache';
 import AgentCreationModal from '../components/AgentCreationModal';
 import type { AppMode } from '../store';
 import type { StrategySnapshot } from '../types/strategies';
@@ -101,36 +102,46 @@ async function enrichSession(session: AgentSession): Promise<AgentSession> {
 export default function SessionsPage() {
   const navigate = useNavigate();
   const { mode: currentMode } = useMode();
-  const { loading, loadSessions, invalidateCache } = useSessionsCache();
-  const [sessions, setSessions] = React.useState<AgentSession[]>([]);
   const [viewMode, setViewMode] = React.useState<ViewMode>('table');
-  const [enrichedSessions, setEnrichedSessions] = React.useState<AgentSession[]>([]);
   const [createModalOpen, setCreateModalOpen] = React.useState(false);
 
-  const fetchSessions = React.useCallback(async (forceRefresh = false) => {
-    try {
-      const data = await loadSessions(currentMode as AppMode, true, forceRefresh);
-      setSessions(data || []);
-    } catch (e) {
-      console.error('Failed to load sessions:', e);
-    }
-  }, [currentMode, loadSessions]);
+  // Fetch sessions WITH enrichment included (avoids N+1 after cache)
+  const fetchEnrichedSessions = React.useCallback(async (): Promise<AgentSession[]> => {
+    const sessions = await api.listSessions(currentMode, true);
+    const sessionsList = Array.isArray(sessions) ? sessions : [];
 
-  React.useEffect(() => {
-    void fetchSessions();
-  }, [fetchSessions]);
+    // Enrich all sessions in PARALLEL
+    const enriched = await Promise.all(sessionsList.map(enrichSession));
+    return enriched;
+  }, [currentMode]);
 
-  React.useEffect(() => {
-    if (sessions?.length) {
-      Promise.all(sessions.map(enrichSession)).then(setEnrichedSessions);
-    } else {
-      setEnrichedSessions([]);
-    }
-  }, [sessions]);
+  // Use caching hook - enrichment is now part of the cached data
+  const {
+    data: enrichedSessions,
+    isInitialLoad,
+    isRefreshing,
+    refresh,
+    invalidate,
+  } = useDataCache<AgentSession[]>({
+    cacheKey: 'sessions-enriched',
+    fetcher: fetchEnrichedSessions,
+    mode: currentMode as AppMode,
+    ttlMs: 15000, // 15s TTL
+    autoRefreshMs: 30000, // Auto-refresh every 30s
+  });
 
-  const activeSessions = enrichedSessions.filter(isSessionActive);
-  const pausedSessions = enrichedSessions.filter((s) => s.haltedAt && !s.stoppedAt);
-  const stoppedSessions = enrichedSessions.filter((s) => s.stoppedAt);
+  const handleRefresh = React.useCallback(() => {
+    refresh(true);
+  }, [refresh]);
+
+  const invalidateCache = React.useCallback(() => {
+    invalidate();
+  }, [invalidate]);
+
+  const sessionsList = enrichedSessions || [];
+  const activeSessions = sessionsList.filter(isSessionActive);
+  const pausedSessions = sessionsList.filter((s) => s.haltedAt && !s.stoppedAt);
+  const stoppedSessions = sessionsList.filter((s) => s.stoppedAt);
 
   const handleAction = React.useCallback(
     async (action: 'stop' | 'start' | 'delete', session: AgentSession) => {
@@ -150,15 +161,15 @@ export default function SessionsPage() {
             else if (action === 'delete') await api.deleteSession(session.id);
             else await api.restartSession(session.id, { mode: session.mode, maxLeverage: 4, strategyEngine: 'meta_adaptive' });
             message.success(`Agent ${action === 'delete' ? 'deleted' : action === 'stop' ? 'stopped' : 'restarted'}`);
-            invalidateCache(currentMode as AppMode);
-            await fetchSessions(true);
+            invalidateCache();
+            await refresh(true);
           } catch (e: any) {
             message.error(e?.response?.data?.message || `Failed to ${action} agent`);
           }
         },
       });
     },
-    [currentMode, fetchSessions, invalidateCache]
+    [invalidateCache, refresh]
   );
 
   // Styles
@@ -177,7 +188,7 @@ export default function SessionsPage() {
     fontWeight: 500,
   };
 
-  if (loading && !enrichedSessions.length) {
+  if (isInitialLoad) {
     return <div style={{ padding: 24 }}><Skeleton active paragraph={{ rows: 8 }} /></div>;
   }
 
@@ -205,7 +216,10 @@ export default function SessionsPage() {
               ]}
               style={{ background: 'var(--bg-primary)' }}
             />
-            <Button icon={<ReloadOutlined />} onClick={() => fetchSessions(true)} loading={loading} />
+            <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={isRefreshing} />
+            {isRefreshing && !isInitialLoad && (
+              <Tag color="processing" icon={<SyncOutlined spin />}>Updating...</Tag>
+            )}
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
               Create Agent
             </Button>
@@ -249,14 +263,14 @@ export default function SessionsPage() {
             <span style={{ ...headerCellStyle, textAlign: 'right' }}>Actions</span>
           </div>
 
-          {enrichedSessions.length === 0 ? (
+          {sessionsList.length === 0 ? (
             <div style={{ padding: 48, textAlign: 'center' }}>
               <Empty description={<Text style={{ color: 'var(--text-secondary)' }}>No agents yet</Text>}>
                 <Button type="primary" onClick={() => setCreateModalOpen(true)}>Create Your First Agent</Button>
               </Empty>
             </div>
           ) : (
-            enrichedSessions.map((session) => {
+            sessionsList.map((session) => {
               const pnl = Number(session.pnlUsd ?? 0);
               const roi = Number(session.roiPct ?? 0);
               const winRate = Number(session.winRate ?? 0);
@@ -387,14 +401,14 @@ export default function SessionsPage() {
       {/* Cards View */}
       {viewMode === 'cards' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
-          {enrichedSessions.length === 0 ? (
+          {sessionsList.length === 0 ? (
             <div style={{ gridColumn: '1 / -1', padding: 48, textAlign: 'center' }}>
               <Empty description={<Text style={{ color: 'var(--text-secondary)' }}>No agents yet</Text>}>
                 <Button type="primary" onClick={() => setCreateModalOpen(true)}>Create Your First Agent</Button>
               </Empty>
             </div>
           ) : (
-            enrichedSessions.map((session) => {
+            sessionsList.map((session) => {
               const pnl = Number(session.pnlUsd ?? 0);
               const isActive = isSessionActive(session);
               const hasPosition = (session.openPositions ?? 0) > 0;
@@ -458,7 +472,7 @@ export default function SessionsPage() {
       <AgentCreationModal
         visible={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        onSuccess={() => { setCreateModalOpen(false); invalidateCache(currentMode as AppMode); fetchSessions(true); }}
+        onSuccess={() => { setCreateModalOpen(false); invalidateCache(); refresh(true); }}
         mode={currentMode as AppMode}
       />
     </div>

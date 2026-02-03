@@ -1,19 +1,20 @@
 import React from 'react';
-import { Button, Typography, Tag, Empty, Tooltip } from 'antd';
+import { Button, Typography, Tag, Empty, Tooltip, Skeleton } from 'antd';
 import {
   SyncOutlined,
   ThunderboltOutlined,
   DollarOutlined,
   EyeOutlined,
-  ExclamationCircleOutlined,
   ReloadOutlined,
   FireOutlined,
   RiseOutlined,
   FallOutlined,
 } from '@ant-design/icons';
-import { TrendingUp, TrendingDown, Clock, Zap, Target, AlertTriangle, Thermometer, Activity } from 'lucide-react';
+import { Clock, Target, AlertTriangle, Thermometer, Activity, Zap, TrendingUp, TrendingDown } from 'lucide-react';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
+import { useMultiDataCache } from '../hooks/useMultiDataCache';
+import { AppMode } from '../store';
 import { openWS } from '../ws';
 
 const { Text, Title } = Typography;
@@ -51,14 +52,59 @@ type FilterType = 'all' | 'futures' | 'exits' | 'orders' | 'triggers';
 type BiasFilter = 'all' | 'long' | 'short' | 'watch';
 
 export default function FeedPage() {
-  const [logs, setLogs] = React.useState<AgentLog[]>([]);
   const [radarEvents, setRadarEvents] = React.useState<RadarEvent[]>([]);
-  const [agentStates, setAgentStates] = React.useState<AgentState[]>([]);
-  const [loading, setLoading] = React.useState(false);
   const [filterType, setFilterType] = React.useState<FilterType>('all');
   const [biasFilter, setBiasFilter] = React.useState<BiasFilter>('all');
   const { mode } = useMode();
   const wsRef = React.useRef<ReturnType<typeof openWS> | null>(null);
+
+  // Use multi-data cache for feed data
+  const {
+    data,
+    isInitialLoad,
+    isRefreshing,
+    refresh,
+  } = useMultiDataCache<{
+    logs: AgentLog[];
+    agentStates: AgentState[];
+  }>({
+    cacheKey: 'feed',
+    mode: mode as AppMode,
+    sources: {
+      logs: {
+        key: 'logs',
+        fetcher: async () => {
+          const res = await api.getAgentLogs?.(mode as 'paper' | 'live', 100, 'memory').catch(() => ({ logs: [] }));
+          return Array.isArray(res) ? res : res?.logs || [];
+        },
+        ttlMs: 10000, // 10s TTL for logs
+      },
+      agentStates: {
+        key: 'agentStates',
+        fetcher: async () => {
+          const sessionsRes = await api.listSessions(mode).catch(() => []);
+          return (sessionsRes || [])
+            .filter((s: any) => !s.stoppedAt && !s.haltedAt)
+            .map((s: any) => ({
+              sessionId: s.id,
+              symbol: s.symbol?.replace('/USDT:USDT', '/USDT-USDT') || 'Unknown',
+              running: true,
+              hasPosition: false,
+              bias: null,
+            }));
+        },
+        ttlMs: 30000, // 30s TTL for sessions
+      },
+    },
+    autoRefreshMs: 15000, // Reduced from 5s to 15s
+  });
+
+  const logs = data.logs || [];
+  const agentStates = data.agentStates || [];
+
+  const handleRefresh = React.useCallback(() => {
+    refresh(undefined, true);
+  }, [refresh]);
 
   // V5.71: WebSocket listener for radar events
   React.useEffect(() => {
@@ -89,38 +135,6 @@ export default function FeedPage() {
       wsRef.current = null;
     };
   }, []);
-
-  const loadData = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      const [logsRes, sessionsRes] = await Promise.all([
-        api.getAgentLogs?.(mode as 'paper' | 'live', 100, 'memory').catch(() => ({ logs: [] })),
-        api.listSessions(mode).catch(() => []),
-      ]);
-      setLogs(Array.isArray(logsRes) ? logsRes : logsRes?.logs || []);
-
-      // Build agent states from sessions
-      const states: AgentState[] = (sessionsRes || [])
-        .filter((s: any) => !s.stoppedAt && !s.haltedAt)
-        .map((s: any) => ({
-          sessionId: s.id,
-          symbol: s.symbol?.replace('/USDT:USDT', '/USDT-USDT') || 'Unknown',
-          running: true,
-          hasPosition: false,
-          bias: null,
-        }));
-      setAgentStates(states);
-    } catch (e) {
-      console.error('Failed to load feed data:', e);
-    }
-    setLoading(false);
-  }, [mode]);
-
-  React.useEffect(() => {
-    void loadData();
-    const interval = setInterval(loadData, 5000);
-    return () => clearInterval(interval);
-  }, [loadData]);
 
   // Filter logs
   const filteredLogs = React.useMemo(() => {
@@ -208,7 +222,10 @@ export default function FeedPage() {
             {agentStates.length} active session(s) • Real-time agent activity ({mode})
           </Text>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading} />
+        <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={isRefreshing} />
+        {isRefreshing && !isInitialLoad && (
+          <Tag color="processing" icon={<SyncOutlined spin />}>Updating...</Tag>
+        )}
       </div>
 
       {/* Active Agents Bar */}

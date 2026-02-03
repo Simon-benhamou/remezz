@@ -6,6 +6,8 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
+import { useReportsCache } from '../hooks/useReportsCache';
+import { AppMode } from '../store';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
 
 dayjs.extend(relativeTime);
@@ -119,6 +121,9 @@ function ParityVerificationPanel() {
     loadResults();
   }, []);
 
+  // Valid category keys for validation
+  const validCategories: ParityCategory[] = ['MATCH', 'EXIT_MISMATCH', 'NO_SIGNAL', 'PNL_VARIANCE', 'DATA_ERROR'];
+
   // Parse mismatch details from V2 format
   const parseDetails = React.useCallback((record: ParityResult): ParsedMismatchDetails | null => {
     if (!record.mismatchDetails) {
@@ -130,7 +135,11 @@ function ParityVerificationPanel() {
       const parsed = JSON.parse(record.mismatchDetails);
       // V2 format: { category, details, signalCheck }
       if (parsed.category) {
-        return parsed as ParsedMismatchDetails;
+        // Validate category is a known value to prevent undefined config access
+        const category = validCategories.includes(parsed.category)
+          ? parsed.category
+          : 'DATA_ERROR';
+        return { ...parsed, category } as ParsedMismatchDetails;
       }
       // V1 format: array of strings
       if (Array.isArray(parsed)) {
@@ -249,13 +258,6 @@ function ParityVerificationPanel() {
     return c1 === c2;
   };
 
-  const isWithinOneCandle = (ts1: string | null, ts2: string | null): boolean => {
-    if (!ts1 || !ts2) return false;
-    const CANDLE_MS = 15 * 60 * 1000;
-    const c1 = Math.floor(dayjs(ts1).valueOf() / CANDLE_MS);
-    const c2 = Math.floor(dayjs(ts2).valueOf() / CANDLE_MS);
-    return Math.abs(c1 - c2) <= 1;
-  };
 
   const PNL_TOLERANCE = 0.5;
 
@@ -728,116 +730,38 @@ function pct(val?: number | null, digits = 2) {
 }
 
 export default function ReportsPage() {
-  const [sessions, setSessions] = React.useState<any[]>([]);
-  const [reports, setReports] = React.useState<any[]>([]);
-  const [loading, setLoading] = React.useState(false);
   const { mode } = useMode();
+  const {
+    reports,
+    sessions,
+    isRefreshing,
+    isInitialLoad,
+    error,
+    loadReports,
+    setupAutoRefresh
+  } = useReportsCache();
 
-  // Theme detection for dark mode compatibility
-  const { token } = theme.useToken();
-  const base = token.colorBgBase.toLowerCase();
-  const isDarkTheme = base.startsWith('#0') || base === 'black' || base.includes('dark');
-
+  // Initial load and mode change
   React.useEffect(() => {
-    loadSessions();
-  }, [mode]);
+    loadReports(mode as AppMode).catch(console.error);
+  }, [mode, loadReports]);
 
+  // Setup auto-refresh (every 60s)
   React.useEffect(() => {
-    if (sessions.length > 0) {
-      loadReports();
-    }
-  }, [sessions]);
+    return setupAutoRefresh(mode as AppMode);
+  }, [mode, setupAutoRefresh]);
 
-  const loadSessions = async () => {
-    try {
-      const data = await api.listSessions(mode);
-      setSessions(data);
-    } catch (error) {
-      console.error('Failed to load sessions:', error);
-    }
-  };
+  // Manual refresh handler
+  const handleRefresh = React.useCallback(() => {
+    loadReports(mode as AppMode, true).catch(console.error);
+  }, [mode, loadReports]);
 
-  const loadReports = async () => {
-    setLoading(true);
-    try {
-      // Récupérer les rapports quotidiens pour toutes les sessions actives
-      const allReports: any[] = [];
-      
-      for (const session of sessions) {
-        try {
-          const sessionReports = await api.listDailyReports(session.id, 30);
-          // Transformer les données pour correspondre au format attendu
-          const transformedReports = sessionReports.map((report: any) => ({
-            date: report.day,
-            sessionId: report.sessionId,
-            symbol: session.symbol,
-            totalTrades: report.stats?.trades || 0,
-            winRate: report.stats?.winRate || 0,
-            totalPnl: report.stats?.pnlUsd || 0,
-            avgWin: report.stats?.avgWin || 0,
-            avgLoss: report.stats?.avgLoss || 0,
-            expectancy: report.stats?.expectancy || 0,
-            roiPct: report.stats?.roiPct || 0,
-            maxDrawdown: -(Math.abs(report.stats?.pnlUsd || 0) * 0.15), // Estimation du drawdown
-            profitFactor: report.stats?.expectancy ? Math.max(1 + (report.stats.expectancy / 100), 0.1) : 1,
-            llmSummary: report.llm?.summary,
-            createdAt: report.createdAt
-          }));
-          allReports.push(...transformedReports);
-        } catch (error) {
-          console.warn(`Failed to load reports for session ${session.id}:`, error);
-        }
-      }
-      
-      // Trier par date (plus récent en premier) et grouper par jour
-      const groupedByDay = allReports.reduce((acc, report) => {
-        const date = report.date;
-        if (!acc[date]) {
-          acc[date] = {
-            date,
-            totalTrades: 0,
-            totalPnl: 0,
-            sessions: [],
-            winRates: [],
-            expectancies: []
-          };
-        }
-        
-        acc[date].totalTrades += report.totalTrades;
-        acc[date].totalPnl += report.totalPnl;
-        acc[date].sessions.push(report);
-        if (report.totalTrades > 0) {
-          acc[date].winRates.push(report.winRate);
-          acc[date].expectancies.push(report.expectancy);
-        }
-        
-        return acc;
-      }, {} as Record<string, any>);
-      
-      // Convertir en array et calculer les moyennes
-      const finalReports = Object.values(groupedByDay).map((dayData: any) => ({
-        date: dayData.date,
-        totalTrades: dayData.totalTrades,
-        winRate: dayData.winRates.length > 0 ? 
-          dayData.winRates.reduce((sum: number, wr: number) => sum + wr, 0) / dayData.winRates.length : 0,
-        totalPnl: dayData.totalPnl,
-        expectancy: dayData.expectancies.length > 0 ?
-          dayData.expectancies.reduce((sum: number, exp: number) => sum + exp, 0) / dayData.expectancies.length : 0,
-        maxDrawdown: Math.min(...dayData.sessions.map((s: any) => s.maxDrawdown), 0),
-        profitFactor: dayData.expectancies.length > 0 ? 
-          Math.max(1 + (dayData.expectancies.reduce((sum: number, exp: number) => sum + exp, 0) / dayData.expectancies.length / 100), 0.1) : 1,
-        sessionsCount: dayData.sessions.length,
-        sessions: dayData.sessions
-      })).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      
-      setReports(finalReports);
-    } catch (error) {
-      console.error('Failed to load reports:', error);
-      message.error('Failed to load reports');
-    } finally {
-      setLoading(false);
+  // Show error toast only once
+  React.useEffect(() => {
+    if (error) {
+      message.error(error);
     }
-  };
+  }, [error]);
 
   const globalStats = React.useMemo(() => {
     const totalTrades = reports.reduce((sum, r) => sum + r.totalTrades, 0);
@@ -849,7 +773,7 @@ export default function ReportsPage() {
     return { totalTrades, avgWinRate, totalPnl, maxDrawdown };
   }, [reports]);
 
-  const columns = [
+  const columns = React.useMemo(() => [
     {
       title: 'Date',
       dataIndex: 'date',
@@ -907,7 +831,7 @@ export default function ReportsPage() {
         </span>
       ),
     }
-  ];
+  ], []);
 
   return (
     <Tabs defaultActiveKey="daily" style={{ padding: '20px' }}>
@@ -964,18 +888,31 @@ export default function ReportsPage() {
             </Col>
           </Row>
 
-          <Card title="📊 Daily Reports" loading={loading} extra={
-            <Button onClick={loadReports} loading={loading}>
-              Refresh Reports
-            </Button>
-          }>
-            {reports.length === 0 ? (
+          <Card
+            title={
+              <Space>
+                <span>📊 Daily Reports</span>
+                {isRefreshing && !isInitialLoad && (
+                  <Tag color="processing" icon={<SyncOutlined spin />}>
+                    Updating...
+                  </Tag>
+                )}
+              </Space>
+            }
+            loading={isInitialLoad}
+            extra={
+              <Button onClick={handleRefresh} loading={isRefreshing}>
+                Refresh Reports
+              </Button>
+            }
+          >
+            {reports.length === 0 && !isInitialLoad ? (
               <div style={{ textAlign: 'center', padding: '40px' }}>
                 <Text type="secondary">
                   {sessions.length === 0 ? 'No trading sessions found' : 'No daily reports available yet'}
                 </Text>
               </div>
-            ) : (
+            ) : reports.length > 0 ? (
               <Table
                 dataSource={reports}
                 columns={columns}
@@ -1014,7 +951,7 @@ export default function ReportsPage() {
                   rowExpandable: (record) => record.sessions && record.sessions.length > 0,
                 }}
               />
-            )}
+            ) : null}
           </Card>
 
           <Card title="Active Sessions" size="small">

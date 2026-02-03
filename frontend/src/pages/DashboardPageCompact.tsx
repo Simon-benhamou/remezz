@@ -1,8 +1,11 @@
 import React from 'react';
-import { Card, Row, Col, Space, Button, Tag, Typography, Tooltip, Spin } from 'antd';
+import { Card, Row, Col, Space, Button, Tag, Typography, Spin, Skeleton } from 'antd';
+import { SyncOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
+import { useMultiDataCache } from '../hooks/useMultiDataCache';
+import { AppMode } from '../store';
 import {
   Area,
   AreaChart,
@@ -13,14 +16,12 @@ import {
   CartesianGrid,
   ReferenceLine,
 } from 'recharts';
-import { 
-  Bot, 
+import {
+  Bot,
   TrendingUp,
   TrendingDown,
   RefreshCw,
-  ArrowRightLeft,
   Activity,
-  Percent,
 } from 'lucide-react';
 
 const { Text } = Typography;
@@ -69,13 +70,58 @@ const statCardStyle: React.CSSProperties = {
 };
 
 export default function DashboardPageCompact() {
-  const [ov, setOv] = React.useState<any>({});
-  const [loading, setLoading] = React.useState<boolean>(true);
-  const [trades, setTrades] = React.useState<Trade[]>([]);
-  const [tradesLoading, setTradesLoading] = React.useState<boolean>(false);
-  const [marketConditions, setMarketConditions] = React.useState<MarketConditions | null>(null);
   const navigate = useNavigate();
   const { mode } = useMode();
+
+  // Use multi-data cache for all dashboard data
+  // Data stays visible while refreshing (stale-while-revalidate)
+  const {
+    data,
+    isInitialLoad,
+    isRefreshing,
+    refresh,
+  } = useMultiDataCache<{
+    overview: any;
+    trades: Trade[];
+    marketConditions: MarketConditions | null;
+  }>({
+    cacheKey: 'dashboard',
+    mode: mode as AppMode,
+    sources: {
+      overview: {
+        key: 'overview',
+        fetcher: async () => api.overview(mode),
+        ttlMs: 30000, // 30s TTL
+      },
+      trades: {
+        key: 'trades',
+        fetcher: async () => {
+          const tradesRes = await api.getTrades(undefined, { limit: 5000, mode: mode as any });
+          const allTrades = Array.isArray(tradesRes) ? tradesRes : (tradesRes?.trades || []);
+          return allTrades
+            .filter((t: any) => t.exitPrice != null && t.entryPrice != null && t.realizedPnlUsd != null)
+            .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        },
+        ttlMs: 60000, // 60s TTL for trades (less frequent updates)
+      },
+      marketConditions: {
+        key: 'marketConditions',
+        fetcher: async () => api.getMarketConditions().catch(() => null),
+        ttlMs: 30000, // 30s TTL
+      },
+    },
+    autoRefreshMs: 30000, // Check for stale data every 30s
+  });
+
+  // Extract data with defaults
+  const ov = data.overview || {};
+  const trades = data.trades || [];
+  const marketConditions = data.marketConditions || null;
+
+  // Manual refresh handler
+  const handleRefresh = React.useCallback(() => {
+    refresh(undefined, true);
+  }, [refresh]);
 
   // Build chart data - NET P&L (after fees)
   const chartData = React.useMemo(() => {
@@ -99,7 +145,7 @@ export default function DashboardPageCompact() {
   // Stats - use ov.todayPnlUsd from backend (already includes fees) for accuracy
   const stats = React.useMemo(() => {
     const totalPnl = trades.reduce((sum, t) => sum + (t.realizedPnlUsd || 0) - (t.feesUsd || 0), 0);
-    
+
     // Today's PnL - filter trades from today (midnight local time)
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -109,70 +155,20 @@ export default function DashboardPageCompact() {
     const todayWins = todayTrades.filter(t => (t.realizedPnlUsd || 0) > 0).length;
     const todayLosses = todayTrades.filter(t => (t.realizedPnlUsd || 0) < 0).length;
     const todayWinRate = (todayWins + todayLosses) > 0 ? (todayWins / (todayWins + todayLosses)) * 100 : 0;
-    
+
     const wins = trades.filter(t => (t.realizedPnlUsd || 0) > 0).length;
     const losses = trades.filter(t => (t.realizedPnlUsd || 0) < 0).length;
     const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
-    const avgRoe = trades.length > 0 
-      ? trades.reduce((sum, t) => sum + (t.roePct || 0), 0) / trades.length 
+    const avgRoe = trades.length > 0
+      ? trades.reduce((sum, t) => sum + (t.roePct || 0), 0) / trades.length
       : 0;
-    const avgLev = trades.length > 0 
-      ? trades.reduce((sum, t) => sum + (t.estLev || 0), 0) / trades.length 
+    const avgLev = trades.length > 0
+      ? trades.reduce((sum, t) => sum + (t.estLev || 0), 0) / trades.length
       : 0;
     const longs = trades.filter(t => t.positionSide === 'long').length;
     const shorts = trades.filter(t => t.positionSide === 'short').length;
     return { totalPnl, todayPnl, todayTrades: todayTrades.length, todayWinRate, wins, losses, winRate, avgRoe, avgLev, longs, shorts };
   }, [trades]);
-
-  async function loadTrades() {
-    setTradesLoading(true);
-    try {
-      // Single call: backend filters by user + mode and returns trades across sessions.
-      // Use a higher limit for an all-time-like equity curve.
-      const tradesRes = await api.getTrades(undefined, { limit: 5000, mode: mode as any });
-      const allTrades = Array.isArray(tradesRes) ? tradesRes : (tradesRes?.trades || []);
-      const validTrades = allTrades
-        .filter((t: any) => t.exitPrice != null && t.entryPrice != null && t.realizedPnlUsd != null)
-        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setTrades(validTrades);
-    } catch (err) {
-      console.error('Failed to load trades:', err);
-      setTrades([]);
-    } finally {
-      setTradesLoading(false);
-    }
-  }
-
-  async function load() {
-    setLoading(true);
-    try {
-      const [overviewRes, conditionsRes] = await Promise.all([
-        api.overview(mode),
-        api.getMarketConditions().catch(() => null),
-      ]);
-      setOv(overviewRes || {});
-      setMarketConditions(conditionsRes);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  React.useEffect(() => {
-    load();
-    loadTrades();
-    const overviewIv = setInterval(() => {
-      load();
-    }, 30000);
-    const tradesIv = setInterval(() => {
-      loadTrades();
-    }, 120000);
-    return () => {
-      clearInterval(overviewIv);
-      clearInterval(tradesIv);
-    };
-  }, [mode]);
 
   const recentTrades = trades.slice(0, 6);
   const tradingCount = (ov?.sessions || []).filter((s: any) => s.state === 'IN_POSITION').length;
@@ -180,7 +176,16 @@ export default function DashboardPageCompact() {
 
   return (
     <div style={{ padding: '20px', maxWidth: 1400, margin: '0 auto', background: 'transparent', minHeight: '100vh' }}>
-      
+
+      {/* Refresh indicator - shows when updating data in background */}
+      {isRefreshing && !isInitialLoad && (
+        <div style={{ textAlign: 'right', marginBottom: 8 }}>
+          <Tag color="processing" icon={<SyncOutlined spin />}>
+            Updating...
+          </Tag>
+        </div>
+      )}
+
       {/* Top Stats Bar */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
         <Col xs={12} sm={6}>
@@ -326,9 +331,9 @@ export default function DashboardPageCompact() {
         }
         headStyle={{ background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}
       >
-        {loading ? (
+        {isInitialLoad ? (
           <div style={{ textAlign: 'center', padding: 40 }}>
-            <Spin size="large" />
+            <Skeleton active paragraph={{ rows: 4 }} />
           </div>
         ) : (ov?.sessions || []).length === 0 ? (
           <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
@@ -410,10 +415,10 @@ export default function DashboardPageCompact() {
                   <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600, display: 'block' }}>Performance Overview</Text>
                   <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>Cumulative PnL across all sessions</Text>
                 </div>
-                <Button 
-                  type="text" 
-                  icon={<RefreshCw size={16} className={tradesLoading ? 'spin' : ''} />} 
-                  onClick={loadTrades}
+                <Button
+                  type="text"
+                  icon={<RefreshCw size={16} className={isRefreshing ? 'spin' : ''} />}
+                  onClick={handleRefresh}
                   style={{ color: 'var(--text-secondary)' }}
                 />
               </div>

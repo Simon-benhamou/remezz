@@ -1,9 +1,11 @@
 import React from 'react';
-import { Card, Table, Select, Space, DatePicker, Segmented, Button, Statistic, Tag, message, InputNumber, Row, Col, Input, Tooltip, Typography } from 'antd';
-import { SearchOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Card, Table, Select, Space, DatePicker, Segmented, Button, Statistic, Tag, message, InputNumber, Row, Col, Input, Tooltip, Typography, Skeleton } from 'antd';
+import { SearchOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
+import { useDataCache } from '../hooks/useDataCache';
+import { AppMode } from '../store';
 
 const { RangePicker } = DatePicker;
 const { Title, Text } = Typography;
@@ -40,11 +42,9 @@ function formatUsd(v?: number | null, digits = 2) {
 }
 
 export default function TradesJournalPage() {
-  const [sessions, setSessions] = React.useState<any[]>([]);
   const [sessionId, setSessionId] = React.useState<string>('');
   const [rows, setRows] = React.useState<TradeRow[]>([]);
-  const [allSessionData, setAllSessionData] = React.useState<TradeRow[]>([]);
-  const [loading, setLoading] = React.useState(false);
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [filterOutcome, setFilterOutcome] = React.useState<'all' | Outcome>('all');
   const [filterSymbol, setFilterSymbol] = React.useState<string>('all');
   const [searchText, setSearchText] = React.useState<string>('');
@@ -53,30 +53,43 @@ export default function TradesJournalPage() {
   const [viewMode, setViewMode] = React.useState<'session' | 'global'>('session');
   const { mode } = useMode();
 
+  // Cache sessions list
+  const {
+    data: sessions,
+    isInitialLoad: sessionsLoading,
+  } = useDataCache<any[]>({
+    cacheKey: 'journal-sessions',
+    fetcher: async () => api.listSessions(mode),
+    mode: mode as AppMode,
+    ttlMs: 60000, // 60s TTL
+    autoRefreshMs: 0, // No auto-refresh for sessions
+  });
+
+  // Set initial session when sessions load
   React.useEffect(() => {
-    (async () => {
-      try {
-        const list = await api.listSessions(mode);
-        setSessions(list);
-        const active = list.find((s: any) => !s.stoppedAt);
-        const first = active || list[0];
-        setSessionId(first?.id || '');
-      } catch {}
-    })();
-  }, [mode]);
+    if (sessions?.length && !sessionId) {
+      const active = sessions.find((s: any) => !s.stoppedAt);
+      const first = active || sessions[0];
+      setSessionId(first?.id || '');
+    }
+  }, [sessions, sessionId]);
 
   const loadTrades = React.useCallback(async () => {
     if (viewMode === 'session' && !sessionId) return;
-    setLoading(true);
+    if (!sessions?.length) return;
+
+    // Keep existing data visible (stale-while-revalidate)
+    setIsRefreshing(true);
+
     try {
       const params: { from?: string; to?: string; limit?: number } = { limit };
       if (range[0]) params.from = range[0].startOf('day').toISOString();
       if (range[1]) params.to = range[1].endOf('day').add(1, 'day').toISOString();
-      
+
       if (viewMode === 'global') {
-        // Load data from all sessions
+        // Load data from all sessions in PARALLEL
         const allData = await Promise.all(
-          sessions.map(async (session) => {
+          sessions.map(async (session: any) => {
             try {
               const res = await api.getTrades(session.id, params);
               const data = Array.isArray(res) ? res : (res?.trades || []);
@@ -87,7 +100,6 @@ export default function TradesJournalPage() {
           })
         );
         const flatData = allData.flat().sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
-        setAllSessionData(flatData);
         setRows(flatData);
       } else {
         // Load data from selected session only
@@ -98,13 +110,13 @@ export default function TradesJournalPage() {
     } catch (e: any) {
       message.error(String(e?.response?.data?.error || e?.message || 'Failed to load trades'));
     }
-    setLoading(false);
+    setIsRefreshing(false);
   }, [sessionId, range, limit, viewMode, sessions]);
 
   React.useEffect(() => {
     if (viewMode === 'session' && sessionId) loadTrades();
-    else if (viewMode === 'global' && sessions.length) loadTrades();
-  }, [sessionId, loadTrades, viewMode, sessions.length]);
+    else if (viewMode === 'global' && sessions?.length) loadTrades();
+  }, [sessionId, loadTrades, viewMode, sessions?.length]);
 
   const data = React.useMemo(() => {
     let mapped = rows.map((row) => ({
@@ -232,7 +244,7 @@ export default function TradesJournalPage() {
     },
   ]), [viewMode]);
 
-  const sessionOptions = sessions.map((s: any) => ({
+  const sessionOptions = (sessions || []).map((s: any) => ({
     value: s.id,
     label: `${s.symbol} · ${s.mode?.toUpperCase?.() || ''}${!s.stoppedAt ? ' (active)' : ''}`,
   }));
@@ -319,14 +331,17 @@ export default function TradesJournalPage() {
               </Space>
               
               <Tooltip title="Refresh Data">
-                <Button 
-                  icon={<ReloadOutlined />} 
+                <Button
+                  icon={<ReloadOutlined />}
                   onClick={loadTrades}
-                  loading={loading}
+                  loading={isRefreshing}
                 >
                   Refresh
                 </Button>
               </Tooltip>
+              {isRefreshing && rows.length > 0 && (
+                <Tag color="processing" icon={<SyncOutlined spin />}>Updating...</Tag>
+              )}
               
               <Tooltip title="Export to CSV">
                 <Button 
@@ -405,7 +420,7 @@ export default function TradesJournalPage() {
       <Card title={`📊 ${viewMode === 'global' ? 'All Sessions' : 'Session'} Trades Journal`}>
         <Table
           rowKey='id'
-          loading={loading}
+          loading={isRefreshing && rows.length === 0}
           dataSource={data}
           columns={columns}
           pagination={{ 
