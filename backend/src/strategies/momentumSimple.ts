@@ -388,7 +388,33 @@ export const MomentumConfig = {
     STOP_LOSS_MIN_PCT: 1.0,          // Min 1.0% (was 0.8%)
     STOP_LOSS_MAX_PCT: 4.5,          // Max 4.5% (was 3.0%)
 
-    // V5.81: Dynamic SL by volatility regime
+    // V5.85: TIER-BASED SL - Different cryptos have different volatility profiles
+    // Based on historical P90 of 45-min moves:
+    // - TIER 1 (Majors): BTC, ETH - P90 < 0.8%, very stable
+    // - TIER 2 (Large-caps): SOL, SEI, DOGE, etc. - P90 0.8-1.2%, need wider SL
+    // - TIER 3 (Mid-caps): IMX, OP - P90 > 1.2%, very volatile
+    TIER_BASED_SL_ENABLED: true,
+
+    // TIER 1: BTC, ETH (P90 < 0.8%)
+    TIER1_SYMBOLS: ['BTC', 'ETH'],
+    TIER1_SL_LOW_VOL_PCT: 1.5,       // Low vol: 1.5%
+    TIER1_SL_MED_VOL_PCT: 2.0,       // Med vol: 2.0%
+    TIER1_SL_HIGH_VOL_PCT: 2.5,      // High vol: 2.5%
+
+    // TIER 2: Most altcoins (P90 0.8-1.2%)
+    // SOL, SEI, DOGE, AVAX, XRP, LINK, ADA, ATOM, DOT, ARB, NEAR, SUI, APT
+    TIER2_SYMBOLS: ['SOL', 'SEI', 'DOGE', 'AVAX', 'XRP', 'LINK', 'ADA', 'ATOM', 'DOT', 'ARB', 'NEAR', 'SUI', 'APT'],
+    TIER2_SL_LOW_VOL_PCT: 2.0,       // Low vol: 2.0% (was 1.5% - too tight!)
+    TIER2_SL_MED_VOL_PCT: 2.5,       // Med vol: 2.5%
+    TIER2_SL_HIGH_VOL_PCT: 3.0,      // High vol: 3.0%
+
+    // TIER 3: High volatility alts (P90 > 1.2%)
+    TIER3_SYMBOLS: ['IMX', 'OP', 'FTM'],
+    TIER3_SL_LOW_VOL_PCT: 2.5,       // Low vol: 2.5%
+    TIER3_SL_MED_VOL_PCT: 3.0,       // Med vol: 3.0%
+    TIER3_SL_HIGH_VOL_PCT: 3.5,      // High vol: 3.5%
+
+    // V5.81: Dynamic SL by volatility regime (LEGACY - used when TIER_BASED_SL_ENABLED = false)
     DYNAMIC_SL_LOW_VOL_PCT: 1.5,     // ATR < 2%: tighter SL, market is calm
     DYNAMIC_SL_MED_VOL_PCT: 2.0,     // ATR 2-3.5%: standard SL
     DYNAMIC_SL_HIGH_VOL_PCT: 2.5,    // ATR > 3.5%: wider SL, market is wild
@@ -2189,15 +2215,48 @@ export function shouldExitPosition(
   // Calculate effective SL % (tightened if stagnant confirmed AND trailing not active)
   const isStagnantConfirmed = !trailingIsActive && position.stagnantState.confirmed && !position.stagnantState.cancelled;
 
-  // V5.81: Dynamic SL based on volatility regime
+  // V5.85: Tier-based + volatility-based dynamic SL
   let baseSlPct: number;
   if (MomentumConfig.EXIT.STOP_LOSS_TYPE === 'dynamic') {
-    if (volatilityRegime.regime === 'LOW') {
-      baseSlPct = (MomentumConfig.EXIT as any).DYNAMIC_SL_LOW_VOL_PCT ?? 1.5;
-    } else if (volatilityRegime.regime === 'HIGH') {
-      baseSlPct = (MomentumConfig.EXIT as any).DYNAMIC_SL_HIGH_VOL_PCT ?? 2.5;
+    const exitConfig = MomentumConfig.EXIT as any;
+    const tierBasedEnabled = exitConfig.TIER_BASED_SL_ENABLED ?? false;
+
+    // Extract base symbol (e.g., "SOL/USDT:USDT" → "SOL")
+    const baseSymbol = position.symbol?.split('/')[0]?.split(':')[0] ?? '';
+
+    if (tierBasedEnabled && baseSymbol) {
+      // Determine tier
+      const tier1 = exitConfig.TIER1_SYMBOLS ?? ['BTC', 'ETH'];
+      const tier2 = exitConfig.TIER2_SYMBOLS ?? [];
+      const tier3 = exitConfig.TIER3_SYMBOLS ?? [];
+
+      let tierPrefix: string;
+      if (tier1.includes(baseSymbol)) {
+        tierPrefix = 'TIER1';
+      } else if (tier3.includes(baseSymbol)) {
+        tierPrefix = 'TIER3';
+      } else {
+        // Default to TIER2 for all other symbols
+        tierPrefix = 'TIER2';
+      }
+
+      // Get SL based on tier + volatility regime
+      if (volatilityRegime.regime === 'LOW') {
+        baseSlPct = exitConfig[`${tierPrefix}_SL_LOW_VOL_PCT`] ?? exitConfig.DYNAMIC_SL_LOW_VOL_PCT ?? 1.5;
+      } else if (volatilityRegime.regime === 'HIGH') {
+        baseSlPct = exitConfig[`${tierPrefix}_SL_HIGH_VOL_PCT`] ?? exitConfig.DYNAMIC_SL_HIGH_VOL_PCT ?? 2.5;
+      } else {
+        baseSlPct = exitConfig[`${tierPrefix}_SL_MED_VOL_PCT`] ?? exitConfig.DYNAMIC_SL_MED_VOL_PCT ?? 2.0;
+      }
     } else {
-      baseSlPct = (MomentumConfig.EXIT as any).DYNAMIC_SL_MED_VOL_PCT ?? 2.0;
+      // Legacy behavior: volatility-only SL
+      if (volatilityRegime.regime === 'LOW') {
+        baseSlPct = exitConfig.DYNAMIC_SL_LOW_VOL_PCT ?? 1.5;
+      } else if (volatilityRegime.regime === 'HIGH') {
+        baseSlPct = exitConfig.DYNAMIC_SL_HIGH_VOL_PCT ?? 2.5;
+      } else {
+        baseSlPct = exitConfig.DYNAMIC_SL_MED_VOL_PCT ?? 2.0;
+      }
     }
   } else {
     baseSlPct = position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
@@ -2597,32 +2656,68 @@ export function calcSafeLeverage(
 
 /**
  * V5.11: Calculate dynamic stop loss based on ATR
- * 
+ * V5.85: Added tier-based SL for different crypto types
+ *
  * Backtested results (24 months, 8 cryptos):
  * - ATR × 3.0: +2547% PnL, 89.1% WR, 10.6% SL rate
  * - vs ATR × 2.0: +915% amélioration, 138 stop hunts évités
  * - Fonctionne en BULL (+401%) et BEAR (+2145%)
- * 
+ *
  * @param candles - Array of OHLCV candles
+ * @param symbol - Optional symbol for tier-based SL (e.g., "SOL/USDT:USDT" or "SOL")
  * @returns Dynamic SL percentage and debug info
  */
 export function calcDynamicStopLoss(
-  candles: { high: number; low: number; close: number }[]
-): { slPct: number; atrPct: number | null; isDynamic: boolean } {
+  candles: { high: number; low: number; close: number }[],
+  symbol?: string
+): { slPct: number; atrPct: number | null; isDynamic: boolean; tier?: string } {
   const config = MomentumConfig.EXIT;
+  const exitConfig = config as any;
 
   // V5.81: Dynamic SL based on volatility regime
   if (config.STOP_LOSS_TYPE === 'dynamic') {
     const regime = determineVolatilityRegime(candles);
+    const tierBasedEnabled = exitConfig.TIER_BASED_SL_ENABLED ?? false;
+
+    // Extract base symbol (e.g., "SOL/USDT:USDT" → "SOL")
+    const baseSymbol = symbol?.split('/')[0]?.split(':')[0] ?? '';
+
     let slPct: number;
-    if (regime.regime === 'LOW') {
-      slPct = (config as any).DYNAMIC_SL_LOW_VOL_PCT ?? 1.5;
-    } else if (regime.regime === 'HIGH') {
-      slPct = (config as any).DYNAMIC_SL_HIGH_VOL_PCT ?? 2.5;
+    let tier: string | undefined;
+
+    if (tierBasedEnabled && baseSymbol) {
+      // V5.85: Tier-based SL
+      const tier1 = exitConfig.TIER1_SYMBOLS ?? ['BTC', 'ETH'];
+      const tier3 = exitConfig.TIER3_SYMBOLS ?? [];
+
+      if (tier1.includes(baseSymbol)) {
+        tier = 'TIER1';
+      } else if (tier3.includes(baseSymbol)) {
+        tier = 'TIER3';
+      } else {
+        tier = 'TIER2';
+      }
+
+      // Get SL based on tier + volatility regime
+      if (regime.regime === 'LOW') {
+        slPct = exitConfig[`${tier}_SL_LOW_VOL_PCT`] ?? exitConfig.DYNAMIC_SL_LOW_VOL_PCT ?? 1.5;
+      } else if (regime.regime === 'HIGH') {
+        slPct = exitConfig[`${tier}_SL_HIGH_VOL_PCT`] ?? exitConfig.DYNAMIC_SL_HIGH_VOL_PCT ?? 2.5;
+      } else {
+        slPct = exitConfig[`${tier}_SL_MED_VOL_PCT`] ?? exitConfig.DYNAMIC_SL_MED_VOL_PCT ?? 2.0;
+      }
     } else {
-      slPct = (config as any).DYNAMIC_SL_MED_VOL_PCT ?? 2.0;
+      // Legacy: volatility-only SL
+      if (regime.regime === 'LOW') {
+        slPct = exitConfig.DYNAMIC_SL_LOW_VOL_PCT ?? 1.5;
+      } else if (regime.regime === 'HIGH') {
+        slPct = exitConfig.DYNAMIC_SL_HIGH_VOL_PCT ?? 2.5;
+      } else {
+        slPct = exitConfig.DYNAMIC_SL_MED_VOL_PCT ?? 2.0;
+      }
     }
-    return { slPct, atrPct: regime.atrPct, isDynamic: true };
+
+    return { slPct, atrPct: regime.atrPct, isDynamic: true, tier };
   }
 
   // Fallback: Fixed SL

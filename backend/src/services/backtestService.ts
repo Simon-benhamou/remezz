@@ -2073,7 +2073,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
                   leverage: posLev,
                   capitalBefore: capital + perPosMargin,
                   wasCapped: true,
-                  stopLossPct: calcDynamicStopLoss(windowCandles).slPct,
+                  stopLossPct: calcDynamicStopLoss(windowCandles, symbol).slPct,
                   highWaterMark: signal.side === 'long' ? multiEntryPrice : undefined,
                   lowWaterMark: signal.side === 'short' ? multiEntryPrice : undefined,
                   entryReason: `${signal.reason}_MULTI${posIdx}${wickBreakout.triggered ? '|wick_entry' : ''}`,
@@ -2093,7 +2093,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           // V5.13: Lower minimum margin for small accounts
           if (marginUsd < CONFIG.SIZING.MIN_MARGIN_USD) continue;
 
-          const slPct = calcDynamicStopLoss(windowCandles).slPct;
+          const slPct = calcDynamicStopLoss(windowCandles, symbol).slPct;
 
           capitalInUse += marginUsd;
           capital -= marginUsd;
