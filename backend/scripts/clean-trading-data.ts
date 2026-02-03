@@ -20,9 +20,8 @@
  * WARNING: This is destructive and cannot be undone!
  */
 
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+// Use the shared prisma client from src/db/client.ts
+import { prisma } from '../src/db/client.js';
 
 async function cleanTradingData() {
   console.log('🧹 Starting trading data cleanup...\n');
@@ -105,8 +104,6 @@ async function cleanTradingData() {
   } catch (error) {
     console.error('\n❌ Cleanup failed:', error);
     process.exit(1);
-  } finally {
-    await prisma.$disconnect();
   }
 }
 
