@@ -2650,6 +2650,7 @@ export class SimpleAgent {
         entryPrice,  // V5.64: Use wick breakout price if available
         qty: sizing.qty,
         entryTime: lastCandle.timestamp,  // V5.46: Use candle timestamp for backtest parity
+        realEntryTime: Date.now(),        // V5.86: Actual entry time for stagnant detection
         leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
         marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
         stopLoss: side === 'long'
@@ -3030,13 +3031,14 @@ export class SimpleAgent {
         //   entryTime = candleTimestamp (of entry candle)
         //   holdMinutes = (nowMs - entryTime) / 60000 = holdBars * 15 (EXACT like backtest)
         const entryTimeMs = lastCandle.timestamp;  // V5.46: Use candle timestamp for backtest parity
-        
+
         const position: Position = {
           symbol,
           side,
           entryPrice: filledPrice!,
           qty: filledQty!,
           entryTime: entryTimeMs,  // V5.46: Aligned with backtest
+          realEntryTime: Date.now(),  // V5.86: Actual entry time for stagnant detection
           leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
           marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
           stopLoss: side === 'long'
@@ -5085,6 +5087,7 @@ export class SimpleAgent {
           entryPrice: dbPosition.entryPrice,
           qty: dbPosition.qty,
           entryTime: dbPosition.openedAt?.getTime() || Date.now(),
+          realEntryTime: dbPosition.openedAt?.getTime() || Date.now(),  // V5.86: Restore from DB (same as openedAt)
           stopLoss: dbPosition.stopPrice || undefined,
           orderId: dbPosition.slOrderId || undefined,
           leverage: leverage,
@@ -5390,6 +5393,7 @@ export class SimpleAgent {
             entryPrice,
             qty: exchangeQty,
             entryTime: dbEntryTime || Date.now(), // Use DB time if available
+            realEntryTime: dbEntryTime || Date.now(),  // V5.86: Use DB time for stagnant detection
             leverage: estimatedLeverage,
             marginUsd: estimatedMargin,
             highWaterMark: exchangeSide === 'long' ? entryPrice : undefined,
@@ -5752,11 +5756,12 @@ export class SimpleAgent {
       // V5.71: Use Prisma transaction to ensure atomic trade lifecycle operations
       // All DB operations succeed or fail together - no partial state on crash
       const exitTs = new Date();
-      // V5.78 FIX: Handle undefined entryTime - fallback to openedAt or current time
-      // This prevents NaN in durationMinutes which causes Prisma transaction to fail
-      const entryTimeMs = position.entryTime || Date.now();
+      // V5.86 FIX: Use realEntryTime for accurate duration in DB (actual hold time)
+      // This ensures DB duration matches what user experienced, not candle-aligned time
+      // Fallback chain: realEntryTime → entryTime → Date.now()
+      const entryTimeMs = position.realEntryTime ?? position.entryTime ?? Date.now();
       const entryTs = new Date(entryTimeMs);
-      if (!position.entryTime) {
+      if (!position.realEntryTime && !position.entryTime) {
         logger.warn(`⚠️ [${this.config.symbol}] position.entryTime was undefined, using fallback: ${entryTs.toISOString()}`);
       }
       const durationMs = exitTs.getTime() - entryTs.getTime();

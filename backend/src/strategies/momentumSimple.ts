@@ -670,6 +670,7 @@ export interface Position {
   entryPrice: number;
   qty: number;
   entryTime: number;
+  realEntryTime?: number;  // V5.86: Actual entry time for stagnant detection (vs candle timestamp for parity)
   stopLoss?: number;
   appTrailingStop?: number;  // App-side trailing stop (distinct from exchange emergency stop)
   stopLossPct?: number;      // V5.7: Store the SL percentage used (for dynamic SL tracking)
@@ -1972,6 +1973,11 @@ export function shouldExitPosition(
 ): ExitSignal {
   const now = opts?.nowMs ?? Date.now();
   const holdMinutes = (now - position.entryTime) / 60000;
+
+  // V5.86: Use realEntryTime for stagnant detection (actual hold time in live/paper)
+  // Keep holdMinutes (candle-based) for other calculations to maintain backtest parity
+  const stagnantEntryTime = position.realEntryTime ?? position.entryTime;
+  const holdMinutesForStagnant = (now - stagnantEntryTime) / 60000;
   
   // ============================================================================
   // V5.42 FIX: Skip exit checks if candle is BEFORE or AT entry time
@@ -2168,44 +2174,44 @@ export function shouldExitPosition(
   
   // Only process stagnant if trailing NOT active (like backtest)
   if (!trailingIsActive) {
-    // Step 1: Check if initial stagnant trigger (at 45min, no trailing, low maxPnl)
-    if (stagnantEnabled && 
-        !position.stagnantState.triggered && 
-        holdMinutes >= stagnantTimeMinutes &&
+    // V5.86: Step 1: Check if initial stagnant trigger (at 45min REAL time, no trailing, low maxPnl)
+    // Use holdMinutesForStagnant to trigger based on actual hold time in live/paper mode
+    if (stagnantEnabled &&
+        !position.stagnantState.triggered &&
+        holdMinutesForStagnant >= stagnantTimeMinutes &&
         (position.maxPnlPct ?? 0) < stagnantMinProfitPct) {
       position.stagnantState.triggered = true;
-      position.stagnantState.triggeredAtMinutes = holdMinutes;  // V5.38 FIX: Use minutes like backtest
+      position.stagnantState.triggeredAtMinutes = holdMinutesForStagnant;  // V5.86: Use real time minutes
     }
-    
+
     // Step 2: During observation window, track peak and check for recovery
     if (position.stagnantState.triggered && !position.stagnantState.confirmed && !position.stagnantState.cancelled) {
       // Use wick to detect peaks (like backtest)
       const wickPeakPnl = position.side === 'long'
         ? ((effectiveHigh - position.entryPrice) / position.entryPrice) * 100
         : ((position.entryPrice - effectiveLow) / position.entryPrice) * 100;
-      
+
       position.stagnantState.obsPeakPct = Math.max(position.stagnantState.obsPeakPct, wickPeakPnl);
-      
+
       // If peak during observation >= recovery threshold → cancel stagnant
       if (position.stagnantState.obsPeakPct >= stagnantRecoveryPct) {
         position.stagnantState.cancelled = true;
       }
-      
-      // V5.38 FIX: End of observation window = triggered time + obsMinutes
-      // Use holdMinutes-based approach like backtest for consistency
-      // Store triggeredAtMinutes when triggered, then check if obsElapsed >= obsMinutes
+
+      // V5.86 FIX: End of observation window = triggered time + obsMinutes
+      // Use holdMinutesForStagnant (real time) for consistency with trigger
       const triggeredAtMinutes = position.stagnantState.triggeredAtMinutes ?? stagnantTimeMinutes;
-      const obsElapsedMinutes = holdMinutes - triggeredAtMinutes;
+      const obsElapsedMinutes = holdMinutesForStagnant - triggeredAtMinutes;
       if (obsElapsedMinutes >= stagnantObsMinutes && !position.stagnantState.cancelled) {
         position.stagnantState.confirmed = true;
-        
+
         // V5.31: Exit at market if currently in profit
         if (stagnantExitIfProfit && pnlPct > 0) {
-          return { 
-            shouldExit: true, 
-            reason: 'stagnant_profit_exit', 
-            pnlPct, 
-            holdMinutes 
+          return {
+            shouldExit: true,
+            reason: 'stagnant_profit_exit',
+            pnlPct,
+            holdMinutes
           };
         }
       }
