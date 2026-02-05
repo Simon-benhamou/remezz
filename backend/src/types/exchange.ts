@@ -5,6 +5,7 @@
 
 export interface CcxtOrder {
   id: string;
+  orderId?: string;
   symbol: string;
   side: 'buy' | 'sell';
   type: string;
@@ -15,6 +16,7 @@ export interface CcxtOrder {
   remaining: number;
   status: 'open' | 'closed' | 'canceled' | 'expired' | 'rejected';
   timestamp: number;
+  fee?: { cost: number; currency?: string };
   info: Record<string, unknown>;
 }
 

@@ -318,7 +318,7 @@ export class CorrelationAnalyzer {
       };
     }
 
-    const symbols = [...new Set(positions.map(p => p.symbol))];
+    const symbols: string[] = [...new Set((positions as Array<{ symbol: string }>).map(p => p.symbol))];
     const matrix = await this.calculateCorrelationMatrix(symbols);
 
     // Find highly correlated groups
@@ -400,7 +400,7 @@ export class CorrelationAnalyzer {
       return { allowed: true, riskMultiplier: 1.0 };
     }
 
-    const existingSymbols = [...new Set(positions.map(p => p.symbol))];
+    const existingSymbols: string[] = [...new Set((positions as Array<{ symbol: string }>).map(p => p.symbol))];
     const allSymbols = [...existingSymbols, newSymbol];
 
     const matrix = await this.calculateCorrelationMatrix(allSymbols);

@@ -33,6 +33,7 @@ import { calculateOrderPriority, getPriorityTier } from './orderPriority.js';
 import type { OrderPriorityContext } from './orderPriority.js';
 import { notifyOrderFailed } from '../utils/notifications.js';
 import { validateOrderComplete, adjustQtyToStepSize, getSymbolLimits, logValidationError } from './orderValidation.js';
+import type { Exchange } from '../types/exchange.js';
 
 const logger = createLogger('order-queue');
 
@@ -599,9 +600,9 @@ export class OrderQueue {
 
       logger.info(
         `[${id}] ✅ SUCCESS | ` +
-        `orderId=${order.id} | ` +
-        `filled=${order.filled} | ` +
-        `price=${order.average || order.price} | ` +
+        `orderId=${order!.id} | ` +
+        `filled=${order!.filled} | ` +
+        `price=${order!.average || order!.price} | ` +
         `executionTime=${executionTimeMs}ms`
       );
 
@@ -745,7 +746,7 @@ export class OrderQueue {
   /**
    * Get exchange instance for a user (with their API credentials)
    */
-  private async getExchangeForUser(userId: string): Promise<unknown> {
+  private async getExchangeForUser(userId: string): Promise<Exchange> {
     // Import dynamically to avoid circular dependencies
     const { getUserExchange } = await import('../exchange/ccxtClient.js');
     const { getUserCredentials } = await import('./userCredentials.js');

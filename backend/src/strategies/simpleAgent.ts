@@ -75,7 +75,7 @@ import {
 import { notifyPositionOpened, notifyPositionClosed } from '../utils/notifications.js';
 import { trackRejectedSignal, recordTrade, updateAgentState } from '../services/telegramReporter.js';
 import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
-import { calculateOrderPriority } from '../services/orderPriority.js';
+import { calculateOrderPriority, type ExitReason } from '../services/orderPriority.js';
 import { exchangeAPIDeduplicator, makeFetchMyTradesKey } from '../services/apiDeduplicator.js';
 import { v4 as uuidv4 } from 'uuid';
 import { CACHE_TTLS, SYNC_INTERVALS, WS_THROTTLE } from '../config/constants.js';
@@ -230,8 +230,8 @@ export class CapitalPool {
         console.log(`[CapitalPool] WebSocket cache empty on ${force ? 'forced' : 'initial'} sync, falling back to REST fetchBalance...`);
         try {
           const restBalance = await this.exchange.fetchBalance({ type: 'future' });
-          const totalUsdt = parseFloat(restBalance?.total?.USDT || restBalance?.USDT?.total || '0') || 0;
-          const freeUsdt = parseFloat(restBalance?.free?.USDT || restBalance?.USDT?.free || '0') || 0;
+          const totalUsdt = parseFloat(String(restBalance?.total?.USDT ?? restBalance?.USDT?.total ?? '0')) || 0;
+          const freeUsdt = parseFloat(String(restBalance?.free?.USDT ?? restBalance?.USDT?.free ?? '0')) || 0;
           
           if (totalUsdt > 0) {
             balance = { asset: 'USDT', total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt, timestamp: Date.now() };
@@ -2176,9 +2176,9 @@ export class SimpleAgent {
         
         // V5.23: New indicators for enhanced scoring
         const bbPosition = calcBBPosition(candles, 20, 2);
-        const atrPct = calcATR(candles, 14);
+        const atrPct = calcATR(candles, 14) ?? 0;
         const trendStrength = calcTrendStrength(closes, 50);
-        
+
         // V5.23: Use enhanced multi-factor scoring
         const qualityScore = globalSignalRanker.calculateScore({
           roc5,
@@ -2188,7 +2188,7 @@ export class SimpleAgent {
           trendStrength,
           side: signal.side,
         });
-        
+
         logger.info(`📊 [${shortSymbol}] Signal Quality Score: ${qualityScore.toFixed(2)} | ROC=${(roc5 * 100).toFixed(2)}% Vol=${volumeRatio.toFixed(1)}x BB=${(bbPosition * 100).toFixed(0)}% ATR=${atrPct.toFixed(1)}% Trend=${(trendStrength * 100).toFixed(1)}%`);
         
         // V5.22: Add signal to global ranker for prioritization
@@ -3175,19 +3175,20 @@ export class SimpleAgent {
         
       } catch (error: unknown) {
         // Enhanced error logging for debugging
+        const err = error as Record<string, unknown>;
         logger.error(`❌ [${symbol}] Failed to open live position:`, {
-          name: error?.name,
-          message: error?.message,
-          code: error?.code,
-          info: error?.info,
+          name: err?.name,
+          message: err?.message,
+          code: err?.code,
+          info: err?.info,
         });
-        
+
         // 📢 NOTIFICATION: Order error (CRITICAL in live mode)
         notifyOrderError({
           symbol,
           side,
           orderType: 'entry',
-          error: error?.message || 'Unknown error',
+          error: errMsg(error),
           mode: 'live',
         });
         
@@ -3672,9 +3673,9 @@ export class SimpleAgent {
   }
   
   private async closePosition(
-    position: Position, 
+    position: Position,
     currentPrice: number,
-    reason: string
+    reason: ExitReason | string
   ): Promise<void> {
     const symbol = this.config.symbol;
 
@@ -3876,12 +3877,13 @@ export class SimpleAgent {
 
         const holdTimeMs = Date.now() - position.entryTime;
 
+        const exitReason = reason as ExitReason;
         const orderRequest: OrderRequest = {
           id: uuidv4(),
           agentId: this.config.sessionId,
           userId: this.config.userId || 'unknown',
           priority: calculateOrderPriority({
-            reason: reason,
+            reason: exitReason,
             isEntry: false,
             positionPnlPct: pnlPct,
             positionHoldTimeMs: holdTimeMs,
@@ -3896,7 +3898,7 @@ export class SimpleAgent {
           reason,
           priorityContext: {
             isEntry: false,
-            reason: reason,
+            reason: exitReason,
             positionPnlPct: pnlPct,
             positionHoldTimeMs: holdTimeMs,
           },
@@ -4090,7 +4092,7 @@ export class SimpleAgent {
               agentId: this.config.sessionId,
               userId: this.config.userId || 'unknown',
               priority: calculateOrderPriority({
-                reason: reason,
+                reason: exitReason,
                 isEntry: false,
                 positionPnlPct: actualPnlPct,
                 positionHoldTimeMs: Date.now() - addPos.entryTime,
@@ -4102,7 +4104,7 @@ export class SimpleAgent {
               params: { reduceOnly: true },
               isEntry: false,
               reason: `multi_exit_${(addPos.entryIndex || 0) + 1}`,
-              priorityContext: { isEntry: false, reason: reason },
+              priorityContext: { isEntry: false, reason: exitReason },
               submittedAt: Date.now(),
               retries: 0,
               timeoutMs: 30_000,
@@ -4226,7 +4228,7 @@ export class SimpleAgent {
           symbol,
           side: position.side,
           orderType: 'exit',
-          error: error?.message || 'Unknown error',
+          error: errMsg(error),
           mode: 'live',
         });
       }
@@ -5148,8 +5150,8 @@ export class SimpleAgent {
             if (trades && trades.length > 0) {
               const lastTrade = trades[trades.length - 1];
               exitPrice = lastTrade.price || exitPrice;
-              exchangeOrderId = lastTrade.order || lastTrade.info?.orderId;
-              orderType = lastTrade.info?.type || lastTrade.type;
+              exchangeOrderId = lastTrade.order || (lastTrade.info?.orderId as string | undefined);
+              orderType = (lastTrade.info?.type as string | undefined) || lastTrade.type;
               logger.info(`📈 [${symbol}] Found exit trade via REST: $${exitPrice} orderId=${exchangeOrderId} type=${orderType}`);
             }
           }

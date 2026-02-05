@@ -286,11 +286,11 @@ export async function listAggregatedTrades(opts: TradeAggregationOptions): Promi
       where: { userId },
       select: { id: true },
     });
-    allowedSessionIds = userSessions.map(s => s.id);
-    if (allowedSessionIds.length === 0) {
+    if (userSessions.length === 0) {
       // User has no sessions, return empty array
       return [];
     }
+    allowedSessionIds = userSessions.map(s => s.id);
   }
 
   const where: any = {};
