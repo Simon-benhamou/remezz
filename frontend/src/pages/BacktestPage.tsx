@@ -137,12 +137,14 @@ type BacktestRunListItem = {
 // HELPER COMPONENTS
 // ============================================================================
 
-const formatCurrency = (value: number) => {
+const formatCurrency = (value: number | null | undefined) => {
+  if (value == null) return '$0.00';
   const sign = value >= 0 ? '+' : '';
   return `${sign}$${Math.abs(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
-const formatPercent = (value: number) => {
+const formatPercent = (value: number | null | undefined) => {
+  if (value == null) return '0.00%';
   const sign = value >= 0 ? '+' : '';
   return `${sign}${value.toFixed(2)}%`;
 };
@@ -465,7 +467,7 @@ export default function BacktestPage() {
       key: 'entryPrice',
       width: 100,
       align: 'right',
-      render: (v: number) => `$${v.toFixed(4)}`,
+      render: (v: number) => `$${(v ?? 0).toFixed(4)}`,
     },
     {
       title: 'Exit',
@@ -473,7 +475,7 @@ export default function BacktestPage() {
       key: 'exitPrice',
       width: 100,
       align: 'right',
-      render: (v: number) => `$${v.toFixed(4)}`,
+      render: (v: number) => `$${(v ?? 0).toFixed(4)}`,
     },
     {
       title: 'Notional',
@@ -481,7 +483,7 @@ export default function BacktestPage() {
       key: 'notionalUsd',
       width: 100,
       align: 'right',
-      render: (v: number) => `$${v.toFixed(0)}`,
+      render: (v: number) => `$${(v ?? 0).toFixed(0)}`,
     },
     {
       title: 'Hold',
@@ -521,8 +523,8 @@ export default function BacktestPage() {
       width: 100,
       align: 'right',
       render: (_, r: BacktestTrade) => (
-        <Tooltip title={`Before: $${r.capitalBefore.toFixed(0)} → After: $${r.capitalAfter.toFixed(0)}`}>
-          <span style={{ color: 'var(--text-secondary)' }}>${r.capitalAfter.toFixed(0)}</span>
+        <Tooltip title={`Before: $${(r.capitalBefore ?? 0).toFixed(0)} → After: $${(r.capitalAfter ?? 0).toFixed(0)}`}>
+          <span style={{ color: 'var(--text-secondary)' }}>${(r.capitalAfter ?? 0).toFixed(0)}</span>
         </Tooltip>
       ),
     },
@@ -562,8 +564,8 @@ export default function BacktestPage() {
       width: 90,
       align: 'right',
       render: (v: number) => (
-        <Text style={{ color: v >= 50 ? 'var(--success)' : 'var(--error)' }}>
-          {v.toFixed(1)}%
+        <Text style={{ color: (v ?? 0) >= 50 ? 'var(--success)' : 'var(--error)' }}>
+          {(v ?? 0).toFixed(1)}%
         </Text>
       ),
     },
@@ -596,7 +598,7 @@ export default function BacktestPage() {
       key: 'maxWinUsd',
       width: 90,
       align: 'right',
-      render: (v: number) => <Text style={{ color: 'var(--success)' }}>${v.toFixed(0)}</Text>,
+      render: (v: number) => <Text style={{ color: 'var(--success)' }}>${(v ?? 0).toFixed(0)}</Text>,
     },
     {
       title: 'Worst',
@@ -604,7 +606,7 @@ export default function BacktestPage() {
       key: 'maxLossUsd',
       width: 90,
       align: 'right',
-      render: (v: number) => <Text style={{ color: 'var(--error)' }}>${Math.abs(v).toFixed(0)}</Text>,
+      render: (v: number) => <Text style={{ color: 'var(--error)' }}>${Math.abs(v ?? 0).toFixed(0)}</Text>,
     },
     {
       title: 'Capital End',
@@ -673,7 +675,7 @@ export default function BacktestPage() {
                         {formatCurrency(r.summary.totalPnlUsd)} ({formatPercent(r.summary.totalPnlPct)})
                       </Text>
                       <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-                        {r.summary.totalTrades} trades · WR {r.summary.winRate.toFixed(1)}% · DD {r.summary.maxDrawdownPct.toFixed(1)}%
+                        {r.summary.totalTrades} trades · WR {(r.summary.winRate ?? 0).toFixed(1)}% · DD {(r.summary.maxDrawdownPct ?? 0).toFixed(1)}%
                       </Text>
                     </Space>
                   </Space>
@@ -822,7 +824,7 @@ export default function BacktestPage() {
                   prefix={<WarningOutlined />}
                 />
                 <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-                  Profit Factor: {result.summary.profitFactor.toFixed(2)}
+                  Profit Factor: {(result.summary.profitFactor ?? 0).toFixed(2)}
                 </Text>
               </Card>
             </Col>
@@ -888,7 +890,7 @@ export default function BacktestPage() {
               <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
                 <Statistic
                   title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Avg Hold</Text>}
-                  value={(result.summary.avgHoldMinutes / 60).toFixed(1)}
+                  value={((result.summary.avgHoldMinutes ?? 0) / 60).toFixed(1)}
                   suffix="h"
                   valueStyle={{ color: '#a78bfa', fontSize: 18 }}
                 />
