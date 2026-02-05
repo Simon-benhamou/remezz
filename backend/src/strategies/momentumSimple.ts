@@ -450,9 +450,11 @@ export const MomentumConfig = {
     // Realtime App-Side Exit (WebSocket)
     // Goal: react faster than 15m candle close while filtering micro-noise.
     // This does NOT move the exchange emergency STOP_MARKET; it only decides when to close.
-    // V5.37: DISABLED to match backtest behavior - let winners run on 15m candle logic
-    // The exchange emergency SL still protects against flash crashes
-    REALTIME_APP_EXIT_ENABLED: false,
+    // V5.37: Was disabled to match backtest behavior
+    // V5.87: RE-ENABLED for proactive limit orders - places LIMIT at trailing stop BEFORE breach
+    // so fills happen at exact trailing price (backtest parity). Without this, live uses market
+    // orders after breach which have slippage (XRP trade lost 7% to bounce/slippage).
+    REALTIME_APP_EXIT_ENABLED: true,
     // Realtime trailing can be evaluated either on ticker (fast but noisy) or on closed 1m candles (filters wicks).
     // Recommended for "avoid noise": use 1m close-based trailing with 2 consecutive closes.
     REALTIME_APP_EXIT_TRAILING_MODE: 'kline_1m_close' as const, // 'ticker' | 'kline_1m_close'

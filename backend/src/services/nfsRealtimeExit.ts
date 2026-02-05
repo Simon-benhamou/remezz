@@ -62,7 +62,7 @@ export const DEFAULT_NFS_CONFIG: NfsConfig = {
   HIGH_CONFIDENCE_THRESHOLD: 70,
   MEDIUM_CONFIDENCE_THRESHOLD: 40,   // V5.62 FIX: Was 50, now 40 to match backtest
   LIMIT_ORDER_TIMEOUT_MS: 30000,
-  PRE_BREACH_DISTANCE_PCT: 0.3,
+  PRE_BREACH_DISTANCE_PCT: 0.6,  // V5.87: Increased from 0.3% to give more time for proactive limit placement
   MAX_SLIPPAGE_PCT: 2.0,
   PARTIAL_FILL_MIN_RATIO: 0.8,
   PROACTIVE_LIMIT_NFS_THRESHOLD: 50,

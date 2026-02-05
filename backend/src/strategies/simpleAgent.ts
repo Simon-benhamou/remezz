@@ -3630,9 +3630,13 @@ export class SimpleAgent {
           );
 
           if (nfsResult.shouldExitImmediately) {
-            // HIGH confidence: Exit at trailing stop price (matches backtest exactly)
-            logger.info(`⚡⚡⚡ [${symbol}] 15m NFS HIGH EXIT | exec=${trailingStopPrice.toFixed(4)}`);
-            await this.closePosition(this.position!, trailingStopPrice, 'trailing_nfs_high_15m');
+            // HIGH confidence: Exit at trailing stop price (backtest) or candle close (paper realistic)
+            // V5.87: Paper now uses candle close to simulate market order execution (more realistic)
+            // Live will place market order anyway, so this just affects paper realism
+            // Proactive limit (when it works) will give both paper and live exact trailing price
+            const highExitPrice = this.config.mode === 'paper' ? currentPrice : trailingStopPrice;
+            logger.info(`⚡⚡⚡ [${symbol}] 15m NFS HIGH EXIT | exec=${highExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)}, mode=${this.config.mode})`);
+            await this.closePosition(this.position!, highExitPrice, 'trailing_nfs_high_15m');
             return;
           } else if (nfsResult.confidence === 'MEDIUM' && breachCount >= 1) {
             // V5.81 PARITY FIX: Use best of trailing stop price or current price
