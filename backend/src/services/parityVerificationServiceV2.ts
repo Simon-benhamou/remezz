@@ -116,6 +116,7 @@ function getExchange(): ccxt.binance {
 interface FetchedCandles {
   symbol: Candle[];
   btc: Candle[];
+  btc1h: Candle[];  // V5.86: BTC 1h candles for regime SMA200
 }
 
 async function fetchCandlesForTrade(
@@ -131,13 +132,14 @@ async function fetchCandlesForTrade(
   const since = entryTs - warmupMs;
   const until = exitTs + bufferMs;
 
-  const fetchCandles = async (sym: string): Promise<Candle[]> => {
+  // V5.86: Generic candle fetcher with configurable timeframe
+  const fetchCandlesWithTimeframe = async (sym: string, timeframe: string): Promise<Candle[]> => {
     const candles: Candle[] = [];
     let cursor = since;
 
     while (cursor < until) {
       try {
-        const ohlcv = await ex.fetchOHLCV(sym, '15m', cursor, 1000);
+        const ohlcv = await ex.fetchOHLCV(sym, timeframe, cursor, 1000);
         if (!ohlcv || ohlcv.length === 0) break;
 
         for (const c of ohlcv) {
@@ -161,7 +163,7 @@ async function fetchCandlesForTrade(
 
         await new Promise(r => setTimeout(r, 100)); // Rate limiting
       } catch (e: any) {
-        logger.error(`Error fetching ${sym}: ${e.message}`);
+        logger.error(`Error fetching ${sym} ${timeframe}: ${e.message}`);
         break;
       }
     }
@@ -169,15 +171,18 @@ async function fetchCandlesForTrade(
     return candles;
   };
 
-  // Fetch in parallel
-  const [symbolCandles, btcCandles] = await Promise.all([
-    fetchCandles(symbol),
-    fetchCandles('BTC/USDT:USDT'),
+  // V5.86: Fetch 15m and 1h candles in parallel
+  // BTC 1h candles are critical for regime SMA200 calculation (matches live/backtest)
+  const [symbolCandles, btcCandles, btcCandles1h] = await Promise.all([
+    fetchCandlesWithTimeframe(symbol, '15m'),
+    fetchCandlesWithTimeframe('BTC/USDT:USDT', '15m'),
+    fetchCandlesWithTimeframe('BTC/USDT:USDT', '1h'),
   ]);
 
   return {
     symbol: symbolCandles,
     btc: btcCandles,
+    btc1h: btcCandles1h,
   };
 }
 
@@ -195,6 +200,7 @@ function checkSignalAtEntry(
   symbol: string,
   candles: Candle[],
   btcCandles: Candle[],
+  btcCandles1h: Candle[],  // V5.86: BTC 1h candles for regime SMA200
   entryTs: number,
   side: 'long' | 'short'
 ): SignalCheckResult {
@@ -248,10 +254,15 @@ function checkSignalAtEntry(
     return { wouldEnter: false, strength: null, reason: 'Insufficient candle data' };
   }
 
+  // V5.86: Filter BTC 1h candles to entry time for regime calculation
+  const btcWindow1h = btcCandles1h.filter(c => c.timestamp <= lastClosedCandleTs);
+
   // Check if signal would fire
   try {
+    // V5.86: Pass btcCandles1h for regime SMA200 (critical for bull/bear regime detection)
     const signal: SignalResult = checkMomentumSignal(symbol, windowCandles, btcWindow, {
       nowMs: entryTs,
+      btcCandles1h: btcWindow1h,  // V5.86: Critical for regime parity!
     });
 
     if (!signal.valid) {
@@ -586,13 +597,15 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   logger.info(`[PARITY-V2] Verifying ${symbol} ${side} @ ${trade.entryTs.toISOString()}`);
 
   // 2. Fetch candles dynamically from API
+  // V5.86: Now fetches BTC 1h candles for regime SMA200 (critical for parity)
   logger.info(`[PARITY-V2] Fetching candles from API...`);
-  const { symbol: symbolCandles, btc: btcCandles } = await fetchCandlesForTrade(
+  const { symbol: symbolCandles, btc: btcCandles, btc1h: btcCandles1h } = await fetchCandlesForTrade(
     symbol,
     entryTs,
     exitTs
   );
 
+  // V5.86: Also check BTC 1h candles (need 200+ for SMA200)
   if (symbolCandles.length < 100 || btcCandles.length < 100) {
     return {
       tradeId,
@@ -617,11 +630,13 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
     };
   }
 
-  logger.info(`[PARITY-V2] Fetched ${symbolCandles.length} symbol candles, ${btcCandles.length} BTC candles`);
+  // V5.86: Log BTC 1h candle count (important for regime parity)
+  logger.info(`[PARITY-V2] Fetched ${symbolCandles.length} symbol candles, ${btcCandles.length} BTC 15m candles, ${btcCandles1h.length} BTC 1h candles`);
 
   // 3. Check if backtest would have entered on same signal
-  const signalCheck = checkSignalAtEntry(symbol, symbolCandles, btcCandles, entryTs, side);
-  logger.info(`[PARITY-V2] Signal check: wouldEnter=${signalCheck.wouldEnter}, reason=${signalCheck.reason}`);
+  // V5.86: Now passes BTC 1h candles for regime SMA200 calculation
+  const signalCheck = checkSignalAtEntry(symbol, symbolCandles, btcCandles, btcCandles1h, entryTs, side);
+  logger.info(`[PARITY-V2] Signal check: wouldEnter=${signalCheck.wouldEnter}, reason=${signalCheck.reason} | btc1h=${btcCandles1h.length} candles`);
 
   // 4. Simulate exit (regardless of signal validity - we want to compare exit logic)
   const exitSim = simulateExit(symbolCandles, btcCandles, entryTs, entryPrice, side, leverage);

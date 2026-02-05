@@ -3510,6 +3510,34 @@ export class SimpleAgent {
         const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
         const nfsAdaptive = (MomentumConfig.EXIT as any).NFS_ADAPTIVE_ENABLED ?? true;
 
+        // V5.86: Check if proactive limit was filled FIRST before doing 15m exit
+        // This prevents double-exit when 15m check runs before 1m fill detection
+        if (this.proactiveLimitOrderId && this.position) {
+          logger.info(`[${symbol}] 15m check: proactive LIMIT pending (${this.proactiveLimitOrderId}), checking fill status first...`);
+          const fillResult = await this.checkProactiveLimitFill(symbol);
+          if (fillResult?.filled) {
+            const execPx = fillResult.avgPrice;
+            this.stopRealtimeExitMonitor();
+            logger.info(
+              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED (detected at 15m check) @ $${execPx.toFixed(4)} | ` +
+              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | ` +
+              `slippage=0% (exact backtest match!)`
+            );
+            this.proactiveLimitOrderId = null;
+            this.proactiveLimitPrice = null;
+            await this.closePosition(this.position!, execPx, 'trailing_proactive_limit_15m');
+            return;
+          }
+          // If not filled yet, cancel it and proceed with 15m exit logic
+          // (price may have gapped through the limit price)
+          logger.info(`[${symbol}] Proactive LIMIT not filled yet, cancelling and proceeding with 15m exit...`);
+          try {
+            await this.cancelProactiveLimit(symbol);
+          } catch (e) {
+            logger.warn(`[${symbol}] Failed to cancel proactive LIMIT: ${e}`);
+          }
+        }
+
         if (nfsEnabled && nfsAdaptive && this.nfsCalculator) {
           // Calculate NFS score for this breach
           const symbolCandles = await this.fetchCandles();
