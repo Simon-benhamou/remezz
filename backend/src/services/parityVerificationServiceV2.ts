@@ -126,16 +126,20 @@ async function fetchCandlesForTrade(
 ): Promise<FetchedCandles> {
   const ex = getExchange();
 
-  // Fetch window: 3 days before entry to 1 hour after exit
-  const warmupMs = 3 * 24 * 60 * 60 * 1000;
+  // Fetch window for 15m candles: 3 days before entry to 1 hour after exit
+  const warmupMs15m = 3 * 24 * 60 * 60 * 1000;
+  // V5.87 FIX: BTC 1h candles need 200+ for SMA200 regime = 200h = 8.3 days minimum
+  // Use 10 days to have buffer (240 candles)
+  const warmupMs1h = 10 * 24 * 60 * 60 * 1000;
   const bufferMs = 60 * 60 * 1000;
-  const since = entryTs - warmupMs;
+  const since15m = entryTs - warmupMs15m;
+  const since1h = entryTs - warmupMs1h;
   const until = exitTs + bufferMs;
 
   // V5.86: Generic candle fetcher with configurable timeframe
-  const fetchCandlesWithTimeframe = async (sym: string, timeframe: string): Promise<Candle[]> => {
+  const fetchCandlesWithTimeframe = async (sym: string, timeframe: string, sinceTs: number): Promise<Candle[]> => {
     const candles: Candle[] = [];
-    let cursor = since;
+    let cursor = sinceTs;
 
     while (cursor < until) {
       try {
@@ -171,12 +175,12 @@ async function fetchCandlesForTrade(
     return candles;
   };
 
-  // V5.86: Fetch 15m and 1h candles in parallel
-  // BTC 1h candles are critical for regime SMA200 calculation (matches live/backtest)
+  // V5.87 FIX: Fetch 15m and 1h candles with appropriate warmup periods
+  // BTC 1h candles need 200+ for SMA200 regime calculation (matches live/backtest)
   const [symbolCandles, btcCandles, btcCandles1h] = await Promise.all([
-    fetchCandlesWithTimeframe(symbol, '15m'),
-    fetchCandlesWithTimeframe('BTC/USDT:USDT', '15m'),
-    fetchCandlesWithTimeframe('BTC/USDT:USDT', '1h'),
+    fetchCandlesWithTimeframe(symbol, '15m', since15m),
+    fetchCandlesWithTimeframe('BTC/USDT:USDT', '15m', since15m),
+    fetchCandlesWithTimeframe('BTC/USDT:USDT', '1h', since1h),  // V5.87: 10 days for 200+ candles
   ]);
 
   return {
@@ -219,10 +223,13 @@ function checkSignalAtEntry(
   //   - entryTime stored in DB = 09:45:00
   //   - Live used candles with timestamp <= 09:45:00
   //
-  // So if entryTs = 09:45:00 (candle OPEN time), the candle IS included (correct)
-  // This matches live behavior since live stores lastCandle.timestamp
+  // V5.87 FIX: The DB stores ACTUAL entry time (e.g., 10:15:03), not candle open time.
+  // Entry happens ~2-3 seconds AFTER a candle closes (due to processing time).
+  // If entry is at 10:15:03, the LAST CLOSED candle is 10:00 (which closed at 10:15:00).
+  // The candle 10:15 is STILL FORMING at 10:15:03, so we must NOT include it.
   const CANDLE_MS = 15 * 60 * 1000; // 15-minute candles
-  const lastClosedCandleTs = Math.floor(entryTs / CANDLE_MS) * CANDLE_MS;
+  const currentCandleStart = Math.floor(entryTs / CANDLE_MS) * CANDLE_MS;
+  const lastClosedCandleTs = currentCandleStart - CANDLE_MS;  // V5.87: Previous candle, not current
 
   // V5.61 FIX: Apply same filter to BOTH symbol and BTC candles
   // V5.80: Use < instead of <= to exclude the candle AT lastClosedCandleTs if it's still forming
