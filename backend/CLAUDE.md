@@ -44,14 +44,24 @@ npm run migrate             # Run migrations
 ### Core Components
 
 **Strategy Engine** (`src/strategies/`)
-- `simpleAgent.ts` - Main agent class with capital pool, position management, trailing stops, NFS adaptive exits
-- `momentumSimple.ts` - Signal detection (BB breakout, ROC momentum, volume filters, BTC macro)
+- `simpleAgent.ts` - Main agent coordinator (~2500 lines post-refactor). Capital pool, position management, trailing stops, NFS adaptive exits
+- `momentumSimple.ts` - Signal detection (BB breakout, ROC momentum, volume filters, BTC macro, cash mode regime detection)
 - `signalRanker.ts` - ML-powered signal scoring with XGBoost integration
+- `positionPersistence.ts` - Extracted DB operations (load/save/update positions, session KPIs)
+- `exchangeOrderManager.ts` - Extracted exchange order placement (SL, trailing stop, proactive limits)
+- `realtimeExitMonitor.ts` - RT exit state definitions and interfaces (full checkRealtimeExit migration deferred)
+- `cacheManager.ts` - Mutex-protected BTC 15m/1h candle caches and leverage cache (`globalCacheManager` singleton)
+
+**Config & Types** (`src/config/`, `src/types/`)
+- `config/constants.ts` - Centralized magic numbers: `CACHE_TTLS`, `SYNC_INTERVALS`, `ORDER_QUEUE`, `WS_THROTTLE`
+- `types/exchange.ts` - Typed CCXT interfaces: `CcxtOrder`, `CcxtPosition`, `CcxtTrade`, `CcxtBalance`, `CcxtMarket`, `Exchange`
 
 **Services** (`src/services/`)
 - `orderQueue.ts` - Rate-limited order execution (3 concurrent, 350ms delays) to prevent IP bans
 - `binanceWebSocket.ts` - Real-time market data with REST fallback
-- `backtestService.ts` - Historical simulation with parity verification
+- `backtestService.ts` - Historical simulation with parity verification. `SignalOverrides` supports EXIT params via index signature
+- `walkForwardService.ts` - Walk-forward testing: sliding train+test windows, in-sample vs out-of-sample comparison
+- `optimizationService.ts` - Grid search over parameter combinations, ranked by out-of-sample Sharpe ratio
 - `nfsRealtimeExit.ts` - Advanced trailing stop with stagnant detection
 - `apiDeduplicator.ts` - Deduplicates concurrent API calls (3x reduction)
 - `candleCache.ts` - PostgreSQL candle storage with background updates (V5.77)
@@ -61,7 +71,7 @@ npm run migrate             # Run migrations
 
 **API Routes** (`src/routes/`)
 - `auth.ts` - JWT/API key authentication
-- `backtest.ts` - Backtest execution and parity verification
+- `backtest.ts` - Backtest execution, parity verification, walk-forward testing (`POST /walk-forward`), grid optimization (`POST /optimize`)
 - `debug.ts` - Internal diagnostics
 
 ### Data Flow
@@ -75,9 +85,13 @@ npm run migrate             # Run migrations
 ### Key Patterns
 
 - **Capital Pool**: Shared across agents with mutex-protected reservation
-- **Order Priority**: Stop loss > exits > entries
+- **Order Priority**: Stop loss > exits > entries (see `ExitReason` union in `orderPriority.ts`)
 - **WebSocket First**: REST fallback only when WS unavailable
 - **Fail Fast**: Markets must be preloaded at startup (no ad-hoc loadMarkets)
+- **Mutex Caches**: BTC 15m/1h candle caches and leverage cache are mutex-protected via `globalCacheManager` to prevent concurrent fetch races
+- **Error Handling**: Use `errMsg(error: unknown): string` helper for safe error extraction in `catch (error: unknown)` blocks (no `catch (error: any)`)
+- **MomentumConfig Mutability**: `MomentumConfig` is a mutable `const` object (not `as const`) so tests can toggle fields like `CASH_MODE.ENABLED`
+- **Cash Mode**: Market regime detection (ADX + ATR + SMA200 slope) skips entries in CHOPPY/LOW_VOL regimes. Integrated at top of `checkMomentumSignal()`
 
 ## Database Schema (Prisma)
 
@@ -89,10 +103,17 @@ V5.77 `MarketCandle`: Cached candle data shared across all users (public market 
 
 ## Testing
 
-- Unit tests auto-discovered from `backend/test/unit/**/*.mjs`
-- Integration tests from `backend/test/integration/**/*.mjs`
+- Unit tests: `backend/test/unit/**/*.mjs` and `backend/test/**/*.test.ts` (Jest)
+- Integration tests: `backend/test/integration/**/*.mjs` and `backend/test/integration/*.test.ts`
 - `UNIT_TEST_MODE=true` uses in-memory Prisma
 - Multi-agent test validates capital pool sharing across 9 agents
+
+### Test files added during refactoring
+- `test/cacheManager.test.ts` - Mutex BTC/leverage cache (concurrent access, TTL, dedup)
+- `test/walkForward.test.ts` - Walk-forward window generation (date math, step size)
+- `test/unit/marketRegime.test.ts` - ADX calculation, regime classification, cash mode skip logic
+- `test/integration/parity.test.ts` - Backtest determinism, snapshot, trailing/SL/stagnant behavior
+- `test/integration/refactoring-regression.test.ts` - Post-refactor regression (trade count, win rate, PnL, Sharpe, drawdown)
 
 ## Python ML Integration
 
@@ -151,3 +172,16 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **XRP example**: 4.55% profit + HIGH vol → 1.5% × 1.6 = 2.4% trailing. Bounce was 2.33% → SURVIVES
   - **Config**: `TRAILING_PROGRESSIVE_ENABLED`, `TRAILING_VOL_ADAPT_ENABLED`, `TRAILING_VOL_HIGH_MULT`, etc.
   - **Applies to**: Live, paper, and backtest (all use shared `shouldExitPosition()`).
+
+## Refactoring (completed)
+
+Major codebase refactoring reducing `simpleAgent.ts` from ~5500 to ~2500 lines:
+
+1. **Centralized constants** (`config/constants.ts`): All magic numbers (cache TTLs, sync intervals, order queue config) extracted from `simpleAgent.ts` and `orderQueue.ts`
+2. **Typed exchange interfaces** (`types/exchange.ts`): Replaced inline `any` Exchange type with `CcxtOrder`, `CcxtPosition`, `CcxtTrade`, `CcxtBalance`, `Exchange` interfaces. Eliminated 30+ `as any` casts
+3. **Mutex caches** (`cacheManager.ts`): Promise-based mutex on global BTC 15m/1h candle caches and leverage cache. Prevents concurrent fetch races
+4. **Extracted modules**: `positionPersistence.ts` (DB ops), `exchangeOrderManager.ts` (SL/trailing/proactive limits), `realtimeExitMonitor.ts` (state definitions)
+5. **Walk-forward testing** (`walkForwardService.ts`): Sliding train+test window validation. Route: `POST /api/backtest/walk-forward`
+6. **Grid optimization** (`optimizationService.ts`): Parameter grid search ranked by OOS Sharpe. Route: `POST /api/backtest/optimize`
+7. **Cash mode** (`momentumSimple.ts`): ADX + ATR + SMA200 slope regime detection. Skips entries in CHOPPY/LOW_VOL markets
+8. **Error handling**: All `catch (error: any)` → `catch (error: unknown)` with `errMsg()` helper. `ExitReason` union extended for cleanup reasons

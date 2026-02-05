@@ -497,6 +497,7 @@ export const MomentumConfig = {
     // NFS score >= 70: High confidence exit (LIMIT order)
     // NFS score 40-69: Medium confidence (wait more or use confirmation)
     // NFS score < 40: Low confidence (likely noise, use 2-candle confirmation)
+    NFS_PROACTIVE_LIMIT_ENABLED: true,        // Place proactive LIMIT before breach
     NFS_ENABLED: true,                        // Master switch for NFS system
     NFS_HIGH_SCORE_THRESHOLD: 70,             // Score >= this = immediate LIMIT exit
     NFS_MEDIUM_SCORE_THRESHOLD: 40,           // Score >= this = monitor closely
@@ -665,6 +666,18 @@ export const MomentumConfig = {
     'LINK/USDT:USDT': 5,
     'AVAX/USDT:USDT': 5,
   } as Record<string, number>,
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CASH MODE - Choppy / Low-Vol Market Detection
+  // When enabled, skips entries in unfavorable market regimes.
+  // ═══════════════════════════════════════════════════════════════════════════
+  CASH_MODE: {
+    ENABLED: true,
+    ADX_NO_TREND_THRESHOLD: 20,       // ADX < 20 = no trend
+    ATR_DECLINING_LOOKBACK: 5,        // Compare current ATR to N periods ago
+    ATR_DECLINING_RATIO: 0.85,        // ATR declining > 15% = volatility drying up
+    SMA200_SLOPE_FLAT_PCT: 0.05,      // SMA200 slope near zero = ranging market
+  },
 };
 
 // Alias pour rétrocompatibilité
@@ -908,6 +921,167 @@ export function calcBollingerBands(closes: number[], period: number = 20, stdMul
 // V5.41: Alias for backwards compatibility with backtest (uses calcBB name)
 export function calcBB(closes: number[], period = 20, mult = 2): { upper: number; middle: number; lower: number } {
   return calcBollingerBands(closes, period, mult);
+}
+
+export function calcBBPosition(candles: Candle[], period = 20, mult = 2): number {
+  const closes = candles.map(c => c.close);
+  const bb = calcBB(closes, period, mult);
+  const currentPrice = candles[candles.length - 1].close;
+  if (bb.upper <= bb.lower) return 0.5;
+  const position = (currentPrice - bb.lower) / (bb.upper - bb.lower);
+  return Math.max(0, Math.min(1, position));
+}
+
+export function calcTrendStrength(closes: number[], period = 50): number {
+  if (closes.length < period) return 0;
+  const sma = calcSMA(closes, period);
+  const currentPrice = closes[closes.length - 1];
+  return sma > 0 ? (currentPrice - sma) / sma : 0;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MARKET REGIME DETECTION (Cash Mode)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type MarketRegime = 'TRENDING_BULL' | 'TRENDING_BEAR' | 'CHOPPY' | 'LOW_VOL';
+
+/**
+ * Calculate ADX (Average Directional Index) for trend strength.
+ * ADX < 20 = no trend, ADX > 25 = trending.
+ */
+export function calcADX(candles: Candle[], period = 14): number {
+  if (candles.length < period * 2 + 1) return 0;
+
+  const slice = candles.slice(-(period * 2 + 1));
+  const plusDM: number[] = [];
+  const minusDM: number[] = [];
+  const trArr: number[] = [];
+
+  for (let i = 1; i < slice.length; i++) {
+    const high = slice[i].high;
+    const low = slice[i].low;
+    const prevHigh = slice[i - 1].high;
+    const prevLow = slice[i - 1].low;
+    const prevClose = slice[i - 1].close;
+
+    const upMove = high - prevHigh;
+    const downMove = prevLow - low;
+
+    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    trArr.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+
+  // Smoothed averages (Wilder's smoothing)
+  const smooth = (arr: number[], p: number): number[] => {
+    const result: number[] = [];
+    let sum = arr.slice(0, p).reduce((s, v) => s + v, 0);
+    result.push(sum);
+    for (let i = p; i < arr.length; i++) {
+      sum = sum - sum / p + arr[i];
+      result.push(sum);
+    }
+    return result;
+  };
+
+  const smoothPlusDM = smooth(plusDM, period);
+  const smoothMinusDM = smooth(minusDM, period);
+  const smoothTR = smooth(trArr, period);
+
+  if (smoothTR.length === 0) return 0;
+
+  const dxValues: number[] = [];
+  for (let i = 0; i < smoothPlusDM.length; i++) {
+    const tr = smoothTR[i];
+    if (tr === 0) { dxValues.push(0); continue; }
+    const plusDI = (smoothPlusDM[i] / tr) * 100;
+    const minusDI = (smoothMinusDM[i] / tr) * 100;
+    const diSum = plusDI + minusDI;
+    dxValues.push(diSum > 0 ? (Math.abs(plusDI - minusDI) / diSum) * 100 : 0);
+  }
+
+  if (dxValues.length < period) return dxValues[dxValues.length - 1] || 0;
+
+  // ADX = smoothed DX
+  let adx = dxValues.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  for (let i = period; i < dxValues.length; i++) {
+    adx = (adx * (period - 1) + dxValues[i]) / period;
+  }
+
+  return adx;
+}
+
+/**
+ * Detect current market regime from BTC candle data.
+ */
+export function detectMarketRegime(
+  btcCandles: Candle[],
+  btcCandles1h: Candle[],
+): MarketRegime {
+  const cfg = MomentumConfig.CASH_MODE;
+
+  // ADX on 1h candles for trend strength
+  const adx = btcCandles1h.length > 30 ? calcADX(btcCandles1h) : calcADX(btcCandles);
+
+  // ATR declining check (volatility drying up)
+  const atrCurrent = calcATR(btcCandles, 14);
+  let atrDeclining = false;
+  if (atrCurrent !== null && btcCandles.length > cfg.ATR_DECLINING_LOOKBACK + 14) {
+    const olderCandles = btcCandles.slice(0, -cfg.ATR_DECLINING_LOOKBACK);
+    const atrOlder = calcATR(olderCandles, 14);
+    if (atrOlder !== null && atrOlder > 0) {
+      atrDeclining = atrCurrent / atrOlder < cfg.ATR_DECLINING_RATIO;
+    }
+  }
+
+  // SMA200 slope (flat = ranging)
+  const closes1h = btcCandles1h.filter(c => c.isFinal !== false).map(c => c.close);
+  let sma200SlopeFlat = false;
+  if (closes1h.length >= 205) {
+    const sma200Now = calcSMA(closes1h.slice(-200), 200);
+    const sma200Prev = calcSMA(closes1h.slice(-205, -5), 200);
+    if (sma200Prev > 0) {
+      const slopePct = Math.abs((sma200Now - sma200Prev) / sma200Prev);
+      sma200SlopeFlat = slopePct < cfg.SMA200_SLOPE_FLAT_PCT / 100;
+    }
+  }
+
+  // Classify regime
+  if (adx < cfg.ADX_NO_TREND_THRESHOLD && atrDeclining) {
+    return 'LOW_VOL';
+  }
+
+  if (adx < cfg.ADX_NO_TREND_THRESHOLD && sma200SlopeFlat) {
+    return 'CHOPPY';
+  }
+
+  // Determine bull/bear from SMA200 direction
+  if (closes1h.length >= 200) {
+    const sma200 = calcSMA(closes1h.slice(-200), 200);
+    const currentPrice = closes1h[closes1h.length - 1];
+    return currentPrice > sma200 ? 'TRENDING_BULL' : 'TRENDING_BEAR';
+  }
+
+  // Default: use 15m data
+  const closes15m = btcCandles.map(c => c.close);
+  if (closes15m.length >= 200) {
+    const sma200 = calcSMA(closes15m.slice(-200), 200);
+    return closes15m[closes15m.length - 1] > sma200 ? 'TRENDING_BULL' : 'TRENDING_BEAR';
+  }
+
+  return 'TRENDING_BULL'; // Default to bullish if insufficient data
+}
+
+/**
+ * Should we skip entry based on the current regime?
+ * In CHOPPY or LOW_VOL regimes, skip all entries (go to cash).
+ */
+export function shouldSkipEntryForRegime(
+  regime: MarketRegime,
+  _side: 'long' | 'short',
+): boolean {
+  if (!MomentumConfig.CASH_MODE.ENABLED) return false;
+  return regime === 'CHOPPY' || regime === 'LOW_VOL';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1574,6 +1748,16 @@ export function checkMomentumSignal(
   // ═══════════════════════════════════════════════════════════════════════════
   // (StochRSI filter removed from here - now in bear regime section below)
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CASH MODE: Skip entry in choppy / low-vol markets
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (MomentumConfig.CASH_MODE.ENABLED) {
+    const regime = detectMarketRegime(btcCandles, btcCandles1h || []);
+    if (regime === 'CHOPPY' || regime === 'LOW_VOL') {
+      return { valid: false, reason: `cash_mode:${regime.toLowerCase()}`, features };
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // V5.12 BULL REGIME → LONG ONLY
   // V5.10 RSI+BTC filter REMOVED - 2-year backtest showed it blocked good trades

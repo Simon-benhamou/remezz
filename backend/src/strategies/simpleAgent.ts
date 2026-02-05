@@ -27,6 +27,12 @@ import {
   calculateExitNowMs,  // V5.45: Shared exit time calculation for parity
   calcBollingerBands,  // V5.64: For wick breakout early entry
   checkWickBreakout,   // V5.64: Wick breakout early entry
+  calcROC,             // Shared indicator
+  calcSMA,             // Shared indicator
+  calcBB,              // Shared indicator
+  calcATR,             // Shared indicator
+  calcBBPosition,      // Shared indicator
+  calcTrendStrength,   // Shared indicator
   LIQUIDATION_CONFIG,
   type Candle,
   type Position,
@@ -72,6 +78,10 @@ import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
 import { calculateOrderPriority } from '../services/orderPriority.js';
 import { exchangeAPIDeduplicator, makeFetchMyTradesKey } from '../services/apiDeduplicator.js';
 import { v4 as uuidv4 } from 'uuid';
+import { CACHE_TTLS, SYNC_INTERVALS, WS_THROTTLE } from '../config/constants.js';
+import { globalCacheManager } from './cacheManager.js';
+import { PositionPersistence } from './positionPersistence.js';
+import { ExchangeOrderManager } from './exchangeOrderManager.js';
 import {
   NfsCalculator,
   NfsExitStateMachine,
@@ -94,76 +104,14 @@ import {
 
 const logger = createLogger('agent');
 
-// ============================================================================
-// GLOBAL BTC CACHE - Shared between all agents to reduce API calls
-// ============================================================================
-// Uses WebSocket first (0 API weight), falls back to REST with cache
-
-const GLOBAL_BTC_CACHE_TTL_MS = 300_000; // 5 minutes (longer TTL since WS is primary)
-let globalBtcCandleCache: { candles: Candle[]; fetchedAt: number } | null = null;
-let globalBtcCacheFetchingPromise: Promise<Candle[]> | null = null;
-let btcWsSubscribed = false;
-
-// V5.36: Global cache for BTC 1h candles (shared across all agents)
-const GLOBAL_BTC_1H_CACHE_TTL_MS = 900_000; // 15 minutes (1h candles change less frequently)
-let globalBtc1hCandleCache: { candles: Candle[]; fetchedAt: number } | null = null;
-let globalBtc1hCacheFetchingPromise: Promise<Candle[]> | null = null;
-
-// V5.66: Leverage cache per symbol to avoid redundant setLeverage API calls
-// Key: `${userId}:${symbol}:${leverage}` Value: timestamp when set
-const LEVERAGE_CACHE_TTL_MS = 3600_000; // 1 hour (leverage rarely changes)
-const leverageCache: Map<string, number> = new Map();
-
-function getLeverageCacheKey(userId: string, symbol: string, leverage: number): string {
-  return `${userId}:${symbol}:${leverage}`;
+function errMsg(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function isLeverageCached(userId: string, symbol: string, leverage: number): boolean {
-  const key = getLeverageCacheKey(userId, symbol, leverage);
-  const cachedAt = leverageCache.get(key);
-  if (!cachedAt) return false;
+// Global caches (BTC candles, leverage) are managed by globalCacheManager
 
-  // Check if cache is still valid
-  if (Date.now() - cachedAt > LEVERAGE_CACHE_TTL_MS) {
-    leverageCache.delete(key);
-    return false;
-  }
-  return true;
-}
-
-function cacheLeverage(userId: string, symbol: string, leverage: number): void {
-  const key = getLeverageCacheKey(userId, symbol, leverage);
-  leverageCache.set(key, Date.now());
-
-  // Cleanup old entries periodically (every 100 entries)
-  if (leverageCache.size > 100) {
-    const now = Date.now();
-    for (const [k, v] of leverageCache.entries()) {
-      if (now - v > LEVERAGE_CACHE_TTL_MS) {
-        leverageCache.delete(k);
-      }
-    }
-  }
-}
-
-// Type for exchange (we avoid importing ccxt directly to reduce bundle size)
-type Exchange = {
-  fetchOHLCV: (symbol: string, timeframe: string, since?: number, limit?: number) => Promise<number[][]>;
-  setLeverage: (leverage: number, symbol: string) => Promise<void>;
-  createMarketBuyOrder: (symbol: string, qty: number, params?: Record<string, any>) => Promise<any>;
-  createMarketSellOrder: (symbol: string, qty: number, params?: Record<string, any>) => Promise<any>;
-  createOrder: (symbol: string, type: string, side: string, qty: number, price?: number, params?: Record<string, any>) => Promise<any>;
-  // For live sync
-  fetchPositions?: (symbols?: string[]) => Promise<any[]>;
-  fetchMyTrades?: (symbol: string, since?: number, limit?: number) => Promise<any[]>;
-  cancelOrder?: (orderId: string, symbol: string) => Promise<any>;
-  cancelAllOrders?: (symbol: string, params?: Record<string, any>) => Promise<any>;
-  // For quantity precision (CCXT method)
-  amountToPrecision?: (symbol: string, amount: number) => string;
-  markets?: Record<string, any>;
-  // For balance fetching (REST fallback)
-  fetchBalance?: (params?: Record<string, any>) => Promise<any>;
-};
+// Exchange type imported from centralized types
+import type { Exchange, CcxtOrder } from '../types/exchange.js';
 
 // ============================================================================
 // CAPITAL POOL - Shared between all agents
@@ -178,7 +126,7 @@ export class CapitalPool {
   private mode: 'paper' | 'live';
   private userId: string | null = null;
   private lastBalanceSync: number = 0;
-  private readonly BALANCE_SYNC_INTERVAL_MS = 30_000; // Sync every 30s max
+  private readonly BALANCE_SYNC_INTERVAL_MS = SYNC_INTERVALS.BALANCE_MS;
   private hasEverSynced: boolean = false; // Track if we've ever successfully synced
 
   // 🔧 FIX: Store exchange reference for REST fallback when WebSocket cache is empty
@@ -689,8 +637,8 @@ export interface SimpleAgentConfig {
   // Exchange
   exchange: Exchange;
   
-  // Database - use any to avoid type conflicts between different prisma versions
-  prisma: any;
+  // Database
+  prisma: PrismaClient;
   
   // Session
   userId: string;
@@ -747,6 +695,8 @@ export interface TradeEvent {
 
 export class SimpleAgent {
   private config: SimpleAgentConfig;
+  private persistence: PositionPersistence;
+  private orderManager: ExchangeOrderManager;
   private position: Position | null = null;
   
   // V5.30: Multi-position support - additional positions for large accounts
@@ -773,7 +723,7 @@ export class SimpleAgent {
   
   // Throttle WebSocket unhealthy warnings (max once per 30s per agent)
   private lastWsUnhealthyWarnTs = 0;
-  private static readonly WS_UNHEALTHY_WARN_THROTTLE_MS = 30_000;
+  private static readonly WS_UNHEALTHY_WARN_THROTTLE_MS = WS_THROTTLE.UNHEALTHY_WARN_MS;
 
   // NFS (Noise Filter Score) Exit System
   private nfsStateMachine: NfsExitStateMachine | null = null;
@@ -827,71 +777,7 @@ export class SimpleAgent {
   private lastProcessedExitCandleTs: number = 0;
   
   // V5.22/V5.23: Helper methods for signal scoring
-  private calcROC(closes: number[], period: number = 5): number {
-    if (closes.length < period + 1) return 0;
-    const current = closes[closes.length - 1];
-    const past = closes[closes.length - period - 1];
-    return past > 0 ? (current - past) / past : 0;
-  }
-  
-  private calcSMA(values: number[], period: number): number {
-    if (values.length < period) return 0;
-    const slice = values.slice(-period);
-    return slice.reduce((sum, v) => sum + v, 0) / period;
-  }
-  
-  private calcBB(closes: number[], period = 20, mult = 2) {
-    if (closes.length < period) return { middle: 0, upper: 0, lower: 0 };
-    const sma = this.calcSMA(closes, period);
-    const slice = closes.slice(-period);
-    const variance = slice.reduce((sum, c) => sum + Math.pow(c - sma, 2), 0) / period;
-    const stdDev = Math.sqrt(variance);
-    return {
-      middle: sma,
-      upper: sma + stdDev * mult,
-      lower: sma - stdDev * mult,
-    };
-  }
-  
-  private calcATR(candles: Candle[], period = 14): number {
-    if (candles.length < period + 1) return 0;
-    const recentCandles = candles.slice(-period - 1);
-    const trValues: number[] = [];
-    
-    for (let i = 1; i < recentCandles.length; i++) {
-      const high = recentCandles[i].high;
-      const low = recentCandles[i].low;
-      const prevClose = recentCandles[i - 1].close;
-      
-      const tr = Math.max(
-        high - low,
-        Math.abs(high - prevClose),
-        Math.abs(low - prevClose)
-      );
-      trValues.push(tr);
-    }
-    
-    const atr = trValues.reduce((sum, tr) => sum + tr, 0) / period;
-    const currentPrice = candles[candles.length - 1].close;
-    return currentPrice > 0 ? (atr / currentPrice) * 100 : 0;
-  }
-  
-  private calcBBPosition(candles: Candle[], period = 20, mult = 2): number {
-    const closes = candles.map(c => c.close);
-    const bb = this.calcBB(closes, period, mult);
-    const currentPrice = candles[candles.length - 1].close;
-    
-    if (bb.upper <= bb.lower) return 0.5;
-    const position = (currentPrice - bb.lower) / (bb.upper - bb.lower);
-    return Math.max(0, Math.min(1, position));
-  }
-  
-  private calcTrendStrength(closes: number[], period = 50): number {
-    if (closes.length < period) return 0;
-    const sma = this.calcSMA(closes, period);
-    const currentPrice = closes[closes.length - 1];
-    return sma > 0 ? (currentPrice - sma) / sma : 0;
-  }
+  // Indicator helpers removed - using shared imports from momentumSimple.ts
 
   // Backtest parity: apply a post-exit cooldown to avoid immediate re-entries.
   // Backtest service uses 8 bars (2h) cooldown after any exit.
@@ -900,7 +786,7 @@ export class SimpleAgent {
   
   // Cache pour éviter trop d'appels API (per-symbol only, BTC is global)
   private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
-  private readonly CACHE_TTL_MS = 120_000; // 2 minutes (increased to reduce API calls)
+  private readonly CACHE_TTL_MS = CACHE_TTLS.SYMBOL_CANDLE_MS;
   private wsSubscribed = false; // Track if WebSocket kline subscription is active
   
   // Guard against concurrent tick execution (prevents re-entrancy/recursion)
@@ -908,14 +794,16 @@ export class SimpleAgent {
   
   // Position sync throttling (WebSocket is primary, REST is fallback)
   private lastPositionSync: number = 0;
-  private readonly POSITION_SYNC_INTERVAL_MS = 600_000; // 10 minutes - CRITICAL: Avoid REST spam causing IP bans
+  private readonly POSITION_SYNC_INTERVAL_MS = SYNC_INTERVALS.POSITION_MS;
 
   // V5.13: Missing trade reconciliation throttling
   private lastMissingTradesCheck: number = 0;
-  private readonly MISSING_TRADES_CHECK_INTERVAL_MS = 5 * 60_000; // 5 minutes
+  private readonly MISSING_TRADES_CHECK_INTERVAL_MS = SYNC_INTERVALS.MISSING_TRADES_MS;
   
   constructor(config: SimpleAgentConfig) {
     this.config = config;
+    this.persistence = new PositionPersistence(config.prisma);
+    this.orderManager = new ExchangeOrderManager(config.exchange, config.symbol, config.mode);
 
     // Initialize NFS system if enabled
     this.initializeNfsSystem();
@@ -925,14 +813,14 @@ export class SimpleAgent {
    * Initialize NFS (Noise Filter Score) exit system
    */
   private initializeNfsSystem(): void {
-    const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
+    const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
     if (!nfsEnabled) {
       logger.debug(`[${this.config.symbol}] NFS system disabled`);
       return;
     }
 
     // Build NFS config from MomentumConfig
-    const exitConfig = MomentumConfig.EXIT as any;
+    const exitConfig = MomentumConfig.EXIT;
     const nfsConfig: Partial<NfsConfig> = {
       HIGH_CONFIDENCE_THRESHOLD: exitConfig.NFS_HIGH_SCORE_THRESHOLD ?? 70,
       MEDIUM_CONFIDENCE_THRESHOLD: exitConfig.NFS_MEDIUM_SCORE_THRESHOLD ?? 40,
@@ -1126,8 +1014,8 @@ export class SimpleAgent {
     // If realtime trailing is enabled and we use kline-close mode, subscribe to 1m klines.
     try {
       const trailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
-      const trailingMode = (MomentumConfig.EXIT as any).REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
-      const klineInterval = (MomentumConfig.EXIT as any).REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined;
+      const trailingMode = MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
+      const klineInterval = MomentumConfig.EXIT.REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined;
       if (trailingEnabled && trailingMode === 'kline_1m_close') {
         const ws = getBinanceWebSocket();
         ws.subscribeToKline(this.config.symbol, klineInterval || '1m');
@@ -1138,13 +1026,13 @@ export class SimpleAgent {
 
     this.realtimeExitIntervalId = setInterval(() => {
       void this.checkRealtimeExit().catch(err => {
-        logger.debug(`⚠️ [${this.config.symbol}] Realtime exit check error: ${String((err as any)?.message || err)}`);
+        logger.debug(`⚠️ [${this.config.symbol}] Realtime exit check error: ${errMsg(err)}`);
       });
     }, pollMs);
 
     const trailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
     const slEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_STOPLOSS_ENABLED ?? true);
-    const trailingMode = (MomentumConfig.EXIT as any).REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
+    const trailingMode = MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
     const mode = trailingEnabled
       ? (slEnabled ? `trail(${trailingMode || 'ticker'})+sl` : `trail(${trailingMode || 'ticker'})`)
       : (slEnabled ? 'sl_only' : 'disabled');
@@ -1221,7 +1109,7 @@ export class SimpleAgent {
 
       const rtTrailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
       const rtStoplossEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_STOPLOSS_ENABLED ?? true);
-      const trailingMode = (MomentumConfig.EXIT as any).REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
+      const trailingMode = MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
 
       // ----------------------------------------------------------------------
       // 🚨 CRITICAL: Check REGIME_CHANGE and MOMENTUM_REVERSAL FIRST
@@ -1237,7 +1125,7 @@ export class SimpleAgent {
         // Regime change and momentum reversal are checked in checkExit() on 15m candle close
         // for 100% backtest parity. Ticker monitor focuses only on protective stops.
       } catch (err) {
-        logger.debug(`[${symbol}] Failed to monitor in RT: ${String((err as any)?.message || err)}`);
+        logger.debug(`[${symbol}] Failed to monitor in RT: ${errMsg(err)}`);
         // Continue to stop loss check if monitoring fails
       }
 
@@ -1260,7 +1148,7 @@ export class SimpleAgent {
         // V5.36: Use stagnant state from position (set by shouldExitPosition on 15m close)
         // Only check if stagnant is CONFIRMED - the detection itself happens on 15m close
         const isStagnantConfirmed = this.position!.stagnantState?.confirmed && !this.position!.stagnantState?.cancelled;
-        const stagnantTightenSlRatio = (MomentumConfig.EXIT as any).STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
+        const stagnantTightenSlRatio = MomentumConfig.EXIT.STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
         const currentBaseSl = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
 
         // V5.84: Stagnant SL respects adaptive SL — ratio of current base SL
@@ -1328,8 +1216,8 @@ export class SimpleAgent {
       if (!rtTrailingEnabled) return;
 
       if (trailingMode === 'kline_1m_close') {
-        const interval = ((MomentumConfig.EXIT as any).REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined) || '1m';
-        const confirmCandles = Math.max(1, Number((MomentumConfig.EXIT as any).REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES ?? 2));
+        const interval = (MomentumConfig.EXIT.REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined) || '1m';
+        const confirmCandles = Math.max(1, Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES ?? 2));
 
         // Ensure we are subscribed.
         ws.subscribeToKline(symbol, interval);
@@ -1349,8 +1237,8 @@ export class SimpleAgent {
           // This lets the order sit in the book and fill at the exact trailing
           // stop price = perfect match with backtest.
           // ═══════════════════════════════════════════════════════════════════
-          const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
-          const proactiveEnabled = (MomentumConfig.EXIT as any).NFS_PROACTIVE_LIMIT_ENABLED ?? true;
+          const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
+          const proactiveEnabled = MomentumConfig.EXIT.NFS_PROACTIVE_LIMIT_ENABLED ?? true;
 
           if (nfsEnabled && proactiveEnabled && this.nfsCalculator && this.nfsStateMachine && this.position) {
             // V5.86 FIX: Calculate if trailing SHOULD be active in real-time
@@ -1622,7 +1510,7 @@ export class SimpleAgent {
         // ═══════════════════════════════════════════════════════════════════════
         // NFS INTEGRATION: Use Noise Filter Score for smarter exit decisions
         // ═══════════════════════════════════════════════════════════════════════
-        const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
+        const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
         const trailingStopPrice = candidateStop as number;
 
         if (nfsEnabled && this.nfsCalculator && trailingStopPrice && klines && klines.length > 0) {
@@ -2281,15 +2169,15 @@ export class SimpleAgent {
         const volumes = candles.map(c => c.volume);
         
         // Core indicators
-        const roc5 = this.calcROC(closes, 5);
+        const roc5 = calcROC(closes, 5);
         const currentVol = volumes[volumes.length - 1];
         const avgVol19 = volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19;
         const volumeRatio = avgVol19 > 0 ? currentVol / avgVol19 : 1;
         
         // V5.23: New indicators for enhanced scoring
-        const bbPosition = this.calcBBPosition(candles, 20, 2);
-        const atrPct = this.calcATR(candles, 14);
-        const trendStrength = this.calcTrendStrength(closes, 50);
+        const bbPosition = calcBBPosition(candles, 20, 2);
+        const atrPct = calcATR(candles, 14);
+        const trendStrength = calcTrendStrength(closes, 50);
         
         // V5.23: Use enhanced multi-factor scoring
         const qualityScore = globalSignalRanker.calculateScore({
@@ -2835,7 +2723,7 @@ export class SimpleAgent {
         
         // V5.26: Check if markets are loaded before any exchange operation
         // NEVER call loadMarkets - it should have been done at startup via preloadMarkets()
-        const exchangeMarkets = (this.config.exchange as any).markets;
+        const exchangeMarkets = this.config.exchange.markets;
         if (!exchangeMarkets || Object.keys(exchangeMarkets).length === 0) {
           if (isIpBanned()) {
             logger.error(`🚫 [${symbol}] Markets not loaded and IP is banned - cannot open position`);
@@ -2852,7 +2740,7 @@ export class SimpleAgent {
 
         // V5.66: Check leverage cache to avoid redundant API calls
         const userId = this.config.userId || 'unknown';
-        if (isLeverageCached(userId, symbol, intLeverage)) {
+        if (globalCacheManager.isLeverageCached(userId, symbol, intLeverage)) {
           logger.debug(`✅ [${symbol}] Leverage ${intLeverage}x already cached - skipping API call`);
         } else {
           logger.info(`🔧 [${symbol}] Setting leverage: ${sizing.suggestedLeverage} → ${intLeverage} (rounded to integer for Binance)`);
@@ -2862,7 +2750,7 @@ export class SimpleAgent {
           const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
           try {
             await this.config.exchange.setLeverage(intLeverage, symbol);
-            cacheLeverage(userId, symbol, intLeverage);
+            globalCacheManager.cacheLeverage(userId, symbol, intLeverage);
           } catch (levErr: any) {
             // If setLeverage fails with the CCXT symbol, try with Binance format
             if (levErr?.message?.includes('leverage') || levErr?.code === -1102) {
@@ -2870,7 +2758,7 @@ export class SimpleAgent {
               try {
                 await this.config.exchange.setLeverage(intLeverage, binanceSymbol);
                 logger.info(`✅ [${symbol}] Leverage set successfully with Binance format`);
-                cacheLeverage(userId, symbol, intLeverage);
+                globalCacheManager.cacheLeverage(userId, symbol, intLeverage);
               } catch (retryErr: any) {
                 logger.error(`❌ [${symbol}] setLeverage failed even with Binance format:`, retryErr?.message);
                 throw retryErr;
@@ -3053,8 +2941,8 @@ export class SimpleAgent {
           ? ((filledPrice! - expectedPrice) / expectedPrice) * 100  // Positive = worse for long
           : ((expectedPrice - filledPrice!) / expectedPrice) * 100; // Positive = worse for short
 
-        const maxEntrySlippage = (MomentumConfig.EXIT as any).MAX_ENTRY_SLIPPAGE_PCT ?? 1.0;
-        const slippageAlertEnabled = (MomentumConfig.EXIT as any).SLIPPAGE_ALERT_ENABLED ?? true;
+        const maxEntrySlippage = MomentumConfig.EXIT.MAX_ENTRY_SLIPPAGE_PCT ?? 1.0;
+        const slippageAlertEnabled = MomentumConfig.EXIT.SLIPPAGE_ALERT_ENABLED ?? true;
 
         if (entrySlippage > maxEntrySlippage) {
           logger.warn(
@@ -3285,7 +3173,7 @@ export class SimpleAgent {
           timestamp: new Date(),
         });
         
-      } catch (error: any) {
+      } catch (error: unknown) {
         // Enhanced error logging for debugging
         logger.error(`❌ [${symbol}] Failed to open live position:`, {
           name: error?.name,
@@ -3503,7 +3391,7 @@ export class SimpleAgent {
       if (this.position!.stagnantState?.confirmed && !this.position!.stagnantState?.cancelled) {
         if (!this.stagnantSlUpdated) {
           this.stagnantSlUpdated = true;
-          const stagnantSlRatio = (MomentumConfig.EXIT as any).STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
+          const stagnantSlRatio = MomentumConfig.EXIT.STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
           const baseSl = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
           const stagnantSlPct = baseSl * stagnantSlRatio;
           const stagnantSlPrice = this.position!.side === 'long'
@@ -3551,8 +3439,8 @@ export class SimpleAgent {
         const trailingStopPrice = exitSignal.newStopLoss ?? this.position!.appTrailingStop ?? currentPrice;
 
         // V5.62: NFS_ADAPTIVE on 15m close (backup to 1m realtime monitor)
-        const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
-        const nfsAdaptive = (MomentumConfig.EXIT as any).NFS_ADAPTIVE_ENABLED ?? true;
+        const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
+        const nfsAdaptive = MomentumConfig.EXIT.NFS_ADAPTIVE_ENABLED ?? true;
 
         // V5.86: Check if proactive limit was filled FIRST before doing 15m exit
         // This prevents double-exit when 15m check runs before 1m fill detection
@@ -3748,9 +3636,9 @@ export class SimpleAgent {
               await this.setTrailingStopOnExchange(this.position, true); // true = isWidening
               // Note: setTrailingStopOnExchange now has built-in fallback to STOP_MARKET if trailing fails
               logger.info(`🎯 [${symbol}] Trailing WIDENED: callback now ${MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT}%`);
-            } catch (error: any) {
+            } catch (error: unknown) {
               // Error already handled by setTrailingStopOnExchange fallback
-              logger.warn(`⚠️ [${symbol}] Failed to widen trailing: ${error.message}`);
+              logger.warn(`⚠️ [${symbol}] Failed to widen trailing: ${errMsg(error)}`);
             }
           }
         }
@@ -3993,7 +3881,7 @@ export class SimpleAgent {
           agentId: this.config.sessionId,
           userId: this.config.userId || 'unknown',
           priority: calculateOrderPriority({
-            reason: reason as any,
+            reason: reason,
             isEntry: false,
             positionPnlPct: pnlPct,
             positionHoldTimeMs: holdTimeMs,
@@ -4008,7 +3896,7 @@ export class SimpleAgent {
           reason,
           priorityContext: {
             isEntry: false,
-            reason: reason as any,
+            reason: reason,
             positionPnlPct: pnlPct,
             positionHoldTimeMs: holdTimeMs,
           },
@@ -4084,7 +3972,7 @@ export class SimpleAgent {
                 params: { reduceOnly: true },
                 isEntry: false,
                 reason: 'partial_fill_cleanup',
-                priorityContext: { isEntry: false, reason: 'partial_fill_cleanup' as any },
+                priorityContext: { isEntry: false, reason: 'partial_fill_cleanup' },
                 submittedAt: Date.now(),
                 retries: 0,
                 timeoutMs: 30_000,
@@ -4131,7 +4019,7 @@ export class SimpleAgent {
                 params: { reduceOnly: true },
                 isEntry: false,
                 reason: 'formatting_residual_cleanup',
-                priorityContext: { isEntry: false, reason: 'formatting_residual_cleanup' as any },
+                priorityContext: { isEntry: false, reason: 'formatting_residual_cleanup' },
                 submittedAt: Date.now(),
                 retries: 0,
                 timeoutMs: 30_000,
@@ -4161,8 +4049,8 @@ export class SimpleAgent {
           ? ((expectedExitPrice - exitPrice) / expectedExitPrice) * 100  // Positive = worse for long exit (sold lower)
           : ((exitPrice - expectedExitPrice) / expectedExitPrice) * 100; // Positive = worse for short exit (bought higher)
 
-        const maxExitSlippage = (MomentumConfig.EXIT as any).MAX_EXIT_SLIPPAGE_PCT ?? 2.0;
-        const slippageAlertEnabled = (MomentumConfig.EXIT as any).SLIPPAGE_ALERT_ENABLED ?? true;
+        const maxExitSlippage = MomentumConfig.EXIT.MAX_EXIT_SLIPPAGE_PCT ?? 2.0;
+        const slippageAlertEnabled = MomentumConfig.EXIT.SLIPPAGE_ALERT_ENABLED ?? true;
 
         if (exitSlippage > maxExitSlippage) {
           logger.warn(
@@ -4202,7 +4090,7 @@ export class SimpleAgent {
               agentId: this.config.sessionId,
               userId: this.config.userId || 'unknown',
               priority: calculateOrderPriority({
-                reason: reason as any,
+                reason: reason,
                 isEntry: false,
                 positionPnlPct: actualPnlPct,
                 positionHoldTimeMs: Date.now() - addPos.entryTime,
@@ -4214,7 +4102,7 @@ export class SimpleAgent {
               params: { reduceOnly: true },
               isEntry: false,
               reason: `multi_exit_${(addPos.entryIndex || 0) + 1}`,
-              priorityContext: { isEntry: false, reason: reason as any },
+              priorityContext: { isEntry: false, reason: reason },
               submittedAt: Date.now(),
               retries: 0,
               timeoutMs: 30_000,
@@ -4330,7 +4218,7 @@ export class SimpleAgent {
           timestamp: new Date(),
         });
         
-      } catch (error: any) {
+      } catch (error: unknown) {
         logger.error(`❌ [${symbol}] Failed to close live position:`, error);
         
         // 📢 NOTIFICATION: Exit order error (CRITICAL)
@@ -4500,171 +4388,125 @@ export class SimpleAgent {
   }
   
   private async fetchBtcCandles(): Promise<Candle[]> {
-    const btcSymbol = 'BTCUSDT'; // Binance format for WebSocket
-    const btcSymbolCcxt = 'BTC/USDT:USDT'; // CCXT format for REST fallback
-    
-    // 1. Subscribe to BTC WebSocket stream (re-subscribe each time to keep TTL alive)
+    const btcSymbol = 'BTCUSDT';
+
+    // 1. Subscribe to BTC WebSocket stream
     try {
       const ws = getBinanceWebSocket();
       ws.subscribeToKline(btcSymbol, '15m');
-      if (!btcWsSubscribed) {
-        btcWsSubscribed = true;
+      if (!globalCacheManager.getBtc15mWsSubscribed()) {
+        globalCacheManager.setBtc15mWsSubscribed(true);
         logger.info('📡 [BTC] Subscribed to WebSocket kline stream (0 API weight)');
       }
     } catch (error) {
-      if (!btcWsSubscribed) {
+      if (!globalCacheManager.getBtc15mWsSubscribed()) {
         logger.warn('⚠️ [BTC] Failed to subscribe to WebSocket, will use REST');
       }
     }
-    
-    // 2. Try WebSocket cache first (0 API weight!) 
-    // V5.50: Use getKlinesWithMeta to preserve isFinal flag for accurate candle close detection
+
+    // 2. Try WebSocket cache first (0 API weight!)
     try {
       const wsKlines = getKlinesWithMeta(btcSymbol, '15m');
       if (wsKlines && wsKlines.length >= 200) {
         const candles: Candle[] = wsKlines.map(c => ({
-          timestamp: c.timestamp,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume,
-          isFinal: c.isFinal,
+          timestamp: c.timestamp, open: c.open, high: c.high,
+          low: c.low, close: c.close, volume: c.volume, isFinal: c.isFinal,
         }));
-        
-        // Update global cache with WS data
-        globalBtcCandleCache = { candles, fetchedAt: Date.now() };
+        globalCacheManager.setBtc15mCache(candles);
         return candles;
       }
     } catch (error) {
-      // WebSocket cache miss - continue to cached/wait
+      // WebSocket cache miss
     }
-    
-    // 3. Check global cache (from previous WS data)
-    if (globalBtcCandleCache && Date.now() - globalBtcCandleCache.fetchedAt < GLOBAL_BTC_CACHE_TTL_MS) {
-      return globalBtcCandleCache.candles;
+
+    // 3. Check global cache
+    if (globalCacheManager.isBtc15mCacheValid()) {
+      return globalCacheManager.getBtc15mCache()!.candles;
     }
-    
-    // 4. NO REST FALLBACK - WebSocket only to avoid IP bans
-    // V5.29: Removed REST fallback - caused IP bans from Binance
-    // V5.50: Use getKlinesWithMeta to preserve isFinal flag
+
+    // 4. WebSocket partial data
     const wsKlinesPartial = getKlinesWithMeta(btcSymbol, '15m');
     if (wsKlinesPartial && wsKlinesPartial.length > 0) {
       const candles: Candle[] = wsKlinesPartial.map(c => ({
-        timestamp: c.timestamp,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume,
-        isFinal: c.isFinal,
+        timestamp: c.timestamp, open: c.open, high: c.high,
+        low: c.low, close: c.close, volume: c.volume, isFinal: c.isFinal,
       }));
-      globalBtcCandleCache = { candles, fetchedAt: Date.now() };
+      globalCacheManager.setBtc15mCache(candles);
       return candles;
     }
-    
-    // No data - return cached or empty
-    return globalBtcCandleCache?.candles || [];
+
+    return globalCacheManager.getBtc15mCache()?.candles || [];
   }
 
   // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
   private async fetchBtcCandles1h(): Promise<Candle[]> {
-    const btcSymbol = 'BTCUSDT'; // Binance format for WebSocket
-    const MIN_FINAL_CANDLES = 11;  // Need at least 11 final candles for MTF filter
+    const btcSymbol = 'BTCUSDT';
+    const MIN_FINAL_CANDLES = 11;
 
-    // 0. Check global cache first (shared across all agents)
-    if (globalBtc1hCandleCache && Date.now() - globalBtc1hCandleCache.fetchedAt < GLOBAL_BTC_1H_CACHE_TTL_MS) {
-      // V5.50 FIX: Also verify cache has enough FINAL candles, otherwise refresh
-      const finalCount = globalBtc1hCandleCache.candles.filter(c => c.isFinal !== false).length;
-      if (finalCount >= MIN_FINAL_CANDLES) {
-        return globalBtc1hCandleCache.candles;
-      }
-      // Cache has insufficient final candles - force refresh
+    // 0. Check global cache first
+    if (globalCacheManager.isBtc1hCacheValid(MIN_FINAL_CANDLES)) {
+      return globalCacheManager.getBtc1hCache()!.candles;
     }
 
     // Prevent multiple concurrent fetches
-    if (globalBtc1hCacheFetchingPromise) {
-      return globalBtc1hCacheFetchingPromise;
-    }
+    const existing = globalCacheManager.getBtc1hFetchingPromise();
+    if (existing) return existing;
 
-    // Create fetch promise
-    globalBtc1hCacheFetchingPromise = (async () => {
+    const fetchPromise = (async () => {
       try {
         // 1. Subscribe to BTC 1h WebSocket stream
         try {
           const ws = getBinanceWebSocket();
           ws.subscribeToKline(btcSymbol, '1h');
         } catch (error) {
-          // Silently fail - will try cache or fallback
+          // Silently fail
         }
 
         // 2. Try WebSocket cache first (0 API weight!)
-        // V5.50: Use getKlinesWithMeta to preserve isFinal flag
         try {
           const wsKlines = getKlinesWithMeta(btcSymbol, '1h');
-          if (wsKlines && wsKlines.length >= 20) {  // Need at least 20 candles for MTF filter
+          if (wsKlines && wsKlines.length >= 20) {
             const candles: Candle[] = wsKlines.map(c => ({
-              timestamp: c.timestamp,
-              open: c.open,
-              high: c.high,
-              low: c.low,
-              close: c.close,
-              volume: c.volume,
-              isFinal: c.isFinal,
+              timestamp: c.timestamp, open: c.open, high: c.high,
+              low: c.low, close: c.close, volume: c.volume, isFinal: c.isFinal,
             }));
-            globalBtc1hCandleCache = { candles, fetchedAt: Date.now() };
+            globalCacheManager.setBtc1hCache(candles);
             return candles;
           }
         } catch (error) {
-          // WebSocket cache miss - will try REST fallback
+          // WebSocket cache miss
         }
 
-        // 3. REST API fallback - fetch BTC 1h candles
-        // V5.36 FIX: MTF filter needs actual data to work properly
-        // V5.86 FIX: Need 200+ candles for SMA200 regime calculation (was only 50!)
+        // 3. REST API fallback (V5.86: 250 candles for SMA200 regime)
         try {
           if (this.config.exchange.fetchOHLCV) {
-            const ohlcv = await this.config.exchange.fetchOHLCV(
-              'BTC/USDT:USDT',
-              '1h',
-              undefined,
-              250  // V5.86: 250 for SMA200 regime + buffer (was 50)
-            );
-
+            const ohlcv = await this.config.exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250);
             if (ohlcv && ohlcv.length >= 11) {
-              // V5.50 FIX: Mark REST candles as isFinal=true (historical candles are always closed)
-              // except the last one which might be in-progress
               const candles: Candle[] = ohlcv.map((c, idx) => ({
-                timestamp: c[0] as number,
-                open: c[1] as number,
-                high: c[2] as number,
-                low: c[3] as number,
-                close: c[4] as number,
-                volume: c[5] as number,
-                isFinal: idx < ohlcv.length - 1,  // All except last are final
+                timestamp: c[0] as number, open: c[1] as number,
+                high: c[2] as number, low: c[3] as number,
+                close: c[4] as number, volume: c[5] as number,
+                isFinal: idx < ohlcv.length - 1,
               }));
-              globalBtc1hCandleCache = { candles, fetchedAt: Date.now() };
-
-              // V5.50 FIX: Also seed WebSocket cache so future reads work correctly
+              globalCacheManager.setBtc1hCache(candles);
               seedKlinesFromWebSocket(btcSymbol, '1h', ohlcv);
               logger.info(`[fetchBtcCandles1h] REST seeded ${ohlcv.length} candles to WebSocket cache`);
-
               return candles;
             }
           }
-        } catch (error: any) {
-          logger.warn(`[fetchBtcCandles1h] REST fallback failed: ${error.message}`);
+        } catch (error: unknown) {
+          logger.warn(`[fetchBtcCandles1h] REST fallback failed: ${errMsg(error)}`);
         }
 
-        // 4. No data - return empty array (MTF filter will pass-through as fail-safe)
         logger.warn('[fetchBtcCandles1h] No BTC 1h data available - MTF filter will be bypassed');
         return [];
       } finally {
-        globalBtc1hCacheFetchingPromise = null;
+        globalCacheManager.setBtc1hFetchingPromise(null);
       }
     })();
 
-    return globalBtc1hCacheFetchingPromise;
+    globalCacheManager.setBtc1hFetchingPromise(fetchPromise);
+    return fetchPromise;
   }
 
   /**
@@ -4771,8 +4613,8 @@ export class SimpleAgent {
 
     // Live mode: check order status on exchange
     try {
-      if ((this.config.exchange as any).fetchOrder) {
-        const order = await (this.config.exchange as any).fetchOrder(orderId, symbol);
+      if (this.config.exchange.fetchOrder) {
+        const order = await this.config.exchange.fetchOrder(orderId, symbol);
         const status = order.status?.toLowerCase();
         if (status === 'closed' || status === 'filled') {
           const avgPrice = order.average || order.price || this.proactiveLimitPrice || 0;
@@ -4853,7 +4695,7 @@ export class SimpleAgent {
           if (this.position?.trailingOrderId) {
             await this.setTrailingStopOnExchange(this.position);
           }
-        } catch (error: any) {
+        } catch (error: unknown) {
           logger.warn(`⚠️ [${symbol}] Failed to cancel orders for SL update:`, error);
         }
       }
@@ -4949,8 +4791,8 @@ export class SimpleAgent {
       
       return true; // Success - trailing stop placed successfully
       
-    } catch (error: any) {
-      const errorMsg = error.message || String(error);
+    } catch (error: unknown) {
+      const errorMsg = errMsg(error);
       
       if (errorMsg.includes('Invalid orderType') || errorMsg.includes('not supported')) {
         logger.warn(`⚠️ [${symbol}] TRAILING_STOP_MARKET not supported, falling back to STOP_MARKET`);
@@ -5409,7 +5251,7 @@ export class SimpleAgent {
                 params: { reduceOnly: true },
                 isEntry: false,
                 reason: 'dust_position_cleanup',
-                priorityContext: { isEntry: false, reason: 'dust_position_cleanup' as any },
+                priorityContext: { isEntry: false, reason: 'dust_position_cleanup' },
                 submittedAt: Date.now(),
                 retries: 0,
                 timeoutMs: 30_000,
@@ -5687,8 +5529,8 @@ export class SimpleAgent {
       
       logger.info(`✅ [${symbol}] Reconciliation complete: ${reconciledCount} missing trades recovered`);
       
-    } catch (error: any) {
-      logger.error(`❌ [${symbol}] Failed to reconcile trades:`, error.message);
+    } catch (error: unknown) {
+      logger.error(`❌ [${symbol}] Failed to reconcile trades:`, errMsg(error));
     }
   }
   
@@ -5792,10 +5634,10 @@ export class SimpleAgent {
           stagnantState: this.position.stagnantState ?? null,
         },
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Don't log every failure (can happen during rapid updates)
-      if (!error.message?.includes('Record to update not found')) {
-        logger.debug(`⚠️ [${this.config.symbol}] Failed to update position state: ${error.message}`);
+      if (!errMsg(error).includes('Record to update not found')) {
+        logger.debug(`⚠️ [${this.config.symbol}] Failed to update position state: ${errMsg(error)}`);
       }
     }
   }

@@ -3,6 +3,8 @@ import { runBacktest, BacktestParams, BacktestResult } from "../services/backtes
 import { authenticateUser, AuthenticatedRequest } from "../middleware/auth.js";
 // V2 parity verification with fixed regime detection
 import { verifyTradeV2, verifyAllTradesV2, getParityResultsV2 } from "../services/parityVerificationServiceV2.js";
+import { runWalkForward, type WalkForwardConfig } from "../services/walkForwardService.js";
+import { runOptimization, type ParameterGrid, type OptimizationConfig } from "../services/optimizationService.js";
 import crypto from 'node:crypto';
 
 export const router = Router();
@@ -278,5 +280,75 @@ router.get('/parity-results', authenticateUser, async (req: AuthenticatedRequest
   } catch (error: any) {
     console.error('[Parity] Error fetching results:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch results' });
+  }
+});
+
+// ============================================================================
+// Walk-Forward Testing
+// ============================================================================
+
+router.post('/walk-forward', authenticateUser, async (req, res) => {
+  try {
+    const {
+      startDate, endDate,
+      trainWindowMonths = 6, testWindowMonths = 2, stepMonths = 2,
+      symbols, initialCapital = 2000, leverage = 4.5,
+      signalOverrides,
+    } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const config: WalkForwardConfig = {
+      fullStartDate: new Date(startDate),
+      fullEndDate: new Date(endDate),
+      trainWindowMonths, testWindowMonths, stepMonths,
+      symbols: symbols || ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT'],
+      initialCapital, leverage, signalOverrides,
+    };
+
+    const result = await runWalkForward(config);
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Walk-Forward] Error:', error);
+    res.status(500).json({ error: error.message || 'Walk-forward failed' });
+  }
+});
+
+// ============================================================================
+// Grid Search / Optimization
+// ============================================================================
+
+router.post('/optimize', authenticateUser, async (req, res) => {
+  try {
+    const {
+      grid, startDate, endDate,
+      trainWindowMonths = 6, testWindowMonths = 2, stepMonths = 2,
+      symbols, initialCapital = 2000, leverage = 4.5,
+      topN = 5,
+    } = req.body;
+
+    if (!grid || !startDate || !endDate) {
+      return res.status(400).json({ error: 'grid, startDate, and endDate are required' });
+    }
+
+    const config: OptimizationConfig = {
+      grid: grid as ParameterGrid,
+      walkForward: {
+        fullStartDate: new Date(startDate),
+        fullEndDate: new Date(endDate),
+        trainWindowMonths, testWindowMonths, stepMonths,
+        symbols: symbols || ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT'],
+        initialCapital, leverage,
+      },
+      topN,
+    };
+
+    const result = await runOptimization(config);
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Optimization] Error:', error);
+    res.status(500).json({ error: error.message || 'Optimization failed' });
   }
 });

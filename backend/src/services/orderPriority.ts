@@ -26,7 +26,10 @@ export type ExitReason =
   | 'max_hold'
   | 'stagnant'
   | 'manual'
-  | 'liquidation_risk';
+  | 'liquidation_risk'
+  | 'partial_fill_cleanup'
+  | 'formatting_residual_cleanup'
+  | 'dust_position_cleanup';
 
 export type OrderPriorityContext = {
   // Order type

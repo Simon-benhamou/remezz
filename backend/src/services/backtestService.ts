@@ -118,6 +118,14 @@ export interface SignalOverrides {
   ROC_MIN?: number;        // Override for LONG ROC threshold (default 0.025 = 2.5%)
   VOL_MULTIPLIER?: number; // Override for LONG volume multiplier (default 1.5)
   MAX_CONSEC_UP?: number;  // Override for max consecutive up candles (default 5)
+  // EXIT parameter overrides for optimization
+  TRAILING_ACTIVATION_PCT?: number;
+  TRAILING_DISTANCE_PCT?: number;
+  STOP_LOSS_PCT?: number;
+  STOP_LOSS_MIN_PCT?: number;
+  STOP_LOSS_MAX_PCT?: number;
+  PROFIT_TARGET_PCT?: number;
+  [key: string]: number | undefined;  // Allow arbitrary overrides for grid search
 }
 
 // V5.54: Forced entry for parity verification

@@ -26,6 +26,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { ORDER_QUEUE } from '../config/constants.js';
 import { createLogger } from '../utils/logger.js';
 import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
 import { calculateOrderPriority, getPriorityTier } from './orderPriority.js';
@@ -55,7 +56,7 @@ export type OrderRequest = {
   type: 'market' | 'limit';
   quantity: number;
   price?: number;
-  params?: Record<string, any>;
+  params?: Record<string, unknown>;
 
   // Order classification
   isEntry: boolean;              // true = opening position, false = closing
@@ -69,7 +70,7 @@ export type OrderRequest = {
 
 export type OrderResult = {
   success: boolean;
-  order?: any;                   // CCXT order object
+  order?: import('../types/exchange.js').CcxtOrder;  // Typed CCXT order
   error?: string;
   errorCode?: string;            // Error classification
   executedAt: number;            // When order was executed
@@ -105,7 +106,7 @@ export class OrderQueue {
   private readonly RESULT_CACHE_TTL_MS: number;        // Result cache lifetime
   private readonly MAX_QUEUE_SIZE: number;             // Max orders in queue
   private readonly DEFAULT_TIMEOUT_MS: number;         // Max wait time per order
-  private readonly EXECUTION_TIMEOUT_MS = 10_000;      // V5.38: Max time for exchange API call (10s)
+  private readonly EXECUTION_TIMEOUT_MS = ORDER_QUEUE.EXECUTION_TIMEOUT_MS;
 
   // V5.65: Enhanced idempotency tracking to prevent double orders
   // Tracks order IDs for 24 hours to handle any edge cases
@@ -133,7 +134,7 @@ export class OrderQueue {
 
   // Health monitoring
   private lastHealthCheckAt = 0;
-  private readonly HEALTH_CHECK_INTERVAL_MS = 60_000; // 1 minute
+  private readonly HEALTH_CHECK_INTERVAL_MS = ORDER_QUEUE.HEALTH_CHECK_INTERVAL_MS;
 
   constructor(config?: {
     maxConcurrentOrders?: number;
@@ -144,12 +145,12 @@ export class OrderQueue {
     defaultTimeoutMs?: number;
   }) {
     // Configuration (with safe defaults for 1000+ agents)
-    this.MAX_CONCURRENT_ORDERS = config?.maxConcurrentOrders ?? 3;    // Safe for Binance
-    this.ORDER_DELAY_MS = config?.orderDelayMs ?? 350;                // 350ms = ~8 orders/sec (well under 40/sec limit)
-    this.MAX_RETRIES = config?.maxRetries ?? 2;                       // 2 retries max
-    this.RESULT_CACHE_TTL_MS = config?.resultCacheTTL ?? 300_000;     // V5.65: 5 minutes cache (was 60s)
-    this.MAX_QUEUE_SIZE = config?.maxQueueSize ?? 5000;               // Support 1000 agents × 5 orders
-    this.DEFAULT_TIMEOUT_MS = config?.defaultTimeoutMs ?? 30_000;     // 30 second timeout
+    this.MAX_CONCURRENT_ORDERS = config?.maxConcurrentOrders ?? ORDER_QUEUE.MAX_CONCURRENT;
+    this.ORDER_DELAY_MS = config?.orderDelayMs ?? ORDER_QUEUE.DELAY_MS;
+    this.MAX_RETRIES = config?.maxRetries ?? ORDER_QUEUE.MAX_RETRIES;
+    this.RESULT_CACHE_TTL_MS = config?.resultCacheTTL ?? ORDER_QUEUE.RESULT_CACHE_TTL_MS;
+    this.MAX_QUEUE_SIZE = config?.maxQueueSize ?? ORDER_QUEUE.MAX_QUEUE_SIZE;
+    this.DEFAULT_TIMEOUT_MS = config?.defaultTimeoutMs ?? ORDER_QUEUE.DEFAULT_TIMEOUT_MS;
     this.IDEMPOTENCY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;              // V5.65: 24 hours for order ID history
 
     logger.info('[OrderQueue] Initialized with config:', {
@@ -540,7 +541,7 @@ export class OrderQueue {
 
       // V5.38: Execute order with timeout to prevent hanging
       // If Binance doesn't respond within EXECUTION_TIMEOUT_MS, we fail gracefully
-      let order: any;
+      let order: import('../types/exchange.js').CcxtOrder | undefined;
 
       const executeWithTimeout = async <T>(operation: Promise<T>): Promise<T> => {
         return new Promise<T>((resolveOp, rejectOp) => {
@@ -608,12 +609,13 @@ export class OrderQueue {
 
       resolve(result);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       const executionTimeMs = Date.now() - executionStartAt;
+      const errorMessage = error instanceof Error ? error.message : String(error);
 
       logger.error(
         `[${id}] ❌ FAILED | ` +
-        `error=${error.message} | ` +
+        `error=${errorMessage} | ` +
         `executionTime=${executionTimeMs}ms`
       );
 
@@ -646,11 +648,11 @@ export class OrderQueue {
         this.stats.totalFailed++;
 
         // Record failure in circuit breaker
-        globalRestCircuitBreaker.recordFailure(request.agentId, symbol, error.message);
+        globalRestCircuitBreaker.recordFailure(request.agentId, symbol, errorMessage);
 
         const result: OrderResult = {
           success: false,
-          error: error.message,
+          error: errorMessage,
           errorCode,
           executedAt: Date.now(),
           waitTimeMs,
@@ -663,7 +665,7 @@ export class OrderQueue {
           symbol,
           side,
           quantity,
-          error: error.message,
+          error: errorMessage,
           retriesUsed: request.retries,
         });
 
@@ -684,8 +686,8 @@ export class OrderQueue {
   /**
    * Classify error for better handling
    */
-  private classifyError(error: any): string {
-    const message = error.message?.toLowerCase() || '';
+  private classifyError(error: unknown): string {
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
 
     if (message.includes('418') || message.includes('429')) {
       return 'RATE_LIMIT';
@@ -713,8 +715,8 @@ export class OrderQueue {
   /**
    * Check if error is retryable
    */
-  private isRetryableError(error: any): boolean {
-    const message = error.message?.toLowerCase() || '';
+  private isRetryableError(error: unknown): boolean {
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
 
     // Retryable: Network errors, timeouts
     if (message.includes('timeout') || message.includes('network') || message.includes('econnreset')) {
@@ -743,7 +745,7 @@ export class OrderQueue {
   /**
    * Get exchange instance for a user (with their API credentials)
    */
-  private async getExchangeForUser(userId: string): Promise<any> {
+  private async getExchangeForUser(userId: string): Promise<unknown> {
     // Import dynamically to avoid circular dependencies
     const { getUserExchange } = await import('../exchange/ccxtClient.js');
     const { getUserCredentials } = await import('./userCredentials.js');
@@ -834,12 +836,12 @@ export class OrderQueue {
  * Used by all agents to submit orders
  */
 export const orderQueue = new OrderQueue({
-  maxConcurrentOrders: 3,      // Conservative (Binance allows 40/sec)
-  orderDelayMs: 350,           // 350ms = ~8.5 orders/sec (safe margin)
-  maxRetries: 2,               // 2 retry attempts
-  resultCacheTTL: 300_000,     // V5.65: 5 minutes result cache (was 60s)
-  maxQueueSize: 5000,          // Support 1000 agents × 5 orders each
-  defaultTimeoutMs: 30_000,    // 30 second timeout per order
+  maxConcurrentOrders: ORDER_QUEUE.MAX_CONCURRENT,
+  orderDelayMs: ORDER_QUEUE.DELAY_MS,
+  maxRetries: ORDER_QUEUE.MAX_RETRIES,
+  resultCacheTTL: ORDER_QUEUE.RESULT_CACHE_TTL_MS,
+  maxQueueSize: ORDER_QUEUE.MAX_QUEUE_SIZE,
+  defaultTimeoutMs: ORDER_QUEUE.DEFAULT_TIMEOUT_MS,
 });
 
 // Auto-start on import
