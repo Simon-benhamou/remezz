@@ -2162,6 +2162,10 @@ class BinanceWebSocketManager {
       const newestExistingTs = existing[existing.length - 1].timestamp;
       const existingTimestamps = new Set(existing.map(k => k.timestamp));
 
+      // V5.86 FIX: Mark all merged candles as isFinal=true
+      // When merging with existing cache (which has correct isFinal from WebSocket),
+      // we're typically backfilling older historical candles which are all closed.
+      // The current in-progress candle is already in existing cache with correct isFinal.
       const toMerge = limited
         .filter(row => !existingTimestamps.has(Number(row[0])))
         .map((row) => ({
@@ -2173,6 +2177,7 @@ class BinanceWebSocketManager {
           low: Number(row[3]),
           close: Number(row[4]),
           volume: Number(row[5]),
+          isFinal: true,  // V5.86: Historical backfill candles are always closed
         } satisfies BinanceKlineData));
 
       if (toMerge.length > 0) {
@@ -2184,7 +2189,8 @@ class BinanceWebSocketManager {
       }
     } else {
       // FULL SEED: No existing data (startup), do full replacement
-      const seeded = limited.map((row) => ({
+      // V5.86 FIX: Set isFinal correctly - last candle is in-progress, rest are final
+      const seeded = limited.map((row, idx) => ({
         symbol: cacheSymbol,
         timeframe: interval,
         timestamp: Number(row[0]),
@@ -2193,6 +2199,7 @@ class BinanceWebSocketManager {
         low: Number(row[3]),
         close: Number(row[4]),
         volume: Number(row[5]),
+        isFinal: idx < limited.length - 1,  // V5.86: Last candle is in-progress
       } satisfies BinanceKlineData));
 
       this.klinesCache.set(key, seeded);
