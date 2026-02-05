@@ -1353,11 +1353,55 @@ export class SimpleAgent {
           const proactiveEnabled = (MomentumConfig.EXIT as any).NFS_PROACTIVE_LIMIT_ENABLED ?? true;
 
           if (nfsEnabled && proactiveEnabled && this.nfsCalculator && this.nfsStateMachine && this.position) {
-            const trailingActive = this.position.trailingActive && this.position.appTrailingStop;
-            if (trailingActive) {
-              const trailingStopPrice = this.position.appTrailingStop!;
-              const currentPrice = last.close;
-              const side = this.position.side;
+            // V5.86 FIX: Calculate if trailing SHOULD be active in real-time
+            // Don't rely on position.trailingActive which is only updated on candle close
+            // This ensures proactive limit is checked even when trailing just activated
+            const currentPrice = last.close;
+            const side = this.position.side;
+            const entryPrice = this.position.entryPrice;
+
+            // Calculate current PnL % in real-time
+            const realtimePnlPct = side === 'long'
+              ? ((currentPrice - entryPrice) / entryPrice) * 100
+              : ((entryPrice - currentPrice) / entryPrice) * 100;
+
+            // Get activation threshold
+            const activationPct = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT; // 0.8%
+
+            // Check if trailing should be active (either already active or should activate now)
+            const shouldTrailingBeActive = this.position.trailingActive || realtimePnlPct >= activationPct;
+
+            // Calculate trailing stop price based on watermarks
+            let trailingStopPrice: number | null = null;
+            if (shouldTrailingBeActive) {
+              if (this.position.appTrailingStop) {
+                // Use existing trailing stop if available
+                trailingStopPrice = this.position.appTrailingStop;
+              } else {
+                // Calculate trailing stop from watermarks
+                const baseDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
+                // Check if we should widen the trailing
+                const hwmPct = side === 'long'
+                  ? this.position.highWaterMark
+                    ? ((this.position.highWaterMark - entryPrice) / entryPrice) * 100
+                    : realtimePnlPct
+                  : this.position.lowWaterMark
+                    ? ((entryPrice - this.position.lowWaterMark) / entryPrice) * 100
+                    : realtimePnlPct;
+
+                const distance = hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT
+                  ? MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT
+                  : baseDistance;
+
+                if (side === 'long' && this.position.highWaterMark) {
+                  trailingStopPrice = this.position.highWaterMark * (1 - distance / 100);
+                } else if (side === 'short' && this.position.lowWaterMark) {
+                  trailingStopPrice = this.position.lowWaterMark * (1 + distance / 100);
+                }
+              }
+            }
+
+            if (shouldTrailingBeActive && trailingStopPrice) {
 
               // Build candle arrays for NFS
               const prevNfsCandles: NfsCandle[] = (klines || []).slice(-25, -1).map(k => ({
@@ -3509,6 +3553,34 @@ export class SimpleAgent {
         // V5.62: NFS_ADAPTIVE on 15m close (backup to 1m realtime monitor)
         const nfsEnabled = (MomentumConfig.EXIT as any).NFS_ENABLED ?? false;
         const nfsAdaptive = (MomentumConfig.EXIT as any).NFS_ADAPTIVE_ENABLED ?? true;
+
+        // V5.86: Check if proactive limit was filled FIRST before doing 15m exit
+        // This prevents double-exit when 15m check runs before 1m fill detection
+        if (this.proactiveLimitOrderId && this.position) {
+          logger.info(`[${symbol}] 15m check: proactive LIMIT pending (${this.proactiveLimitOrderId}), checking fill status first...`);
+          const fillResult = await this.checkProactiveLimitFill(symbol);
+          if (fillResult?.filled) {
+            const execPx = fillResult.avgPrice;
+            this.stopRealtimeExitMonitor();
+            logger.info(
+              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED (detected at 15m check) @ $${execPx.toFixed(4)} | ` +
+              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | ` +
+              `slippage=0% (exact backtest match!)`
+            );
+            this.proactiveLimitOrderId = null;
+            this.proactiveLimitPrice = null;
+            await this.closePosition(this.position!, execPx, 'trailing_proactive_limit_15m');
+            return;
+          }
+          // If not filled yet, cancel it and proceed with 15m exit logic
+          // (price may have gapped through the limit price)
+          logger.info(`[${symbol}] Proactive LIMIT not filled yet, cancelling and proceeding with 15m exit...`);
+          try {
+            await this.cancelProactiveLimit(symbol);
+          } catch (e) {
+            logger.warn(`[${symbol}] Failed to cancel proactive LIMIT: ${e}`);
+          }
+        }
 
         if (nfsEnabled && nfsAdaptive && this.nfsCalculator) {
           // Calculate NFS score for this breach
