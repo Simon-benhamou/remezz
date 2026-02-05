@@ -176,10 +176,12 @@ export async function seedFreshCandles(symbols?: string[]): Promise<{ seeded: nu
 
   await Promise.all(promises);
 
-  // Also fetch BTC 1h candles for MTF filter
+  // Also fetch BTC 1h candles for MTF filter + regime SMA200
+  // V5.86 FIX: Need 200+ candles for SMA200 regime calculation (was only 100!)
+  // Without this, live falls back to 15m SMA200 which gives different regime than backtest
   try {
     const ohlcv1h = await binanceRestQueue.enqueue<number[][]>(
-      () => exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 100),
+      () => exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250),  // V5.86: 250 for SMA200 + buffer
       {
         weight: BINANCE_WEIGHTS.FETCH_OHLCV,
         priority: 'normal',
@@ -229,9 +231,10 @@ export async function backfillBtcCandles(): Promise<void> {
     logger.warn(`⚠️ BTC 15m backfill failed: ${error?.message}`);
   }
 
+  // V5.86 FIX: Need 200+ candles for SMA200 regime calculation (was only 100!)
   try {
     const ohlcv1h = await binanceRestQueue.enqueue<number[][]>(
-      () => exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 100),
+      () => exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250),  // V5.86: 250 for SMA200 + buffer
       {
         weight: BINANCE_WEIGHTS.FETCH_OHLCV,
         priority: 'high',

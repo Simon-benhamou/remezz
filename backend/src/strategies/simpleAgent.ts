@@ -4545,13 +4545,14 @@ export class SimpleAgent {
 
         // 3. REST API fallback - fetch BTC 1h candles
         // V5.36 FIX: MTF filter needs actual data to work properly
+        // V5.86 FIX: Need 200+ candles for SMA200 regime calculation (was only 50!)
         try {
           if (this.config.exchange.fetchOHLCV) {
             const ohlcv = await this.config.exchange.fetchOHLCV(
               'BTC/USDT:USDT',
               '1h',
               undefined,
-              50  // Fetch 50 candles for MTF filter (need at least 11)
+              250  // V5.86: 250 for SMA200 regime + buffer (was 50)
             );
 
             if (ohlcv && ohlcv.length >= 11) {
