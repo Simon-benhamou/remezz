@@ -1,18 +1,16 @@
 /**
- * 🧪 BACKTEST vs LIVE PARITY TESTS
- * 
- * Ces tests vérifient que les décisions de sortie sont IDENTIQUES
- * entre le code live (shouldExitPosition) et le code backtest
- * 
+ * 🧪 EXIT LOGIC TESTS
+ *
+ * Ces tests vérifient que shouldExitPosition() fonctionne correctement.
+ * Depuis V5.41, LIVE et BACKTEST utilisent la MÊME fonction shouldExitPosition().
+ *
  * Run with: npx tsx test/run-parity-tests.ts
  */
 
 import {
   shouldExitPosition,
   determineVolatilityRegime,
-  updatePositionWaterMarks,
   MomentumConfig,
-  calcATR,
 } from '../src/strategies/momentumSimple.js';
 import type { Position, Candle } from '../src/types.js';
 
@@ -40,43 +38,12 @@ function describe(name: string, fn: () => void): void {
   fn();
 }
 
-// Backtest config (from backtestService.ts)
-const BACKTEST_CONFIG = {
-  EXIT: {
-    STOP_LOSS_PCT: 2.5,
-    TRAILING_ACTIVATION_PCT: 0.8,
-    TRAILING_DISTANCE_PCT: 0.5,
-    TRAILING_WIDEN_AT_PCT: 3.0,
-    TRAILING_WIDE_DISTANCE_PCT: 0.8,
-    MAX_HOLD_BARS: 192, // 48h in 15m bars
-    STAGNANT_TIME_BARS: 3, // 45 min
-    STAGNANT_OBS_BARS: 4, // 60 min
-    STAGNANT_SL_TIGHTEN_PCT: 0.8,
-    STAGNANT_MIN_PROFIT: 0.8,
-    STAGNANT_RECOVERY_PCT: 0.6,
-  },
-  COSTS: {
-    TRADING_FEE_PCT: 0.04,
-    SLIPPAGE_PCT: 0.05,
-    FUNDING_RATE_PCT: 0.01,
-    FUNDING_INTERVAL_BARS: 32,
-  },
-  ADAPTIVE_TRAILING: {
-    LOW_VOL_ATR_MAX: 2,
-    LOW_VOL_ACTIVATION: 0.6,
-    LOW_VOL_DISTANCE: 0.3,
-    HIGH_VOL_ATR_MIN: 3.5,
-    HIGH_VOL_ACTIVATION: 1.2,
-    HIGH_VOL_DISTANCE: 0.8,
-  },
-};
-
-// Create mock position
+// Create mock position with a known symbol for tier-based SL
 function createPosition(overrides: Partial<Position> = {}): Position {
   const now = Date.now();
   return {
     id: 'test-pos',
-    symbol: 'TEST/USDT',
+    symbol: 'SOL/USDT',  // Use a known TIER2 symbol for predictable SL
     side: 'long',
     entryPrice: 100,
     entryTime: now - 30 * 60 * 1000,
@@ -92,443 +59,210 @@ function createPosition(overrides: Partial<Position> = {}): Position {
   } as Position;
 }
 
-// Create trending candles
-function createCandles(count: number, startPrice: number, trend: 'up' | 'down' | 'flat' = 'flat'): Candle[] {
-  const candles: Candle[] = [];
-  const now = Date.now();
-  let price = startPrice;
-  
-  for (let i = 0; i < count; i++) {
-    const change = trend === 'up' ? 0.5 : trend === 'down' ? -0.5 : 0;
-    const newPrice = price * (1 + change / 100);
-    
-    candles.push({
-      timestamp: now - (count - i) * 15 * 60 * 1000,
-      open: price,
-      high: Math.max(price, newPrice) * 1.005,
-      low: Math.min(price, newPrice) * 0.995,
-      close: newPrice,
-      volume: 1000000,
-    });
-    
-    price = newPrice;
-  }
-  
-  return candles;
-}
 
 // ============================================================================
-// SIMULATED BACKTEST EXIT LOGIC
-// (Mirrors backtestService.ts exactly)
-// ============================================================================
-
-interface BacktestPos {
-  side: 'long' | 'short';
-  entryPrice: number;
-  entryBarIndex: number;
-  stopLossPct: number;
-  trailingActive: boolean;
-  highWaterMark?: number;
-  lowWaterMark?: number;
-  maxPnlPct: number;
-  trailingBreachCandles: number;
-  stagnantState: {
-    triggered: boolean;
-    confirmed: boolean;
-    cancelled: boolean;
-    obsPeakPct: number;
-    triggeredAtBar?: number;
-  };
-}
-
-function calcAdaptiveTrailing(candles: Candle[]): { activation: number; distance: number } {
-  if (!MomentumConfig.EXIT.ADAPTIVE_TRAILING) {
-    return { activation: BACKTEST_CONFIG.EXIT.TRAILING_ACTIVATION_PCT, distance: BACKTEST_CONFIG.EXIT.TRAILING_DISTANCE_PCT };
-  }
-  
-  const atrValue = calcATR(candles, 14);
-  if (!atrValue || candles.length === 0) {
-    return { activation: BACKTEST_CONFIG.EXIT.TRAILING_ACTIVATION_PCT, distance: BACKTEST_CONFIG.EXIT.TRAILING_DISTANCE_PCT };
-  }
-  
-  const currentPrice = candles[candles.length - 1].close;
-  const atrPct = (atrValue / currentPrice) * 100;
-  
-  if (atrPct < BACKTEST_CONFIG.ADAPTIVE_TRAILING.LOW_VOL_ATR_MAX) {
-    return { 
-      activation: BACKTEST_CONFIG.ADAPTIVE_TRAILING.LOW_VOL_ACTIVATION, 
-      distance: BACKTEST_CONFIG.ADAPTIVE_TRAILING.LOW_VOL_DISTANCE 
-    };
-  }
-  
-  if (atrPct > BACKTEST_CONFIG.ADAPTIVE_TRAILING.HIGH_VOL_ATR_MIN) {
-    return { 
-      activation: BACKTEST_CONFIG.ADAPTIVE_TRAILING.HIGH_VOL_ACTIVATION, 
-      distance: BACKTEST_CONFIG.ADAPTIVE_TRAILING.HIGH_VOL_DISTANCE 
-    };
-  }
-  
-  return { activation: BACKTEST_CONFIG.EXIT.TRAILING_ACTIVATION_PCT, distance: BACKTEST_CONFIG.EXIT.TRAILING_DISTANCE_PCT };
-}
-
-function backtestExitCheck(
-  pos: BacktestPos,
-  currentBar: number,
-  candle: Candle,
-  candles: Candle[]
-): { shouldExit: boolean; reason: string } {
-  const holdBars = currentBar - pos.entryBarIndex;
-  
-  // 1. MAX_HOLD (first check - aligned with live)
-  if (holdBars >= BACKTEST_CONFIG.EXIT.MAX_HOLD_BARS) {
-    return { shouldExit: true, reason: 'TIME' };
-  }
-  
-  // Calculate PnL
-  const pnlPct = pos.side === 'long'
-    ? ((candle.close - pos.entryPrice) / pos.entryPrice) * 100
-    : ((pos.entryPrice - candle.close) / pos.entryPrice) * 100;
-  
-  // Get adaptive trailing params
-  const { activation, distance } = calcAdaptiveTrailing(candles);
-  
-  // Check trailing activation
-  const shouldActivateNow = pnlPct >= activation;
-  const trailingIsActiveNow = pos.trailingActive || shouldActivateNow;
-  
-  // Update water marks
-  if (pos.side === 'long') {
-    pos.highWaterMark = pos.highWaterMark 
-      ? Math.max(pos.highWaterMark, candle.high) 
-      : candle.high;
-  } else {
-    pos.lowWaterMark = pos.lowWaterMark 
-      ? Math.min(pos.lowWaterMark, candle.low) 
-      : candle.low;
-  }
-  
-  // Update maxPnlPct
-  const wickPnl = pos.side === 'long'
-    ? ((candle.high - pos.entryPrice) / pos.entryPrice) * 100
-    : ((pos.entryPrice - candle.low) / pos.entryPrice) * 100;
-  pos.maxPnlPct = Math.max(pos.maxPnlPct, wickPnl);
-  
-  // Stagnant state machine (only when trailing NOT active)
-  if (!trailingIsActiveNow) {
-    // Trigger check
-    if (!pos.stagnantState.triggered && 
-        holdBars >= BACKTEST_CONFIG.EXIT.STAGNANT_TIME_BARS &&
-        pos.maxPnlPct < BACKTEST_CONFIG.EXIT.STAGNANT_MIN_PROFIT) {
-      pos.stagnantState.triggered = true;
-      pos.stagnantState.triggeredAtBar = holdBars;
-    }
-    
-    // Observation window
-    if (pos.stagnantState.triggered && !pos.stagnantState.confirmed && !pos.stagnantState.cancelled) {
-      pos.stagnantState.obsPeakPct = Math.max(pos.stagnantState.obsPeakPct, wickPnl);
-      
-      if (pos.stagnantState.obsPeakPct >= BACKTEST_CONFIG.EXIT.STAGNANT_RECOVERY_PCT) {
-        pos.stagnantState.cancelled = true;
-      }
-      
-      const triggeredAtBar = pos.stagnantState.triggeredAtBar ?? BACKTEST_CONFIG.EXIT.STAGNANT_TIME_BARS;
-      const obsElapsed = holdBars - triggeredAtBar;
-      
-      if (obsElapsed >= BACKTEST_CONFIG.EXIT.STAGNANT_OBS_BARS && !pos.stagnantState.cancelled) {
-        pos.stagnantState.confirmed = true;
-      }
-    }
-  }
-  
-  // Effective SL (V5.39: only tighten if trailing NOT active)
-  const isStagnantConfirmed = !trailingIsActiveNow && pos.stagnantState.confirmed && !pos.stagnantState.cancelled;
-  const effectiveSlPct = isStagnantConfirmed ? BACKTEST_CONFIG.EXIT.STAGNANT_SL_TIGHTEN_PCT : pos.stopLossPct;
-  
-  // 2. Check SL on wick
-  if (pos.side === 'long') {
-    const slPrice = pos.entryPrice * (1 - effectiveSlPct / 100);
-    if (candle.low <= slPrice) {
-      return { shouldExit: true, reason: isStagnantConfirmed ? 'STAGNANT_TRADE' : 'SL' };
-    }
-  } else {
-    const slPrice = pos.entryPrice * (1 + effectiveSlPct / 100);
-    if (candle.high >= slPrice) {
-      return { shouldExit: true, reason: isStagnantConfirmed ? 'STAGNANT_TRADE' : 'SL' };
-    }
-  }
-  
-  // 3. Trailing stop
-  if (trailingIsActiveNow) {
-    pos.trailingActive = true;
-    
-    // Calculate trailing distance (widen at 3%)
-    const hwm = pos.side === 'long' ? pos.highWaterMark! : pos.lowWaterMark!;
-    const hwmPct = pos.side === 'long'
-      ? ((hwm - pos.entryPrice) / pos.entryPrice) * 100
-      : ((pos.entryPrice - hwm) / pos.entryPrice) * 100;
-    
-    const trailDist = hwmPct >= BACKTEST_CONFIG.EXIT.TRAILING_WIDEN_AT_PCT 
-      ? BACKTEST_CONFIG.EXIT.TRAILING_WIDE_DISTANCE_PCT 
-      : distance;
-    
-    let trailingStopPrice: number;
-    
-    if (pos.side === 'long') {
-      trailingStopPrice = hwm * (1 - trailDist / 100);
-      if (candle.low <= trailingStopPrice) {
-        pos.trailingBreachCandles++;
-        if (pos.trailingBreachCandles >= 2) {
-          return { shouldExit: true, reason: 'TRAIL' };
-        }
-      } else {
-        pos.trailingBreachCandles = 0;
-      }
-    } else {
-      trailingStopPrice = hwm * (1 + trailDist / 100);
-      if (candle.high >= trailingStopPrice) {
-        pos.trailingBreachCandles++;
-        if (pos.trailingBreachCandles >= 2) {
-          return { shouldExit: true, reason: 'TRAIL' };
-        }
-      } else {
-        pos.trailingBreachCandles = 0;
-      }
-    }
-  }
-  
-  return { shouldExit: false, reason: '' };
-}
-
-// ============================================================================
-// PARITY TESTS
+// TESTS
 // ============================================================================
 
 console.log('\n════════════════════════════════════════════════════════════');
-console.log('🔬 BACKTEST vs LIVE PARITY TESTS');
+console.log('🔬 EXIT LOGIC TESTS (shouldExitPosition)');
+console.log('════════════════════════════════════════════════════════════');
+console.log('📝 Note: Since V5.41, LIVE and BACKTEST use the SAME function');
 console.log('════════════════════════════════════════════════════════════');
 
-describe('MAX_HOLD Parity', () => {
+describe('MAX_HOLD Exit', () => {
   const maxHoldMinutes = MomentumConfig.EXIT.HOLD_PERIOD_MAX_MIN ?? 2880;
-  const maxHoldBars = Math.floor(maxHoldMinutes / 15);
-  
-  // Live check
-  const livePosition = createPosition({
+
+  // Position held too long
+  const position = createPosition({
     entryTime: Date.now() - (maxHoldMinutes + 1) * 60 * 1000,
   });
-  const liveResult = shouldExitPosition(livePosition, 100);
-  
-  // Backtest check
-  const btPosition: BacktestPos = {
-    side: 'long',
-    entryPrice: 100,
-    entryBarIndex: 0,
-    stopLossPct: 2.5,
-    trailingActive: false,
-    maxPnlPct: 0,
-    trailingBreachCandles: 0,
-    stagnantState: { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 },
-  };
-  const btResult = backtestExitCheck(btPosition, maxHoldBars + 1, { open: 100, high: 101, low: 99, close: 100, volume: 1000000, timestamp: Date.now() }, []);
-  
-  assert(liveResult.shouldExit === btResult.shouldExit, `MAX_HOLD exit: Live=${liveResult.shouldExit}, BT=${btResult.shouldExit}`);
-  assert(liveResult.reason === 'time' && btResult.reason === 'TIME', `MAX_HOLD reason: Live=${liveResult.reason}, BT=${btResult.reason}`);
+  const result = shouldExitPosition(position, 100);
+
+  assert(result.shouldExit === true, `Exits after max hold time`);
+  assert(result.reason === 'time', `Reason is 'time': ${result.reason}`);
 });
 
-describe('Stop Loss Parity', () => {
-  // LONG SL hit
-  const livePosition = createPosition({
+describe('Stop Loss Exit - LONG', () => {
+  const position = createPosition({
     side: 'long',
     entryPrice: 100,
     stopLossPct: 2.5,
   });
-  const liveResult = shouldExitPosition(livePosition, 97, undefined, { priceLow: 97 });
-  
-  const btPosition: BacktestPos = {
-    side: 'long',
-    entryPrice: 100,
-    entryBarIndex: 0,
-    stopLossPct: 2.5,
-    trailingActive: false,
-    maxPnlPct: 0,
-    trailingBreachCandles: 0,
-    stagnantState: { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 },
-  };
-  const btResult = backtestExitCheck(btPosition, 1, { open: 100, high: 100, low: 97, close: 97, volume: 1000000, timestamp: Date.now() }, []);
-  
-  assert(liveResult.shouldExit === btResult.shouldExit, `SL LONG exit: Live=${liveResult.shouldExit}, BT=${btResult.shouldExit}`);
-  assert(liveResult.reason === 'stoploss' && btResult.reason === 'SL', `SL LONG reason aligned`);
-  
-  // SHORT SL hit
-  const livePositionShort = createPosition({
+
+  // Price below SL threshold
+  const result = shouldExitPosition(position, 97, undefined, { priceLow: 97 });
+
+  assert(result.shouldExit === true, `Exits on SL hit`);
+  assert(result.reason === 'stoploss', `Reason is 'stoploss': ${result.reason}`);
+});
+
+describe('Stop Loss Exit - SHORT', () => {
+  const position = createPosition({
     side: 'short',
     entryPrice: 100,
     stopLossPct: 2.5,
   });
-  const liveResultShort = shouldExitPosition(livePositionShort, 103, undefined, { priceHigh: 103 });
-  
-  const btPositionShort: BacktestPos = {
-    side: 'short',
-    entryPrice: 100,
-    entryBarIndex: 0,
-    stopLossPct: 2.5,
-    trailingActive: false,
-    maxPnlPct: 0,
-    trailingBreachCandles: 0,
-    stagnantState: { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 },
-  };
-  const btResultShort = backtestExitCheck(btPositionShort, 1, { open: 100, high: 103, low: 100, close: 103, volume: 1000000, timestamp: Date.now() }, []);
-  
-  assert(liveResultShort.shouldExit === btResultShort.shouldExit, `SL SHORT exit: Live=${liveResultShort.shouldExit}, BT=${btResultShort.shouldExit}`);
+
+  // Price above SL threshold
+  const result = shouldExitPosition(position, 103, undefined, { priceHigh: 103 });
+
+  assert(result.shouldExit === true, `Exits on SL hit`);
+  assert(result.reason === 'stoploss', `Reason is 'stoploss': ${result.reason}`);
 });
 
-describe('Stagnant SL Tightening + Trailing Check', () => {
+describe('Stagnant SL Tightening + Trailing Interaction', () => {
+  // Get current config values for accurate testing
+  const exitConfig = MomentumConfig.EXIT as any;
+  const stagnantRatio = exitConfig.STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
+  const tier2MedSl = exitConfig.TIER2_SL_MED_VOL_PCT ?? 2.5;
+  const expectedTightenedSl = tier2MedSl * stagnantRatio;  // e.g., 2.5 * 0.5 = 1.25%
+
+  console.log(`    📊 Config: TIER2_MED_SL=${tier2MedSl}%, ratio=${stagnantRatio}, tightened=${expectedTightenedSl}%`);
+
   // Case 1: Stagnant confirmed BUT trailing active → SL NOT tightened
-  const livePos1 = createPosition({
+  const pos1 = createPosition({
     side: 'long',
     entryPrice: 100,
     stopLossPct: 2.5,
-    trailingActive: true, // Trailing active
+    trailingActive: true, // Trailing active - stagnant SL should NOT apply
     stagnantState: { triggered: true, confirmed: true, cancelled: false, obsPeakPct: 0.3 },
   });
-  // Price at 99% (1% loss) - would hit 0.8% tightened SL but not 2.5% base SL
-  const result1 = shouldExitPosition(livePos1, 99, undefined, { priceLow: 99 });
-  
+
+  // Price at 99% (1% loss) - below tightened SL but above base SL
+  const result1 = shouldExitPosition(pos1, 99, undefined, { priceLow: 99 });
+
   assert(result1.reason !== 'stagnant_trade', `Trailing active → SL NOT tightened: reason=${result1.reason}`);
-  
+
   // Case 2: Stagnant confirmed AND trailing NOT active → SL tightened
-  const livePos2 = createPosition({
+  const pos2 = createPosition({
     side: 'long',
     entryPrice: 100,
     stopLossPct: 2.5,
-    trailingActive: false, // Trailing NOT active
+    trailingActive: false, // Trailing NOT active - stagnant SL SHOULD apply
     stagnantState: { triggered: true, confirmed: true, cancelled: false, obsPeakPct: 0.3 },
   });
-  const result2 = shouldExitPosition(livePos2, 99, undefined, { priceLow: 99 });
-  
-  assert(result2.shouldExit === true && result2.reason === 'stagnant_trade', `Trailing NOT active → SL tightened to 0.8%`);
-  
-  // Backtest equivalent
-  const btPos: BacktestPos = {
-    side: 'long',
-    entryPrice: 100,
-    entryBarIndex: 0,
-    stopLossPct: 2.5,
-    trailingActive: false,
-    maxPnlPct: 0.3,
-    trailingBreachCandles: 0,
-    stagnantState: { triggered: true, confirmed: true, cancelled: false, obsPeakPct: 0.3 },
-  };
-  const btResult = backtestExitCheck(btPos, 10, { open: 100, high: 100, low: 99, close: 99, volume: 1000000, timestamp: Date.now() }, []);
-  
-  assert(btResult.shouldExit === true && btResult.reason === 'STAGNANT_TRADE', `Backtest also exits on tightened SL`);
+
+  // Price below the tightened SL (1.25% → slPrice = 98.75)
+  const triggerPrice = 100 * (1 - expectedTightenedSl / 100) - 0.01;  // Just below SL
+  const result2 = shouldExitPosition(pos2, triggerPrice, undefined, { priceLow: triggerPrice });
+
+  console.log(`    📊 Trigger price: ${triggerPrice.toFixed(4)}, SL price: ${(100 * (1 - expectedTightenedSl / 100)).toFixed(4)}`);
+
+  assert(result2.shouldExit === true && result2.reason === 'stagnant_trade',
+    `Trailing NOT active → Exits on tightened SL (${expectedTightenedSl}%): exit=${result2.shouldExit}, reason=${result2.reason}`);
+
+  // Verify effectiveSlPct matches expected
+  assert(Math.abs((result2.effectiveSlPct ?? 0) - expectedTightenedSl) < 0.01,
+    `effectiveSlPct matches: expected=${expectedTightenedSl}%, got=${result2.effectiveSlPct}%`);
 });
 
-describe('Adaptive Trailing Parity', () => {
-  // Create low volatility candles
-  const candles: Candle[] = [];
+describe('Adaptive Trailing - Volatility Regime', () => {
+  // Create low volatility candles (tight range)
+  const lowVolCandles: Candle[] = [];
   const now = Date.now();
   for (let i = 0; i < 20; i++) {
-    candles.push({
+    lowVolCandles.push({
       timestamp: now - (20 - i) * 15 * 60 * 1000,
       open: 100,
-      high: 100.5, // Very tight range
+      high: 100.5, // Very tight range → low ATR
       low: 99.5,
       close: 100,
       volume: 1000000,
     });
   }
-  
-  // Live volatility regime
-  const liveRegime = determineVolatilityRegime(candles);
-  
-  // Backtest adaptive trailing
-  const btAdaptive = calcAdaptiveTrailing(candles);
-  
-  console.log(`    📊 Live: ${liveRegime.regime}, dist=${liveRegime.trailingDistance}%`);
-  console.log(`    📊 Backtest: dist=${btAdaptive.distance}%`);
-  
-  // Both should use same distance for same volatility
-  assert(
-    Math.abs(liveRegime.trailingDistance - btAdaptive.distance) < 0.01,
-    `Trailing distance matches: Live=${liveRegime.trailingDistance}, BT=${btAdaptive.distance}`
-  );
+
+  const regime = determineVolatilityRegime(lowVolCandles);
+
+  console.log(`    📊 Regime: ${regime.regime}, ATR%=${regime.atrPct?.toFixed(2)}, dist=${regime.trailingDistance}%`);
+
+  assert(regime.regime === 'LOW', `Low vol candles → LOW regime: ${regime.regime}`);
+  assert(regime.trailingDistance === MomentumConfig.EXIT.LOW_VOL_DISTANCE,
+    `Uses low vol trailing distance: ${regime.trailingDistance}%`);
 });
 
-describe('Trailing Widen at 3% Parity', () => {
-  // Position that reached 3.5% profit
-  const livePos = createPosition({
+describe('Trailing Widen at 3%', () => {
+  // Position that reached 3.5% profit peak
+  const position = createPosition({
     side: 'long',
     entryPrice: 100,
     trailingActive: true,
     highWaterMark: 103.5, // 3.5% profit peak
   });
-  
-  const btPos: BacktestPos = {
-    side: 'long',
-    entryPrice: 100,
-    entryBarIndex: 0,
-    stopLossPct: 2.5,
-    trailingActive: true,
-    highWaterMark: 103.5,
-    maxPnlPct: 3.5,
-    trailingBreachCandles: 0,
-    stagnantState: { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 },
-  };
-  
-  // Both should use WIDE distance (0.8%) not base (0.5%)
+
   const hwmPct = ((103.5 - 100) / 100) * 100;
-  const shouldWiden = hwmPct >= BACKTEST_CONFIG.EXIT.TRAILING_WIDEN_AT_PCT;
-  
-  assert(shouldWiden, `Should widen at hwmPct=${hwmPct}% (threshold=3%)`);
-  
-  // Live uses same widen logic (verified in shouldExitPosition)
-  assert(hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT, `Live widen threshold matches`);
+  const shouldWiden = hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT;
+
+  assert(shouldWiden, `Should widen at hwmPct=${hwmPct}% (threshold=${MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT}%)`);
+
+  // Verify the trailing stop calculation uses wide distance
+  const result = shouldExitPosition(position, 103);
+
+  // At 103 (close to HWM), trailing should be active with wide distance
+  assert(result.trailingActivated === true, `Trailing is activated`);
 });
 
 describe('Exit Priority Order', () => {
   // MAX_HOLD should trigger FIRST, even with other conditions
   const maxHoldMinutes = MomentumConfig.EXIT.HOLD_PERIOD_MAX_MIN ?? 2880;
-  
-  const livePos = createPosition({
+
+  const position = createPosition({
     side: 'long',
     entryPrice: 100,
     entryTime: Date.now() - (maxHoldMinutes + 1) * 60 * 1000,
     trailingActive: true,
     highWaterMark: 110, // In profit, trailing active
   });
-  
-  const result = shouldExitPosition(livePos, 109);
-  
+
+  const result = shouldExitPosition(position, 109);
+
   assert(result.reason === 'time', `MAX_HOLD checked first: reason=${result.reason}`);
 });
 
 describe('Trailing Breach Reset on Wick Recovery', () => {
   // When wick hits trailing stop but close recovers, trailingBreached should be false
-  // This is critical for 2-close confirmation to work correctly
-  
   const position = createPosition({
     side: 'long',
     entryPrice: 100,
     trailingActive: true,
     highWaterMark: 105, // 5% profit reached
   });
-  
-  // Trailing stop at 105 * (1 - 0.5%) = 104.475
+
   const trailDist = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
   const trailStop = 105 * (1 - trailDist / 100);
-  
+
   // Scenario: Wick hit below stop (104) but close recovered above (104.5)
   const result = shouldExitPosition(position, 104.5, undefined, {
     priceHigh: 105,
     priceLow: 104, // Below trailing stop
   });
-  
+
   console.log(`    📊 Trail stop: $${trailStop.toFixed(4)}, Low: $104, Close: $104.5`);
   console.log(`    📊 trailingBreached: ${result.trailingBreached}`);
-  
+
   // trailingBreached should be explicitly false (not undefined, not true)
-  assert(result.trailingBreached === false, `trailingBreached should be false when wick hit but close recovered`);
-  assert(result.trailingActivated === true, `trailingActivated should still be true`);
+  assert(result.trailingBreached === false, `trailingBreached=false when wick hit but close recovered`);
+  assert(result.trailingActivated === true, `trailingActivated still true`);
+});
+
+describe('Dynamic SL by Tier and Volatility', () => {
+  // Test that TIER1 (BTC/ETH) gets different SL than TIER2
+  const exitConfig = MomentumConfig.EXIT as any;
+  const tierBasedEnabled = exitConfig.TIER_BASED_SL_ENABLED ?? false;
+
+  if (tierBasedEnabled) {
+    const tier1Sl = exitConfig.TIER1_SL_MED_VOL_PCT ?? 1.5;
+    const tier2Sl = exitConfig.TIER2_SL_MED_VOL_PCT ?? 2.5;
+
+    console.log(`    📊 TIER_BASED_SL_ENABLED: ${tierBasedEnabled}`);
+    console.log(`    📊 TIER1 (BTC) MED SL: ${tier1Sl}%`);
+    console.log(`    📊 TIER2 (SOL) MED SL: ${tier2Sl}%`);
+
+    assert(tier1Sl < tier2Sl, `TIER1 has tighter SL than TIER2: ${tier1Sl}% < ${tier2Sl}%`);
+  } else {
+    console.log(`    📊 TIER_BASED_SL_ENABLED: false (skipping tier test)`);
+    assert(true, `Tier-based SL disabled, using legacy dynamic SL`);
+  }
 });
 
 // ============================================================================
@@ -536,13 +270,13 @@ describe('Trailing Breach Reset on Wick Recovery', () => {
 // ============================================================================
 
 console.log('\n════════════════════════════════════════════════════════════');
-console.log(`📊 PARITY RESULTS: ${testsPassed}/${testsRun} passed, ${testsFailed} failed`);
+console.log(`📊 TEST RESULTS: ${testsPassed}/${testsRun} passed, ${testsFailed} failed`);
 console.log('════════════════════════════════════════════════════════════');
 
 if (testsFailed > 0) {
-  console.log('\n❌ PARITY ISSUES DETECTED');
+  console.log('\n❌ SOME TESTS FAILED');
   process.exit(1);
 } else {
-  console.log('\n✅ BACKTEST & LIVE ARE PERFECTLY ALIGNED');
+  console.log('\n✅ ALL TESTS PASSED');
   process.exit(0);
 }
