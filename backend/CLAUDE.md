@@ -137,3 +137,17 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **PRE_BREACH zone widened**: Increased from 0.3% to 0.6% (nfsRealtimeExit.ts). Gives more time to detect approaching breach and place proactive limit before price gaps through.
   - **Paper mode realistic exits**: Paper NFS HIGH exits now use candle close price instead of theoretical trailing stop (simpleAgent.ts). Simulates market order execution without slippage. When proactive limit fills, both paper and live get exact trailing price.
   - **Parity verification fixes**: BTC 1h warmup increased to 10 days for 240+ candles (parityVerificationServiceV2.ts). Fixed candle timestamp to use last CLOSED candle, not current forming candle.
+- V5.88: Progressive + volatility-adaptive trailing for big winners:
+  - **Problem**: XRP trade captured only 56% of move (12% of potential 67% lev PnL). Price bounced 2.33% from low, triggering exit at 0.8% trailing, then dropped another 55%.
+  - **Solution**: Wider trailing on bigger moves AND on high volatility days.
+  - **Progressive tiers** (momentumSimple.ts):
+    - Tier 1: 3% raw profit → 0.8% trailing (unchanged)
+    - Tier 2: 4% raw profit → 1.5% trailing (lowered from 5%)
+    - Tier 3: 6% raw profit → 2.5% trailing (lowered from 7%)
+  - **Volatility adaptation**: Trailing distances scaled by volatility regime multiplier:
+    - LOW volatility: 0.8x (tighter trailing, safe markets)
+    - MEDIUM volatility: 1.0x (base distances)
+    - HIGH volatility: 1.6x (wider trailing for bigger bounces)
+  - **XRP example**: 4.55% profit + HIGH vol → 1.5% × 1.6 = 2.4% trailing. Bounce was 2.33% → SURVIVES
+  - **Config**: `TRAILING_PROGRESSIVE_ENABLED`, `TRAILING_VOL_ADAPT_ENABLED`, `TRAILING_VOL_HIGH_MULT`, etc.
+  - **Applies to**: Live, paper, and backtest (all use shared `shouldExitPosition()`).

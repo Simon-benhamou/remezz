@@ -433,6 +433,24 @@ export const MomentumConfig = {
     TRAILING_DISTANCE_PCT: 0.5,         // Initial callback: 0.5% (tight protection)
     TRAILING_WIDEN_AT_PCT: 3.0,         // V5.35: Widen at 3% (was 2%) - tighter on medium winners
     TRAILING_WIDE_DISTANCE_PCT: 0.8,    // Widened callback: 0.8% (let big winner run)
+
+    // V5.88: Progressive trailing - wider trailing on bigger moves to let winners run
+    // XRP analysis showed 4.55% move exited on 2.33% bounce, missing 55% more profit
+    // On strong trending days, initial moves often continue after pullbacks
+    TRAILING_PROGRESSIVE_ENABLED: true,
+    TRAILING_TIER2_AT_PCT: 4.0,         // At 4% raw profit, widen to tier 2 (lowered from 5%)
+    TRAILING_TIER2_DISTANCE_PCT: 1.5,   // Tier 2 base: 1.5% trailing
+    TRAILING_TIER3_AT_PCT: 6.0,         // At 6% raw profit, widen to tier 3 (lowered from 7%)
+    TRAILING_TIER3_DISTANCE_PCT: 2.5,   // Tier 3 base: 2.5% trailing
+
+    // V5.88: Volatility-adaptive progressive trailing
+    // On HIGH volatility days (like XRP crash), bounces are larger → need wider trailing
+    // Multipliers applied to progressive tier distances based on volatility regime
+    // XRP had 2.33% bounce on HIGH vol day → need 1.6x to survive (1.5% × 1.6 = 2.4%)
+    TRAILING_VOL_ADAPT_ENABLED: true,
+    TRAILING_VOL_LOW_MULT: 0.8,         // LOW vol: tighter (0.8x base distance)
+    TRAILING_VOL_MED_MULT: 1.0,         // MEDIUM vol: base distance (1.0x)
+    TRAILING_VOL_HIGH_MULT: 1.6,        // HIGH vol: wider (1.6x) - handles 2.4%+ bounces
     
     // Protection setup
     // - Emergency stop is placed on exchange (wide, crash protection)
@@ -2322,21 +2340,63 @@ export function shouldExitPosition(
   // ============================================================================
   if (trailingIsActive) {
     // V5.39 FIX: Use adaptive trailing distance (from volatility regime)
-    // Then widen to WIDE_DISTANCE if hwmPct >= 3%
+    // Then widen progressively based on move size
     let trailingDistance = baseTrailingDistance;
-    
+
     // V5.39 FIX: Use hwmPct (max reached) for widen check, like backtest
     // Previously used pnlPct (current) which could differ when price retraces
     const hwmPct = position.side === 'long'
-      ? position.highWaterMark 
+      ? position.highWaterMark
         ? ((position.highWaterMark - position.entryPrice) / position.entryPrice) * 100
         : pnlPct
       : position.lowWaterMark
         ? ((position.entryPrice - position.lowWaterMark) / position.entryPrice) * 100
         : pnlPct;
-    
-    if (hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT) {
-      trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT;
+
+    // V5.88: Progressive trailing - wider on bigger moves to let winners run
+    // XRP trade analysis: 4.55% move exited on 2.33% bounce, missing 55% more
+    const progressiveEnabled = (MomentumConfig.EXIT as any).TRAILING_PROGRESSIVE_ENABLED ?? false;
+    const volAdaptEnabled = (MomentumConfig.EXIT as any).TRAILING_VOL_ADAPT_ENABLED ?? false;
+
+    // V5.88: Get volatility multiplier based on regime
+    let volMultiplier = 1.0;
+    if (volAdaptEnabled) {
+      const lowMult = (MomentumConfig.EXIT as any).TRAILING_VOL_LOW_MULT ?? 0.8;
+      const medMult = (MomentumConfig.EXIT as any).TRAILING_VOL_MED_MULT ?? 1.0;
+      const highMult = (MomentumConfig.EXIT as any).TRAILING_VOL_HIGH_MULT ?? 1.5;
+
+      if (volatilityRegime.regime === 'HIGH') {
+        volMultiplier = highMult;
+      } else if (volatilityRegime.regime === 'LOW') {
+        volMultiplier = lowMult;
+      } else {
+        volMultiplier = medMult;
+      }
+    }
+
+    if (progressiveEnabled) {
+      const tier3At = (MomentumConfig.EXIT as any).TRAILING_TIER3_AT_PCT ?? 6.0;
+      const tier2At = (MomentumConfig.EXIT as any).TRAILING_TIER2_AT_PCT ?? 4.0;
+      const tier1At = MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT;
+
+      if (hwmPct >= tier3At) {
+        // Tier 3: Very big winner (6%+) - widest trailing × vol multiplier
+        const baseDist = (MomentumConfig.EXIT as any).TRAILING_TIER3_DISTANCE_PCT ?? 2.5;
+        trailingDistance = baseDist * volMultiplier;
+      } else if (hwmPct >= tier2At) {
+        // Tier 2: Big winner (4-6%) - wide trailing × vol multiplier
+        const baseDist = (MomentumConfig.EXIT as any).TRAILING_TIER2_DISTANCE_PCT ?? 1.5;
+        trailingDistance = baseDist * volMultiplier;
+      } else if (hwmPct >= tier1At) {
+        // Tier 1: Good winner (3-4%) - normal wide trailing × vol multiplier
+        trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT * volMultiplier;
+      }
+      // Below tier1At: use baseTrailingDistance (already set, from volatility regime)
+    } else {
+      // Legacy behavior: single widen threshold
+      if (hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT) {
+        trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT * volMultiplier;
+      }
     }
     
     let trailingStopPrice: number;
