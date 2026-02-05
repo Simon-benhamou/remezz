@@ -29,6 +29,11 @@ import {
   type ExitSignal,
 } from '../strategies/momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
+import {
+  EXIT_TRAIL, EXIT_TRAIL_NFS_HIGH, EXIT_TRAIL_NFS_MED, EXIT_TRAIL_NFS_LOW,
+  EXIT_TIME, EXIT_SIGNAL_REASON_MAP,
+  normalizeToFamily,
+} from '../types/exitReasons.js';
 
 const logger = createLogger('parity-v2');
 
@@ -482,26 +487,26 @@ function simulateExit(
 
       let shouldExit = false;
       let exitPrice = candle.close;
-      let exitReason = 'TRAIL';
+      let exitReason = EXIT_TRAIL;
 
       if (nfsScore.confidence === 'HIGH') {
         // HIGH confidence: Exit at trailing stop price (perfect)
         shouldExit = true;
         exitPrice = trailingStopPrice;
-        exitReason = 'TRAIL_NFS_HIGH';
+        exitReason = EXIT_TRAIL_NFS_HIGH;
       } else if (nfsScore.confidence === 'MEDIUM') {
         // MEDIUM: 1-candle confirmation, exit at close
         if (position.trailingBreachCandles >= 1) {
           shouldExit = true;
           exitPrice = candle.close;
-          exitReason = 'TRAIL_NFS_MED';
+          exitReason = EXIT_TRAIL_NFS_MED;
         }
       } else {
         // LOW: 2-candle confirmation, exit at close
         if (position.trailingBreachCandles >= 2) {
           shouldExit = true;
           exitPrice = candle.close;
-          exitReason = 'TRAIL_NFS_LOW';
+          exitReason = EXIT_TRAIL_NFS_LOW;
         }
       }
 
@@ -526,15 +531,6 @@ function simulateExit(
 
     // Check other exit conditions
     if (exitSignal.shouldExit && exitSignal.reason !== 'trailing_breach') {
-      const reasonMap: Record<string, string> = {
-        'time': 'TIME',
-        'stoploss': 'SL',
-        'regime_change': 'REGIME_CHANGE',
-        'momentum_reversal': 'MOMENTUM_REVERSAL',
-        'stagnant_trade': 'STAGNANT_TRADE',
-        'trailing': 'TRAIL',
-      };
-
       let exitPrice = candle.close;
       if (exitSignal.reason === 'stoploss' || exitSignal.reason === 'stagnant_trade') {
         const slPct = exitSignal.effectiveSlPct ?? position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
@@ -549,7 +545,7 @@ function simulateExit(
       const candlesHeld = i - entryIdx;
 
       return {
-        exitReason: reasonMap[exitSignal.reason ?? ''] ?? exitSignal.reason?.toUpperCase() ?? 'UNKNOWN',
+        exitReason: EXIT_SIGNAL_REASON_MAP[exitSignal.reason ?? ''] ?? exitSignal.reason?.toUpperCase() ?? 'UNKNOWN',
         exitPrice,
         exitCandleIndex: candlesHeld,
         pnlPct,
@@ -565,7 +561,7 @@ function simulateExit(
       const candlesHeld = i - entryIdx;
 
       return {
-        exitReason: 'TIME',
+        exitReason: EXIT_TIME,
         exitPrice: candle.close,
         exitCandleIndex: candlesHeld,
         pnlPct,
@@ -679,8 +675,8 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   logger.info(`[PARITY-V2] Exit sim: reason=${exitSim.exitReason}, price=${exitSim.exitPrice.toFixed(4)}, pnl=${exitSim.pnlPct.toFixed(2)}%, duration=${exitSim.durationMin}min`);
 
   // 5. Compare results
-  const liveExitReason = normalizeExitReason(trade.exitReason || 'UNKNOWN');
-  const simExitReason = normalizeExitReason(exitSim.exitReason);
+  const liveExitReason = normalizeToFamily(trade.exitReason || 'UNKNOWN');
+  const simExitReason = normalizeToFamily(exitSim.exitReason);
   const livePnlPct = (trade.roiPct || 0) * leverage;
   const pnlDiff = Math.abs(livePnlPct - exitSim.pnlPct);
 
@@ -755,17 +751,6 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
 // ============================================================================
 // HELPERS
 // ============================================================================
-
-function normalizeExitReason(reason: string): string {
-  const r = reason.toUpperCase();
-  if (r.includes('TRAIL')) return 'TRAIL';
-  if (r.includes('STOP') || r === 'SL') return 'SL';
-  if (r.includes('REGIME')) return 'REGIME_CHANGE';
-  if (r.includes('MOMENTUM') || r.includes('REVERSAL')) return 'MOMENTUM_REVERSAL';
-  if (r.includes('STAGNANT')) return 'STAGNANT_TRADE';
-  if (r.includes('TIME') || r.includes('MAX_HOLD')) return 'TIME';
-  return r;
-}
 
 async function saveParityResultV2(result: ParityResultV2): Promise<void> {
   try {

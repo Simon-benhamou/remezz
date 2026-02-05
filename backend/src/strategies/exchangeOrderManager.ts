@@ -4,11 +4,12 @@
  * proactive limits, quantity formatting, and order cancellation.
  */
 
-import type { Exchange, CcxtOrder } from '../types/exchange.js';
+import type { Exchange } from '../types/exchange.js';
 import { MomentumConfig, type Position } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
 import { notifyOrderError } from '../services/notificationService.js';
 import { getTickerFromWebSocket } from '../services/binanceWebSocket.js';
+import { EXIT_EMERGENCY } from '../types/exitReasons.js';
 
 const logger = createLogger('exchange-orders');
 
@@ -215,7 +216,7 @@ export class ExchangeOrderManager {
             await new Promise(resolve => setTimeout(resolve, 1000));
             const ticker = await getTickerFromWebSocket(this.symbol);
             const currentPrice = ticker?.last || position.entryPrice;
-            await closePositionFn(position, currentPrice, 'emergency_unprotected');
+            await closePositionFn(position, currentPrice, EXIT_EMERGENCY);
           } catch (emergencyError: unknown) {
             logger.error(`🚨🚨🚨🚨 [${this.symbol}] CATASTROPHIC: Emergency exit ALSO failed!`, errMsg(emergencyError));
             notifyOrderError({ symbol: this.symbol, side: position.side, orderType: 'exit', error: 'CATASTROPHIC: All protection mechanisms failed. Manual closure required!', mode: 'live' });
@@ -243,6 +244,59 @@ export class ExchangeOrderManager {
     position.stopLoss = newStopPrice;
     await this.setStopLossOnExchange(position, true);
     logger.info(`📈 [${this.symbol}] Trailing stop moved: $${oldSL?.toFixed(4)} → $${newStopPrice.toFixed(4)}`);
+  }
+
+  // ── Profit-Protection Stop ───────────────────────────────────────────
+
+  /**
+   * Profit-protection stop (exchange-side) with ~2% buffer.
+   * Starts only after +2% PnL, then ratchets in 1% steps:
+   * - +2% → stop @ breakeven
+   * - +3% → stop @ +1%
+   * - +4% → stop @ +2%
+   */
+  async updateEmergencyStopProfitProtectionIfNeeded(
+    position: Position,
+    currentPrice: number,
+    pnlPct: number,
+  ): Promise<void> {
+    if (this.mode !== 'live') return;
+    if (!position.entryPrice) return;
+    if (!position.stopLoss) return;
+
+    const startAt = MomentumConfig.EXIT.EMERGENCY_PROFIT_LOCK_START_PCT ?? 2.0;
+    const distance = MomentumConfig.EXIT.EMERGENCY_PROFIT_LOCK_DISTANCE_PCT ?? 2.0;
+    const step = MomentumConfig.EXIT.EMERGENCY_PROFIT_LOCK_STEP_PCT ?? 1.0;
+
+    if (pnlPct < startAt) return;
+
+    const rawLock = pnlPct - distance;
+    const lockedProfitPct = Math.max(0, Math.floor(rawLock / step) * step);
+
+    const entry = position.entryPrice;
+    const desiredStop = position.side === 'long'
+      ? entry * (1 + lockedProfitPct / 100)
+      : entry * (1 - lockedProfitPct / 100);
+
+    // Safety: avoid placing an immediately-triggering stop
+    if (position.side === 'long' && desiredStop >= currentPrice) return;
+    if (position.side === 'short' && desiredStop <= currentPrice) return;
+
+    // Only ratchet in the favorable direction
+    const currentStop = position.stopLoss;
+    const isImprovement = position.side === 'long'
+      ? desiredStop > currentStop
+      : desiredStop < currentStop;
+    if (!isImprovement) return;
+
+    // Apply + update on exchange
+    position.stopLoss = desiredStop;
+    position.emergencyStopPrice = desiredStop;
+    await this.setStopLossOnExchange(position, true);
+
+    logger.info(
+      `🧷 [${this.symbol}] Profit-protection stop ratcheted: pnl=${pnlPct.toFixed(2)}% | locked=+${lockedProfitPct.toFixed(0)}% | stop=$${desiredStop.toFixed(4)} (≈${distance}% buffer)`
+    );
   }
 
   // ── Proactive LIMIT Orders ─────────────────────────────────────────────

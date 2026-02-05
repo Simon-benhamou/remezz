@@ -24,6 +24,7 @@
     "scripts/test-nfs-*.ts",
     "scripts/temp-*.ts",
     "scripts/deep-*.ts",
-    "scripts/check-*.ts"
+    "scripts/check-*.ts",
+    "scripts/reverify-parity.ts"
   ]
 }

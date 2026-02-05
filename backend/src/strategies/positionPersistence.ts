@@ -1,6 +1,8 @@
 /**
  * PositionPersistence - Extracted from SimpleAgent.
  * Handles all Prisma DB operations for positions, orders, fills, and session KPIs.
+ *
+ * Uses PersistenceContext to avoid passing sessionId/symbol/mode on every call.
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -13,18 +15,28 @@ function errMsg(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export interface PersistenceContext {
+  prisma: PrismaClient;
+  sessionId: string;
+  symbol: string;
+  mode: 'paper' | 'live';
+}
+
 export class PositionPersistence {
-  constructor(private prisma: PrismaClient) {}
+  private ctx: PersistenceContext;
+
+  constructor(ctx: PersistenceContext) {
+    this.ctx = ctx;
+  }
 
   /**
    * Load an existing position from DB (for agent restart recovery).
+   * Note: capitalPool.commit() must be called by the caller after loading.
    */
-  async loadExistingPosition(
-    sessionId: string,
-    symbol: string,
-  ): Promise<Position | null> {
+  async loadExistingPosition(): Promise<Position | null> {
+    const { prisma, sessionId, symbol } = this.ctx;
     try {
-      const dbPosition = await (this.prisma as any).position.findFirst({
+      const dbPosition = await (prisma as any).position.findFirst({
         where: { sessionId, symbol },
       });
 
@@ -85,12 +97,10 @@ export class PositionPersistence {
    * Save a new position to DB (entry order + fill + position record).
    */
   async savePositionToDb(
-    sessionId: string,
-    symbol: string,
-    mode: 'paper' | 'live',
     position: Position,
     entryFeeUsd?: number,
   ): Promise<void> {
+    const { prisma, sessionId, symbol, mode } = this.ctx;
     try {
       const isLive = mode === 'live';
       const clientOrderId = position.orderId || `${isLive ? 'live' : 'paper'}_entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -98,7 +108,7 @@ export class PositionPersistence {
       const entryNotionalUsd = position.qty * position.entryPrice;
       const calculatedFee = entryFeeUsd ?? (entryNotionalUsd * 0.0004);
 
-      const order = await (this.prisma as any).order.create({
+      const order = await (prisma as any).order.create({
         data: {
           clientOrderId,
           sessionId,
@@ -114,7 +124,7 @@ export class PositionPersistence {
         },
       });
 
-      await (this.prisma as any).fill.create({
+      await (prisma as any).fill.create({
         data: {
           orderId: order.id,
           sessionId,
@@ -132,7 +142,7 @@ export class PositionPersistence {
 
       logger.info(`💾 [${symbol}] Entry order logged: ${entrySide.toUpperCase()} @ $${position.entryPrice.toFixed(4)}, fee: $${calculatedFee.toFixed(2)}`);
 
-      await (this.prisma as any).position.create({
+      await (prisma as any).position.create({
         data: {
           sessionId,
           symbol: position.symbol,
@@ -159,12 +169,11 @@ export class PositionPersistence {
    * Update position tracking state in DB (HWM, trailing, stagnant).
    */
   async updatePositionStateInDb(
-    sessionId: string,
-    symbol: string,
     position: Position,
   ): Promise<void> {
+    const { prisma, sessionId, symbol } = this.ctx;
     try {
-      await (this.prisma as any).position.update({
+      await (prisma as any).position.update({
         where: {
           sessionId_symbol: { sessionId, symbol },
         },
@@ -186,22 +195,18 @@ export class PositionPersistence {
 
   /**
    * Save an exit to DB (atomic transaction: order + trade + fill + delete position).
-   * Returns true on success, false on failure.
+   * Returns { success, orderId } where orderId is the clientOrderId used.
    */
   async saveExitToDb(
-    sessionId: string,
-    symbol: string,
-    mode: 'paper' | 'live',
     position: Position,
     exitPrice: number,
     reason: string,
     pnlPct: number,
     pnlUsd: number,
-    currentPosition: Position | null,
-    lastPrice: number,
     exchangeOrderId?: string,
     feeUsd?: number,
-  ): Promise<boolean> {
+  ): Promise<{ success: boolean; orderId?: string }> {
+    const { prisma, sessionId, symbol, mode } = this.ctx;
     try {
       const exitSide = position.side === 'long' ? 'sell' : 'buy';
       const isLive = mode === 'live';
@@ -209,10 +214,10 @@ export class PositionPersistence {
       let clientOrderId = exchangeOrderId || `${isLive ? 'live' : 'paper'}_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
       if (exchangeOrderId) {
-        const existing = await (this.prisma as any).order.findFirst({ where: { clientOrderId: exchangeOrderId } });
+        const existing = await (prisma as any).order.findFirst({ where: { clientOrderId: exchangeOrderId } });
         if (existing) {
           logger.warn(`⚠️ [${symbol}] Exit order ${exchangeOrderId} already exists in DB, skipping save`);
-          return true;
+          return { success: true, orderId: clientOrderId };
         }
       }
 
@@ -236,7 +241,7 @@ export class PositionPersistence {
       const leverage = position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4;
       const roePct = roiPct * leverage;
 
-      await (this.prisma as any).$transaction(async (tx: any) => {
+      await (prisma as any).$transaction(async (tx: any) => {
         const order = await tx.order.create({
           data: {
             clientOrderId,
@@ -318,30 +323,27 @@ export class PositionPersistence {
         }).catch(() => {});
       }
 
-      // Update session KPI
-      await this.updateSessionKpi(sessionId, symbol, currentPosition, lastPrice, pnlUsd, pnlPct);
-
       logger.info(`💾 [${symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%), Fee: $${calculatedFee.toFixed(2)}`);
-      return true;
+      return { success: true, orderId: clientOrderId };
     } catch (error) {
       logger.error(`❌ [${symbol}] Failed to save exit to DB:`, error);
-      return false;
+      return { success: false };
     }
   }
 
   /**
    * Update session KPI aggregate metrics after a trade.
+   * Caller passes currentPosition and lastPrice for unrealized PnL calculation.
    */
   async updateSessionKpi(
-    sessionId: string,
-    symbol: string,
+    tradePnlUsd: number,
+    tradePnlPct: number,
     currentPosition: Position | null,
     lastPrice: number,
-    _tradePnlUsd: number,
-    _tradePnlPct: number,
   ): Promise<void> {
+    const { prisma, sessionId, symbol } = this.ctx;
     try {
-      const fills = await (this.prisma as any).fill.findMany({
+      const fills = await (prisma as any).fill.findMany({
         where: { sessionId, realizedPnl: { not: null } },
         orderBy: { ts: 'asc' },
       });
@@ -369,7 +371,7 @@ export class PositionPersistence {
         if (drawdown < maxDrawdown) maxDrawdown = drawdown;
       }
 
-      const session = await (this.prisma as any).agentSession.findUnique({
+      const session = await (prisma as any).agentSession.findUnique({
         where: { id: sessionId },
         select: { startBalanceUsd: true },
       });
@@ -397,7 +399,7 @@ export class PositionPersistence {
         avgLossUsd: losses > 0 ? exitFills.filter((f: any) => (f.realizedPnl || 0) < 0).reduce((s: number, f: any) => s + (f.realizedPnl || 0), 0) / losses : 0,
       };
 
-      await (this.prisma as any).sessionKpi.upsert({
+      await (prisma as any).sessionKpi.upsert({
         where: { sessionId },
         update: {
           realizedPnlUsd: netRealizedPnl,

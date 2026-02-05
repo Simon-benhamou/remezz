@@ -1,0 +1,845 @@
+/**
+ * RealtimeExitHandler - Extracted from SimpleAgent.
+ * Owns all real-time exit state and logic: checkRealtimeExit(), NFS system,
+ * proactive limit tracking, trailing breach detection, kline-based exits.
+ */
+
+import {
+  MomentumConfig,
+  shouldExitPosition,
+  updatePositionWaterMarks,
+  type Candle,
+  type Position,
+} from './momentumSimple.js';
+import { createLogger } from '../utils/logger.js';
+import {
+  getBinanceWebSocket,
+} from '../services/binanceWebSocket.js';
+import {
+  NfsCalculator,
+  NfsExitStateMachine,
+  createNfsExitSystem,
+  type NfsConfig,
+  type NfsResult,
+  type Candle as NfsCandle,
+} from '../services/nfsRealtimeExit.js';
+import {
+  EXIT_TRAIL_RT,
+  EXIT_TRAIL_NFS_HIGH,
+  EXIT_TRAIL_NFS_MED,
+  EXIT_TRAIL_NFS_LOW,
+  EXIT_TRAIL_PROACTIVE,
+  EXIT_SL_RT,
+  EXIT_STAGNANT,
+} from '../types/exitReasons.js';
+import { WS_THROTTLE } from '../config/constants.js';
+import type { ExchangeOrderManager } from './exchangeOrderManager.js';
+
+const logger = createLogger('rt-exit');
+
+function errMsg(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export interface RealtimeExitContext {
+  symbol: string;
+  mode: 'paper' | 'live';
+
+  // Read-only accessors
+  getPosition: () => Position | null;
+  isRunning: () => boolean;
+  isClosingPosition: () => boolean;
+  setClosingPosition: (val: boolean) => void;
+
+  // Data fetchers
+  fetchCandles: () => Promise<Candle[]>;
+  fetchBtcCandles: () => Promise<Candle[]>;
+
+  // Exchange order manager for proactive limits
+  orderManager: ExchangeOrderManager;
+
+  // Exit callback
+  closePosition: (position: Position, price: number, reason: string) => Promise<void>;
+
+  // State mutation
+  setLastPrice: (price: number) => void;
+
+  // Position mutation (for watermark updates)
+  setPosition: (position: Position) => void;
+}
+
+export class RealtimeExitHandler {
+  // RT exit state
+  private realtimeExitInProgress = false;
+  private rtBreachSinceMs: number | null = null;
+  private rtBreachTicks = 0;
+  private rtTrailingBreachCandles = 0;
+  private nfsBreachCount = 0;
+  private lastNfsResult: NfsResult | null = null;
+  private lastRtTrailingKlineTs: number | null = null;
+  private lastAppTrailingStop: number | null = null;
+  private lastWsUnhealthyWarnTs = 0;
+  private static readonly WS_UNHEALTHY_WARN_THROTTLE_MS = WS_THROTTLE.UNHEALTHY_WARN_MS;
+
+  // Trailing tracking (for frontend display)
+  trailingActivatedAt: number | null = null;
+  trailingUpdateCount: number = 0;
+
+  private intervalId: NodeJS.Timeout | null = null;
+
+  // NFS system
+  private nfsCalculator: NfsCalculator | null = null;
+  nfsStateMachine: NfsExitStateMachine | null = null;
+
+  // Proactive limit state
+  proactiveLimitOrderId: string | null = null;
+  proactiveLimitPrice: number | null = null;
+
+  constructor(private ctx: RealtimeExitContext) {}
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // NFS SYSTEM INITIALIZATION
+  // ═══════════════════════════════════════════════════════════════════════
+
+  initializeNfsSystem(): void {
+    const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
+    if (!nfsEnabled) {
+      logger.debug(`[${this.ctx.symbol}] NFS system disabled`);
+      return;
+    }
+
+    const exitConfig = MomentumConfig.EXIT;
+    const nfsConfig: Partial<NfsConfig> = {
+      HIGH_CONFIDENCE_THRESHOLD: exitConfig.NFS_HIGH_SCORE_THRESHOLD ?? 70,
+      MEDIUM_CONFIDENCE_THRESHOLD: exitConfig.NFS_MEDIUM_SCORE_THRESHOLD ?? 40,
+      LIMIT_ORDER_TIMEOUT_MS: exitConfig.NFS_LIMIT_ORDER_TIMEOUT_MS ?? 3000,
+      MAX_SLIPPAGE_PCT: exitConfig.NFS_MAX_SLIPPAGE_PCT ?? 0.5,
+      PARTIAL_FILL_MIN_RATIO: exitConfig.NFS_PARTIAL_FILL_MIN_RATIO ?? 0.7,
+      WEIGHTS: {
+        breachATR: {
+          threshold: exitConfig.NFS_BREACH_ATR_THRESHOLD ?? 0.40,
+          weight: exitConfig.NFS_WEIGHT_BREACH_ATR ?? 35
+        },
+        breachDepth: {
+          threshold: exitConfig.NFS_BREACH_DEPTH_THRESHOLD ?? 0.25,
+          weight: exitConfig.NFS_WEIGHT_BREACH_DEPTH ?? 25
+        },
+        volumeRatio: {
+          threshold: exitConfig.NFS_VOLUME_RATIO_THRESHOLD ?? 1.5,
+          weight: exitConfig.NFS_WEIGHT_VOLUME ?? 20
+        },
+        candleBody: {
+          threshold: exitConfig.NFS_CANDLE_BODY_RATIO_THRESHOLD ?? 0.5,
+          weight: exitConfig.NFS_WEIGHT_CANDLE_BODY ?? 10
+        },
+        momentum: {
+          threshold: exitConfig.NFS_MOMENTUM_ROC5_THRESHOLD ?? 0.5,
+          weight: exitConfig.NFS_WEIGHT_MOMENTUM ?? 10
+        },
+      },
+    };
+
+    const { calculator, stateMachine } = createNfsExitSystem(
+      nfsConfig,
+      (oldState, newState) => {
+        logger.info(`[${this.ctx.symbol}] NFS state: ${oldState} → ${newState}`);
+      }
+    );
+
+    this.nfsCalculator = calculator;
+    this.nfsStateMachine = stateMachine;
+    logger.info(`[${this.ctx.symbol}] NFS system initialized | high=${nfsConfig.HIGH_CONFIDENCE_THRESHOLD} medium=${nfsConfig.MEDIUM_CONFIDENCE_THRESHOLD}`);
+  }
+
+  getNfsStateMachine(): NfsExitStateMachine | null {
+    return this.nfsStateMachine;
+  }
+
+  getNfsCalculator(): NfsCalculator | null {
+    return this.nfsCalculator;
+  }
+
+  getLastNfsResult(): NfsResult | null {
+    return this.lastNfsResult;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // START / STOP
+  // ═══════════════════════════════════════════════════════════════════════
+
+  startIfNeeded(): void {
+    if (!this.ctx.isRunning()) return;
+    if (!this.ctx.getPosition()) return;
+    if (!MomentumConfig.EXIT.REALTIME_APP_EXIT_ENABLED) return;
+    if (this.intervalId) return;
+
+    const pollMs = Math.max(250, Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_POLL_MS ?? 1000));
+
+    this.rtBreachSinceMs = null;
+    this.rtBreachTicks = 0;
+    this.lastAppTrailingStop = null;
+    this.lastRtTrailingKlineTs = null;
+    this.rtTrailingBreachCandles = 0;
+    this.ctx.setClosingPosition(false);
+
+    // If realtime trailing is enabled and we use kline-close mode, subscribe to 1m klines.
+    try {
+      const trailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
+      const trailingMode = MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
+      const klineInterval = MomentumConfig.EXIT.REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined;
+      if (trailingEnabled && trailingMode === 'kline_1m_close') {
+        const ws = getBinanceWebSocket();
+        ws.subscribeToKline(this.ctx.symbol, klineInterval || '1m');
+      }
+    } catch {
+      // Non-fatal
+    }
+
+    this.intervalId = setInterval(() => {
+      void this.check().catch(err => {
+        logger.debug(`⚠️ [${this.ctx.symbol}] Realtime exit check error: ${errMsg(err)}`);
+      });
+    }, pollMs);
+
+    const trailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
+    const slEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_STOPLOSS_ENABLED ?? true);
+    const trailingMode = MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
+    const mode = trailingEnabled
+      ? (slEnabled ? `trail(${trailingMode || 'ticker'})+sl` : `trail(${trailingMode || 'ticker'})`)
+      : (slEnabled ? 'sl_only' : 'disabled');
+    logger.info(`📡 [${this.ctx.symbol}] Realtime WS exits enabled (poll ${pollMs}ms, mode=${mode})`);
+  }
+
+  stop(): void {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    this.rtBreachSinceMs = null;
+    this.rtBreachTicks = 0;
+    this.lastAppTrailingStop = null;
+    this.lastRtTrailingKlineTs = null;
+    this.rtTrailingBreachCandles = 0;
+    this.realtimeExitInProgress = false;
+  }
+
+  resetState(): void {
+    this.nfsBreachCount = 0;
+    this.lastNfsResult = null;
+    this.proactiveLimitOrderId = null;
+    this.proactiveLimitPrice = null;
+    if (this.nfsStateMachine) {
+      this.nfsStateMachine.reset();
+    }
+    this.trailingActivatedAt = null;
+    this.trailingUpdateCount = 0;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PROACTIVE LIMIT HELPERS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private async placeProactiveLimit(
+    symbol: string, orderSide: 'buy' | 'sell', qty: number, price: number,
+  ): Promise<string | null> {
+    return this.ctx.orderManager.placeProactiveLimit(symbol, orderSide, qty, price);
+  }
+
+  private async cancelProactiveLimit(symbol: string): Promise<void> {
+    const orderId = this.proactiveLimitOrderId;
+    if (!orderId) return;
+
+    // Clear local state first
+    this.proactiveLimitOrderId = null;
+    this.proactiveLimitPrice = null;
+
+    // Sync to orderManager and cancel
+    this.ctx.orderManager.proactiveLimitOrderId = orderId;
+    this.ctx.orderManager.proactiveLimitPrice = null;
+    await this.ctx.orderManager.cancelProactiveLimit(symbol, this.nfsStateMachine);
+  }
+
+  private async checkProactiveLimitFill(symbol: string, position: Position | null, lastPrice: number): Promise<{ filled: boolean; avgPrice: number } | null> {
+    // Sync state to orderManager for checking
+    this.ctx.orderManager.proactiveLimitOrderId = this.proactiveLimitOrderId;
+    this.ctx.orderManager.proactiveLimitPrice = this.proactiveLimitPrice;
+    return this.ctx.orderManager.checkProactiveLimitFill(symbol, position, lastPrice);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // MAIN CHECK METHOD (~650 lines)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private async check(): Promise<void> {
+    if (!this.ctx.isRunning()) return;
+    if (!MomentumConfig.EXIT.REALTIME_APP_EXIT_ENABLED) return;
+    if (this.realtimeExitInProgress) return;
+    if (this.ctx.isClosingPosition()) return;
+
+    const position = this.ctx.getPosition();
+    if (!position) return;
+
+    this.realtimeExitInProgress = true;
+    try {
+      const symbol = this.ctx.symbol;
+
+      // WebSocket ticker is 0 weight; if WS is not receiving data we do nothing here.
+      const ws = getBinanceWebSocket();
+      const wsConnected = ws.isConnectedAndReceiving();
+      const wsHealthy = ws.isHealthy();
+
+      if (!wsConnected) {
+        const now = Date.now();
+        if (now - this.lastWsUnhealthyWarnTs >= RealtimeExitHandler.WS_UNHEALTHY_WARN_THROTTLE_MS) {
+          this.lastWsUnhealthyWarnTs = now;
+          const status = ws.getHealthStatus();
+          logger.warn(`⚠️ [${symbol}] WebSocket NOT CONNECTED - realtime exit monitoring paused | connected=${status.isConnected}, tickers=${status.tickerCount}, lastUpdate=${status.lastUpdateAge}ms ago`);
+        }
+        return;
+      }
+
+      // If connected but not strictly "healthy", just log debug (no warning spam)
+      if (!wsHealthy) {
+        logger.debug(`[${symbol}] WebSocket connected but stale - continuing with cached data`);
+      }
+
+      // Clear throttle timestamp when connected
+      this.lastWsUnhealthyWarnTs = 0;
+
+      const ticker = ws.getTicker(symbol);
+      if (!ticker) {
+        logger.debug(`⚠️ [${symbol}] No ticker data from WebSocket`);
+        return;
+      }
+      const tickerTs = Number.isFinite(Number(ticker.timestamp)) ? Number(ticker.timestamp) : Date.now();
+      if (Date.now() - tickerTs > 10_000) return;
+
+      const useMid = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_USE_MID_PRICE ?? true);
+      const mid = ticker.bid > 0 && ticker.ask > 0 ? (ticker.bid + ticker.ask) / 2 : 0;
+      const currentPrice = useMid && mid > 0 ? mid : ticker.last;
+      if (!Number.isFinite(currentPrice) || currentPrice <= 0) return;
+
+      this.ctx.setLastPrice(currentPrice);
+
+      const rtTrailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
+      const rtStoplossEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_STOPLOSS_ENABLED ?? true);
+      const trailingMode = MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
+
+      // ──────────────────────────────────────────────────────────────────
+      // 🚨 CRITICAL: Check REGIME_CHANGE and MOMENTUM_REVERSAL FIRST
+      // ──────────────────────────────────────────────────────────────────
+      try {
+        const symbolCandles = await this.ctx.fetchCandles();
+        const btcCandles = await this.ctx.fetchBtcCandles();
+        const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
+
+        // ⚠️  STRATEGIC EXITS ONLY ON 15M CLOSE
+        // Regime change and momentum reversal are checked in checkExit() on 15m candle close
+        // for 100% backtest parity. Ticker monitor focuses only on protective stops.
+      } catch (err) {
+        logger.debug(`[${symbol}] Failed to monitor in RT: ${errMsg(err)}`);
+        // Continue to stop loss check if monitoring fails
+      }
+
+      // ──────────────────────────────────────────────────────────────────
+      // 1) STOPLOSS realtime (ticker-based, protective)
+      // ──────────────────────────────────────────────────────────────────
+      if (rtStoplossEnabled) {
+        const bufferPct = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_BUFFER_PCT ?? 0.05);
+        const confirmMs = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_MS ?? 1800);
+        const confirmTicks = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_TICKS ?? 2);
+        const now = Date.now();
+
+        // V5.28 FIX: If trailing is active, use trailing stop instead of fixed SL
+        const trailingActive = position.trailingActive && position.appTrailingStop;
+
+        // V5.36: Use stagnant state from position
+        const isStagnantConfirmed = position.stagnantState?.confirmed && !position.stagnantState?.cancelled;
+        const stagnantTightenSlRatio = MomentumConfig.EXIT.STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
+        const currentBaseSl = position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
+
+        // V5.84: Stagnant SL respects adaptive SL — ratio of current base SL
+        const effectiveSlPct = isStagnantConfirmed
+          ? currentBaseSl * stagnantTightenSlRatio
+          : currentBaseSl;
+
+        const fixedSlPrice = position.side === 'long'
+          ? position.entryPrice * (1 - effectiveSlPct / 100)
+          : position.entryPrice * (1 + effectiveSlPct / 100);
+
+        const slPrice = trailingActive ? position.appTrailingStop! : fixedSlPrice;
+
+        const slBreach = position.side === 'long'
+          ? currentPrice <= slPrice * (1 - bufferPct / 100)
+          : currentPrice >= slPrice * (1 + bufferPct / 100);
+
+        if (!slBreach) {
+          this.rtBreachSinceMs = null;
+          this.rtBreachTicks = 0;
+        } else {
+          if (this.rtBreachSinceMs == null) {
+            this.rtBreachSinceMs = now;
+            this.rtBreachTicks = 1;
+          } else {
+            this.rtBreachTicks += 1;
+          }
+
+          const elapsed = now - (this.rtBreachSinceMs ?? now);
+          const confirmed = elapsed >= confirmMs || this.rtBreachTicks >= confirmTicks;
+          if (confirmed) {
+            this.stop();
+            let exitReason: string;
+            let stopType: string;
+            if (trailingActive) {
+              exitReason = EXIT_TRAIL_RT;
+              stopType = 'trailing';
+            } else if (isStagnantConfirmed) {
+              exitReason = EXIT_STAGNANT;
+              stopType = 'stagnant';
+            } else {
+              exitReason = EXIT_SL_RT;
+              stopType = 'fixed';
+            }
+            const holdMinutes = (now - position.entryTime) / 60000;
+            const maxPnlRaw = position.maxPnlPct ?? 0;
+            logger.info(
+              `⚡ [${symbol}] REALTIME EXIT confirmed (${exitReason}) price=$${currentPrice.toFixed(4)} ${stopType}_sl=$${slPrice.toFixed(4)} sl_pct=${effectiveSlPct.toFixed(1)}% | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks${isStagnantConfirmed ? ` | STAGNANT: held ${Math.round(holdMinutes)}m, maxPnl=${maxPnlRaw.toFixed(2)}%` : ''}`,
+            );
+            await this.ctx.closePosition(position, currentPrice, exitReason);
+            return;
+          }
+        }
+      }
+
+      // ──────────────────────────────────────────────────────────────────
+      // 2) TRAILING realtime (noise-filtered)
+      // ──────────────────────────────────────────────────────────────────
+      if (!rtTrailingEnabled) return;
+
+      if (trailingMode === 'kline_1m_close') {
+        const interval = (MomentumConfig.EXIT.REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined) || '1m';
+        const confirmCandles = Math.max(1, Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES ?? 2));
+
+        // Ensure we are subscribed.
+        ws.subscribeToKline(symbol, interval);
+
+        const klines = ws.getKlines(symbol, interval);
+        const last = klines && klines.length ? klines[klines.length - 1] : null;
+
+        if (!last) {
+          logger.debug(`⚠️ [${symbol}] No 1m klines received from WebSocket yet`);
+          return;
+        }
+
+        if (!last.isFinal) {
+          // ═══════════════════════════════════════════════════════════════
+          // V5.82: PROACTIVE LIMIT - On non-final candles
+          // ═══════════════════════════════════════════════════════════════
+          const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
+          const proactiveEnabled = MomentumConfig.EXIT.NFS_PROACTIVE_LIMIT_ENABLED ?? true;
+
+          if (nfsEnabled && proactiveEnabled && this.nfsCalculator && this.nfsStateMachine && position) {
+            // V5.86 FIX: Calculate if trailing SHOULD be active in real-time
+            const klineClose = last.close;
+            const side = position.side;
+            const posEntryPrice = position.entryPrice;
+
+            const realtimePnlPct = side === 'long'
+              ? ((klineClose - posEntryPrice) / posEntryPrice) * 100
+              : ((posEntryPrice - klineClose) / posEntryPrice) * 100;
+
+            const activationPct = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;
+            const shouldTrailingBeActive = position.trailingActive || realtimePnlPct >= activationPct;
+
+            let trailingStopPrice: number | null = null;
+            if (shouldTrailingBeActive) {
+              if (position.appTrailingStop) {
+                trailingStopPrice = position.appTrailingStop;
+              } else {
+                const baseDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
+                const hwmPct = side === 'long'
+                  ? position.highWaterMark
+                    ? ((position.highWaterMark - posEntryPrice) / posEntryPrice) * 100
+                    : realtimePnlPct
+                  : position.lowWaterMark
+                    ? ((posEntryPrice - position.lowWaterMark) / posEntryPrice) * 100
+                    : realtimePnlPct;
+
+                const distance = hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT
+                  ? MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT
+                  : baseDistance;
+
+                if (side === 'long' && position.highWaterMark) {
+                  trailingStopPrice = position.highWaterMark * (1 - distance / 100);
+                } else if (side === 'short' && position.lowWaterMark) {
+                  trailingStopPrice = position.lowWaterMark * (1 + distance / 100);
+                }
+              }
+            }
+
+            if (shouldTrailingBeActive && trailingStopPrice) {
+              // Build candle arrays for NFS
+              const prevNfsCandles: NfsCandle[] = (klines || []).slice(-25, -1).map(k => ({
+                timestamp: k.timestamp,
+                open: k.open,
+                high: k.high,
+                low: k.low,
+                close: k.close,
+                volume: k.volume || 0,
+                isFinal: true,
+              }));
+
+              const partialCandle: NfsCandle = {
+                timestamp: last.timestamp,
+                open: last.open,
+                high: last.high,
+                low: last.low,
+                close: last.close,
+                volume: last.volume || 0,
+                isFinal: false,
+              };
+
+              // Run NFS state machine evaluation on partial candle
+              const evalResult = this.nfsStateMachine.evaluate(
+                klineClose,
+                partialCandle,
+                prevNfsCandles,
+                side,
+                trailingStopPrice,
+                position.highWaterMark ?? klineClose,
+                position.lowWaterMark ?? klineClose
+              );
+
+              // Handle proactive LIMIT actions
+              if (evalResult.action === 'PLACE_PROACTIVE_LIMIT' && evalResult.targetPrice) {
+                const orderSide: 'buy' | 'sell' = side === 'long' ? 'sell' : 'buy';
+                logger.info(
+                  `🎯 [${symbol}] PROACTIVE LIMIT: placing ${orderSide} LIMIT @ $${evalResult.targetPrice.toFixed(4)} ` +
+                  `(trailing stop) | NFS=${evalResult.nfsResult?.score.toFixed(0)} | price=$${klineClose.toFixed(4)} | ` +
+                  `dist=${((side === 'long' ? klineClose - trailingStopPrice : trailingStopPrice - klineClose) / trailingStopPrice * 100).toFixed(3)}%`
+                );
+
+                // Cancel any existing proactive limit first
+                if (this.proactiveLimitOrderId) {
+                  try {
+                    await this.cancelProactiveLimit(symbol);
+                  } catch (e) {
+                    logger.warn(`[${symbol}] Failed to cancel existing proactive LIMIT: ${e}`);
+                  }
+                }
+
+                // Place the proactive limit
+                try {
+                  const plOrderId = await this.placeProactiveLimit(symbol, orderSide, position.qty, evalResult.targetPrice);
+                  if (plOrderId) {
+                    this.proactiveLimitOrderId = plOrderId;
+                    this.proactiveLimitPrice = evalResult.targetPrice;
+                    this.nfsStateMachine.setProactiveLimitOrderPending(plOrderId, evalResult.targetPrice);
+                    logger.info(`🎯 [${symbol}] PROACTIVE LIMIT placed: orderId=${plOrderId} @ $${evalResult.targetPrice.toFixed(4)}`);
+                  }
+                } catch (e) {
+                  logger.warn(`[${symbol}] Failed to place proactive LIMIT: ${e}`);
+                }
+              } else if (evalResult.action === 'CANCEL_PROACTIVE_LIMIT') {
+                if (this.proactiveLimitOrderId) {
+                  logger.info(`🎯 [${symbol}] PROACTIVE LIMIT CANCEL: ${evalResult.reason}`);
+                  try {
+                    await this.cancelProactiveLimit(symbol);
+                  } catch (e) {
+                    logger.warn(`[${symbol}] Failed to cancel proactive LIMIT: ${e}`);
+                  }
+                }
+              }
+            }
+          }
+
+          const now = Date.now();
+          const candleAge = now - last.timestamp;
+          logger.debug(`⏳ [${symbol}] Waiting for 1m candle to close (age: ${Math.round(candleAge/1000)}s, close: ${last.close.toFixed(4)})`);
+          return;
+        }
+
+        // Process once per newly-closed 1m candle.
+        if (this.lastRtTrailingKlineTs === last.timestamp) return;
+
+        const detectionDelay = Date.now() - (last.closeTime || last.timestamp);
+        logger.info(`📍 [${symbol}] NEW 1m candle closed | close=${last.close.toFixed(4)} | detection_delay=${detectionDelay}ms`);
+        this.lastRtTrailingKlineTs = last.timestamp;
+
+        // ═══════════════════════════════════════════════════════════════════
+        // V5.82: Check if proactive LIMIT was filled during this candle
+        // ═══════════════════════════════════════════════════════════════════
+        if (this.proactiveLimitOrderId && position) {
+          const fillResult = await this.checkProactiveLimitFill(symbol, position, currentPrice);
+          if (fillResult?.filled) {
+            const execPx = fillResult.avgPrice;
+            this.stop();
+            logger.info(
+              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED @ $${execPx.toFixed(4)} | ` +
+              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | ` +
+              `slippage=0% (exact backtest match!) | ` +
+              `nfs=${this.lastNfsResult?.score.toFixed(0) ?? 'n/a'}`
+            );
+            this.proactiveLimitOrderId = null;
+            this.proactiveLimitPrice = null;
+            await this.ctx.closePosition(position, execPx, EXIT_TRAIL_PROACTIVE);
+            return;
+          }
+        }
+
+        // Update trailing state using the candle close for breach detection.
+        const closePx = last.close;
+        if (!Number.isFinite(closePx) || closePx <= 0) return;
+
+        const priceHigh = last.high;
+        const priceLow = last.low;
+
+        // V5.25 FIX: Update watermarks with 1m candle data
+        const updatedPosition = updatePositionWaterMarks(position, closePx, priceHigh, priceLow);
+        this.ctx.setPosition(updatedPosition);
+
+        // V5.13: Fetch BTC candles for regime detection in realtime
+        const btcCandles = await this.ctx.fetchBtcCandles();
+        const symbolCandles = await this.ctx.fetchCandles();
+        const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
+
+        const exitSignal = shouldExitPosition(updatedPosition, closePx, candles, {
+          nowMs: Date.now(),
+          priceHigh,
+          priceLow,
+          btcCandles: undefined,
+        });
+
+        const candidateStop = exitSignal.newStopLoss;
+        if (Number.isFinite(Number(candidateStop))) {
+          this.lastAppTrailingStop = candidateStop as number;
+          updatedPosition.appTrailingStop = candidateStop as number;
+        }
+
+        // V5.26: Persist trailing activation
+        if (exitSignal.trailingActivated) {
+          if (!updatedPosition.trailingActive) {
+            this.trailingActivatedAt = Date.now();
+          }
+          updatedPosition.trailingActive = true;
+        }
+
+        // V5.72: Track trailing stop updates
+        if (updatedPosition.appTrailingStop && updatedPosition.appTrailingStop !== this.lastAppTrailingStop) {
+          this.trailingUpdateCount++;
+        }
+
+        // ONLY react to trailing exits in realtime
+        if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
+          if (this.rtTrailingBreachCandles > 0 || this.nfsBreachCount > 0) {
+            logger.info(`✅ [${symbol}] Trailing breach CLEARED (was ${this.rtTrailingBreachCandles}/${confirmCandles}, nfs=${this.nfsBreachCount}) | close=${closePx.toFixed(4)} | stop=${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'}`);
+          }
+          this.rtTrailingBreachCandles = 0;
+          this.nfsBreachCount = 0;
+          this.lastNfsResult = null;
+          if (this.nfsStateMachine) {
+            this.nfsStateMachine.reset();
+          }
+          // V5.82: Cancel proactive LIMIT if breach cleared
+          if (this.proactiveLimitOrderId) {
+            logger.info(`🎯 [${symbol}] Trailing breach cleared — cancelling proactive LIMIT`);
+            await this.cancelProactiveLimit(symbol);
+          }
+          return;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // V5.82: If proactive LIMIT is in play and breach confirmed, check fill
+        // ═══════════════════════════════════════════════════════════════════
+        if (this.proactiveLimitOrderId && position) {
+          const fillResult = await this.checkProactiveLimitFill(symbol, position, currentPrice);
+          if (fillResult?.filled) {
+            const execPx = fillResult.avgPrice;
+            this.stop();
+            logger.info(
+              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED on breach confirm @ $${execPx.toFixed(4)} | ` +
+              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | exact backtest match`
+            );
+            this.proactiveLimitOrderId = null;
+            this.proactiveLimitPrice = null;
+            await this.ctx.closePosition(position, execPx, EXIT_TRAIL_PROACTIVE);
+            return;
+          }
+          // Proactive LIMIT didn't fill yet — cancel it and fall through to normal NFS logic
+          logger.info(`🎯 [${symbol}] Proactive LIMIT not filled on breach — cancelling, using normal NFS flow`);
+          await this.cancelProactiveLimit(symbol);
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // NFS INTEGRATION: Use Noise Filter Score for smarter exit decisions
+        // ═══════════════════════════════════════════════════════════════════
+        const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
+        const trailingStopPrice = candidateStop as number;
+
+        if (nfsEnabled && this.nfsCalculator && trailingStopPrice && klines && klines.length > 0) {
+          const nfsCandles: NfsCandle[] = klines.slice(-25).map(k => ({
+            timestamp: k.timestamp,
+            open: k.open,
+            high: k.high,
+            low: k.low,
+            close: k.close,
+            volume: k.volume || 0,
+            isFinal: k.isFinal,
+          }));
+
+          const currentNfsCandle: NfsCandle = {
+            timestamp: last.timestamp,
+            open: last.open,
+            high: last.high,
+            low: last.low,
+            close: last.close,
+            volume: last.volume || 0,
+            isFinal: true,
+          };
+
+          // Calculate NFS score
+          const nfsResult = this.nfsCalculator.calculate(
+            currentNfsCandle,
+            nfsCandles.slice(0, -1),
+            updatedPosition.side,
+            trailingStopPrice
+          );
+          this.lastNfsResult = nfsResult;
+          this.nfsBreachCount++;
+
+          const stopPrice = trailingStopPrice.toFixed(4);
+          logger.warn(
+            `🚨 [${symbol}] NFS TRAILING BREACH (${this.nfsBreachCount}/${confirmCandles}) | NFS=${nfsResult.score.toFixed(0)} (${nfsResult.confidence}) | close=${closePx.toFixed(4)} | stop=${stopPrice} | action=${nfsResult.recommendation}`,
+          );
+
+          logger.debug(
+            `[${symbol}] NFS components: breachATR=${nfsResult.components.breachATRRatio.toFixed(3)} breachDepth=${nfsResult.components.breachDepthPct.toFixed(3)}% vol=${nfsResult.components.volumeRatio.toFixed(2)}x body=${nfsResult.components.candleBodyRatio.toFixed(2)} roc5=${nfsResult.components.momentumROC5.toFixed(3)}%`
+          );
+
+          // ═══════════════════════════════════════════════════════════════════
+          // V5.62: NFS_ADAPTIVE EXIT LOGIC (matches backtest)
+          // ═══════════════════════════════════════════════════════════════════
+          if (nfsResult.shouldExitImmediately) {
+            // HIGH confidence - exit immediately at trailing stop price
+            this.stop();
+            const execPx = trailingStopPrice;
+            logger.info(
+              `⚡⚡⚡ [${symbol}] NFS HIGH EXIT (score=${nfsResult.score.toFixed(0)}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | close=${closePx.toFixed(4)} | reason=high_confidence_breach`,
+            );
+            await this.ctx.closePosition(updatedPosition, execPx, EXIT_TRAIL_NFS_HIGH);
+            return;
+          } else if (nfsResult.confidence === 'MEDIUM' && this.nfsBreachCount >= 1) {
+            // MEDIUM confidence - 1 candle confirmation, exit at CANDLE CLOSE
+            this.stop();
+            const execPx = closePx;
+            logger.info(
+              `⚡⚡ [${symbol}] NFS MEDIUM EXIT (score=${nfsResult.score.toFixed(0)}, breaches=${this.nfsBreachCount}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | reason=medium_confidence_confirmed`,
+            );
+            await this.ctx.closePosition(updatedPosition, execPx, EXIT_TRAIL_NFS_MED);
+            return;
+          } else {
+            // LOW confidence - use standard 2-close confirmation
+            logger.info(
+              `⏳ [${symbol}] NFS LOW (score=${nfsResult.score.toFixed(0)}) - using 2-close confirmation (${this.nfsBreachCount}/${confirmCandles})`,
+            );
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // STANDARD 2-CLOSE CONFIRMATION (when NFS disabled or LOW confidence)
+        // ═══════════════════════════════════════════════════════════════════
+        this.rtTrailingBreachCandles += 1;
+        const stopPriceStr = (candidateStop as number | undefined)?.toFixed(4) || 'n/a';
+
+        if (!nfsEnabled) {
+          logger.warn(
+            `🚨 [${symbol}] TRAILING BREACH detected! (${this.rtTrailingBreachCandles}/${confirmCandles}) | close=${closePx.toFixed(4)} | stop=${stopPriceStr} | side=${updatedPosition.side}`,
+          );
+        }
+
+        if (this.rtTrailingBreachCandles < confirmCandles) {
+          logger.info(`⏳ [${symbol}] Waiting for confirmation... (need ${confirmCandles - this.rtTrailingBreachCandles} more candle${confirmCandles - this.rtTrailingBreachCandles > 1 ? 's' : ''})`);
+          return;
+        }
+
+        this.stop();
+        const trailingStopPx = candidateStop ?? updatedPosition.appTrailingStop ?? this.lastAppTrailingStop;
+        const execPx = closePx;
+        const exitReason = nfsEnabled && this.lastNfsResult ? EXIT_TRAIL_NFS_LOW : EXIT_TRAIL_RT;
+        logger.info(
+          `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (${exitReason}, 2-close) | exec=${execPx.toFixed(4)} | trailStop=${trailingStopPx?.toFixed(4) ?? 'n/a'} | close=${closePx.toFixed(4)} | confirmCandles=${confirmCandles}${this.lastNfsResult ? ` | nfs=${this.lastNfsResult.score.toFixed(0)}` : ''}`,
+        );
+        await this.ctx.closePosition(updatedPosition, execPx, exitReason);
+        return;
+      }
+
+      // Fallback: ticker-based trailing (legacy).
+      const updatedPosition = updatePositionWaterMarks(position, currentPrice, currentPrice, currentPrice);
+      this.ctx.setPosition(updatedPosition);
+
+      const symbolCandles = await this.ctx.fetchCandles();
+      const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
+
+      const exitSignal = shouldExitPosition(updatedPosition, currentPrice, candles, {
+        nowMs: Date.now(),
+        priceHigh: currentPrice,
+        priceLow: currentPrice,
+      });
+
+      const candidateStop = exitSignal.newStopLoss;
+      if (Number.isFinite(Number(candidateStop))) {
+        this.lastAppTrailingStop = candidateStop as number;
+        updatedPosition.appTrailingStop = candidateStop as number;
+      }
+
+      if (exitSignal.trailingActivated) {
+        if (!updatedPosition.trailingActive) {
+          this.trailingActivatedAt = Date.now();
+        }
+        updatedPosition.trailingActive = true;
+      }
+
+      if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
+        this.rtBreachSinceMs = null;
+        this.rtBreachTicks = 0;
+        return;
+      }
+
+      const bufferPct = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_BUFFER_PCT ?? 0.05);
+      const confirmMs = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_MS ?? 1800);
+      const confirmTicks = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_TICKS ?? 2);
+      const now = Date.now();
+      const stopPrice = candidateStop as number | undefined;
+      if (!stopPrice) return;
+
+      const breach = updatedPosition.side === 'long'
+        ? currentPrice <= stopPrice * (1 - bufferPct / 100)
+        : currentPrice >= stopPrice * (1 + bufferPct / 100);
+
+      if (!breach) {
+        this.rtBreachSinceMs = null;
+        this.rtBreachTicks = 0;
+        return;
+      }
+
+      if (this.rtBreachSinceMs == null) {
+        this.rtBreachSinceMs = now;
+        this.rtBreachTicks = 1;
+        logger.debug(`🔎 [${symbol}] Realtime trailing breach started (ticker) price=$${currentPrice.toFixed(4)} stop=$${stopPrice.toFixed(4)}`);
+        return;
+      }
+
+      this.rtBreachTicks += 1;
+      const elapsed = now - this.rtBreachSinceMs;
+      const confirmed = elapsed >= confirmMs || this.rtBreachTicks >= confirmTicks;
+      if (!confirmed) return;
+
+      this.stop();
+      const trailingStopPx = updatedPosition.appTrailingStop ?? this.lastAppTrailingStop ?? stopPrice;
+      logger.info(`⚡ [${symbol}] REALTIME EXIT confirmed (trailing_rt) price=$${currentPrice.toFixed(4)} exitAt=$${trailingStopPx.toFixed(4)} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`);
+      await this.ctx.closePosition(updatedPosition, trailingStopPx, EXIT_TRAIL_RT);
+    } finally {
+      this.realtimeExitInProgress = false;
+    }
+  }
+}

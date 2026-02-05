@@ -18,6 +18,8 @@
  * - New entries wait until exits complete
  */
 
+import { normalizeToFamily, type ExitFamily } from '../types/exitReasons.js';
+
 export type ExitReason =
   | 'stop_loss'
   | 'trailing_stop'
@@ -29,7 +31,8 @@ export type ExitReason =
   | 'liquidation_risk'
   | 'partial_fill_cleanup'
   | 'formatting_residual_cleanup'
-  | 'dust_position_cleanup';
+  | 'dust_position_cleanup'
+  | string; // Accept any canonical exit reason string
 
 export type OrderPriorityContext = {
   // Order type
@@ -60,11 +63,17 @@ export type OrderPriorityContext = {
 export function calculateOrderPriority(context: OrderPriorityContext): number {
   let priority = 50; // Base priority (MEDIUM)
 
+  // Normalize reason to family for tier matching
+  const family: ExitFamily = context.reason === 'signal_entry'
+    ? 'UNKNOWN'
+    : normalizeToFamily(context.reason);
+  const reason = context.reason;
+
   // ========================================================================
   // TIER 1: CRITICAL - Liquidation protection & deep losses (90-100)
   // ========================================================================
 
-  if (context.reason === 'liquidation_risk') {
+  if (reason === 'liquidation_risk') {
     priority = 100; // MAXIMUM PRIORITY - prevent account liquidation
 
     if (context.liquidationRisk !== undefined && context.liquidationRisk > 80) {
@@ -72,7 +81,7 @@ export function calculateOrderPriority(context: OrderPriorityContext): number {
     }
   }
 
-  if (context.reason === 'stop_loss') {
+  if (family === 'SL' || reason === 'stop_loss') {
     priority = 90; // Very high priority - protect capital
 
     // Boost if deep in loss
@@ -95,7 +104,7 @@ export function calculateOrderPriority(context: OrderPriorityContext): number {
   // TIER 2: HIGH - Profit protection (70-89)
   // ========================================================================
 
-  if (context.reason === 'trailing_stop') {
+  if (family === 'TRAIL' || reason === 'trailing_stop') {
     priority = 75; // High priority - lock in profits
 
     // Boost if large profit at risk
@@ -113,7 +122,7 @@ export function calculateOrderPriority(context: OrderPriorityContext): number {
     }
   }
 
-  if (context.reason === 'take_profit') {
+  if (reason === 'take_profit') {
     priority = 70; // High priority - realize gains
 
     // Boost if target profit is large
@@ -126,7 +135,7 @@ export function calculateOrderPriority(context: OrderPriorityContext): number {
   // TIER 3: MEDIUM - Strategic exits (50-69)
   // ========================================================================
 
-  if (context.reason === 'regime_change') {
+  if (family === 'REGIME_CHANGE' || reason === 'regime_change') {
     priority = 60; // Medium-high priority
 
     // Boost if in loss (regime change + losing = bad combo)
@@ -135,7 +144,7 @@ export function calculateOrderPriority(context: OrderPriorityContext): number {
     }
   }
 
-  if (context.reason === 'max_hold') {
+  if (family === 'TIME' || reason === 'max_hold') {
     priority = 55; // Medium priority
 
     // Boost if position has been open for very long time
@@ -147,7 +156,7 @@ export function calculateOrderPriority(context: OrderPriorityContext): number {
     }
   }
 
-  if (context.reason === 'stagnant') {
+  if (family === 'STAGNANT_TRADE' || reason === 'stagnant') {
     priority = 50; // Medium priority
 
     // Lower priority if in profit (let it run)
@@ -156,8 +165,12 @@ export function calculateOrderPriority(context: OrderPriorityContext): number {
     }
   }
 
-  if (context.reason === 'manual') {
+  if (reason === 'manual') {
     priority = 65; // Medium-high (user requested)
+  }
+
+  if (family === 'EMERGENCY') {
+    priority = 95; // Near-critical - position unprotected
   }
 
   // ========================================================================

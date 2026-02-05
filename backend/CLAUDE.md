@@ -44,12 +44,14 @@ npm run migrate             # Run migrations
 ### Core Components
 
 **Strategy Engine** (`src/strategies/`)
-- `simpleAgent.ts` - Main agent coordinator (~2500 lines post-refactor). Capital pool, position management, trailing stops, NFS adaptive exits
+- `simpleAgent.ts` - Main agent coordinator (~3660 lines). Capital pool, position management, trailing stops, NFS adaptive exits, 15m exit logic
+- `positionOpener.ts` - Extracted `openPosition()` (~970 lines). Pre-entry filters, capital sizing, exchange order placement, multi-position support
+- `realtimeExitHandler.ts` - Extracted `checkRealtimeExit()` (~845 lines). Owns all RT exit state, NFS system, proactive limit tracking, trailing breach detection
 - `momentumSimple.ts` - Signal detection (BB breakout, ROC momentum, volume filters, BTC macro, cash mode regime detection)
 - `signalRanker.ts` - ML-powered signal scoring with XGBoost integration
 - `positionPersistence.ts` - Extracted DB operations (load/save/update positions, session KPIs)
 - `exchangeOrderManager.ts` - Extracted exchange order placement (SL, trailing stop, proactive limits)
-- `realtimeExitMonitor.ts` - RT exit state definitions and interfaces (full checkRealtimeExit migration deferred)
+- `realtimeExitMonitor.ts` - RT exit state definitions and interfaces
 - `cacheManager.ts` - Mutex-protected BTC 15m/1h candle caches and leverage cache (`globalCacheManager` singleton)
 
 **Config & Types** (`src/config/`, `src/types/`)
@@ -175,13 +177,14 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
 
 ## Refactoring (completed)
 
-Major codebase refactoring reducing `simpleAgent.ts` from ~5500 to ~2500 lines:
+Major codebase refactoring reducing `simpleAgent.ts` from ~5500 to ~3660 lines:
 
 1. **Centralized constants** (`config/constants.ts`): All magic numbers (cache TTLs, sync intervals, order queue config) extracted from `simpleAgent.ts` and `orderQueue.ts`
 2. **Typed exchange interfaces** (`types/exchange.ts`): Replaced inline `any` Exchange type with `CcxtOrder`, `CcxtPosition`, `CcxtTrade`, `CcxtBalance`, `Exchange` interfaces. Eliminated 30+ `as any` casts
 3. **Mutex caches** (`cacheManager.ts`): Promise-based mutex on global BTC 15m/1h candle caches and leverage cache. Prevents concurrent fetch races
-4. **Extracted modules**: `positionPersistence.ts` (DB ops), `exchangeOrderManager.ts` (SL/trailing/proactive limits), `realtimeExitMonitor.ts` (state definitions)
+4. **Extracted modules (phase 1)**: `positionPersistence.ts` (DB ops), `exchangeOrderManager.ts` (SL/trailing/proactive limits), `realtimeExitMonitor.ts` (state definitions)
 5. **Walk-forward testing** (`walkForwardService.ts`): Sliding train+test window validation. Route: `POST /api/backtest/walk-forward`
 6. **Grid optimization** (`optimizationService.ts`): Parameter grid search ranked by OOS Sharpe. Route: `POST /api/backtest/optimize`
 7. **Cash mode** (`momentumSimple.ts`): ADX + ATR + SMA200 slope regime detection. Skips entries in CHOPPY/LOW_VOL markets
 8. **Error handling**: All `catch (error: any)` → `catch (error: unknown)` with `errMsg()` helper. `ExitReason` union extended for cleanup reasons
+9. **Extracted modules (phase 2)**: `positionOpener.ts` (openPosition ~970 lines with PositionOpener class + context interface), `realtimeExitHandler.ts` (checkRealtimeExit ~845 lines with RealtimeExitHandler class owning NFS system, proactive limits, trailing breach state)

@@ -65,6 +65,13 @@ import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
 // V5.22: Import shared signal scoring function (ensures backtest = production)
 import { calculateSignalScore } from '../strategies/signalRanker.js';
 
+import {
+  EXIT_TRAIL, EXIT_TRAIL_NFS_HIGH, EXIT_TRAIL_NFS_MED, EXIT_TRAIL_NFS_LOW,
+  EXIT_SL, EXIT_TIME, EXIT_REGIME_CHANGE, EXIT_MOMENTUM_REVERSAL,
+  EXIT_STAGNANT, EXIT_STAGNANT_PROFIT, EXIT_END,
+  EXIT_SIGNAL_REASON_MAP,
+} from '../types/exitReasons.js';
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -740,7 +747,7 @@ function checkBacktestExit(
         // HIGH confidence: Exit at trailing stop price (theoretical/perfect)
         return {
           shouldExit: true,
-          exitReason: 'TRAIL_NFS_HIGH',
+          exitReason: EXIT_TRAIL_NFS_HIGH,
           exitPrice: trailingStopPrice,
         };
       } else if (nfsScore.confidence === 'MEDIUM') {
@@ -752,7 +759,7 @@ function checkBacktestExit(
             : Math.min(trailingStopPrice, current.close);
           return {
             shouldExit: true,
-            exitReason: 'TRAIL_NFS_MED',
+            exitReason: EXIT_TRAIL_NFS_MED,
             exitPrice: medExitPrice,
           };
         }
@@ -765,7 +772,7 @@ function checkBacktestExit(
             : Math.min(trailingStopPrice, current.close);
           return {
             shouldExit: true,
-            exitReason: 'TRAIL_NFS_LOW',
+            exitReason: EXIT_TRAIL_NFS_LOW,
             exitPrice: lowExitPrice,
           };
         }
@@ -783,7 +790,7 @@ function checkBacktestExit(
 
       return {
         shouldExit: true,
-        exitReason: 'TRAIL',
+        exitReason: EXIT_TRAIL,
         exitPrice,
       };
     }
@@ -804,19 +811,8 @@ function checkBacktestExit(
   
   // Handle other exit signals
   if (exitSignal.shouldExit) {
-    // Map reason names to backtest format
-    const reasonMap: Record<string, string> = {
-      'time': 'TIME',
-      'regime_change': 'REGIME_CHANGE',
-      'momentum_reversal': 'MOMENTUM_REVERSAL',
-      'stoploss': 'SL',
-      'stagnant_trade': 'STAGNANT_TRADE',
-      'stagnant_profit_exit': 'STAGNANT_PROFIT_EXIT',
-      'trailing': 'TRAIL',
-    };
-    
     const reason = exitSignal.reason ?? 'unknown';
-    const exitReason = reasonMap[reason] ?? reason.toUpperCase();
+    const exitReason = EXIT_SIGNAL_REASON_MAP[reason] ?? reason.toUpperCase();
     
     // Calculate exit price based on reason
     let exitPrice = current.close;
@@ -1320,7 +1316,7 @@ function calculateRealisticHoldMinutes(
 
   // For exits, check if it's an intrabar exit type
   const isIntrabarExit = exitReason.includes('NFS_HIGH') ||
-                          exitReason === 'SL' ||
+                          exitReason === EXIT_SL ||
                           exitReason === 'TP' ||
                           exitReason === 'STOP_LOSS' ||
                           exitReason === 'TAKE_PROFIT';
@@ -2203,7 +2199,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         netPnlPct: pnl.netPnlPct,
         netPnlUsd: pnl.netPnlUsd,
         feesUsd: pnl.feesUsd,
-        exitReason: 'END',
+        exitReason: EXIT_END,
         entryReason: pos.entryReason,  // V5.32: Track entry reason
         capitalBefore: pos.capitalBefore,
         capitalAfter: capital + capitalInUse, // Total capital (free + in use)
@@ -2254,7 +2250,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           netPnlPct: multiPnl.netPnlPct,
           netPnlUsd: multiPnl.netPnlUsd,
           feesUsd: multiPnl.feesUsd,
-          exitReason: `END_MULTI${multiPos.positionIndex}`,
+          exitReason: `${EXIT_END}_MULTI${multiPos.positionIndex}`,
           entryReason: multiPos.entryReason,
           capitalBefore: multiPos.capitalBefore,
           capitalAfter: capital + capitalInUse,

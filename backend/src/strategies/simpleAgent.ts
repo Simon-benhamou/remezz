@@ -16,24 +16,14 @@ import {
   MomentumConfig,
   checkMomentumSignal,
   shouldExitPosition,
-  calculatePositionSize,
   updatePositionWaterMarks,
   getMarketConditions,
-  getLiquidityTier,
-  calcSafeLeverage,
-  calcDynamicStopLoss,  // V5.7: Dynamic SL based on ATR
-  determineVolatilityRegime,  // V5.14: Volatility-based trailing
   getCooldownBars,  // V5.41: Shared cooldown logic
   calculateExitNowMs,  // V5.45: Shared exit time calculation for parity
-  calcBollingerBands,  // V5.64: For wick breakout early entry
-  checkWickBreakout,   // V5.64: Wick breakout early entry
   calcROC,             // Shared indicator
-  calcSMA,             // Shared indicator
-  calcBB,              // Shared indicator
   calcATR,             // Shared indicator
   calcBBPosition,      // Shared indicator
   calcTrendStrength,   // Shared indicator
-  LIQUIDATION_CONFIG,
   type Candle,
   type Position,
   type MarketConditions,
@@ -42,29 +32,20 @@ import { createLogger } from '../utils/logger.js';
 import { globalSignalRanker } from './signalRanker.js';
 import {
   getBinanceWebSocket,
-  getKlinesOhlcvFromWebSocket,
   getKlinesWithMeta,  // V5.50: Added for accurate candle close detection using isFinal flag
   seedKlinesFromWebSocket,
   getBalanceFromWebSocket,
-  getTickerFromWebSocket,
   getPositionFromWebSocket,
   getLastFilledOrderTradeUpdateFromWebSocket,
   isUserDataStreamActive,
-  seedPositionCache,
-  toBinanceSymbolId,
-  isPositionCacheSeeded,
   type BinanceKlineData,
 } from '../services/binanceWebSocket.js';
 import { globalRestCircuitBreaker } from '../services/globalRestCircuitBreaker.js';
-import { isIpBanned } from '../exchange/ccxtClient.js';
 import {
-  notifyTradeEntry,
   notifyTradeExit,
   notifyOrderError,
-  notifyDailyLossLimit,
   notifyTrailingActivated,
   notifyRegimeChange,
-  notifyHighVolatility,
   notifyAgentStarted,
   notifyAgentStopped,
   notifyLongHold,
@@ -72,33 +53,31 @@ import {
   notifySyncFailure,
   notifySignalDetected,
 } from '../services/notificationService.js';
-import { notifyPositionOpened, notifyPositionClosed } from '../utils/notifications.js';
+import { notifyPositionClosed } from '../utils/notifications.js';
 import { trackRejectedSignal, recordTrade, updateAgentState } from '../services/telegramReporter.js';
 import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
 import { calculateOrderPriority, type ExitReason } from '../services/orderPriority.js';
 import { exchangeAPIDeduplicator, makeFetchMyTradesKey } from '../services/apiDeduplicator.js';
 import { v4 as uuidv4 } from 'uuid';
-import { CACHE_TTLS, SYNC_INTERVALS, WS_THROTTLE } from '../config/constants.js';
+import { CACHE_TTLS, SYNC_INTERVALS } from '../config/constants.js';
 import { globalCacheManager } from './cacheManager.js';
 import { PositionPersistence } from './positionPersistence.js';
-import { ExchangeOrderManager } from './exchangeOrderManager.js';
 import {
-  NfsCalculator,
-  NfsExitStateMachine,
-  createNfsExitSystem,
-  type NfsConfig,
-  type NfsResult,
-  type NfsEvaluationResult,
-  type NfsExitState,
+  EXIT_TRAIL, EXIT_TRAIL_NFS_HIGH_15M,
+  EXIT_TRAIL_NFS_MED_15M, EXIT_TRAIL_NFS_LOW_15M, EXIT_TRAIL_PROACTIVE_15M,
+  EXIT_SL_EXCHANGE, EXIT_TRAIL_EXCHANGE,
+  EXIT_STAGNANT,
+  EXIT_SIGNAL_REASON_MAP, toCanonical,
+} from '../types/exitReasons.js';
+import { ExchangeOrderManager } from './exchangeOrderManager.js';
+import { PositionOpener } from './positionOpener.js';
+import { RealtimeExitHandler } from './realtimeExitHandler.js';
+import {
   type Candle as NfsCandle,
-  DEFAULT_NFS_CONFIG,
 } from '../services/nfsRealtimeExit.js';
 import {
   updateSymbolState,
-  updateMarketState,
   calculateProximityScore,
-  logEntry as radarLogEntry,
-  logExit as radarLogExit,
   type SignalFeatures,
 } from '../services/signalRadarService.js';
 
@@ -111,7 +90,7 @@ function errMsg(error: unknown): string {
 // Global caches (BTC candles, leverage) are managed by globalCacheManager
 
 // Exchange type imported from centralized types
-import type { Exchange, CcxtOrder } from '../types/exchange.js';
+import type { Exchange } from '../types/exchange.js';
 
 // ============================================================================
 // CAPITAL POOL - Shared between all agents
@@ -697,43 +676,19 @@ export class SimpleAgent {
   private config: SimpleAgentConfig;
   private persistence: PositionPersistence;
   private orderManager: ExchangeOrderManager;
+  private positionOpener: PositionOpener;
+  private rtExitHandler: RealtimeExitHandler;
   private position: Position | null = null;
-  
+
   // V5.30: Multi-position support - additional positions for large accounts
   private additionalPositions: Position[] = [];
-  
+
   private running = false;
   private tickIntervalId: NodeJS.Timeout | null = null;
   private tickAlignTimeoutId: NodeJS.Timeout | null = null; // V5.39: For synchronized tick alignment
   private finalKlineUnsubscribe: (() => void) | null = null; // V5.50: Instant candle close detection
 
-  // Realtime app-side exits (WS-based) to react faster than 15m candle-close.
-  private realtimeExitIntervalId: NodeJS.Timeout | null = null;
-  private realtimeExitInProgress = false;
   private closingPosition = false;
-  private rtBreachSinceMs: number | null = null;
-  private rtBreachTicks = 0;
-  private lastAppTrailingStop: number | null = null;
-  private lastRtTrailingKlineTs: number | null = null;
-  private rtTrailingBreachCandles = 0;
-
-  // V5.72: Trailing stop tracking for frontend display
-  private trailingActivatedAt: number | null = null;
-  private trailingUpdateCount: number = 0;
-  
-  // Throttle WebSocket unhealthy warnings (max once per 30s per agent)
-  private lastWsUnhealthyWarnTs = 0;
-  private static readonly WS_UNHEALTHY_WARN_THROTTLE_MS = WS_THROTTLE.UNHEALTHY_WARN_MS;
-
-  // NFS (Noise Filter Score) Exit System
-  private nfsStateMachine: NfsExitStateMachine | null = null;
-  private nfsCalculator: NfsCalculator | null = null;
-  private lastNfsResult: NfsResult | null = null;
-  private nfsBreachCount = 0;
-
-  // V5.82: Proactive LIMIT order tracking
-  private proactiveLimitOrderId: string | null = null;
-  private proactiveLimitPrice: number | null = null;
 
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
@@ -802,66 +757,52 @@ export class SimpleAgent {
   
   constructor(config: SimpleAgentConfig) {
     this.config = config;
-    this.persistence = new PositionPersistence(config.prisma);
+    this.persistence = new PositionPersistence({
+      prisma: config.prisma,
+      sessionId: config.sessionId,
+      symbol: config.symbol,
+      mode: config.mode,
+    });
     this.orderManager = new ExchangeOrderManager(config.exchange, config.symbol, config.mode);
 
-    // Initialize NFS system if enabled
-    this.initializeNfsSystem();
+    // Initialize RealtimeExitHandler (owns NFS system + proactive limit state)
+    this.rtExitHandler = new RealtimeExitHandler({
+      symbol: config.symbol,
+      mode: config.mode,
+      getPosition: () => this.position,
+      isRunning: () => this.running,
+      isClosingPosition: () => this.closingPosition,
+      setClosingPosition: (val: boolean) => { this.closingPosition = val; },
+      fetchCandles: () => this.fetchCandles(),
+      fetchBtcCandles: () => this.fetchBtcCandles(),
+      orderManager: this.orderManager,
+      closePosition: (pos, price, reason) => this.closePosition(pos, price, reason),
+      setLastPrice: (price: number) => { this.lastPrice = price; },
+      setPosition: (pos: Position) => { this.position = pos; },
+    });
+    this.rtExitHandler.initializeNfsSystem();
+
+    // Initialize PositionOpener
+    this.positionOpener = new PositionOpener({
+      symbol: config.symbol,
+      sessionId: config.sessionId,
+      userId: config.userId,
+      mode: config.mode,
+      exchange: config.exchange,
+      capitalPool: config.capitalPool,
+      riskPerTradePct: config.riskPerTradePct,
+      savePositionToDb: (pos, action, fee) => this.savePositionToDb(pos, action, fee),
+      setStopLossOnExchange: (pos, isUpdate) => this.setStopLossOnExchange(pos, isUpdate),
+      setTrailingStopOnExchange: (pos, isWidening) => this.setTrailingStopOnExchange(pos, isWidening),
+      formatQtyForExchange: (sym, qty) => this.formatQtyForExchange(sym, qty),
+      startRealtimeExitMonitorIfNeeded: () => this.startRealtimeExitMonitorIfNeeded(),
+      fetchBtcCandles: () => this.fetchBtcCandles(),
+      fetchBtcCandles1h: () => this.fetchBtcCandles1h(),
+      onTrade: config.onTrade ? (trade) => config.onTrade!(trade) : undefined,
+    });
   }
 
-  /**
-   * Initialize NFS (Noise Filter Score) exit system
-   */
-  private initializeNfsSystem(): void {
-    const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
-    if (!nfsEnabled) {
-      logger.debug(`[${this.config.symbol}] NFS system disabled`);
-      return;
-    }
-
-    // Build NFS config from MomentumConfig
-    const exitConfig = MomentumConfig.EXIT;
-    const nfsConfig: Partial<NfsConfig> = {
-      HIGH_CONFIDENCE_THRESHOLD: exitConfig.NFS_HIGH_SCORE_THRESHOLD ?? 70,
-      MEDIUM_CONFIDENCE_THRESHOLD: exitConfig.NFS_MEDIUM_SCORE_THRESHOLD ?? 40,
-      LIMIT_ORDER_TIMEOUT_MS: exitConfig.NFS_LIMIT_ORDER_TIMEOUT_MS ?? 3000,
-      MAX_SLIPPAGE_PCT: exitConfig.NFS_MAX_SLIPPAGE_PCT ?? 0.5,
-      PARTIAL_FILL_MIN_RATIO: exitConfig.NFS_PARTIAL_FILL_MIN_RATIO ?? 0.7,
-      WEIGHTS: {
-        breachATR: {
-          threshold: exitConfig.NFS_BREACH_ATR_THRESHOLD ?? 0.40,
-          weight: exitConfig.NFS_WEIGHT_BREACH_ATR ?? 35
-        },
-        breachDepth: {
-          threshold: exitConfig.NFS_BREACH_DEPTH_THRESHOLD ?? 0.25,
-          weight: exitConfig.NFS_WEIGHT_BREACH_DEPTH ?? 25
-        },
-        volumeRatio: {
-          threshold: exitConfig.NFS_VOLUME_RATIO_THRESHOLD ?? 1.5,
-          weight: exitConfig.NFS_WEIGHT_VOLUME ?? 20
-        },
-        candleBody: {
-          threshold: exitConfig.NFS_CANDLE_BODY_RATIO_THRESHOLD ?? 0.5,
-          weight: exitConfig.NFS_WEIGHT_CANDLE_BODY ?? 10
-        },
-        momentum: {
-          threshold: exitConfig.NFS_MOMENTUM_ROC5_THRESHOLD ?? 0.5,
-          weight: exitConfig.NFS_WEIGHT_MOMENTUM ?? 10
-        },
-      },
-    };
-
-    const { calculator, stateMachine } = createNfsExitSystem(
-      nfsConfig,
-      (oldState, newState) => {
-        logger.info(`[${this.config.symbol}] NFS state: ${oldState} → ${newState}`);
-      }
-    );
-
-    this.nfsCalculator = calculator;
-    this.nfsStateMachine = stateMachine;
-    logger.info(`[${this.config.symbol}] NFS system initialized | high=${nfsConfig.HIGH_CONFIDENCE_THRESHOLD} medium=${nfsConfig.MEDIUM_CONFIDENCE_THRESHOLD}`);
-  }
+  // NFS system initialization delegated to rtExitHandler (see constructor)
   
   // ==========================================================================
   // LIFECYCLE
@@ -990,717 +931,15 @@ export class SimpleAgent {
   }
 
   // ==========================================================================
-  // REALTIME (WS) EXIT MONITOR
+  // REALTIME (WS) EXIT MONITOR - Delegated to RealtimeExitHandler
   // ==========================================================================
 
   private startRealtimeExitMonitorIfNeeded(): void {
-    // V5.37: Enable RT exit monitor for BOTH paper and live modes
-    // This ensures identical behavior between paper and live trading
-    // Previously only live had RT protection, causing divergent exit timing
-    if (!this.running) return;
-    if (!this.position) return;
-    if (!MomentumConfig.EXIT.REALTIME_APP_EXIT_ENABLED) return;
-    if (this.realtimeExitIntervalId) return;
-
-    const pollMs = Math.max(250, Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_POLL_MS ?? 1000));
-
-    this.rtBreachSinceMs = null;
-    this.rtBreachTicks = 0;
-    this.lastAppTrailingStop = null;
-    this.lastRtTrailingKlineTs = null;
-    this.rtTrailingBreachCandles = 0;
-    this.closingPosition = false;
-
-    // If realtime trailing is enabled and we use kline-close mode, subscribe to 1m klines.
-    try {
-      const trailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
-      const trailingMode = MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
-      const klineInterval = MomentumConfig.EXIT.REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined;
-      if (trailingEnabled && trailingMode === 'kline_1m_close') {
-        const ws = getBinanceWebSocket();
-        ws.subscribeToKline(this.config.symbol, klineInterval || '1m');
-      }
-    } catch {
-      // Non-fatal: realtime exit monitor should still run even if subscription fails.
-    }
-
-    this.realtimeExitIntervalId = setInterval(() => {
-      void this.checkRealtimeExit().catch(err => {
-        logger.debug(`⚠️ [${this.config.symbol}] Realtime exit check error: ${errMsg(err)}`);
-      });
-    }, pollMs);
-
-    const trailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
-    const slEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_STOPLOSS_ENABLED ?? true);
-    const trailingMode = MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
-    const mode = trailingEnabled
-      ? (slEnabled ? `trail(${trailingMode || 'ticker'})+sl` : `trail(${trailingMode || 'ticker'})`)
-      : (slEnabled ? 'sl_only' : 'disabled');
-    logger.info(`📡 [${this.config.symbol}] Realtime WS exits enabled (poll ${pollMs}ms, mode=${mode})`);
+    this.rtExitHandler.startIfNeeded();
   }
 
   private stopRealtimeExitMonitor(): void {
-    if (this.realtimeExitIntervalId) {
-      clearInterval(this.realtimeExitIntervalId);
-      this.realtimeExitIntervalId = null;
-    }
-    this.rtBreachSinceMs = null;
-    this.rtBreachTicks = 0;
-    this.lastAppTrailingStop = null;
-    this.lastRtTrailingKlineTs = null;
-    this.rtTrailingBreachCandles = 0;
-    this.realtimeExitInProgress = false;
-  }
-
-  private async checkRealtimeExit(): Promise<void> {
-    if (!this.running) return;
-    // V5.73 FIX: Enable for BOTH paper and live modes (as V5.37 intended)
-    // Paper mode uses real WebSocket ticker data, just doesn't place orders
-    // This ensures paper/live parity for exit timing
-    if (!MomentumConfig.EXIT.REALTIME_APP_EXIT_ENABLED) return;
-    if (this.realtimeExitInProgress) return;
-    if (this.closingPosition) return;
-    if (!this.position) return;
-
-    this.realtimeExitInProgress = true;
-    try {
-      const symbol = this.config.symbol;
-
-      // WebSocket ticker is 0 weight; if WS is not receiving data we do nothing here.
-      // We use isConnectedAndReceiving() which is more lenient than isHealthy() -
-      // it allows realtime exit monitoring even during temporary timestamp drift.
-      const ws = getBinanceWebSocket();
-      const wsConnected = ws.isConnectedAndReceiving();
-      const wsHealthy = ws.isHealthy();
-      
-      if (!wsConnected) {
-        // Throttled warning: max once per 30s per agent to avoid log spam
-        const now = Date.now();
-        if (now - this.lastWsUnhealthyWarnTs >= SimpleAgent.WS_UNHEALTHY_WARN_THROTTLE_MS) {
-          this.lastWsUnhealthyWarnTs = now;
-          const status = ws.getHealthStatus();
-          logger.warn(`⚠️ [${symbol}] WebSocket NOT CONNECTED - realtime exit monitoring paused | connected=${status.isConnected}, tickers=${status.tickerCount}, lastUpdate=${status.lastUpdateAge}ms ago`);
-        }
-        return;
-      }
-      
-      // If connected but not strictly "healthy", just log debug (no warning spam)
-      if (!wsHealthy) {
-        logger.debug(`[${symbol}] WebSocket connected but stale - continuing with cached data`);
-      }
-      
-      // Clear throttle timestamp when connected
-      this.lastWsUnhealthyWarnTs = 0;
-      
-      const ticker = ws.getTicker(symbol);
-      if (!ticker) {
-        logger.debug(`⚠️ [${symbol}] No ticker data from WebSocket`);
-        return;
-      }
-      const tickerTs = Number.isFinite(Number(ticker.timestamp)) ? Number(ticker.timestamp) : Date.now();
-      if (Date.now() - tickerTs > 10_000) return;
-
-      const useMid = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_USE_MID_PRICE ?? true);
-      const mid = ticker.bid > 0 && ticker.ask > 0 ? (ticker.bid + ticker.ask) / 2 : 0;
-      const currentPrice = useMid && mid > 0 ? mid : ticker.last;
-      if (!Number.isFinite(currentPrice) || currentPrice <= 0) return;
-
-      this.lastPrice = currentPrice;
-
-      const rtTrailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
-      const rtStoplossEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_STOPLOSS_ENABLED ?? true);
-      const trailingMode = MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_MODE as string | undefined;
-
-      // ----------------------------------------------------------------------
-      // 🚨 CRITICAL: Check REGIME_CHANGE and MOMENTUM_REVERSAL FIRST
-      // These are protective exits that should trigger BEFORE stop loss
-      // to save 5-10% of loss when regime flips
-      // ----------------------------------------------------------------------
-      try {
-        const symbolCandles = await this.fetchCandles();
-        const btcCandles = await this.fetchBtcCandles();
-        const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
-        
-        // ⚠️  STRATEGIC EXITS ONLY ON 15M CLOSE
-        // Regime change and momentum reversal are checked in checkExit() on 15m candle close
-        // for 100% backtest parity. Ticker monitor focuses only on protective stops.
-      } catch (err) {
-        logger.debug(`[${symbol}] Failed to monitor in RT: ${errMsg(err)}`);
-        // Continue to stop loss check if monitoring fails
-      }
-
-      // ----------------------------------------------------------------------
-      // 1) STOPLOSS realtime (ticker-based, protective)
-      // V5.36: Stagnant detection REMOVED from realtime - now only on 15m candle close
-      // to match paper/backtest behavior. This prevents premature stagnant exits.
-      // Stagnant detection is handled by shouldExitPosition() in checkExit().
-      // ----------------------------------------------------------------------
-      if (rtStoplossEnabled) {
-        const bufferPct = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_BUFFER_PCT ?? 0.05);
-        const confirmMs = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_MS ?? 1800);
-        const confirmTicks = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_TICKS ?? 2);
-        const now = Date.now();
-
-        // V5.28 FIX: If trailing is active, use trailing stop instead of fixed SL
-        // This prevents the bug where trailing activates but SL still uses the fixed price
-        const trailingActive = this.position!.trailingActive && this.position!.appTrailingStop;
-        
-        // V5.36: Use stagnant state from position (set by shouldExitPosition on 15m close)
-        // Only check if stagnant is CONFIRMED - the detection itself happens on 15m close
-        const isStagnantConfirmed = this.position!.stagnantState?.confirmed && !this.position!.stagnantState?.cancelled;
-        const stagnantTightenSlRatio = MomentumConfig.EXIT.STAGNANT_TRADE_TIGHTEN_SL_RATIO ?? 0.5;
-        const currentBaseSl = this.position!.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
-
-        // V5.84: Stagnant SL respects adaptive SL — ratio of current base SL
-        const effectiveSlPct = isStagnantConfirmed
-          ? currentBaseSl * stagnantTightenSlRatio
-          : currentBaseSl;
-        
-        const fixedSlPrice = this.position!.side === 'long'
-          ? this.position!.entryPrice * (1 - effectiveSlPct / 100)
-          : this.position!.entryPrice * (1 + effectiveSlPct / 100);
-        
-        // When trailing is active, use the trailing stop as our protective stop
-        // For LONG: trailing stop is below current price (sell if price drops to it)
-        // For SHORT: trailing stop is above current price (buy if price rises to it)
-        const slPrice = trailingActive ? this.position!.appTrailingStop! : fixedSlPrice;
-        
-        const slBreach = this.position!.side === 'long'
-          ? currentPrice <= slPrice * (1 - bufferPct / 100)
-          : currentPrice >= slPrice * (1 + bufferPct / 100);
-
-        if (!slBreach) {
-          this.rtBreachSinceMs = null;
-          this.rtBreachTicks = 0;
-        } else {
-          if (this.rtBreachSinceMs == null) {
-            this.rtBreachSinceMs = now;
-            this.rtBreachTicks = 1;
-          } else {
-            this.rtBreachTicks += 1;
-          }
-
-          const elapsed = now - (this.rtBreachSinceMs ?? now);
-          const confirmed = elapsed >= confirmMs || this.rtBreachTicks >= confirmTicks;
-          if (confirmed) {
-            this.stopRealtimeExitMonitor();
-            // V5.28: Distinguish between trailing stop hit, stagnant trade, or fixed SL hit
-            let exitReason: string;
-            let stopType: string;
-            if (trailingActive) {
-              exitReason = 'trailing_rt';
-              stopType = 'trailing';
-            } else if (isStagnantConfirmed) {
-              exitReason = 'stagnant_trade';
-              stopType = 'stagnant';
-            } else {
-              exitReason = 'stoploss_rt';
-              stopType = 'fixed';
-            }
-            const holdMinutes = (now - this.position!.entryTime) / 60000;
-            const maxPnlRaw = this.position!.maxPnlPct ?? 0;
-            logger.info(
-              `⚡ [${symbol}] REALTIME EXIT confirmed (${exitReason}) price=$${currentPrice.toFixed(4)} ${stopType}_sl=$${slPrice.toFixed(4)} sl_pct=${effectiveSlPct.toFixed(1)}% | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks${isStagnantConfirmed ? ` | STAGNANT: held ${Math.round(holdMinutes)}m, maxPnl=${maxPnlRaw.toFixed(2)}%` : ''}`,
-            );
-            await this.closePosition(this.position, currentPrice, exitReason);
-            return;
-          }
-        }
-      }
-
-      // ----------------------------------------------------------------------
-      // 2) TRAILING realtime (noise-filtered)
-      //    Option A: ticker-based (fast but noisy)
-      //    Option B: 1m kline CLOSE-based (filters wicks)
-      // ----------------------------------------------------------------------
-      if (!rtTrailingEnabled) return;
-
-      if (trailingMode === 'kline_1m_close') {
-        const interval = (MomentumConfig.EXIT.REALTIME_APP_EXIT_KLINE_INTERVAL as string | undefined) || '1m';
-        const confirmCandles = Math.max(1, Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES ?? 2));
-
-        // Ensure we are subscribed.
-        ws.subscribeToKline(symbol, interval);
-
-        const klines = ws.getKlines(symbol, interval);
-        const last = klines && klines.length ? klines[klines.length - 1] : null;
-        
-        if (!last) {
-          logger.debug(`⚠️ [${symbol}] No 1m klines received from WebSocket yet`);
-          return;
-        }
-        
-        if (!last.isFinal) {
-          // ═══════════════════════════════════════════════════════════════════
-          // V5.82: PROACTIVE LIMIT - On non-final candles, check if we should
-          // place a LIMIT at trailing stop BEFORE the breach happens.
-          // This lets the order sit in the book and fill at the exact trailing
-          // stop price = perfect match with backtest.
-          // ═══════════════════════════════════════════════════════════════════
-          const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
-          const proactiveEnabled = MomentumConfig.EXIT.NFS_PROACTIVE_LIMIT_ENABLED ?? true;
-
-          if (nfsEnabled && proactiveEnabled && this.nfsCalculator && this.nfsStateMachine && this.position) {
-            // V5.86 FIX: Calculate if trailing SHOULD be active in real-time
-            // Don't rely on position.trailingActive which is only updated on candle close
-            // This ensures proactive limit is checked even when trailing just activated
-            const currentPrice = last.close;
-            const side = this.position.side;
-            const entryPrice = this.position.entryPrice;
-
-            // Calculate current PnL % in real-time
-            const realtimePnlPct = side === 'long'
-              ? ((currentPrice - entryPrice) / entryPrice) * 100
-              : ((entryPrice - currentPrice) / entryPrice) * 100;
-
-            // Get activation threshold
-            const activationPct = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT; // 0.8%
-
-            // Check if trailing should be active (either already active or should activate now)
-            const shouldTrailingBeActive = this.position.trailingActive || realtimePnlPct >= activationPct;
-
-            // Calculate trailing stop price based on watermarks
-            let trailingStopPrice: number | null = null;
-            if (shouldTrailingBeActive) {
-              if (this.position.appTrailingStop) {
-                // Use existing trailing stop if available
-                trailingStopPrice = this.position.appTrailingStop;
-              } else {
-                // Calculate trailing stop from watermarks
-                const baseDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
-                // Check if we should widen the trailing
-                const hwmPct = side === 'long'
-                  ? this.position.highWaterMark
-                    ? ((this.position.highWaterMark - entryPrice) / entryPrice) * 100
-                    : realtimePnlPct
-                  : this.position.lowWaterMark
-                    ? ((entryPrice - this.position.lowWaterMark) / entryPrice) * 100
-                    : realtimePnlPct;
-
-                const distance = hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT
-                  ? MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT
-                  : baseDistance;
-
-                if (side === 'long' && this.position.highWaterMark) {
-                  trailingStopPrice = this.position.highWaterMark * (1 - distance / 100);
-                } else if (side === 'short' && this.position.lowWaterMark) {
-                  trailingStopPrice = this.position.lowWaterMark * (1 + distance / 100);
-                }
-              }
-            }
-
-            if (shouldTrailingBeActive && trailingStopPrice) {
-
-              // Build candle arrays for NFS
-              const prevNfsCandles: NfsCandle[] = (klines || []).slice(-25, -1).map(k => ({
-                timestamp: k.timestamp,
-                open: k.open,
-                high: k.high,
-                low: k.low,
-                close: k.close,
-                volume: k.volume || 0,
-                isFinal: true,
-              }));
-
-              const partialCandle: NfsCandle = {
-                timestamp: last.timestamp,
-                open: last.open,
-                high: last.high,
-                low: last.low,
-                close: last.close,
-                volume: last.volume || 0,
-                isFinal: false,
-              };
-
-              // Run NFS state machine evaluation on partial candle
-              const evalResult = this.nfsStateMachine.evaluate(
-                currentPrice,
-                partialCandle,
-                prevNfsCandles,
-                side,
-                trailingStopPrice,
-                this.position.highWaterMark ?? currentPrice,
-                this.position.lowWaterMark ?? currentPrice
-              );
-
-              // Handle proactive LIMIT actions
-              if (evalResult.action === 'PLACE_PROACTIVE_LIMIT' && evalResult.targetPrice) {
-                // Place LIMIT order at trailing stop price BEFORE breach
-                const orderSide: 'buy' | 'sell' = side === 'long' ? 'sell' : 'buy';
-                logger.info(
-                  `🎯 [${symbol}] PROACTIVE LIMIT: placing ${orderSide} LIMIT @ $${evalResult.targetPrice.toFixed(4)} ` +
-                  `(trailing stop) | NFS=${evalResult.nfsResult?.score.toFixed(0)} | price=$${currentPrice.toFixed(4)} | ` +
-                  `dist=${((side === 'long' ? currentPrice - trailingStopPrice : trailingStopPrice - currentPrice) / trailingStopPrice * 100).toFixed(3)}%`
-                );
-
-                // Cancel any existing proactive limit first
-                if (this.proactiveLimitOrderId) {
-                  try {
-                    await this.cancelProactiveLimit(symbol);
-                  } catch (e) {
-                    logger.warn(`[${symbol}] Failed to cancel existing proactive LIMIT: ${e}`);
-                  }
-                }
-
-                // Place the proactive limit
-                try {
-                  const orderId = await this.placeProactiveLimit(symbol, orderSide, this.position.qty, evalResult.targetPrice);
-                  if (orderId) {
-                    this.proactiveLimitOrderId = orderId;
-                    this.proactiveLimitPrice = evalResult.targetPrice;
-                    this.nfsStateMachine.setProactiveLimitOrderPending(orderId, evalResult.targetPrice);
-                    logger.info(`🎯 [${symbol}] PROACTIVE LIMIT placed: orderId=${orderId} @ $${evalResult.targetPrice.toFixed(4)}`);
-                  }
-                } catch (e) {
-                  logger.warn(`[${symbol}] Failed to place proactive LIMIT: ${e}`);
-                }
-              } else if (evalResult.action === 'CANCEL_PROACTIVE_LIMIT') {
-                // NFS dropped or price moved away — cancel the proactive LIMIT
-                if (this.proactiveLimitOrderId) {
-                  logger.info(`🎯 [${symbol}] PROACTIVE LIMIT CANCEL: ${evalResult.reason}`);
-                  try {
-                    await this.cancelProactiveLimit(symbol);
-                  } catch (e) {
-                    logger.warn(`[${symbol}] Failed to cancel proactive LIMIT: ${e}`);
-                  }
-                }
-              }
-              // If action is NONE or ALERT, the proactive LIMIT (if placed) stays in the book
-            }
-          }
-
-          const now = Date.now();
-          const candleAge = now - last.timestamp;
-          logger.debug(`⏳ [${symbol}] Waiting for 1m candle to close (age: ${Math.round(candleAge/1000)}s, close: ${last.close.toFixed(4)})`);
-          return;
-        }
-
-        // Process once per newly-closed 1m candle.
-        if (this.lastRtTrailingKlineTs === last.timestamp) return;
-        
-        const detectionDelay = Date.now() - (last.closeTime || last.timestamp);
-        logger.info(`📍 [${symbol}] NEW 1m candle closed | close=${last.close.toFixed(4)} | detection_delay=${detectionDelay}ms`);
-        this.lastRtTrailingKlineTs = last.timestamp;
-
-        // ═══════════════════════════════════════════════════════════════════
-        // V5.82: Check if proactive LIMIT was filled during this candle
-        // If so, the exit happened at the exact trailing stop price!
-        // ═══════════════════════════════════════════════════════════════════
-        if (this.proactiveLimitOrderId && this.position) {
-          const fillResult = await this.checkProactiveLimitFill(symbol);
-          if (fillResult?.filled) {
-            const execPx = fillResult.avgPrice;
-            this.stopRealtimeExitMonitor();
-            logger.info(
-              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED @ $${execPx.toFixed(4)} | ` +
-              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | ` +
-              `slippage=0% (exact backtest match!) | ` +
-              `nfs=${this.lastNfsResult?.score.toFixed(0) ?? 'n/a'}`
-            );
-            this.proactiveLimitOrderId = null;
-            this.proactiveLimitPrice = null;
-            await this.closePosition(this.position!, execPx, 'trailing_proactive_limit');
-            return;
-          }
-        }
-
-        // Update trailing state using the candle close for breach detection.
-        // V5.25 FIX: Use proper high/low for breach detection:
-        // - LONG: breach when price drops below trailing stop -> use last.low
-        // - SHORT: breach when price rises above trailing stop -> use last.high
-        // This ensures we detect when the trailing stop was hit during the candle.
-        const closePx = last.close;
-        if (!Number.isFinite(closePx) || closePx <= 0) return;
-
-        // For watermark updates (to move the trailing stop favorably):
-        // - LONG: use last.high to track highest price (move stop up)
-        // - SHORT: use last.low to track lowest price (move stop down)
-        // For breach detection (to check if stop was hit):
-        // - LONG: use last.low (did price drop to stop?)
-        // - SHORT: use last.high (did price rise to stop?)
-        const priceHigh = last.high;
-        const priceLow = last.low;
-
-        // V5.25 FIX: Update watermarks with 1m candle data so trailing stop follows profit!
-        // This was missing - the watermark wasn't being updated on 1m candles,
-        // so the trailing stop never moved up/down with the price.
-        this.position = updatePositionWaterMarks(this.position!, closePx, priceHigh, priceLow);
-
-        // V5.13: Fetch BTC candles for regime detection in realtime
-        const btcCandles = await this.fetchBtcCandles();
-        const symbolCandles = await this.fetchCandles();
-        const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
-        
-        // IMPORTANT: For realtime 1m-based trailing, we ONLY check trailing stop.
-        // Regime change and momentum reversal should be evaluated on 15m candle close
-        // in checkExit() to match backtest behavior exactly.
-        const exitSignal = shouldExitPosition(this.position!, closePx, candles, {
-          nowMs: Date.now(),
-          priceHigh,
-          priceLow,
-          // NOTE: Pass null for btcCandles to DISABLE regime_change detection in realtime
-          // Regime detection should only happen on 15m candle close (checkExit)
-          btcCandles: undefined,
-        });
-
-        const candidateStop = exitSignal.newStopLoss;
-        if (Number.isFinite(Number(candidateStop))) {
-          this.lastAppTrailingStop = candidateStop as number;
-          this.position!.appTrailingStop = candidateStop as number;
-        }
-        
-        // V5.26: Persist trailing activation - once active, stays active
-        if (exitSignal.trailingActivated) {
-          // V5.72: Track when trailing first activated
-          if (!this.position!.trailingActive) {
-            this.trailingActivatedAt = Date.now();
-          }
-          this.position!.trailingActive = true;
-        }
-
-        // V5.72: Track trailing stop updates
-        if (this.position!.appTrailingStop && this.position!.appTrailingStop !== this.lastAppTrailingStop) {
-          this.trailingUpdateCount++;
-        }
-
-        // ONLY react to trailing exits in realtime - regime_change and momentum_reversal
-        // are handled in checkExit() on 15m candle close for backtest parity
-        if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
-          if (this.rtTrailingBreachCandles > 0 || this.nfsBreachCount > 0) {
-            logger.info(`✅ [${symbol}] Trailing breach CLEARED (was ${this.rtTrailingBreachCandles}/${confirmCandles}, nfs=${this.nfsBreachCount}) | close=${closePx.toFixed(4)} | stop=${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'}`);
-          }
-          this.rtTrailingBreachCandles = 0;
-          this.nfsBreachCount = 0;
-          this.lastNfsResult = null;
-          if (this.nfsStateMachine) {
-            this.nfsStateMachine.reset();
-          }
-          // V5.82: Cancel proactive LIMIT if breach cleared
-          if (this.proactiveLimitOrderId) {
-            logger.info(`🎯 [${symbol}] Trailing breach cleared — cancelling proactive LIMIT`);
-            await this.cancelProactiveLimit(symbol);
-          }
-          return;
-        }
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // V5.82: If proactive LIMIT is in play and breach confirmed, check fill
-        // The proactive order was placed BEFORE breach — it should have filled
-        // at the exact trailing stop price for perfect backtest parity.
-        // ═══════════════════════════════════════════════════════════════════════
-        if (this.proactiveLimitOrderId && this.position) {
-          const fillResult = await this.checkProactiveLimitFill(symbol);
-          if (fillResult?.filled) {
-            const execPx = fillResult.avgPrice;
-            this.stopRealtimeExitMonitor();
-            logger.info(
-              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED on breach confirm @ $${execPx.toFixed(4)} | ` +
-              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | exact backtest match`
-            );
-            this.proactiveLimitOrderId = null;
-            this.proactiveLimitPrice = null;
-            await this.closePosition(this.position!, execPx, 'trailing_proactive_limit');
-            return;
-          }
-          // Proactive LIMIT didn't fill yet — cancel it and fall through to normal NFS logic
-          logger.info(`🎯 [${symbol}] Proactive LIMIT not filled on breach — cancelling, using normal NFS flow`);
-          await this.cancelProactiveLimit(symbol);
-        }
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // NFS INTEGRATION: Use Noise Filter Score for smarter exit decisions
-        // ═══════════════════════════════════════════════════════════════════════
-        const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
-        const trailingStopPrice = candidateStop as number;
-
-        if (nfsEnabled && this.nfsCalculator && trailingStopPrice && klines && klines.length > 0) {
-          // Convert candles to NFS format
-          const nfsCandles: NfsCandle[] = klines.slice(-25).map(k => ({
-            timestamp: k.timestamp,
-            open: k.open,
-            high: k.high,
-            low: k.low,
-            close: k.close,
-            volume: k.volume || 0,
-            isFinal: k.isFinal,
-          }));
-
-          const currentNfsCandle: NfsCandle = {
-            timestamp: last.timestamp,
-            open: last.open,
-            high: last.high,
-            low: last.low,
-            close: last.close,
-            volume: last.volume || 0,
-            isFinal: true,
-          };
-
-          // Calculate NFS score
-          const nfsResult = this.nfsCalculator.calculate(
-            currentNfsCandle,
-            nfsCandles.slice(0, -1), // Previous candles
-            this.position!.side,
-            trailingStopPrice
-          );
-          this.lastNfsResult = nfsResult;
-          this.nfsBreachCount++;
-
-          const stopPrice = trailingStopPrice.toFixed(4);
-          logger.warn(
-            `🚨 [${symbol}] NFS TRAILING BREACH (${this.nfsBreachCount}/${confirmCandles}) | NFS=${nfsResult.score.toFixed(0)} (${nfsResult.confidence}) | close=${closePx.toFixed(4)} | stop=${stopPrice} | action=${nfsResult.recommendation}`,
-          );
-
-          // Log NFS components for debugging
-          logger.debug(
-            `[${symbol}] NFS components: breachATR=${nfsResult.components.breachATRRatio.toFixed(3)} breachDepth=${nfsResult.components.breachDepthPct.toFixed(3)}% vol=${nfsResult.components.volumeRatio.toFixed(2)}x body=${nfsResult.components.candleBodyRatio.toFixed(2)} roc5=${nfsResult.components.momentumROC5.toFixed(3)}%`
-          );
-
-          // ═══════════════════════════════════════════════════════════════════════
-          // V5.62: NFS_ADAPTIVE EXIT LOGIC (matches backtest)
-          // ═══════════════════════════════════════════════════════════════════════
-          // HIGH: Exit at trailing stop price (theoretical/perfect) - immediate
-          // MEDIUM: Exit at candle close with 1-candle confirmation
-          // LOW: Exit at candle close with 2-candle confirmation
-          // ═══════════════════════════════════════════════════════════════════════
-          if (nfsResult.shouldExitImmediately) {
-            // HIGH confidence - exit immediately at trailing stop price (THEORETICAL)
-            // This captures the perfect exit that backtest achieves
-            this.stopRealtimeExitMonitor();
-            const execPx = trailingStopPrice; // HIGH = trailing stop price
-            logger.info(
-              `⚡⚡⚡ [${symbol}] NFS HIGH EXIT (score=${nfsResult.score.toFixed(0)}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | close=${closePx.toFixed(4)} | reason=high_confidence_breach`,
-            );
-            await this.closePosition(this.position!, execPx, 'trailing_nfs_high');
-            return;
-          } else if (nfsResult.confidence === 'MEDIUM' && this.nfsBreachCount >= 1) {
-            // MEDIUM confidence - 1 candle confirmation, exit at CANDLE CLOSE
-            // V5.62 FIX: Use closePx instead of trailingStopPrice to match backtest
-            this.stopRealtimeExitMonitor();
-            const execPx = closePx; // MEDIUM = candle close price
-            logger.info(
-              `⚡⚡ [${symbol}] NFS MEDIUM EXIT (score=${nfsResult.score.toFixed(0)}, breaches=${this.nfsBreachCount}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | reason=medium_confidence_confirmed`,
-            );
-            await this.closePosition(this.position!, execPx, 'trailing_nfs_medium');
-            return;
-          } else {
-            // LOW confidence - use standard 2-close confirmation (falls through)
-            logger.info(
-              `⏳ [${symbol}] NFS LOW (score=${nfsResult.score.toFixed(0)}) - using 2-close confirmation (${this.nfsBreachCount}/${confirmCandles})`,
-            );
-            // Fall through to standard confirmation logic below
-          }
-        }
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // STANDARD 2-CLOSE CONFIRMATION (when NFS disabled or LOW confidence)
-        // ═══════════════════════════════════════════════════════════════════════
-        this.rtTrailingBreachCandles += 1;
-        const stopPrice = (candidateStop as number | undefined)?.toFixed(4) || 'n/a';
-
-        if (!nfsEnabled) {
-          logger.warn(
-            `🚨 [${symbol}] TRAILING BREACH detected! (${this.rtTrailingBreachCandles}/${confirmCandles}) | close=${closePx.toFixed(4)} | stop=${stopPrice} | side=${this.position!.side}`,
-          );
-        }
-
-        if (this.rtTrailingBreachCandles < confirmCandles) {
-          logger.info(`⏳ [${symbol}] Waiting for confirmation... (need ${confirmCandles - this.rtTrailingBreachCandles} more candle${confirmCandles - this.rtTrailingBreachCandles > 1 ? 's' : ''})`);
-          return;
-        }
-
-        this.stopRealtimeExitMonitor();
-        // ═══════════════════════════════════════════════════════════════════════
-        // V5.62 FIX: Use CANDLE CLOSE for 2-close confirmation (LOW confidence)
-        // ═══════════════════════════════════════════════════════════════════════
-        // Previously: Used trailingStopPx (theoretical price) which caused paper
-        // mode to overestimate profits compared to actual market execution.
-        // Now: Use closePx to match backtest NFS_ADAPTIVE logic.
-        // ═══════════════════════════════════════════════════════════════════════
-        const trailingStopPx = candidateStop ?? this.position!.appTrailingStop ?? this.lastAppTrailingStop;
-        const execPx = closePx; // V5.62: Always use candle close for 2-candle confirmation
-        const exitReason = nfsEnabled && this.lastNfsResult ? 'trailing_nfs_low' : 'trailing_rt';
-        logger.info(
-          `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (${exitReason}, 2-close) | exec=${execPx.toFixed(4)} | trailStop=${trailingStopPx?.toFixed(4) ?? 'n/a'} | close=${closePx.toFixed(4)} | confirmCandles=${confirmCandles}${this.lastNfsResult ? ` | nfs=${this.lastNfsResult.score.toFixed(0)}` : ''}`,
-        );
-        await this.closePosition(this.position!, execPx, exitReason);
-        return;
-      }
-
-      // Fallback: ticker-based trailing (legacy). Keep the existing anti-noise confirmation.
-      // Update watermarks in realtime so trailing can capture peaks/troughs.
-      this.position = updatePositionWaterMarks(this.position!, currentPrice, currentPrice, currentPrice);
-
-      // Fetch symbol candles for trailing stop calculation
-      // NOTE: Do NOT pass btcCandles - regime detection should only happen on 15m close
-      // This ensures regime_change exits match backtest timing exactly
-      const symbolCandles = await this.fetchCandles();
-      const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
-      
-      const exitSignal = shouldExitPosition(this.position!, currentPrice, candles, {
-        nowMs: Date.now(),
-        priceHigh: currentPrice,
-        priceLow: currentPrice,
-        // btcCandles: undefined - regime detection disabled in realtime for backtest parity
-      });
-
-      const candidateStop = exitSignal.newStopLoss;
-      if (Number.isFinite(Number(candidateStop))) {
-        this.lastAppTrailingStop = candidateStop as number;
-        this.position!.appTrailingStop = candidateStop as number;
-      }
-      
-      // V5.26: Persist trailing activation - once active, stays active
-      if (exitSignal.trailingActivated) {
-        // V5.72: Track when trailing first activated
-        if (!this.position!.trailingActive) {
-          this.trailingActivatedAt = Date.now();
-        }
-        this.position!.trailingActive = true;
-      }
-
-      if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
-        this.rtBreachSinceMs = null;
-        this.rtBreachTicks = 0;
-        return;
-      }
-
-      const bufferPct = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_BUFFER_PCT ?? 0.05);
-      const confirmMs = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_MS ?? 1800);
-      const confirmTicks = Number(MomentumConfig.EXIT.REALTIME_APP_EXIT_CONFIRM_TICKS ?? 2);
-      const now = Date.now();
-      const stopPrice = candidateStop as number | undefined;
-      if (!stopPrice) return;
-
-      const breach = this.position!.side === 'long'
-        ? currentPrice <= stopPrice * (1 - bufferPct / 100)
-        : currentPrice >= stopPrice * (1 + bufferPct / 100);
-
-      if (!breach) {
-        this.rtBreachSinceMs = null;
-        this.rtBreachTicks = 0;
-        return;
-      }
-
-      if (this.rtBreachSinceMs == null) {
-        this.rtBreachSinceMs = now;
-        this.rtBreachTicks = 1;
-        logger.debug(`🔎 [${symbol}] Realtime trailing breach started (ticker) price=$${currentPrice.toFixed(4)} stop=$${stopPrice.toFixed(4)}`);
-        return;
-      }
-
-      this.rtBreachTicks += 1;
-      const elapsed = now - this.rtBreachSinceMs;
-      const confirmed = elapsed >= confirmMs || this.rtBreachTicks >= confirmTicks;
-      if (!confirmed) return;
-
-      this.stopRealtimeExitMonitor();
-      // V5.55 FIX: Use trailing stop price for exit, not current market price
-      const trailingStopPx = this.position!.appTrailingStop ?? this.lastAppTrailingStop ?? stopPrice;
-      logger.info(`⚡ [${symbol}] REALTIME EXIT confirmed (trailing_rt) price=$${currentPrice.toFixed(4)} exitAt=$${trailingStopPx.toFixed(4)} | confirm=${Math.round(elapsed)}ms/${this.rtBreachTicks}ticks`);
-      await this.closePosition(this.position!, trailingStopPx, 'trailing_rt');
-    } finally {
-      this.realtimeExitInProgress = false;
-    }
+    this.rtExitHandler.stop();
   }
   
   // ==========================================================================
@@ -2287,916 +1526,17 @@ export class SimpleAgent {
   }
   
   private async openPosition(side: 'long' | 'short', candles: Candle[]): Promise<void> {
-    const symbol = this.config.symbol;
-    const lastCandle = candles[candles.length - 1];
-    const currentPrice = lastCandle.close;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // V5.80: LOSS REDUCTION FILTERS - Validated on 24 months of data (4297 trades)
-    // Baseline WR: 74.1% | Only filter hours with significantly lower WR
-    // Days (including weekend) are NOT filtered - they perform at or above baseline
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    // 1. SYMBOL BLACKLIST - Prevent trading on untested/incompatible symbols
-    if (MomentumConfig.SYMBOLS_NOT_COMPATIBLE.includes(symbol)) {
-      logger.warn(`🚫 [${symbol}] BLOCKED: Symbol in NOT_COMPATIBLE list`);
-      return;
-    }
-
-    // 2. TOXIC HOURS FILTER - Hours with WR significantly below 74.1% baseline
-    // Validated on 4297 trades over 24 months:
-    // 04:00: 58.2% WR (-15.9pp) | 05:00: 66.7% WR (-7.4pp) | 09:00: 65.6% WR (-8.5pp)
-    // 18:00: 61.7% WR (-12.4pp) | 21:00: 62.1% WR (-12.0pp)
-    const hourUtc = new Date().getUTCHours();
-    if (hourUtc === 4 || hourUtc === 5 || hourUtc === 9 || hourUtc === 18 || hourUtc === 21) {
-      logger.warn(`🚫 [${symbol}] BLOCKED: Toxic hour ${hourUtc}:00 UTC (WR < 67% on 24mo)`);
-      return;
-    }
-
-    // V5.56 FIX: Re-validate BTC regime before entering position
-    // This catches cases where signal was generated with stale BTC data
-    try {
-      // V5.82: Use 1h candles for regime validation (same as entry signal)
-      const btcCandles1hVal = (await this.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
-      let btcSma200: number;
-      let btcNow: number;
-      if (btcCandles1hVal.length >= 200) {
-        const btcCloses1h = btcCandles1hVal.map(c => c.close);
-        btcSma200 = btcCloses1h.slice(-200).reduce((a, b) => a + b, 0) / 200;
-        btcNow = btcCloses1h[btcCloses1h.length - 1];
-      } else {
-        // Fallback to 15m
-        const btcCandlesForValidation = await this.fetchBtcCandles();
-        if (btcCandlesForValidation.length >= 201) {
-          const btcCloses = btcCandlesForValidation.map(c => c.close);
-          btcSma200 = btcCloses.slice(-200).reduce((a, b) => a + b, 0) / 200;
-          btcNow = btcCloses[btcCloses.length - 1];
-        } else {
-          logger.warn(`⚠️ [${symbol}] Not enough BTC candles for regime validation`);
-          btcSma200 = 0;
-          btcNow = 0;
-        }
-      }
-      if (btcSma200 > 0 && btcNow > 0) {
-        const btcInBullRegime = btcNow > btcSma200;
-        const btcInBearRegime = btcNow < btcSma200;
-
-        // Block SHORT in BULL regime and LONG in BEAR regime
-        if (side === 'short' && btcInBullRegime) {
-          logger.error(`🚫 [${symbol}] BLOCKED: SHORT in BULL regime! BTC=${btcNow.toFixed(0)} > SMA200(1h)=${btcSma200.toFixed(0)}`);
-          return;
-        }
-        if (side === 'long' && btcInBearRegime) {
-          logger.error(`🚫 [${symbol}] BLOCKED: LONG in BEAR regime! BTC=${btcNow.toFixed(0)} < SMA200(1h)=${btcSma200.toFixed(0)}`);
-          return;
-        }
-      }
-    } catch (err) {
-      logger.warn(`⚠️ [${symbol}] Failed to validate BTC regime:`, err);
-    }
-
-    // V5.63: Skip-N-trades-then-resume rule
-    // After 2 consecutive losers, skip the next 1 trade, then resume
-    // Testing showed: Skip 1 = +70% PnL, skips 2x more losers than winners
-    if (this.config.capitalPool.shouldSkipEntry()) {
-      const skipState = this.config.capitalPool.getSkipState();
-      logger.info(`🛑 [${symbol}] SKIPPED (skip rule active, ${skipState.tradesToSkip} more to skip after this)`);
-      return;
-    }
-
-    // Sync with exchange balance before checking capital (live mode)
-    // For live mode, force sync on first position attempt to ensure we have real balance
-    if (this.config.mode === 'live') {
-      // Force sync if we haven't successfully synced yet
-      await this.config.capitalPool.syncWithExchange(!this.config.capitalPool.isSynced());
-      
-      // In live mode, don't open positions if we haven't successfully synced with exchange
-      if (!this.config.capitalPool.isSynced()) {
-        logger.error(`❌ [${symbol}] Cannot open live position - failed to sync with exchange balance. Please check API connection.`);
-        return;
-      }
-
-      // ═══════════════════════════════════════════════════════════════════════════
-      // V5.65: POSITION VERIFICATION PRE-ORDER
-      // ═══════════════════════════════════════════════════════════════════════════
-      // Check that no position already exists on the exchange for this symbol.
-      // This prevents double positions after reconnection or crash recovery.
-      // ═══════════════════════════════════════════════════════════════════════════
-      try {
-        const existingPosition = getPositionFromWebSocket(this.config.userId, symbol);
-        if (existingPosition && Math.abs(existingPosition.positionAmt) > 0) {
-          logger.warn(
-            `⚠️ [${symbol}] POSITION ALREADY EXISTS on exchange | ` +
-            `qty=${existingPosition.positionAmt} | entryPrice=${existingPosition.entryPrice} | ` +
-            `unrealizedPnl=${existingPosition.unrealizedPnl.toFixed(2)} | ` +
-            `SKIPPING new entry to prevent double position`
-          );
-          return;
-        }
-      } catch (posCheckError) {
-        // If we can't verify, log warning but allow entry (conservative approach could block here)
-        logger.warn(`⚠️ [${symbol}] Could not verify exchange position status - proceeding with caution`);
-      }
-    }
-
-    // V5.18: Check if we're at max positions before proceeding
-    const openPositionCount = this.config.capitalPool.getOpenPositionCount();
-    const maxPositions = this.config.capitalPool.getMaxPositions();
-    if (openPositionCount >= maxPositions) {
-      logger.info(`⚠️ [${symbol}] Max positions reached (${openPositionCount}/${maxPositions}) - waiting for existing positions to close | mode=${this.config.mode}`);
-      return;
-    }
-    
-    // V5.22: Check if this signal is ranked high enough to execute
-    // Calculate how many position slots are available
-    const availableSlots = maxPositions - openPositionCount;
-    
-    // V5.58: Log ranking state for paper/live parity debugging
-    const allPendingSignals = globalSignalRanker.getPendingSignals(this.config.mode);
-    const slotsConsumed = globalSignalRanker.getSlotsConsumedInBatch(this.config.mode);
-    if (allPendingSignals.length > 0) {
-      const sortedByScore = [...allPendingSignals].sort((a, b) => b.score - a.score);
-      const rankingLog = sortedByScore.map((s, i) => `${i + 1}.${s.symbol.replace('/USDT:USDT', '')}(${s.score.toFixed(1)})`).join(' ');
-      const effectiveSlots = Math.max(0, availableSlots - slotsConsumed);
-      logger.info(`📊 [${symbol.replace('/USDT:USDT', '')}] RANKING CHECK | mode=${this.config.mode} | slots=${effectiveSlots}/${maxPositions} (${slotsConsumed} consumed) | signals: ${rankingLog}`);
-    }
-    
-    const shouldExecute = globalSignalRanker.shouldExecuteSignal(symbol, availableSlots, this.config.mode);
-    
-    if (!shouldExecute) {
-      // V5.58 FIX: Remove deferred signal from pool to prevent stale signals
-      // polluting future batches and causing paper/live mismatch
-      // (Note: ranker already logged the deferral reason)
-      globalSignalRanker.removeSignal(symbol, this.config.mode);
-      return;
-    }
-    
-    // Signal approved for execution - remove from pending
-    // (Note: ranker already logged the approval)
-    globalSignalRanker.removeSignal(symbol, this.config.mode);
-    
-    // Get available capital from pool
-    const availableCapital = this.config.capitalPool.getAvailableCapital();
-    const poolStatus = this.config.capitalPool.getStatus();
-    
-    // Log available capital for debugging - include full pool state
-    logger.info(`💰 [${symbol}] Capital Pool Status | mode=${this.config.mode} | total=$${poolStatus.totalUsd.toFixed(2)} | inPositions=$${poolStatus.inPositionsUsd.toFixed(2)} | available=$${availableCapital.toFixed(2)} | synced=${this.config.capitalPool.isSynced()}`);
-    
-    // V5.5: Get 24h volume for liquidity-aware position sizing
-    let volume24h: number | undefined;
-    try {
-      const wsTicker = await getTickerFromWebSocket(symbol);
-      volume24h = wsTicker?.quoteVolume || undefined;
-      if (volume24h) {
-        const tier = getLiquidityTier(symbol);
-        logger.info(`📊 [${symbol}] 24h Volume: $${(volume24h / 1_000_000).toFixed(1)}M | Liquidity Tier: ${tier}`);
-      }
-    } catch (e) {
-      logger.warn(`⚠️ [${symbol}] Could not fetch 24h volume for sizing - using tier-based caps`);
-    }
-    
-    // V5.6: Calculate safe leverage based on ATR volatility
-    const baseLeverage = MomentumConfig.LEVERAGE[symbol] || 4;
-    const leverageCalc = calcSafeLeverage(candles, baseLeverage);
-    
-    if (leverageCalc.wasReduced) {
-      logger.warn(`⚡ [${symbol}] HIGH VOLATILITY DETECTED! ATR=${leverageCalc.atrPct?.toFixed(2)}% > ${LIQUIDATION_CONFIG.HIGH_VOLATILITY_ATR_PCT}% threshold | Leverage reduced: ${baseLeverage}x → ${leverageCalc.leverage}x`);
-      
-      // 📢 NOTIFICATION: High volatility detected
-      notifyHighVolatility({
-        symbol,
-        atrPct: leverageCalc.atrPct || 0,
-        originalLeverage: baseLeverage,
-        reducedLeverage: leverageCalc.leverage,
-        mode: this.config.mode,
-      });
-    }
-    
-    // V5.18: Get initial capital for adaptive sizing
-    const initialCapitalUsd = this.config.capitalPool.getTotalCapital();
-    
-    // Calculate position size V5.18 - now with liquidity awareness, dynamic leverage, AND adaptive sizing
-    const sizing = calculatePositionSize({
-      symbol,
-      currentPrice,
-      totalCapitalUsd: availableCapital,
-      riskPerTradePct: this.config.riskPerTradePct,
-      stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
-      volume24h, // V5.5: Pass volume for liquidity-aware sizing
-      safeLeverage: leverageCalc.leverage, // V5.6: Pass ATR-adjusted leverage
-      initialCapitalUsd, // V5.18: Pass initial capital for adaptive sizing
-    });
-    
-    // V5.18: Calculate adaptive sizing % for logging
-    const adaptiveSizingPct = Math.min(
-      MomentumConfig.RISK.POSITION_SIZE_PCT_BASE + (initialCapitalUsd / 5000) * MomentumConfig.RISK.POSITION_SIZE_PCT_BOOST_PER_5K,
-      MomentumConfig.RISK.POSITION_SIZE_PCT_MAX
-    );
-    
-    // V5.5: Log if position was capped due to liquidity
-    if (sizing.wasLiquidityCapped) {
-      const targetNotional = availableCapital * adaptiveSizingPct * sizing.suggestedLeverage;
-      logger.warn(`🚨 [${symbol}] Position CAPPED by liquidity! Target notional=$${targetNotional.toFixed(0)} → Capped=$${sizing.notionalUsd.toFixed(0)} (max safe=$${sizing.maxSafePosition?.toFixed(0)}, tier=${sizing.liquidityTier})`);
-    }
-    
-    // 🔧 SAFETY CHECK: Validate position size is reasonable compared to available capital
-    // This catches cases where capital sync might have failed or returned wrong values
-    const maxReasonableNotional = availableCapital * 10; // Max 10x leverage equivalent
-    if (sizing.notionalUsd > maxReasonableNotional) {
-      logger.error(`🚫 [${symbol}] POSITION REJECTED - Notional ($${sizing.notionalUsd.toFixed(2)}) exceeds 10x available capital ($${availableCapital.toFixed(2)}). Likely capital sync issue.`);
-      return;
-    }
-    
-    // 🔧 SAFETY CHECK: Margin should not exceed 100% of capital
-    if (sizing.marginUsd > availableCapital) {
-      logger.error(`🚫 [${symbol}] POSITION REJECTED - Margin ($${sizing.marginUsd.toFixed(2)}) exceeds available capital ($${availableCapital.toFixed(2)}).`);
-      return;
-    }
-    
-    // Check if position size is valid (minimum $20 notional)
-    if (sizing.notionalUsd < 20) {
-      logger.info(`⚠️ [${symbol}] Cannot open position - insufficient capital (available $${availableCapital.toFixed(2)}, min $20 notional required)`);
-      return;
-    }
-    
-    // Try to reserve MARGIN (not notional) - this is what we actually risk
-    // V5.65: reserve() is now async with atomic locking
-    if (!await this.config.capitalPool.reserve(this.config.sessionId, sizing.marginUsd)) {
-      logger.info(`⚠️ [${symbol}] Cannot open position - failed to reserve margin $${sizing.marginUsd.toFixed(2)}`);
-      return;
-    }
-    
-    // V5.5: Include liquidity info in log
-    const slippageInfo = sizing.estimatedSlippage ? ` | est.slip=${sizing.estimatedSlippage.toFixed(3)}%` : '';
-    const liquidityInfo = sizing.liquidityTier ? ` | tier=${sizing.liquidityTier}` : '';
-    
-    // V5.30: Check for multi-position plan (only for large accounts with liquidity caps)
-    const multiPlan = sizing.multiPositionPlan;
-    if (multiPlan?.enabled && multiPlan.totalPositions > 1) {
-      logger.info(`📊 [${symbol}] MULTI-POSITION PLAN ACTIVE | positions=${multiPlan.totalPositions} | perPosition=$${multiPlan.positionSizeUsd.toFixed(0)} | total=$${multiPlan.totalNotionalUsd.toFixed(0)} | efficiency=${(multiPlan.efficiency * 100).toFixed(1)}%`);
-    }
-    
-    logger.info(`🚀 [${symbol}] OPENING ${side.toUpperCase()} | price=$${currentPrice.toFixed(4)} | qty=${sizing.qty.toFixed(6)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x${liquidityInfo}${slippageInfo}`);
-    
-    // V5.7: Calculate dynamic stop-loss based on ATR
-    // V5.85: Now includes tier-based SL for different crypto types
-    const slCalc = calcDynamicStopLoss(candles, symbol);
-    const slPct = slCalc.slPct;
-    if (slCalc.isDynamic) {
-      const tierInfo = slCalc.tier ? ` | tier=${slCalc.tier}` : '';
-      logger.info(`🎯 [${symbol}] Dynamic SL: ATR=${slCalc.atrPct?.toFixed(2)}%${tierInfo} → SL=${slPct.toFixed(2)}%`);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // V5.64: WICK BREAKOUT EARLY ENTRY
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Same shared functions as backtestService.ts for exact parity
-    // Entry price is improved when wick touches BB buffer before candle close
-    // ═══════════════════════════════════════════════════════════════════════════
-    const closes = candles.map((c: Candle) => c.close);
-    const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
-    const wickBreakout = checkWickBreakout(lastCandle, bb, side);
-
-    // V5.78 FIX: Always use market price (currentPrice = candle close) for entries
-    // Wick breakout price is theoretical (achievable during candle formation, not after close)
-    // This ensures paper and live have realistic, comparable entry prices
-    // TODO: Implement intrabar entry (Option D) after backtesting
-    const entryPrice = currentPrice;
-
-    if (wickBreakout.triggered && wickBreakout.improvement) {
-      // Log wick breakout detection but DON'T use the price
-      logger.info(`📊 [${symbol}] WICK BREAKOUT DETECTED (not used) | side=${side.toUpperCase()} | close=$${currentPrice.toFixed(4)} | theoreticalWickEntry=$${wickBreakout.entryPrice?.toFixed(4)} | potentialImprovement=+${(wickBreakout.improvement * 100).toFixed(2)}%`);
-    }
-
-    if (this.config.mode === 'paper') {
-      // Paper trade
-      // V5.46 FIX: Use candle.timestamp for entryTime (same as backtest)
-      // This ensures EXACT parity with backtest's holdMinutes calculation.
-      // Combined with calculateExitNowMs() in checkExit(), holdMinutes will be:
-      //   nowMs = candleTimestamp + 15min
-      //   entryTime = candleTimestamp (of entry candle)
-      //   holdMinutes = (nowMs - entryTime) / 60000 = holdBars * 15 (EXACT like backtest)
-      const position: Position = {
-        symbol,
-        side,
-        entryPrice,  // V5.64: Use wick breakout price if available
-        qty: sizing.qty,
-        entryTime: lastCandle.timestamp,  // V5.46: Use candle timestamp for backtest parity
-        realEntryTime: Date.now(),        // V5.86: Actual entry time for stagnant detection
-        leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
-        marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
-        stopLoss: side === 'long'
-          ? entryPrice * (1 - slPct / 100)  // V5.64: Use entryPrice (may be wick breakout price)
-          : entryPrice * (1 + slPct / 100),
-        stopLossPct: slPct,                    // V5.7: Store SL percentage used
-        // HWM tracks gains from YOUR entry price (not candle extremes)
-        // Paper/live may diverge due to entry slippage - this is expected behavior
-        highWaterMark: side === 'long' ? entryPrice : undefined,
-        lowWaterMark: side === 'short' ? entryPrice : undefined,
-        // V5.30: Multi-position tracking
-        positionId: multiPlan?.enabled ? `${this.config.sessionId}_0` : undefined,
-        groupId: multiPlan?.enabled ? `group_${Date.now()}_${symbol}` : undefined,
-        entryIndex: multiPlan?.enabled ? 0 : undefined,
-      };
-      
-      // Calculate entry fee: 0.04% taker on entry notional
-      const paperEntryFee = sizing.notionalUsd * 0.0004;
-      
-      // V5.44 FIX: Save to DB FIRST, before committing capital
-      // If DB save fails, cancel reservation and don't send notification
-      try {
-        await this.savePositionToDb(position, 'paper_entry', paperEntryFee);
-      } catch (dbError) {
-        logger.error(`❌ [${symbol}] PAPER position DB save failed - cancelling entry:`, dbError);
-        this.config.capitalPool.cancelReservation(this.config.sessionId);
-        return;
-      }
-      
-      // Only now that DB is confirmed, set position state and commit capital
-      this.position = position;
-      this.additionalPositions = []; // Reset additional positions
+    const result = await this.positionOpener.open(side, candles);
+    if (result.position) {
+      this.position = result.position;
+      this.additionalPositions = result.additionalPositions;
       this.closingPosition = false;
-      
-      // Commit MARGIN (not notional)
-      this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
-      
-      // V5.30: Open additional positions if multi-position plan is active
-      if (multiPlan?.enabled && multiPlan.totalPositions > 1) {
-        const groupId = position.groupId!;
-        let totalAdditionalMargin = 0;
-        
-        for (let i = 1; i < multiPlan.totalPositions; i++) {
-          const entryPrice = multiPlan.entryPrices[i];
-          const marginPerPosition = multiPlan.positionSizeUsd / sizing.suggestedLeverage;
-          const qtyPerPosition = multiPlan.positionSizeUsd / entryPrice;
-          
-          // V5.73 FIX: Reserve THEN commit for multi-position (atomic protection)
-          // Previously only committed without reserve, allowing race conditions
-          const multiPosId = `${this.config.sessionId}_multi_${i}`;
-          if (!await this.config.capitalPool.reserve(multiPosId, marginPerPosition)) {
-            logger.warn(`⚠️ [${symbol}] Multi-position ${i+1}/${multiPlan.totalPositions} skipped - failed to reserve margin $${marginPerPosition.toFixed(2)}`);
-            break;
-          }
-
-          const additionalPosition: Position = {
-            symbol,
-            side,
-            entryPrice,
-            qty: qtyPerPosition,
-            entryTime: lastCandle.timestamp,
-            leverage: sizing.suggestedLeverage,
-            marginUsd: marginPerPosition,
-            stopLoss: side === 'long'
-              ? entryPrice * (1 - slPct / 100)
-              : entryPrice * (1 + slPct / 100),
-            stopLossPct: slPct,
-            highWaterMark: side === 'long' ? entryPrice : undefined,
-            lowWaterMark: side === 'short' ? entryPrice : undefined,
-            positionId: `${this.config.sessionId}_${i}`,
-            groupId,
-            entryIndex: i,
-          };
-
-          this.additionalPositions.push(additionalPosition);
-          totalAdditionalMargin += marginPerPosition;
-
-          // Commit the reserved margin
-          this.config.capitalPool.commit(multiPosId, marginPerPosition);
-          
-          logger.info(`📝 [${symbol}] PAPER MULTI-POS ${i+1}/${multiPlan.totalPositions} @ $${entryPrice.toFixed(4)} | margin=$${marginPerPosition.toFixed(2)}`);
-        }
-        
-        logger.info(`✅ [${symbol}] Opened ${1 + this.additionalPositions.length} positions | totalMargin=$${(sizing.marginUsd + totalAdditionalMargin).toFixed(2)}`);
-      }
-      
-      // Log the updated capital state after commit
-      const statusAfterCommit = this.config.capitalPool.getStatus();
-      logger.info(`💰 [${symbol}] Capital after PAPER entry: total=$${statusAfterCommit.totalUsd.toFixed(2)} | inPositions=$${statusAfterCommit.inPositionsUsd.toFixed(2)} | available=$${statusAfterCommit.availableUsd.toFixed(2)}`);
-      
-      logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=${slPct.toFixed(2)}% ($${position.stopLoss?.toFixed(4)})`);
-      
-      // V5.42 FIX: Mark current candle as processed to prevent checkExit() from
-      // checking exit conditions on the same candle where we just entered.
-      // Without this, checkExit() would use the high/low of the entry candle
-      // which could trigger false SL exits.
-      this.lastProcessedExitCandleTs = lastCandle.timestamp;
-      
-      // 📢 Send Telegram notification for paper entry (only after DB confirm)
-      void notifyPositionOpened({
-        agentId: this.config.sessionId,
-        symbol,
-        side,
-        quantity: sizing.qty,
-        entryPrice,  // V5.64: Use wick breakout entry price
-        leverage: sizing.suggestedLeverage,
-        stopLoss: position.stopLoss,
-        mode: 'paper',
-        notionalUsd: sizing.notionalUsd,
-        marginUsd: sizing.marginUsd,
-      });
-
-      // Old notification system (kept for compatibility)
-      notifyTradeEntry({
-        symbol,
-        side,
-        price: entryPrice,  // V5.64: Use wick breakout entry price
-        qty: sizing.qty,
-        notionalUsd: sizing.notionalUsd,
-        marginUsd: sizing.marginUsd,
-        leverage: sizing.suggestedLeverage,
-        stopLoss: position.stopLoss,
-        mode: 'paper',
-      });
-      
-    } else {
-      // Live trade
-      try {
-        // � Check circuit breaker FIRST - don't attempt REST calls if IP is banned
-        if (!globalRestCircuitBreaker.canMakeRequest()) {
-          const state = globalRestCircuitBreaker.getState();
-          const remainingMs = state.closesAt ? state.closesAt - Date.now() : 0;
-          const remainingSec = Math.round(remainingMs / 1000);
-          logger.warn(`🚫 [${symbol}] REST circuit breaker is OPEN - cannot open position (${remainingSec}s remaining)`);
-          this.config.capitalPool.cancelReservation(this.config.sessionId);
-          return;
-        }
-        
-        // V5.26: Check if markets are loaded before any exchange operation
-        // NEVER call loadMarkets - it should have been done at startup via preloadMarkets()
-        const exchangeMarkets = this.config.exchange.markets;
-        if (!exchangeMarkets || Object.keys(exchangeMarkets).length === 0) {
-          if (isIpBanned()) {
-            logger.error(`🚫 [${symbol}] Markets not loaded and IP is banned - cannot open position`);
-            this.config.capitalPool.cancelReservation(this.config.sessionId);
-            return;
-          }
-          logger.warn(`⚠️ [${symbol}] Markets not loaded - this should have been done at startup!`);
-          // Don't call loadMarkets here - it's a REST call that could get us banned
-          // Continue anyway - setLeverage might still work with manual symbol conversion
-        }
-        
-        // Set leverage - Binance Futures requires integer leverage
-        const intLeverage = Math.round(sizing.suggestedLeverage);
-
-        // V5.66: Check leverage cache to avoid redundant API calls
-        const userId = this.config.userId || 'unknown';
-        if (globalCacheManager.isLeverageCached(userId, symbol, intLeverage)) {
-          logger.debug(`✅ [${symbol}] Leverage ${intLeverage}x already cached - skipping API call`);
-        } else {
-          logger.info(`🔧 [${symbol}] Setting leverage: ${sizing.suggestedLeverage} → ${intLeverage} (rounded to integer for Binance)`);
-
-          // 🔧 FIX: Convert symbol to Binance format if needed (e.g., ETH/USDT:USDT → ETHUSDT)
-          // Some CCXT versions/exchanges need the raw symbol format
-          const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
-          try {
-            await this.config.exchange.setLeverage(intLeverage, symbol);
-            globalCacheManager.cacheLeverage(userId, symbol, intLeverage);
-          } catch (levErr: any) {
-            // If setLeverage fails with the CCXT symbol, try with Binance format
-            if (levErr?.message?.includes('leverage') || levErr?.code === -1102) {
-              logger.warn(`⚠️ [${symbol}] setLeverage failed with CCXT symbol, trying Binance format: ${binanceSymbol}`);
-              try {
-                await this.config.exchange.setLeverage(intLeverage, binanceSymbol);
-                logger.info(`✅ [${symbol}] Leverage set successfully with Binance format`);
-                globalCacheManager.cacheLeverage(userId, symbol, intLeverage);
-              } catch (retryErr: any) {
-                logger.error(`❌ [${symbol}] setLeverage failed even with Binance format:`, retryErr?.message);
-                throw retryErr;
-              }
-            } else {
-              throw levErr;
-            }
-          }
-        }
-        
-        // Format quantity to exchange precision (critical for Binance Futures)
-        const formattedQty = this.formatQtyForExchange(symbol, sizing.qty);
-        
-        // Validate formatted quantity is still valid
-        if (formattedQty <= 0) {
-          logger.error(`❌ [${symbol}] Formatted quantity is 0 or negative (raw: ${sizing.qty})`);
-          this.config.capitalPool.cancelReservation(this.config.sessionId);
-          return;
-        }
-
-        // ========================================================================
-        // ORDER QUEUE INTEGRATION - Submit order via global queue
-        // V5.78 FIX: Disabled wick limit orders - always use market order
-        // Wick limit orders for SHORT can't fill (price above market after candle close)
-        // and cause 10s delays. TODO: Implement intrabar entry (Option D) after backtesting
-        // ========================================================================
-        const wickConfig = MomentumConfig.WICK_BREAKOUT;
-        const useWickLimitOrder = false;  // V5.78: Disabled - use market order for reliability
-        // Original logic (disabled):
-        // const useWickLimitOrder = wickBreakout.triggered &&
-        //   wickBreakout.entryPrice &&
-        //   wickConfig.LIMIT_ORDER_ENABLED;
-
-        let filledPrice: number;
-        let filledQty: number;
-        let orderId: string | undefined;
-        let usedLimitOrder = false;
-
-        if (useWickLimitOrder) {
-          // ════════════════════════════════════════════════════════════════════
-          // V5.72: LIMIT ORDER AT WICK PRICE
-          // Place limit order at the wick breakout price for better fill
-          // ════════════════════════════════════════════════════════════════════
-          const limitPrice = wickBreakout.entryPrice!;
-          logger.info(`⚡ [${symbol}] WICK LIMIT ORDER | ${side.toUpperCase()} @ $${limitPrice.toFixed(4)} (current: $${currentPrice.toFixed(4)}) | improvement potential: +${(wickBreakout.improvement! * 100).toFixed(2)}%`);
-
-          // For limit orders, we use direct exchange API with timeout
-          // This gives us more control over the fill checking
-          try {
-            const orderSide = side === 'long' ? 'buy' : 'sell';
-            const limitOrder = await this.config.exchange.createOrder(
-              symbol,
-              'limit',
-              orderSide,
-              formattedQty,
-              limitPrice,
-              { timeInForce: 'GTC' }
-            );
-
-            const timeoutMs = wickConfig.LIMIT_ORDER_TIMEOUT_MS || 10_000;
-            const startTime = Date.now();
-            let lastStatus = limitOrder;
-
-            // Poll for fill
-            while ((Date.now() - startTime) < timeoutMs) {
-              const filled = (lastStatus.filled || 0) >= formattedQty * 0.99;
-              const isClosed = lastStatus.status === 'closed';
-
-              if (filled || isClosed) {
-                // Order filled!
-                filledPrice = lastStatus.average || lastStatus.price || limitPrice;
-                filledQty = lastStatus.filled || formattedQty;
-                orderId = lastStatus.id;
-                usedLimitOrder = true;
-
-                const improvement = side === 'long'
-                  ? ((currentPrice - filledPrice) / currentPrice) * 100
-                  : ((filledPrice - currentPrice) / currentPrice) * 100;
-                logger.info(`✅ [${symbol}] WICK LIMIT FILLED | $${filledPrice.toFixed(4)} | saved ${improvement.toFixed(2)}% vs market`);
-                break;
-              }
-
-              // Wait and check again
-              await new Promise(resolve => setTimeout(resolve, 500));
-
-              // Fetch fresh order status
-              try {
-                const orders = await this.config.exchange.fetchMyTrades?.(symbol, undefined, 1);
-                if (orders && orders.length > 0 && orders[0].order === lastStatus.id) {
-                  // Check if our order was filled via trades
-                  lastStatus = { ...lastStatus, filled: orders[0].amount, status: 'closed' };
-                }
-              } catch {
-                // Ignore fetch errors, continue polling
-              }
-            }
-
-            // If not filled after timeout, cancel and fall back to market
-            if (!usedLimitOrder) {
-              if (wickConfig.LIMIT_ORDER_FALLBACK) {
-                logger.warn(`⏱️ [${symbol}] Limit order timeout after ${timeoutMs}ms - cancelling and using market order`);
-                try {
-                  await this.config.exchange.cancelOrder?.(limitOrder.id, symbol);
-                } catch (cancelErr) {
-                  logger.debug(`[${symbol}] Cancel order error (may already be filled/cancelled): ${cancelErr}`);
-                }
-              } else {
-                logger.error(`❌ [${symbol}] Limit order not filled and fallback disabled - aborting entry`);
-                try {
-                  await this.config.exchange.cancelOrder?.(limitOrder.id, symbol);
-                } catch {
-                  // Ignore
-                }
-                this.config.capitalPool.cancelReservation(this.config.sessionId);
-                return;
-              }
-            }
-          } catch (limitErr) {
-            logger.warn(`⚠️ [${symbol}] Limit order failed, falling back to market | error: ${limitErr}`);
-            // Fall through to market order
-          }
-        }
-
-        // Market order (default or fallback from limit)
-        if (!usedLimitOrder) {
-          const orderRequest: OrderRequest = {
-            id: uuidv4(),
-            agentId: this.config.sessionId,
-            userId: this.config.userId || 'unknown',
-            priority: calculateOrderPriority({
-              reason: 'signal_entry',
-              isEntry: true,
-              urgency: 'medium',
-            }),
-            symbol,
-            side: side === 'long' ? 'buy' : 'sell',
-            type: 'market',
-            quantity: formattedQty,
-            params: { reduceOnly: false },
-            isEntry: true,
-            reason: 'signal_entry',
-            priorityContext: {
-              isEntry: true,
-              reason: 'signal_entry',
-              urgency: 'medium',
-            },
-            submittedAt: Date.now(),
-            retries: 0,
-            timeoutMs: 30_000,
-          };
-
-          logger.info(`[${symbol}] Submitting ${side} MARKET entry order to queue | orderId=${orderRequest.id}`);
-
-          const result = await orderQueue.submitOrder(orderRequest);
-
-          if (!result.success) {
-            logger.error(`[${symbol}] Order FAILED: ${result.error} (${result.errorCode})`);
-            this.config.capitalPool.cancelReservation(this.config.sessionId);
-            notifyOrderError({
-              symbol,
-              side,
-              orderType: 'entry',
-              error: result.error || 'Unknown error',
-              mode: this.config.mode,
-            });
-            return;
-          }
-
-          const order = result.order!;
-          filledPrice = order.average || order.price || currentPrice;
-          filledQty = order.filled || formattedQty;
-          orderId = order.id;
-        }
-
-        // ═══════════════════════════════════════════════════════════════════════════
-        // V5.65: SLIPPAGE VALIDATION FOR ENTRY ORDERS
-        // ═══════════════════════════════════════════════════════════════════════════
-        const expectedPrice = currentPrice;
-        const entrySlippage = side === 'long'
-          ? ((filledPrice! - expectedPrice) / expectedPrice) * 100  // Positive = worse for long
-          : ((expectedPrice - filledPrice!) / expectedPrice) * 100; // Positive = worse for short
-
-        const maxEntrySlippage = MomentumConfig.EXIT.MAX_ENTRY_SLIPPAGE_PCT ?? 1.0;
-        const slippageAlertEnabled = MomentumConfig.EXIT.SLIPPAGE_ALERT_ENABLED ?? true;
-
-        if (entrySlippage > maxEntrySlippage) {
-          logger.warn(
-            `⚠️ [${symbol}] HIGH ENTRY SLIPPAGE | ` +
-            `expected=$${expectedPrice.toFixed(4)} | filled=$${filledPrice!.toFixed(4)} | ` +
-            `slippage=${entrySlippage.toFixed(2)}% (max=${maxEntrySlippage}%)`
-          );
-          // Slippage alert removed from Telegram (V5.79) - log only
-        } else if (entrySlippage > 0.1) {
-          // Log notable slippage but don't alert
-          logger.info(`📊 [${symbol}] Entry slippage: ${entrySlippage.toFixed(3)}%`);
-        }
-
-        // V5.46 FIX: Use candle.timestamp for entryTime (same as backtest)
-        // This ensures EXACT parity with backtest's holdMinutes calculation.
-        // Combined with calculateExitNowMs() in checkExit(), holdMinutes will be:
-        //   nowMs = candleTimestamp + 15min (next candle's open = current candle's close)
-        //   entryTime = candleTimestamp (of entry candle)
-        //   holdMinutes = (nowMs - entryTime) / 60000 = holdBars * 15 (EXACT like backtest)
-        const entryTimeMs = lastCandle.timestamp;  // V5.46: Use candle timestamp for backtest parity
-
-        const position: Position = {
-          symbol,
-          side,
-          entryPrice: filledPrice!,
-          qty: filledQty!,
-          entryTime: entryTimeMs,  // V5.46: Aligned with backtest
-          realEntryTime: Date.now(),  // V5.86: Actual entry time for stagnant detection
-          leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
-          marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
-          stopLoss: side === 'long'
-            ? filledPrice! * (1 - slPct / 100)
-            : filledPrice! * (1 + slPct / 100),
-          stopLossPct: slPct,                    // V5.7: Store SL percentage used
-          orderId: orderId,
-          // HWM tracks gains from YOUR fill price (not candle extremes)
-          highWaterMark: side === 'long' ? filledPrice! : undefined,
-          lowWaterMark: side === 'short' ? filledPrice! : undefined,
-          // V5.30: Multi-position tracking
-          positionId: multiPlan?.enabled ? `${this.config.sessionId}_0` : undefined,
-          groupId: multiPlan?.enabled ? `group_${Date.now()}_${symbol}` : undefined,
-          entryIndex: multiPlan?.enabled ? 0 : undefined,
-        };
-        
-        this.position = position;
-        this.additionalPositions = []; // Reset additional positions
-        this.closingPosition = false;
-        
-        // Commit MARGIN (not notional)
-        this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
-        
-        // V5.30: Open additional positions if multi-position plan is active (LIVE mode)
-        if (multiPlan?.enabled && multiPlan.totalPositions > 1) {
-          const groupId = position.groupId!;
-
-          for (let i = 1; i < multiPlan.totalPositions; i++) {
-            const targetEntryPrice = multiPlan.entryPrices[i];
-            const marginPerPosition = multiPlan.positionSizeUsd / sizing.suggestedLeverage;
-            const qtyPerPosition = this.formatQtyForExchange(symbol, multiPlan.positionSizeUsd / targetEntryPrice);
-
-            // V5.73 FIX: Reserve FIRST with atomic protection
-            const multiPosId = `${this.config.sessionId}_multi_${i}`;
-            if (!await this.config.capitalPool.reserve(multiPosId, marginPerPosition)) {
-              logger.warn(`⚠️ [${symbol}] LIVE multi-pos ${i+1}/${multiPlan.totalPositions} skipped - failed to reserve margin $${marginPerPosition.toFixed(2)}`);
-              break;
-            }
-
-            // Submit additional order via queue
-            const additionalOrderRequest: OrderRequest = {
-              id: uuidv4(),
-              agentId: this.config.sessionId,
-              userId: this.config.userId || 'unknown',
-              priority: calculateOrderPriority({
-                reason: 'signal_entry',
-                isEntry: true,
-                urgency: 'medium',
-              }),
-              symbol,
-              side: side === 'long' ? 'buy' : 'sell',
-              type: 'market',
-              quantity: qtyPerPosition,
-              params: { reduceOnly: false },
-              isEntry: true,
-              reason: `multi_entry_${i+1}`,
-              priorityContext: {
-                isEntry: true,
-                reason: 'signal_entry',
-                urgency: 'medium',
-              },
-              submittedAt: Date.now(),
-              retries: 0,
-              timeoutMs: 30_000,
-            };
-
-            logger.info(`[${symbol}] Submitting multi-pos ${i+1}/${multiPlan.totalPositions} | orderId=${additionalOrderRequest.id}`);
-
-            const additionalResult = await orderQueue.submitOrder(additionalOrderRequest);
-
-            if (!additionalResult.success) {
-              logger.error(`[${symbol}] Multi-pos ${i+1} FAILED: ${additionalResult.error}`);
-              // V5.73 FIX: Cancel reservation if order fails
-              this.config.capitalPool.cancelReservation(multiPosId);
-              continue;
-            }
-
-            const addOrder = additionalResult.order!;
-            const addFilledPrice = addOrder.average || addOrder.price || targetEntryPrice;
-            const addFilledQty = addOrder.filled || qtyPerPosition;
-
-            const additionalPosition: Position = {
-              symbol,
-              side,
-              entryPrice: addFilledPrice,
-              qty: addFilledQty,
-              entryTime: addOrder.timestamp || Date.now(),
-              leverage: sizing.suggestedLeverage,
-              marginUsd: marginPerPosition,
-              stopLoss: side === 'long'
-                ? addFilledPrice * (1 - slPct / 100)
-                : addFilledPrice * (1 + slPct / 100),
-              stopLossPct: slPct,
-              orderId: addOrder.id,
-              highWaterMark: side === 'long' ? addFilledPrice : undefined,
-              lowWaterMark: side === 'short' ? addFilledPrice : undefined,
-              positionId: `${this.config.sessionId}_${i}`,
-              groupId,
-              entryIndex: i,
-            };
-
-            this.additionalPositions.push(additionalPosition);
-            // Commit the reserved margin
-            this.config.capitalPool.commit(multiPosId, marginPerPosition);
-
-            // Set SL for this position too
-            await this.setStopLossOnExchange(additionalPosition);
-
-            logger.info(`🟢 [${symbol}] LIVE MULTI-POS ${i+1}/${multiPlan.totalPositions} @ $${addFilledPrice.toFixed(4)} | margin=$${marginPerPosition.toFixed(2)}`);
-
-            // Delay between orders to avoid rate limits
-            await new Promise(r => setTimeout(r, 500));
-          }
-
-          logger.info(`✅ [${symbol}] Opened ${1 + this.additionalPositions.length} LIVE positions`);
-        }
-        
-        // Log the updated capital state after commit
-        const statusAfterCommit = this.config.capitalPool.getStatus();
-        logger.info(`💰 [${symbol}] Capital after LIVE entry: total=$${statusAfterCommit.totalUsd.toFixed(2)} | inPositions=$${statusAfterCommit.inPositionsUsd.toFixed(2)} | available=$${statusAfterCommit.availableUsd.toFixed(2)}`);
-        
-        // Extract entry fee from CCXT order, fallback to 0.04% calculation
-        const liveEntryNotional = filledQty! * filledPrice!;
-        const liveEntryFee = liveEntryNotional * 0.0004;  // V5.72: Simplified - fee info not available from our order tracking
-        
-        // Exchange-side protection: EMERGENCY STOP ONLY (wide, crash protection)
-        // Trailing exit is managed app-side; do NOT move exchange SL above entry.
-        const baseSlPct = position.stopLossPct || 2.0;
-        const emergencyTargetPct = baseSlPct * (MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER || 2.5);
-        const emergencyMaxPct = MomentumConfig.EXIT.EMERGENCY_STOP_MAX_PCT ?? 3.0;
-        const emergencySlPct = Math.min(emergencyTargetPct, emergencyMaxPct);
-        const emergencyStop = position.side === 'long'
-          ? position.entryPrice * (1 - emergencySlPct / 100)
-          : position.entryPrice * (1 + emergencySlPct / 100);
-
-        if (this.position) {
-          this.position.stopLoss = emergencyStop;
-          this.position.emergencyStopPrice = emergencyStop;
-        }
-        await this.setStopLossOnExchange(position);
-
-        logger.info(`🛡️ [${symbol}] Emergency STOP_MARKET set @ $${emergencyStop.toFixed(4)} (${emergencySlPct.toFixed(2)}%) | trailing exit = app-side`);
-
-        // Save to DB with fee (store the emergency stop, not the tight strategy SL)
-        await this.savePositionToDb(position, 'live_entry', liveEntryFee);
-
-        // Realtime app-side exits (WS-based) for fast trailing/stoploss reaction.
-        this.startRealtimeExitMonitorIfNeeded();
-        
-        // Optional: native exchange trailing (disabled by default)
-        if (MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) {
-          const trailingSuccess = await this.setTrailingStopOnExchange(position);
-          
-          if (trailingSuccess) {
-            logger.info(`✅ [${symbol}] DUAL PROTECTION: Fixed SL @ $${position.stopLoss?.toFixed(4)} + Trailing @ +0.8%`);
-          } else {
-            logger.warn(`⚠️ [${symbol}] SINGLE PROTECTION: Only fixed SL active (trailing failed)`);
-          }
-        }
-        
-        logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice!} | qty=${filledQty!} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
-
-        // V5.42 FIX: Mark current candle as processed to prevent checkExit() from
-        // checking exit conditions on the same candle where we just entered.
-        this.lastProcessedExitCandleTs = lastCandle.timestamp;
-
-        // 📢 Send Telegram notification for live entry avec détails complets
-        void notifyPositionOpened({
-          agentId: this.config.sessionId,
-          symbol,
-          side,
-          quantity: filledQty!,
-          entryPrice: filledPrice!,
-          leverage: sizing.suggestedLeverage,
-          stopLoss: position.stopLoss,
-          mode: 'live',
-          notionalUsd: sizing.notionalUsd,
-          marginUsd: sizing.marginUsd,
-        });
-
-        // Old notification system (kept for compatibility)
-        notifyTradeEntry({
-          symbol,
-          side,
-          price: filledPrice!,
-          qty: filledQty!,
-          notionalUsd: sizing.notionalUsd,
-          marginUsd: sizing.marginUsd,
-          leverage: sizing.suggestedLeverage,
-          stopLoss: position.stopLoss,
-          mode: 'live',
-        });
-
-        this.config.onTrade?.({
-          symbol,
-          side: side === 'long' ? 'buy' : 'sell',
-          qty: filledQty!,
-          price: filledPrice!,
-          orderId: orderId!,
-          timestamp: new Date(),
-        });
-        
-      } catch (error: unknown) {
-        // Enhanced error logging for debugging
-        const err = error as Record<string, unknown>;
-        logger.error(`❌ [${symbol}] Failed to open live position:`, {
-          name: err?.name,
-          message: err?.message,
-          code: err?.code,
-          info: err?.info,
-        });
-
-        // 📢 NOTIFICATION: Order error (CRITICAL in live mode)
-        notifyOrderError({
-          symbol,
-          side,
-          orderType: 'entry',
-          error: errMsg(error),
-          mode: 'live',
-        });
-        
-        // Cancel reservation on failure
-        this.config.capitalPool.cancelReservation(this.config.sessionId);
+      if (result.lastProcessedExitCandleTs !== null) {
+        this.lastProcessedExitCandleTs = result.lastProcessedExitCandleTs;
       }
     }
   }
+
   
   // ==========================================================================
   // EXIT LOGIC WITH TRAILING STOP
@@ -3417,7 +1757,7 @@ export class SimpleAgent {
       if (exitSignal.trailingActivated) {
         // V5.72: Track when trailing first activated
         if (!this.position!.trailingActive) {
-          this.trailingActivatedAt = Date.now();
+          this.rtExitHandler.trailingActivatedAt = Date.now();
         }
         this.position!.trailingActive = true;
       }
@@ -3445,20 +1785,20 @@ export class SimpleAgent {
 
         // V5.86: Check if proactive limit was filled FIRST before doing 15m exit
         // This prevents double-exit when 15m check runs before 1m fill detection
-        if (this.proactiveLimitOrderId && this.position) {
-          logger.info(`[${symbol}] 15m check: proactive LIMIT pending (${this.proactiveLimitOrderId}), checking fill status first...`);
+        if (this.rtExitHandler.proactiveLimitOrderId && this.position) {
+          logger.info(`[${symbol}] 15m check: proactive LIMIT pending (${this.rtExitHandler.proactiveLimitOrderId}), checking fill status first...`);
           const fillResult = await this.checkProactiveLimitFill(symbol);
           if (fillResult?.filled) {
             const execPx = fillResult.avgPrice;
             this.stopRealtimeExitMonitor();
             logger.info(
               `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED (detected at 15m check) @ $${execPx.toFixed(4)} | ` +
-              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | ` +
+              `trailing=$${this.rtExitHandler.proactiveLimitPrice?.toFixed(4)} | ` +
               `slippage=0% (exact backtest match!)`
             );
-            this.proactiveLimitOrderId = null;
-            this.proactiveLimitPrice = null;
-            await this.closePosition(this.position!, execPx, 'trailing_proactive_limit_15m');
+            this.rtExitHandler.proactiveLimitOrderId = null;
+            this.rtExitHandler.proactiveLimitPrice = null;
+            await this.closePosition(this.position!, execPx, EXIT_TRAIL_PROACTIVE_15M);
             return;
           }
           // If not filled yet, cancel it and proceed with 15m exit logic
@@ -3471,7 +1811,7 @@ export class SimpleAgent {
           }
         }
 
-        if (nfsEnabled && nfsAdaptive && this.nfsCalculator) {
+        if (nfsEnabled && nfsAdaptive && this.rtExitHandler.getNfsCalculator()) {
           // Calculate NFS score for this breach
           const symbolCandles = await this.fetchCandles();
           const nfsCandles = symbolCandles.slice(-25).map(c => ({
@@ -3494,7 +1834,7 @@ export class SimpleAgent {
             isFinal: true,
           };
 
-          const nfsResult = this.nfsCalculator.calculate(
+          const nfsResult = this.rtExitHandler.getNfsCalculator()!.calculate(
             currentNfsCandle,
             nfsCandles.slice(0, -1),
             this.position!.side,
@@ -3525,7 +1865,7 @@ export class SimpleAgent {
             // Proactive limit (when it works) will give both paper and live exact trailing price
             const highExitPrice = this.config.mode === 'paper' ? currentPrice : trailingStopPrice;
             logger.info(`⚡⚡⚡ [${symbol}] 15m NFS HIGH EXIT | exec=${highExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)}, mode=${this.config.mode})`);
-            await this.closePosition(this.position!, highExitPrice, 'trailing_nfs_high_15m');
+            await this.closePosition(this.position!, highExitPrice, EXIT_TRAIL_NFS_HIGH_15M);
             return;
           } else if (nfsResult.confidence === 'MEDIUM' && breachCount >= 1) {
             // V5.81 PARITY FIX: Use best of trailing stop price or current price
@@ -3535,7 +1875,7 @@ export class SimpleAgent {
               ? Math.max(trailingStopPrice, currentPrice)
               : Math.min(trailingStopPrice, currentPrice);
             logger.info(`⚡⚡ [${symbol}] 15m NFS MEDIUM EXIT | exec=${medExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)})`);
-            await this.closePosition(this.position!, medExitPrice, 'trailing_nfs_med_15m');
+            await this.closePosition(this.position!, medExitPrice, EXIT_TRAIL_NFS_MED_15M);
             return;
           } else if (breachCount >= 2) {
             // V5.81: Same fix for LOW - use best of trailing stop or close
@@ -3543,7 +1883,7 @@ export class SimpleAgent {
               ? Math.max(trailingStopPrice, currentPrice)
               : Math.min(trailingStopPrice, currentPrice);
             logger.info(`⚡ [${symbol}] 15m NFS LOW EXIT (2-close) | exec=${lowExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)})`);
-            await this.closePosition(this.position!, lowExitPrice, 'trailing_nfs_low_15m');
+            await this.closePosition(this.position!, lowExitPrice, EXIT_TRAIL_NFS_LOW_15M);
             return;
           } else {
             // LOW, first breach - wait for confirmation
@@ -3554,7 +1894,7 @@ export class SimpleAgent {
           const REQUIRED_CONFIRMATIONS = 2;
           if (breachCount >= REQUIRED_CONFIRMATIONS) {
             logger.info(`🔴 [${symbol}] TRAILING CONFIRMED (${breachCount}/${REQUIRED_CONFIRMATIONS} closes) | price=$${currentPrice.toFixed(4)} | trailStop=$${trailingStopPrice.toFixed(4)} | PnL=${exitSignal.pnlPct?.toFixed(2)}%`);
-            await this.closePosition(this.position!, currentPrice, 'trailing');
+            await this.closePosition(this.position!, currentPrice, EXIT_TRAIL);
             return;
           } else {
             logger.warn(`⚠️ [${symbol}] TRAILING BREACH ${breachCount}/${REQUIRED_CONFIRMATIONS} | price=$${currentPrice.toFixed(4)} | trail=$${exitSignal.newStopLoss?.toFixed(4)} | Waiting for confirmation...`);
@@ -3604,7 +1944,7 @@ export class SimpleAgent {
           logger.info(`🎯 [${symbol}] V5.81: Using SL exit price $${exitPrice.toFixed(4)} (SL=$${slExitPrice.toFixed(4)}, close=$${currentPrice.toFixed(4)}, slPct=${effectiveSlPct.toFixed(1)}%)`);
         }
         logger.info(`🔴 [${symbol}] EXIT SIGNAL: reason=${exitSignal.reason} | PnL=${exitSignal.pnlPct?.toFixed(2)}% | holdMin=${exitSignal.holdMinutes?.toFixed(0)}`);
-        await this.closePosition(this.position!, exitPrice, exitSignal.reason || 'unknown');
+        await this.closePosition(this.position!, exitPrice, EXIT_SIGNAL_REASON_MAP[exitSignal.reason ?? ''] ?? toCanonical(exitSignal.reason ?? 'unknown'));
       } else if (exitSignal.newStopLoss && exitSignal.newStopLoss !== this.position?.appTrailingStop) {
         // Update app trailing stop price
         this.position!.appTrailingStop = exitSignal.newStopLoss;
@@ -3712,20 +2052,14 @@ export class SimpleAgent {
     this.trailingWidened = false;
     this.stagnantSlUpdated = false;
 
-    // Reset NFS state
-    this.nfsBreachCount = 0;
-    this.lastNfsResult = null;
-    this.proactiveLimitOrderId = null;
-    this.proactiveLimitPrice = null;
-    if (this.nfsStateMachine) {
-      this.nfsStateMachine.reset();
-    }
+    // Reset NFS + proactive limit + trailing tracking state (owned by rtExitHandler)
+    this.rtExitHandler.resetState();
 
     // V5.41: Use shared cooldown logic from momentumSimple.ts
     const cooldownBars = getCooldownBars(reason, this.ENTRY_COOLDOWN_BARS);
     this.entryCooldownBarsRemaining = cooldownBars;
     logger.info(`⏱️ [${symbol}] Cooldown: ${cooldownBars} bars (${cooldownBars * 15}min) - exit reason: ${reason}`);
-    
+
     // Store exit info for frontend display
     this.lastExit = {
       ts: Date.now(),
@@ -3734,9 +2068,6 @@ export class SimpleAgent {
     };
     this.currentBias = null;
     this.lastSignal = null;
-    // V5.72: Reset trailing tracking for frontend
-    this.trailingActivatedAt = null;
-    this.trailingUpdateCount = 0;
 
     if (this.config.mode === 'paper') {
       // Paper close
@@ -4242,81 +2573,8 @@ export class SimpleAgent {
   // EXCHANGE HELPERS
   // ==========================================================================
   
-  /**
-   * Format quantity to exchange precision
-   * Uses CCXT's amountToPrecision if available, otherwise applies fallback rounding
-   * This is critical for Binance Futures which requires specific step sizes per symbol
-   */
   private formatQtyForExchange(symbol: string, qty: number): number {
-    // Try CCXT's amountToPrecision first (most reliable)
-    if (this.config.exchange.amountToPrecision) {
-      try {
-        const formatted = this.config.exchange.amountToPrecision(symbol, qty);
-        const result = parseFloat(formatted);
-        logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (via amountToPrecision)`);
-        return result;
-      } catch (e) {
-        logger.warn(`⚠️ [${symbol}] amountToPrecision failed, using fallback:`, e);
-      }
-    }
-    
-    // Fallback: Get precision from market info if available
-    const market = this.config.exchange.markets?.[symbol];
-    if (market?.precision?.amount !== undefined) {
-      const precision = market.precision.amount;
-      // In CCXT, precision can be represented as:
-      // - Number of decimal places (integer >= 0, e.g., 3 means 0.001 step)
-      // - Direct step size (decimal < 1, e.g., 0.001)
-      // CCXT typically uses Number.isInteger() to distinguish, but we use a heuristic:
-      // If precision is an integer AND > 0, treat as decimal places
-      // Otherwise treat as step size
-      if (Number.isInteger(precision) && precision > 0) {
-        // It's decimal places (e.g., 3 means 3 decimal places = 0.001 step)
-        const factor = Math.pow(10, precision);
-        const result = Math.floor(qty * factor) / factor;
-        logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (${precision} decimals)`);
-        return result;
-      } else {
-        // It's step size (e.g., 0.001 or 1)
-        const stepSize = precision;
-        const result = Math.floor(qty / stepSize) * stepSize;
-        logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (step=${stepSize})`);
-        return result;
-      }
-    }
-    
-    // Known precision map for Binance Futures symbols (fallback when markets not loaded)
-    // These are step sizes (quantity increments) for each symbol
-    // ⚠️ WARNING: This is a static fallback - step sizes may change on the exchange
-    const knownPrecision: Record<string, number> = {
-      'SEI/USDT:USDT': 1,      // Step size = 1 (whole units)
-      'IMX/USDT:USDT': 0.1,    // Step size = 0.1
-      'SUI/USDT:USDT': 0.1,    // Step size = 0.1
-      'DOGE/USDT:USDT': 1,     // Step size = 1
-      'XRP/USDT:USDT': 0.1,    // Step size = 0.1
-      'ADA/USDT:USDT': 0.1,    // Step size = 0.1
-      'DOT/USDT:USDT': 0.1,    // Step size = 0.1
-      'LINK/USDT:USDT': 0.01,  // Step size = 0.01
-      'AVAX/USDT:USDT': 0.01,  // Step size = 0.01
-      'SOL/USDT:USDT': 0.01,   // Step size = 0.01
-      'ETH/USDT:USDT': 0.001,  // Step size = 0.001
-      'BTC/USDT:USDT': 0.001,  // Step size = 0.001
-    };
-    
-    const stepSize = knownPrecision[symbol];
-    if (stepSize !== undefined) {
-      // Log warning that we're using static fallback - markets should be loaded
-      logger.warn(`⚠️ [${symbol}] Using static precision fallback (step=${stepSize}). Consider checking if exchange markets are loaded correctly.`);
-      const result = Math.floor(qty / stepSize) * stepSize;
-      logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (known step=${stepSize})`);
-      return result;
-    }
-    
-    // Ultimate fallback: round to 3 decimal places (more conservative for safety)
-    logger.warn(`⚠️ [${symbol}] No precision info available, using conservative 3 decimal fallback`);
-    const result = Math.floor(qty * 1000) / 1000;
-    logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (fallback 3 decimals)`);
-    return result;
+    return this.orderManager.formatQtyForExchange(symbol, qty);
   }
   
   private async fetchCandles(): Promise<Candle[]> {
@@ -4519,217 +2777,35 @@ export class SimpleAgent {
   // V5.82: PROACTIVE LIMIT ORDER HELPERS
   // ═══════════════════════════════════════════════════════════════════════
 
-  /**
-   * Place a proactive LIMIT order at the trailing stop price BEFORE breach.
-   * In paper mode, returns a simulated order ID.
-   * In live mode, places a real LIMIT order on the exchange.
-   */
   private async placeProactiveLimit(
-    symbol: string,
-    orderSide: 'buy' | 'sell',
-    qty: number,
-    price: number
+    symbol: string, orderSide: 'buy' | 'sell', qty: number, price: number,
   ): Promise<string | null> {
-    if (this.config.mode === 'paper') {
-      const orderId = `paper_proactive_${Date.now()}`;
-      logger.debug(`[${symbol}] PAPER proactive LIMIT: ${orderSide} ${qty} @ ${price.toFixed(4)}`);
-      return orderId;
-    }
-
-    // Live mode: place real LIMIT order
-    try {
-      const order = await this.config.exchange.createOrder(
-        symbol,
-        'limit',
-        orderSide,
-        qty,
-        price,
-        { timeInForce: 'GTC' }
-      );
-      return order.id || order.orderId || null;
-    } catch (e: any) {
-      logger.warn(`[${symbol}] Failed to place proactive LIMIT on exchange: ${e.message}`);
-      return null;
-    }
+    return this.orderManager.placeProactiveLimit(symbol, orderSide, qty, price);
   }
 
-  /**
-   * Cancel a proactive LIMIT order. Resets tracking state.
-   */
   private async cancelProactiveLimit(symbol: string): Promise<void> {
-    const orderId = this.proactiveLimitOrderId;
-    if (!orderId) return;
-
-    this.proactiveLimitOrderId = null;
-    this.proactiveLimitPrice = null;
-
-    if (this.nfsStateMachine) {
-      this.nfsStateMachine.onLimitOrderCancelled();
-    }
-
-    if (this.config.mode === 'paper') {
-      logger.debug(`[${symbol}] PAPER proactive LIMIT cancelled: ${orderId}`);
-      return;
-    }
-
-    // Live mode: cancel on exchange
-    try {
-      if (this.config.exchange.cancelOrder) {
-        await this.config.exchange.cancelOrder(orderId, symbol);
-      }
-      logger.info(`[${symbol}] Proactive LIMIT cancelled on exchange: ${orderId}`);
-    } catch (e: any) {
-      // Order may have already filled or expired
-      logger.debug(`[${symbol}] Proactive LIMIT cancel failed (may have filled): ${e.message}`);
-    }
+    await this.orderManager.cancelProactiveLimit(symbol, this.rtExitHandler.getNfsStateMachine());
+    this.rtExitHandler.proactiveLimitOrderId = null;
+    this.rtExitHandler.proactiveLimitPrice = null;
   }
 
-  /**
-   * Check if a proactive LIMIT order has been filled.
-   * Called on candle close to see if the proactive order executed.
-   * Returns the fill price if filled, null otherwise.
-   */
   private async checkProactiveLimitFill(symbol: string): Promise<{ filled: boolean; avgPrice: number } | null> {
-    const orderId = this.proactiveLimitOrderId;
-    if (!orderId) return null;
-
-    if (this.config.mode === 'paper') {
-      // In paper mode, check if price actually reached the limit price
-      if (this.proactiveLimitPrice && this.position) {
-        const side = this.position.side;
-        const limitPrice = this.proactiveLimitPrice;
-        const currentPrice = this.lastPrice;
-
-        // For LONG: sell limit fills when price >= limit price
-        // For SHORT: buy limit fills when price <= limit price
-        const filled = side === 'long'
-          ? currentPrice <= limitPrice  // Price dropped to trailing = limit fills
-          : currentPrice >= limitPrice; // Price rose to trailing = limit fills
-
-        if (filled) {
-          return { filled: true, avgPrice: limitPrice };
-        }
-      }
-      return null;
-    }
-
-    // Live mode: check order status on exchange
-    try {
-      if (this.config.exchange.fetchOrder) {
-        const order = await this.config.exchange.fetchOrder(orderId, symbol);
-        const status = order.status?.toLowerCase();
-        if (status === 'closed' || status === 'filled') {
-          const avgPrice = order.average || order.price || this.proactiveLimitPrice || 0;
-          return { filled: true, avgPrice };
-        }
-      }
-    } catch (e: any) {
-      logger.debug(`[${symbol}] Failed to check proactive LIMIT status: ${e.message}`);
-    }
-    return null;
+    // Sync proactive limit state to orderManager before checking
+    this.orderManager.proactiveLimitOrderId = this.rtExitHandler.proactiveLimitOrderId;
+    this.orderManager.proactiveLimitPrice = this.rtExitHandler.proactiveLimitPrice;
+    return this.orderManager.checkProactiveLimitFill(symbol, this.position, this.lastPrice);
   }
 
   private async cancelAllOrdersOnExchange(): Promise<void> {
-    if (this.config.mode === 'paper') return;
-    
-    const symbol = this.config.symbol;
-    
-    if (this.config.exchange.cancelAllOrders) {
-      // Step 1: Cancel REGULAR orders
-      try {
-        await this.config.exchange.cancelAllOrders(symbol);
-      } catch (err: any) {
-        // Ignore "no orders" errors
-      }
-      
-      // Step 2: Cancel ALGO orders (STOP_MARKET, TRAILING_STOP_MARKET)
-      try {
-        await this.config.exchange.cancelAllOrders(symbol, { conditional: true });
-      } catch (err: any) {
-        // Ignore "no orders" errors
-      }
-      
-      if (this.position) {
-        this.position.stopLossOrderId = undefined;
-        this.position.trailingOrderId = undefined;
-      }
-    }
+    await this.orderManager.cancelAllOrdersOnExchange(this.position);
   }
-  
-  /**
-   * Cancel existing stop loss order on exchange
-   * NOTE: For Binance, we need TWO calls:
-   * 1. cancelAllOrders(symbol) - cancels REGULAR orders
-   * 2. cancelAllOrders(symbol, { conditional: true }) - cancels ALGO orders (STOP_MARKET, TRAILING_STOP_MARKET)
-   */
+
   private async cancelStopLossOnExchange(): Promise<void> {
-    if (this.config.mode === 'paper') return;
-    
-    const symbol = this.config.symbol;
-    
-    try {
-      await this.cancelAllOrdersOnExchange();
-      logger.info(`🗑️ [${symbol}] Cancelled all open orders (regular + algo)`);
-    } catch (error) {
-      logger.warn(`⚠️ [${symbol}] Failed to cancel orders:`, error);
-    }
+    await this.orderManager.cancelStopLossOnExchange(this.position);
   }
   
-  /**
-   * Set or update stop loss on exchange
-   * Cancels existing SL first if present
-   */
   private async setStopLossOnExchange(position: Position, isUpdate: boolean = false): Promise<void> {
-    if (!position.stopLoss) return;
-    if (this.config.mode === 'paper') return;
-    
-    const symbol = this.config.symbol;
-    const side = position.side === 'long' ? 'sell' : 'buy';
-    
-    try {
-      // Cancel existing SL order first if updating
-      // NOTE: Must cancel both regular AND algo orders, then re-place trailing
-      if (isUpdate && this.position?.stopLossOrderId) {
-        try {
-          await this.cancelAllOrdersOnExchange();
-          logger.info(`🔄 [${symbol}] Cancelled all orders for SL update`);
-          // Re-place trailing stop if it exists
-          if (this.position?.trailingOrderId) {
-            await this.setTrailingStopOnExchange(this.position);
-          }
-        } catch (error: unknown) {
-          logger.warn(`⚠️ [${symbol}] Failed to cancel orders for SL update:`, error);
-        }
-      }
-      
-      // Format quantity to exchange precision for SL order
-      const formattedQty = this.formatQtyForExchange(symbol, position.qty);
-      
-      // Create new SL order using stopLossPrice (triggers CCXT Algo Order endpoint for Binance Futures)
-      // Binance changed their API in late 2024 - STOP_MARKET now requires Algo Order endpoint
-      const slOrder = await this.config.exchange.createOrder(
-        symbol,
-        'market',  // CCXT will convert to STOP_MARKET when stopLossPrice is set
-        side,
-        formattedQty,
-        undefined,
-        {
-          stopLossPrice: position.stopLoss,  // This triggers CCXT to use fapiPrivatePostAlgoOrder
-          reduceOnly: true,
-          workingType: 'MARK_PRICE',  // Use mark price to avoid manipulation
-        }
-      );
-      
-      // Store the SL order ID for later cancellation/update
-      if (this.position) {
-        this.position.stopLossOrderId = slOrder.id;
-      }
-      
-      const action = isUpdate ? 'UPDATED' : 'SET';
-      logger.info(`🛡️ [${symbol}] Stop loss ${action} at $${position.stopLoss.toFixed(4)} (order: ${slOrder.id})`);
-    } catch (error) {
-      logger.warn(`⚠️ [${symbol}] Failed to set stop loss on exchange:`, error);
-    }
+    await this.orderManager.setStopLossOnExchange(position, isUpdate);
   }
   
   /**
@@ -4745,306 +2821,34 @@ export class SimpleAgent {
    * @returns true if trailing stop was placed successfully, false if fallback to STOP_MARKET was used
    */
   private async setTrailingStopOnExchange(position: Position, isWidening: boolean = false): Promise<boolean> {
-    // V5.13: Skip exchange trailing if app-side management enabled (like paper mode)
-    if (this.config.mode === 'paper') return false;
-    if (!MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) return false;
-    if (!position.entryPrice) return false;
-    
-    const symbol = this.config.symbol;
-    const side = position.side === 'long' ? 'sell' : 'buy';
-    
-    // V5.12: SMART trailing config
-    const trailingActivationPct = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;  // 0.8%
-    const trailingDistancePct = isWidening 
-      ? MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT    // 0.8% (widened)
-      : MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;        // 0.5% (initial)
-    
-    // Calculate activation price (when trailing starts)
-    const activationPrice = position.side === 'long'
-      ? position.entryPrice * (1 + trailingActivationPct / 100)
-      : position.entryPrice * (1 - trailingActivationPct / 100);
-    
-    try {
-      // Format quantity to exchange precision
-      const formattedQty = this.formatQtyForExchange(symbol, position.qty);
-      
-      // Create TRAILING_STOP_MARKET order using CCXT unified params
-      const trailingOrder = await this.config.exchange.createOrder(
-        symbol,
-        'market',
-        side,
-        formattedQty,
-        undefined,
-        {
-          trailingPercent: trailingDistancePct,
-          trailingTriggerPrice: activationPrice,
-          reduceOnly: true,
-          workingType: 'MARK_PRICE',
-        }
-      );
-      
-      // Store the trailing order ID for tracking
-      if (this.position) {
-        this.position.trailingOrderId = trailingOrder.id;
-      }
-      
-      const phase = isWidening ? 'WIDENED' : 'INITIAL';
-      logger.info(`🎯 [${symbol}] TRAILING_STOP_MARKET [${phase}]: activation=$${activationPrice.toFixed(4)} (+${trailingActivationPct}%) | callback=${trailingDistancePct}% | order=${trailingOrder.id}`);
-      
-      return true; // Success - trailing stop placed successfully
-      
-    } catch (error: unknown) {
-      const errorMsg = errMsg(error);
-      
-      if (errorMsg.includes('Invalid orderType') || errorMsg.includes('not supported')) {
-        logger.warn(`⚠️ [${symbol}] TRAILING_STOP_MARKET not supported, falling back to STOP_MARKET`);
-      } else {
-        logger.warn(`⚠️ [${symbol}] Failed to set trailing stop: ${errorMsg}`);
-      }
-      
-      // 🔧 FIX: CRITICAL - Fallback to STOP_MARKET when trailing fails
-      // Without this, the position would have NO PROTECTION after cancelAllOrdersOnExchange()
-      logger.warn(`🛡️ [${symbol}] FALLBACK: Re-placing STOP_MARKET as protection since trailing failed`);
-      
-      try {
-        // Calculate a dynamic SL based on current profit
-        // If widening (>2% profit), use a tighter SL at +1% profit
-        // Otherwise, use the original SL
-        if (this.position?.stopLoss) {
-          await this.setStopLossOnExchange(this.position, false);
-          logger.info(`🛡️ [${symbol}] FALLBACK STOP_MARKET placed at $${this.position.stopLoss.toFixed(4)}`);
-        } else {
-          // Calculate emergency SL at -2% from entry
-          const emergencySL = position.side === 'long'
-            ? position.entryPrice * (1 - 0.02)
-            : position.entryPrice * (1 + 0.02);
-          
-          if (this.position) {
-            this.position.stopLoss = emergencySL;
-            await this.setStopLossOnExchange(this.position, false);
-            logger.warn(`🛡️ [${symbol}] EMERGENCY STOP_MARKET placed at $${emergencySL.toFixed(4)}`);
-          }
-        }
-      } catch (fallbackError: any) {
-        // ═══════════════════════════════════════════════════════════════════════════
-        // V5.65: CRITICAL EMERGENCY PROTECTION
-        // ═══════════════════════════════════════════════════════════════════════════
-        // If BOTH trailing AND fallback SL fail, the position is UNPROTECTED.
-        // This is extremely dangerous - trigger an emergency market exit.
-        // ═══════════════════════════════════════════════════════════════════════════
-        logger.error(`🚨🚨🚨 [${symbol}] CRITICAL: Both trailing AND fallback SL failed! Position UNPROTECTED!`, fallbackError.message);
-
-        // Send notification for critical error
-        notifyOrderError({
-          symbol,
-          side: position.side,
-          orderType: 'stop_loss',
-          error: `CRITICAL: Trailing failed AND fallback SL failed - EMERGENCY EXIT TRIGGERED: ${fallbackError.message}`,
-          mode: 'live',
-        });
-
-        // V5.65: EMERGENCY MARKET EXIT
-        // If we can't protect the position, close it immediately to prevent catastrophic loss
-        logger.error(`🚨 [${symbol}] TRIGGERING EMERGENCY MARKET EXIT due to unprotected position!`);
-        try {
-          // Use a slight delay to avoid rate limits from the failed orders
-          await new Promise(resolve => setTimeout(resolve, 1000));
-
-          // Close position via market order
-          const ticker = await getTickerFromWebSocket(symbol);
-          const currentPrice = ticker?.last || position.entryPrice;
-
-          // Calculate current PnL to log it
-          const currentPnL = position.side === 'long'
-            ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
-            : ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
-
-          logger.warn(`🚨 [${symbol}] EMERGENCY EXIT | currentPrice=$${currentPrice.toFixed(4)} | pnl=${currentPnL.toFixed(2)}%`);
-
-          // Close position - pass position object, currentPrice, and reason
-          await this.closePosition(position, currentPrice, 'emergency_unprotected');
-
-        } catch (emergencyError: any) {
-          // Even emergency exit failed - this is catastrophic, log everything
-          logger.error(`🚨🚨🚨🚨 [${symbol}] CATASTROPHIC: Emergency exit ALSO failed! Manual intervention required IMMEDIATELY!`, emergencyError.message);
-
-          notifyOrderError({
-            symbol,
-            side: position.side,
-            orderType: 'exit', // Use 'exit' as emergency_exit is still an exit type
-            error: `CATASTROPHIC: All protection mechanisms failed. Manual closure required immediately!`,
-            mode: 'live',
-          });
-        }
-
-        return false; // Fallback failed - indicate failure
-      }
-      
-      return false; // Fallback used - keep fixed SL as protection
-    }
-  }
-  
-  /**
-   * Update trailing stop on exchange when price moves favorably
-   * NOTE: With native TRAILING_STOP_MARKET, this is only used as a fallback
-   */
-  private async updateTrailingStopOnExchange(newStopPrice: number): Promise<void> {
-    if (this.config.mode === 'paper') return;
-    if (!this.position) return;
-
-    // App-side trailing mode: do NOT update exchange stop. This avoids wick/mark-price stop-outs.
-    // Emergency STOP_MARKET remains in place for crash protection.
-    if (!MomentumConfig.EXIT.USE_EXCHANGE_TRAILING) {
-      return;
-    }
-    
-    // If we have a native trailing order, Binance handles everything - no manual update needed
-    if (this.position.trailingOrderId) {
-      // Just log for monitoring, Binance manages the trailing automatically
-      logger.debug(`📊 [${this.config.symbol}] Native trailing active, Binance managing stop`);
-      return;
-    }
-    
-    const symbol = this.config.symbol;
-    const oldSL = this.position.stopLoss;
-    
-    // Only update if the new stop is better (higher for long, lower for short)
-    if (this.position.side === 'long' && newStopPrice <= (oldSL || 0)) return;
-    if (this.position.side === 'short' && newStopPrice >= (oldSL || Infinity)) return;
-    
-    // Update position with new SL
-    this.position.stopLoss = newStopPrice;
-    
-    // Update on exchange
-    await this.setStopLossOnExchange(this.position, true);
-    
-    logger.info(`📈 [${symbol}] Trailing stop moved: $${oldSL?.toFixed(4)} → $${newStopPrice.toFixed(4)}`);
-  }
-
-  /**
-   * Profit-protection stop (exchange-side) with ~2% buffer.
-   * Starts only after +2% PnL, then ratchets in 1% steps:
-   * - +2% → stop @ breakeven
-   * - +3% → stop @ +1%
-   * - +4% → stop @ +2%
-   * This protects against crashes while avoiding most wick/mark noise.
-   */
-  private async updateEmergencyStopProfitProtectionIfNeeded(currentPrice: number, pnlPct: number): Promise<void> {
-    if (this.config.mode !== 'live') return;
-    if (!this.position) return;
-    if (!this.position.entryPrice) return;
-    if (!this.position.stopLoss) return; // emergency stop should always exist in live
-
-    const startAt = MomentumConfig.EXIT.EMERGENCY_PROFIT_LOCK_START_PCT ?? 2.0;
-    const distance = MomentumConfig.EXIT.EMERGENCY_PROFIT_LOCK_DISTANCE_PCT ?? 2.0;
-    const step = MomentumConfig.EXIT.EMERGENCY_PROFIT_LOCK_STEP_PCT ?? 1.0;
-
-    if (pnlPct < startAt) return;
-
-    // Lock profit in steps such that lockedProfitPct = floor(pnl - distance)
-    // Example: pnl=3.2, distance=2 → lock=1% (stop @ +1% profit)
-    const rawLock = pnlPct - distance;
-    const lockedProfitPct = Math.max(0, Math.floor(rawLock / step) * step);
-
-    const entry = this.position.entryPrice;
-    const desiredStop = this.position.side === 'long'
-      ? entry * (1 + lockedProfitPct / 100)
-      : entry * (1 - lockedProfitPct / 100);
-
-    // Safety: avoid placing an immediately-triggering stop
-    if (this.position.side === 'long' && desiredStop >= currentPrice) return;
-    if (this.position.side === 'short' && desiredStop <= currentPrice) return;
-
-    // Only ratchet in the favorable direction
-    const currentStop = this.position.stopLoss;
-    const isImprovement = this.position.side === 'long'
-      ? desiredStop > currentStop
-      : desiredStop < currentStop;
-    if (!isImprovement) return;
-
-    // Apply + update on exchange
-    this.position.stopLoss = desiredStop;
-    this.position.emergencyStopPrice = desiredStop;
-    await this.setStopLossOnExchange(this.position, true);
-
-    logger.info(
-      `🧷 [${this.config.symbol}] Profit-protection stop ratcheted: pnl=${pnlPct.toFixed(2)}% | locked=+${lockedProfitPct.toFixed(0)}% | stop=$${desiredStop.toFixed(4)} (≈${distance}% buffer)`
+    return this.orderManager.setTrailingStopOnExchange(
+      position,
+      (pos, price, reason) => this.closePosition(pos, price, reason),
+      isWidening,
     );
   }
-
-  /**
-   * 🎯 Layer 3: Progressive Profit Lock
-   * DÉSACTIVÉ: Dégrade les performances en coupant les gagnants trop tôt (-85% ROI in backtest)
-   */
-  private async updateProfitLockIfNeeded(currentPrice: number): Promise<void> {
-    // DISABLED: Profit lock cuts winners too early
-    return;
-  }
   
+  private async updateTrailingStopOnExchange(newStopPrice: number): Promise<void> {
+    if (!this.position) return;
+    await this.orderManager.updateTrailingStopOnExchange(this.position, newStopPrice);
+  }
+
+  private async updateEmergencyStopProfitProtectionIfNeeded(currentPrice: number, pnlPct: number): Promise<void> {
+    if (!this.position) return;
+    await this.orderManager.updateEmergencyStopProfitProtectionIfNeeded(this.position, currentPrice, pnlPct);
+  }
+
   // ==========================================================================
   // DATABASE HELPERS
   // ==========================================================================
   
   private async loadExistingPosition(): Promise<void> {
-    try {
-      const dbPosition = await this.config.prisma.position.findFirst({
-        where: {
-          sessionId: this.config.sessionId,
-          symbol: this.config.symbol,
-        },
-      });
-      
-      if (dbPosition && dbPosition.entryPrice && dbPosition.qty) {
-        // Calculate margin from notional / leverage
-        const notional = dbPosition.qty * dbPosition.entryPrice;
-        const leverage = dbPosition.leverage || MomentumConfig.LEVERAGE[this.config.symbol] || 4.5;
-        const marginUsd = notional / leverage;
-        
-        // V5.39 FIX: Restore ALL position tracking state from DB (not just basic fields)
-        // This ensures trailing/stagnant logic continues correctly after agent restart
-        this.position = {
-          symbol: dbPosition.symbol,
-          side: (dbPosition.side as 'long' | 'short') || 'long',
-          entryPrice: dbPosition.entryPrice,
-          qty: dbPosition.qty,
-          entryTime: dbPosition.openedAt?.getTime() || Date.now(),
-          realEntryTime: dbPosition.openedAt?.getTime() || Date.now(),  // V5.86: Restore from DB (same as openedAt)
-          stopLoss: dbPosition.stopPrice || undefined,
-          orderId: dbPosition.slOrderId || undefined,
-          leverage: leverage,
-          marginUsd: marginUsd,
-          // V5.39 FIX: Restore saved HWM/LWM or default to entry price
-          highWaterMark: (dbPosition.highWaterMark as number | null) ?? (dbPosition.side === 'long' ? dbPosition.entryPrice : undefined),
-          lowWaterMark: (dbPosition.lowWaterMark as number | null) ?? (dbPosition.side === 'short' ? dbPosition.entryPrice : undefined),
-          // V5.39 FIX: Restore trailing/stagnant tracking state
-          maxPnlPct: (dbPosition.maxPnlPct as number | null) ?? undefined,
-          trailingActive: (dbPosition.trailingActive as boolean) ?? false,
-          // V5.60 FIX: Restore trailingBreachCandles from DB to preserve exit confirmation state
-          trailingBreachCandles: (dbPosition.trailingBreachCandles as number | null) ?? 0,
-          // V5.60 FIX: Wrap JSON.parse in try-catch to prevent crash on corrupted data
-          stagnantState: (() => {
-            try {
-              if (!dbPosition.stagnantState) return undefined;
-              if (typeof dbPosition.stagnantState === 'string') {
-                return JSON.parse(dbPosition.stagnantState);
-              }
-              return dbPosition.stagnantState as { triggered: boolean; triggeredAtMinutes?: number; confirmed: boolean; cancelled: boolean; obsPeakPct: number };
-            } catch (e) {
-              logger.warn(`⚠️ [${this.config.symbol}] Failed to parse stagnantState from DB, resetting: ${e}`);
-              return undefined;
-            }
-          })(),
-        };
-        
-        // ⚠️ CRITICAL: Register margin in CapitalPool to prevent double-spending!
-        // This is essential for live mode where exchange balance includes locked margin
-        this.config.capitalPool.commit(this.config.sessionId, marginUsd);
-        
-        logger.info(`📥 [${this.config.symbol}] Loaded existing position: ${this.position?.side} @ $${this.position?.entryPrice} | margin=$${marginUsd.toFixed(2)} | trailingActive=${this.position.trailingActive} | breachCandles=${this.position.trailingBreachCandles ?? 0} | maxPnl=${this.position.maxPnlPct?.toFixed(2) ?? 'N/A'}% | hwm=$${this.position.highWaterMark?.toFixed(4) ?? 'N/A'}`);
-      }
-      
-    } catch (error) {
-      logger.error(`❌ [${this.config.symbol}] Failed to load position:`, error);
+    const position = await this.persistence.loadExistingPosition();
+    if (position) {
+      this.position = position;
+      // CRITICAL: Register margin in CapitalPool to prevent double-spending
+      const marginUsd = position.marginUsd ?? (position.qty * position.entryPrice) / (position.leverage ?? 4.5);
+      this.config.capitalPool.commit(this.config.sessionId, marginUsd);
     }
   }
   
@@ -5061,9 +2865,6 @@ export class SimpleAgent {
     if (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL_MS) {
       return;
     }
-    
-    // Track if this is the first sync (for REST fallback logic)
-    const isFirstSync = (this.lastPositionSync === 0);
     this.lastPositionSync = now;
     
     try {
@@ -5112,7 +2913,7 @@ export class SimpleAgent {
         let orderType: string | undefined;
         
         // 🔍 Determine exit reason based on order data from Binance
-        let reason = 'stop_loss_exchange';
+        let reason = EXIT_SL_EXCHANGE;
         
         try {
           // Prefer WebSocket user-data fills (0 weight) when available
@@ -5173,28 +2974,28 @@ export class SimpleAgent {
         // 🔍 V5.13: IMPROVED exit reason detection using order type
         // Priority 1: Check if orderType explicitly says TRAILING_STOP_MARKET
         if (orderType && orderType.includes('TRAILING')) {
-          reason = 'trailing_stop_exchange';
+          reason = EXIT_TRAIL_EXCHANGE;
           logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via orderType=${orderType} (PnL: ${pnlPct.toFixed(2)}%)`);
         }
         // Priority 2: Check if orderId matches our tracked trailingOrderId
         else if (exchangeOrderId && this.position.trailingOrderId && exchangeOrderId === this.position.trailingOrderId) {
-          reason = 'trailing_stop_exchange';
+          reason = EXIT_TRAIL_EXCHANGE;
           logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via orderId match (PnL: ${pnlPct.toFixed(2)}%)`);
         }
         // Priority 3: If PnL > -1% and we had a trailing order active, assume trailing
         // (Trailing activates at +0.8%, so any exit with PnL > -1% is likely trailing)
         else if (pnlPct > -1 && this.position.trailingOrderId) {
-          reason = 'trailing_stop_exchange';
+          reason = EXIT_TRAIL_EXCHANGE;
           logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via PnL heuristic (PnL: ${pnlPct.toFixed(2)}%)`);
         }
         // Priority 4: V5.85 - Check if stagnant was confirmed (exchange SL was tightened)
         else if (this.position.stagnantState?.confirmed && !this.position.stagnantState?.cancelled) {
-          reason = 'stagnant_trade';
+          reason = EXIT_STAGNANT;
           logger.info(`🐌 [${symbol}] Detected STAGNANT TRADE exit (PnL: ${pnlPct.toFixed(2)}%, stagnant SL hit on exchange)`);
         }
         // Priority 5: Fixed stop loss (significant loss or orderType is STOP_MARKET)
         else {
-          reason = 'stop_loss_exchange';
+          reason = EXIT_SL_EXCHANGE;
           logger.info(`🛑 [${symbol}] Detected FIXED SL exit (PnL: ${pnlPct.toFixed(2)}%, type=${orderType})`);
         }
         
@@ -5222,10 +3023,9 @@ export class SimpleAgent {
         // Reset trailing flags
         this.trailingNotified = false;
         this.trailingWidened = false;
-    this.stagnantSlUpdated = false;
-        // V5.72: Reset trailing tracking for frontend
-        this.trailingActivatedAt = null;
-        this.trailingUpdateCount = 0;
+        this.stagnantSlUpdated = false;
+        // V5.72: Reset trailing tracking (owned by rtExitHandler)
+        this.rtExitHandler.resetState();
 
         this.position = null;
       }
@@ -5488,12 +3288,12 @@ export class SimpleAgent {
         
         // Determine exit reason based on order type
         const orderType = pair.exitTrade.info?.type || pair.exitTrade.type;
-        let reason = 'stop_loss_exchange';
+        let reason = EXIT_SL_EXCHANGE;
         
         if (orderType && orderType.includes('TRAILING')) {
-          reason = 'trailing_stop_exchange';
+          reason = EXIT_TRAIL_EXCHANGE;
         } else if (pnlPct > -1) {
-          reason = 'trailing_stop_exchange';
+          reason = EXIT_TRAIL_EXCHANGE;
         }
         
         // Reconstruct position object
@@ -5536,112 +3336,13 @@ export class SimpleAgent {
     }
   }
   
-  private async savePositionToDb(position: Position, action: string, entryFeeUsd?: number): Promise<void> {
-    try {
-      // First create an order for the entry (BUY for long, SELL for short)
-      const isLive = this.config.mode === 'live';
-      // For live mode, use the orderId from exchange if available, otherwise generate one
-      const clientOrderId = position.orderId || `${isLive ? 'live' : 'paper'}_entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const entrySide = position.side === 'long' ? 'buy' : 'sell';
-      
-      // Calculate entry fee if not provided (0.04% taker on notional)
-      const entryNotionalUsd = position.qty * position.entryPrice;
-      const calculatedFee = entryFeeUsd ?? (entryNotionalUsd * 0.0004);
-      
-      const order = await this.config.prisma.order.create({
-        data: {
-          clientOrderId,
-          sessionId: this.config.sessionId,
-          symbol: position.symbol,
-          side: entrySide,
-          type: 'market',
-          qty: position.qty,
-          price: position.entryPrice,
-          status: 'filled',
-          source: 'simple_agent',
-          strategyUsed: 'momentum_simple',
-          leverage: position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4,
-        },
-      });
-      
-      // Log entry as a Fill record linked to the order
-      await this.config.prisma.fill.create({
-        data: {
-          orderId: order.id,
-          sessionId: this.config.sessionId,
-          symbol: position.symbol,
-          price: position.entryPrice,
-          qty: position.qty,
-          side: entrySide,
-          realizedPnl: 0, // No PnL on entry
-          fee: calculatedFee,  // Store entry fee for accurate cost tracking
-          strategyUsed: 'momentum_simple',
-          strategyFamily: 'momentum',
-          ts: new Date(position.entryTime),
-        },
-      });
-      
-      logger.info(`💾 [${this.config.symbol}] Entry order logged: ${entrySide.toUpperCase()} @ $${position.entryPrice.toFixed(4)}, fee: $${calculatedFee.toFixed(2)}`);
-      
-      // Then create the position record
-      // V5.39 FIX: Save ALL position tracking state to DB for persistence across restarts
-      await this.config.prisma.position.create({
-        data: {
-          sessionId: this.config.sessionId,
-          symbol: position.symbol,
-          side: position.side,
-          entryPrice: position.entryPrice,
-          qty: position.qty,
-          leverage: MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] || 3,
-          stopPrice: position.stopLoss,
-          openedAt: new Date(position.entryTime),
-          // V5.39 FIX: Initialize tracking state fields
-          highWaterMark: position.side === 'long' ? position.entryPrice : null,
-          lowWaterMark: position.side === 'short' ? position.entryPrice : null,
-          maxPnlPct: 0,
-          trailingActive: false,
-          stagnantState: null,
-        },
-      });
-    } catch (error) {
-      logger.error(`❌ [${this.config.symbol}] Failed to save position to DB:`, error);
-      // V5.44 FIX: Rethrow error so caller knows save failed
-      // This prevents notification being sent when position wasn't actually saved
-      throw error;
-    }
+  private async savePositionToDb(position: Position, _action: string, entryFeeUsd?: number): Promise<void> {
+    await this.persistence.savePositionToDb(position, entryFeeUsd);
   }
   
-  /**
-   * V5.39: Update position tracking state in DB
-   * Called periodically during checkExit to persist HWM, maxPnl, trailing state
-   * This ensures position state survives agent restarts
-   */
   private async updatePositionStateInDb(): Promise<void> {
     if (!this.position) return;
-    
-    try {
-      await this.config.prisma.position.update({
-        where: {
-          sessionId_symbol: {
-            sessionId: this.config.sessionId,
-            symbol: this.config.symbol,
-          },
-        },
-        data: {
-          highWaterMark: this.position.highWaterMark ?? null,
-          lowWaterMark: this.position.lowWaterMark ?? null,
-          maxPnlPct: this.position.maxPnlPct ?? null,
-          trailingActive: this.position.trailingActive ?? false,
-          trailingBreachCandles: this.position.trailingBreachCandles ?? 0,  // V5.60: Persist breach counter
-          stagnantState: this.position.stagnantState ?? null,
-        },
-      });
-    } catch (error: unknown) {
-      // Don't log every failure (can happen during rapid updates)
-      if (!errMsg(error).includes('Record to update not found')) {
-        logger.debug(`⚠️ [${this.config.symbol}] Failed to update position state: ${errMsg(error)}`);
-      }
-    }
+    await this.persistence.updatePositionStateInDb(this.position);
   }
   
   private async saveExitToDb(
@@ -5650,260 +3351,17 @@ export class SimpleAgent {
     reason: string,
     pnlPct: number,
     pnlUsd: number,
-    exchangeOrderId?: string,  // Optional: real orderId from exchange (for live mode)
-    feeUsd?: number  // Optional: actual fee from exchange or calculated
-  ): Promise<boolean> {  // V5.78: Return boolean to indicate success for notification gating
-    try {
-      // Exit side is opposite of position side (SELL to close LONG, BUY to close SHORT)
-      const exitSide = position.side === 'long' ? 'sell' : 'buy';
-      const isLive = this.config.mode === 'live';
-
-      // 🔧 FIX: Use exchange orderId if available (for synced exits), otherwise generate unique ID
-      // Check if order already exists in DB to avoid duplicate clientOrderId constraint error
-      let clientOrderId = exchangeOrderId || `${isLive ? 'live' : 'paper'}_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-      if (exchangeOrderId) {
-        const existing = await this.config.prisma.order.findFirst({ where: { clientOrderId: exchangeOrderId } });
-        if (existing) {
-          logger.warn(`⚠️ [${this.config.symbol}] Exit order ${exchangeOrderId} already exists in DB, skipping save`);
-          return true;  // V5.78: Order exists = already processed, safe to continue
-        }
-      }
-
-      // Calculate fee if not provided (0.04% taker fee on notional)
-      const notionalUsd = position.qty * exitPrice;
-      const calculatedFee = feeUsd ?? (notionalUsd * 0.0004); // 0.04% taker
-
-      // V5.71: Use Prisma transaction to ensure atomic trade lifecycle operations
-      // All DB operations succeed or fail together - no partial state on crash
-      const exitTs = new Date();
-      // V5.86 FIX: Use realEntryTime for accurate duration in DB (actual hold time)
-      // This ensures DB duration matches what user experienced, not candle-aligned time
-      // Fallback chain: realEntryTime → entryTime → Date.now()
-      const entryTimeMs = position.realEntryTime ?? position.entryTime ?? Date.now();
-      const entryTs = new Date(entryTimeMs);
-      if (!position.realEntryTime && !position.entryTime) {
-        logger.warn(`⚠️ [${this.config.symbol}] position.entryTime was undefined, using fallback: ${entryTs.toISOString()}`);
-      }
-      const durationMs = exitTs.getTime() - entryTs.getTime();
-      const durationMinutes = Math.max(0, Math.round(durationMs / 60000));
-      const entryNotional = position.entryPrice * position.qty;
-      const priceChange = position.side === 'long'
-        ? exitPrice - position.entryPrice
-        : position.entryPrice - exitPrice;
-      const pctChange = (priceChange / position.entryPrice) * 100;
-      const roiPct = entryNotional > 0 ? (pnlUsd / entryNotional) * 100 : 0;
-      const leverage = position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4;
-      const roePct = roiPct * leverage;
-
-      // Use interactive transaction for dependent operations
-      const result = await this.config.prisma.$transaction(async (tx) => {
-        // 1. Create Order record
-        const order = await tx.order.create({
-          data: {
-            clientOrderId,
-            sessionId: this.config.sessionId,
-            symbol: position.symbol,
-            side: exitSide,
-            type: 'market',
-            qty: position.qty,
-            price: exitPrice,
-            status: 'filled',
-            source: 'simple_agent',
-            strategyUsed: 'momentum_simple',
-            leverage,
-            pctChange: pnlPct / 100, // Store as decimal (e.g., 0.015 for 1.5%)
-          },
-        });
-
-        // 2. Create Trade record FIRST (Fill has foreign key to Trade)
-        // V5.78 FIX: Must create Trade before Fill to satisfy Fill_tradeId_fkey constraint
-        const trade = await tx.trade.create({
-          data: {
-            id: order.id,  // Use exitOrderId as tradeId
-            sessionId: this.config.sessionId,
-            symbol: position.symbol,
-            positionSide: position.side,
-            qty: position.qty,
-            entryPrice: position.entryPrice,
-            exitPrice,
-            entryNotional,
-            realizedPnlUsd: pnlUsd,
-            feesUsd: calculatedFee * 2,  // Approximate entry + exit fees (both 0.04%)
-            pctChange,
-            roiPct,
-            leverage,
-            roePct,
-            orderCount: 2,  // Entry + exit
-            exitReason: reason.toUpperCase(),
-            durationMinutes,
-            maxPnlPct: position.maxPnlPct ?? null,
-            entryTs,
-            exitTs,
-          },
-        });
-
-        // 3. Create Fill record linked to Order AND Trade
-        const fill = await tx.fill.create({
-          data: {
-            orderId: order.id,
-            sessionId: this.config.sessionId,
-            symbol: position.symbol,
-            price: exitPrice,
-            qty: position.qty,
-            side: exitSide,
-            realizedPnl: pnlUsd,
-            fee: calculatedFee,
-            strategyUsed: 'momentum_simple',
-            strategyFamily: 'momentum',
-            ts: exitTs,
-            exitReason: reason.toUpperCase(),
-            entryTs,
-            maxPnlPct: position.maxPnlPct ?? null,
-            tradeId: trade.id,  // Link to trade (now exists)
-          },
-        });
-
-        // 4. Delete the closed position
-        await tx.position.deleteMany({
-          where: {
-            sessionId: this.config.sessionId,
-            symbol: position.symbol,
-          },
-        });
-
-        return { order, fill };
-      }, {
-        maxWait: 5000,  // Max time to wait for transaction slot
-        timeout: 10000, // Max time for transaction to complete
-      });
-
-      logger.info(`✅ [${this.config.symbol}] Trade created (atomic): ${position.side.toUpperCase()} ${position.qty} PnL=$${pnlUsd.toFixed(2)}`);
-
-      // V5.60: Trigger parity verification V2 (async, non-blocking, outside transaction)
-      if (process.env.AUTO_VERIFY_PARITY === 'true') {
-        import('../services/parityVerificationServiceV2.js').then(({ triggerVerificationV2 }) => {
-          triggerVerificationV2(result.order.id);
-        }).catch(() => {}); // Ignore import errors
-      }
-
-      // Update SessionKpi with new performance metrics (outside transaction - non-critical)
-      await this.updateSessionKpi(pnlUsd, pnlPct);
-
-      logger.info(`💾 [${this.config.symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%), Fee: $${calculatedFee.toFixed(2)}`);
-
-      return true;  // V5.78: Success - safe to send notification
-
-    } catch (error) {
-      logger.error(`❌ [${this.config.symbol}] Failed to save exit to DB:`, error);
-      return false;  // V5.78: Failed - do NOT send notification, position may still exist
+    exchangeOrderId?: string,
+    feeUsd?: number,
+  ): Promise<boolean> {
+    const result = await this.persistence.saveExitToDb(
+      position, exitPrice, reason, pnlPct, pnlUsd, exchangeOrderId, feeUsd,
+    );
+    if (result.success) {
+      // Update SessionKpi (non-critical, outside transaction)
+      await this.persistence.updateSessionKpi(pnlUsd, pnlPct, this.position, this.lastPrice);
     }
-  }
-  
-  /**
-   * Update SessionKpi after each trade exit
-   * Calculates: realizedPnlUsd, winRate, expectancy, maxDrawdownPct, etc.
-   */
-  private async updateSessionKpi(tradePnlUsd: number, tradePnlPct: number): Promise<void> {
-    try {
-      const sessionId = this.config.sessionId;
-      
-      // Aggregate all fills with realized PnL for this session
-      const fills = await this.config.prisma.fill.findMany({
-        where: { 
-          sessionId,
-          realizedPnl: { not: null }
-        },
-        orderBy: { ts: 'asc' }
-      });
-      
-      // Calculate metrics from fills
-      const exitFills = fills.filter(f => f.realizedPnl !== null && f.realizedPnl !== 0);
-      const tradeCount = exitFills.length;
-      const wins = exitFills.filter(f => (f.realizedPnl || 0) > 0).length;
-      const losses = exitFills.filter(f => (f.realizedPnl || 0) < 0).length;
-      
-      const totalRealizedPnl = exitFills.reduce((sum, f) => sum + (f.realizedPnl || 0), 0);
-      const totalFees = fills.reduce((sum, f) => sum + (f.fee || 0), 0);
-      const netRealizedPnl = totalRealizedPnl - totalFees;
-      
-      const winRate = tradeCount > 0 ? (wins / tradeCount) * 100 : 0;
-      
-      // Calculate expectancy (average PnL per trade)
-      const expectancy = tradeCount > 0 ? netRealizedPnl / tradeCount : 0;
-      
-      // Calculate max drawdown from cumulative PnL
-      let peak = 0;
-      let cumulative = 0;
-      let maxDrawdown = 0;
-      
-      for (const fill of exitFills) {
-        cumulative += (fill.realizedPnl || 0);
-        if (cumulative > peak) peak = cumulative;
-        const drawdown = peak > 0 ? (cumulative - peak) / peak * 100 : 0;
-        if (drawdown < maxDrawdown) maxDrawdown = drawdown;
-      }
-      
-      // Get session start balance for ROI calculation
-      const session = await this.config.prisma.agentSession.findUnique({
-        where: { id: sessionId },
-        select: { startBalanceUsd: true }
-      });
-      const startBalance = session?.startBalanceUsd || 1000; // Default 1000 if not set
-      const roiPct = startBalance > 0 ? (netRealizedPnl / startBalance) * 100 : 0;
-      
-      // Get current unrealized PnL from open position
-      let unrealizedPnlUsd = 0;
-      if (this.position && this.lastPrice) {
-        if (this.position.side === 'long') {
-          unrealizedPnlUsd = this.position.qty * (this.lastPrice - this.position.entryPrice);
-        } else {
-          unrealizedPnlUsd = this.position.qty * (this.position.entryPrice - this.lastPrice);
-        }
-      }
-      
-      // Build stats JSON
-      const stats = {
-        trades: tradeCount,
-        wins,
-        losses,
-        totalFees,
-        netRealizedPnl,
-        lastTradeAt: new Date().toISOString(),
-        avgWinUsd: wins > 0 ? exitFills.filter(f => (f.realizedPnl || 0) > 0).reduce((s, f) => s + (f.realizedPnl || 0), 0) / wins : 0,
-        avgLossUsd: losses > 0 ? exitFills.filter(f => (f.realizedPnl || 0) < 0).reduce((s, f) => s + (f.realizedPnl || 0), 0) / losses : 0,
-      };
-      
-      // Upsert SessionKpi
-      await this.config.prisma.sessionKpi.upsert({
-        where: { sessionId },
-        update: {
-          realizedPnlUsd: netRealizedPnl,
-          unrealizedPnlUsd,
-          roiPct,
-          winRate,
-          expectancy,
-          maxDrawdownPct: Math.abs(maxDrawdown),
-          stats,
-          lastUpdated: new Date(),
-        },
-        create: {
-          sessionId,
-          realizedPnlUsd: netRealizedPnl,
-          unrealizedPnlUsd,
-          roiPct,
-          winRate,
-          expectancy,
-          maxDrawdownPct: Math.abs(maxDrawdown),
-          stats,
-        },
-      });
-      
-      logger.info(`📊 [${this.config.symbol}] KPI updated: ${tradeCount} trades, ${winRate.toFixed(1)}% WR, $${netRealizedPnl.toFixed(2)} PnL, ${roiPct.toFixed(2)}% ROI`);
-      
-    } catch (error) {
-      logger.error(`❌ [${this.config.symbol}] Failed to update SessionKpi:`, error);
-    }
+    return result.success;
   }
   
   // ==========================================================================
@@ -6045,8 +3503,8 @@ export class SimpleAgent {
       // V5.72: Build trailing state object
       const trailingState = {
         active: this.position.trailingActive || false,
-        activatedAt: this.trailingActivatedAt,
-        updateCount: this.trailingUpdateCount,
+        activatedAt: this.rtExitHandler.trailingActivatedAt,
+        updateCount: this.rtExitHandler.trailingUpdateCount,
         currentStopPrice: this.position.appTrailingStop || this.position.stopLoss,
         peakPrice,
         distanceFromPeak,
