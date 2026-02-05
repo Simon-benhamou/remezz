@@ -656,6 +656,7 @@ function checkBacktestExit(
   current: BacktestCandle,
   windowCandles: BacktestCandle[],
   btcWindowCandles: Candle[],
+  btcCandles1hWindow: Candle[],  // V5.86: 1h candles for regime SMA200 (matches live)
   idx: number,
   params: BacktestParams
 ): BacktestExitResult {
@@ -680,11 +681,13 @@ function checkBacktestExit(
   };
   
   // Call shared exit function with timestamp override for consistent time calculation
+  // V5.86: Pass btcCandles1h for regime SMA200 (matches live behavior)
   const exitSignal = shouldExitPosition(position, current.close, windowCandles as Candle[], {
     nowMs: pos.entryTime + holdMinutes * 60000,  // Simulate correct time
     priceHigh: current.high,
     priceLow: current.low,
     btcCandles: btcWindowCandles,
+    btcCandles1h: btcCandles1hWindow,  // V5.86: 1h candles for regime SMA200
   });
   
   // Sync state back to pos (stagnant, trailing, etc.)
@@ -1136,7 +1139,7 @@ async function fetchCandles1h(
   endDate: Date
 ): Promise<Candle[]> {
   const until = endDate.getTime();
-  const extraBarsMs = 50 * 60 * 60 * 1000; // 50 bars × 1h
+  const extraBarsMs = 250 * 60 * 60 * 1000; // V5.86: 250 bars × 1h (matches live SMA200 regime)
   const since = startDate.getTime() - extraBarsMs;
 
   // V5.67: Try local JSON files first (same pattern as fetchCandles)
@@ -1543,13 +1546,18 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         
         const btcWindowStart = Math.max(0, btcIdxForExit - 200);
         const btcWindowCandles = btcCandles.slice(btcWindowStart, btcIdxForExit + 1);
-        
+
+        // V5.86: Compute 1h candles window for exit (matches entry logic at line 1711)
+        const CANDLE_1H_INTERVAL_MS = 60 * 60 * 1000;
+        const btcCandles1hWindowForExit = btcCandles1h.filter(c => c.timestamp + CANDLE_1H_INTERVAL_MS <= current.timestamp);
+
         const exitResult = checkBacktestExit(
-          pos, 
-          current, 
-          windowCandles, 
-          btcWindowCandles as Candle[], 
-          idx, 
+          pos,
+          current,
+          windowCandles,
+          btcWindowCandles as Candle[],
+          btcCandles1hWindowForExit as Candle[],  // V5.86: 1h candles for regime
+          idx,
           params
         );
         
