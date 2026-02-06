@@ -316,25 +316,25 @@ export default function BacktestPage() {
   const [selectedSymbol, setSelectedSymbol] = useState<string | 'all'>('all');
   const [selectedSide, setSelectedSide] = useState<'all' | 'long' | 'short'>('all');
 
-  const defaultSymbols = ['DOGE/USDT:USDT', 'IMX/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT'];
+  // V5.92: Updated based on individual symbol analysis (Jan-Dec 2025)
+  const defaultSymbols = ['IMX/USDT:USDT', 'AVAX/USDT:USDT', 'SEI/USDT:USDT', 'ADA/USDT:USDT', 'DOT/USDT:USDT', 'DOGE/USDT:USDT', 'BTC/USDT:USDT'];
   const symbolOptions = [
-    { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT (+438%)' },
-    { value: 'IMX/USDT:USDT', label: 'IMX/USDT (+344%)' },
-    { value: 'SEI/USDT:USDT', label: 'SEI/USDT (+280%)' },
-    { value: 'SUI/USDT:USDT', label: 'SUI/USDT (+266%)' },
-    { value: 'XRP/USDT:USDT', label: 'XRP/USDT (+185%)' },
-    { value: 'ETH/USDT:USDT', label: 'ETH/USDT (+173%)' },
-    { value: 'ADA/USDT:USDT', label: 'ADA/USDT (+173%)' },
-    { value: 'DOT/USDT:USDT', label: 'DOT/USDT (+173%)' },
-    { value: 'LINK/USDT:USDT', label: 'LINK/USDT (+143%)' },
-    { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT (+118%)' },
-    { value: 'SOL/USDT:USDT', label: 'SOL/USDT (+111%)' },
-    { value: 'BTC/USDT:USDT', label: 'BTC/USDT (+65%)' },
-    { value: 'UNI/USDT:USDT', label: 'UNI/USDT' },
-    { value: 'LTC/USDT:USDT', label: 'LTC/USDT' },
-    { value: 'SONIC/USDT:USDT', label: 'SONIC/USDT' },
-    { value: 'BCH/USDT:USDT', label: 'BCH/USDT' },
-    { value: 'APT/USDT:USDT', label: 'APT/USDT' },
+    // STRONG symbols
+    { value: 'IMX/USDT:USDT', label: 'IMX/USDT (+264%)' },
+    { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT (+155%)' },
+    { value: 'SEI/USDT:USDT', label: 'SEI/USDT (+98%)' },
+    { value: 'ADA/USDT:USDT', label: 'ADA/USDT (+92%)' },
+    { value: 'DOT/USDT:USDT', label: 'DOT/USDT (+50%)' },
+    { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT (+33%)' },
+    { value: 'BTC/USDT:USDT', label: 'BTC/USDT (+29%)' },
+    { value: 'APT/USDT:USDT', label: 'APT/USDT (+27%)' },
+    { value: 'OP/USDT:USDT', label: 'OP/USDT (+30%)' },
+    // OK symbols
+    { value: 'SUI/USDT:USDT', label: 'SUI/USDT (+33%)' },
+    { value: 'SOL/USDT:USDT', label: 'SOL/USDT (+25%)' },
+    { value: 'XRP/USDT:USDT', label: 'XRP/USDT (+12%)' },
+    { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT (+19%)' },
+    { value: 'LINK/USDT:USDT', label: 'LINK/USDT (+7%)' },
   ];
 
   const refreshRuns = async () => {

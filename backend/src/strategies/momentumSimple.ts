@@ -429,8 +429,8 @@ export const MomentumConfig = {
 
     // V5.35: OPTIMIZED Trailing Stop - Tighter trail on medium winners
     // Changed TRAILING_WIDEN_AT_PCT from 2.0% to 3.0% to keep tight control longer
-    TRAILING_ACTIVATION_PCT: 0.8,       // Activate trailing at +0.8% profit
-    TRAILING_DISTANCE_PCT: 0.5,         // Initial callback: 0.5% (tight protection)
+    TRAILING_ACTIVATION_PCT: 1.0,       // V5.92: Optimized from 0.8 → 1.0 (+34% PnL, same DD)
+    TRAILING_DISTANCE_PCT: 0.4,         // V5.92: Optimized from 0.5 → 0.4 (tighter trail, faster lock-in)
     TRAILING_WIDEN_AT_PCT: 3.0,         // V5.35: Widen at 3% (was 2%) - tighter on medium winners
     TRAILING_WIDE_DISTANCE_PCT: 0.8,    // Widened callback: 0.8% (let big winner run)
 
@@ -584,7 +584,7 @@ export const MomentumConfig = {
     // 4. Else confirm stagnant → tighten SL to 0.8% (don't exit, just protect)
     // ═══════════════════════════════════════════════════════════════════════════
     STAGNANT_TRADE_EXIT_ENABLED: true,     // Enable stagnant trade early exit
-    STAGNANT_TRADE_TIME_MINUTES: 45,       // V5.34: Faster check at 45 minutes
+    STAGNANT_TRADE_TIME_MINUTES: 60,       // V5.92: Optimized from 45 → 60 (+67% PnL, -6% DD, +1.8% WR)
     STAGNANT_TRADE_OBS_MINUTES: 60,        // V5.34: Shorter observation (45+60=105min)
     STAGNANT_TRADE_MIN_PROFIT_PCT: 0.8,    // Threshold for initial stagnant trigger
     STAGNANT_TRADE_RECOVERY_PCT: 0.6,      // V5.34: Higher recovery threshold
@@ -615,39 +615,48 @@ export const MomentumConfig = {
   // ASSETS V5.6 - Backtest 24 mois (Nov 2023 - Nov 2025) - Tous ROI positifs
   // ═══════════════════════════════════════════════════════════════════════════
   
-  // ✅ TOP PERFORMERS (ROI >200% sur 24 mois)
+  // V5.92: All tested symbols (Jan-Dec 2025, individual backtest)
   SYMBOLS_V5_COMPATIBLE: [
-    'DOGE/USDT:USDT',  // 🏆 #1: +438% ROI, 65.5% WR
-    'IMX/USDT:USDT',   // 🏆 #2: +344% ROI, 67.9% WR
-    'SEI/USDT:USDT',   // 🏆 #3: +280% ROI, 65.8% WR
-    'SUI/USDT:USDT',   // 🏆 #4: +266% ROI, 65.4% WR
-    'XRP/USDT:USDT',   // ✅ +185% ROI, 65.0% WR
-    'ETH/USDT:USDT',   // ✅ +173% ROI, 67.8% WR
-    'ADA/USDT:USDT',   // ✅ +173% ROI, 65.8% WR
-    'DOT/USDT:USDT',   // ✅ +173% ROI, 64.8% WR
-    'LINK/USDT:USDT',  // ✅ +143% ROI, 65.9% WR
-    'AVAX/USDT:USDT',  // ✅ +118% ROI, 66.1% WR
-    'SOL/USDT:USDT',   // ✅ +111% ROI, 65.5% WR
-    'BTC/USDT:USDT',   // ⚡ +65% ROI, 69.9% WR (plus stable)
+    'IMX/USDT:USDT',   // STRONG: +264%, 70.2% WR, Sharpe 2.74
+    'AVAX/USDT:USDT',  // STRONG: +155%, 69.7% WR, Sharpe 2.61
+    'SEI/USDT:USDT',   // STRONG: +98%, 61.1% WR, Sharpe 1.61
+    'ADA/USDT:USDT',   // STRONG: +92%, 61.1% WR, Sharpe 1.58
+    'DOT/USDT:USDT',   // STRONG: +50%, 55.8% WR, Sharpe 1.23
+    'DOGE/USDT:USDT',  // STRONG: +33%, 58.1% WR, Sharpe 0.88
+    'BTC/USDT:USDT',   // STRONG: +29%, 71.4% WR, Sharpe 1.58
+    'APT/USDT:USDT',   // STRONG: +27%, 59.3% WR, Sharpe 0.80
+    'OP/USDT:USDT',    // STRONG: +30%, 57.4% WR, Sharpe 0.76
+    'SUI/USDT:USDT',   // OK: +33%, 54.5% WR
+    'SOL/USDT:USDT',   // OK: +25%, 59.1% WR
+    'XRP/USDT:USDT',   // OK: +12%, 58.6% WR
+    'NEAR/USDT:USDT',  // OK: +19%, 56.8% WR
+    'ATOM/USDT:USDT',  // OK: +16%, 54.0% WR
+    'LINK/USDT:USDT',  // OK: +7%, 50.6% WR
   ],
-  
-  // ❌ NON TESTÉS (pas de données 24 mois)
+
+  // V5.92: AVOID — negative or marginal PnL, no edge
   SYMBOLS_NOT_COMPATIBLE: [
-    'BNB/USDT:USDT',   // Non testé
-    'ATOM/USDT:USDT',  // Non testé
-    'UNI/USDT:USDT',   // Non testé
-    'LTC/USDT:USDT',   // Non testé
-    'BCH/USDT:USDT',   // Non testé
+    'ETH/USDT:USDT',   // MARGINAL: +3%, 49.4% WR (worse than coin flip)
+    'ARB/USDT:USDT',   // MARGINAL: -3%, 49.5% WR (negative PnL)
+    'FTM/USDT:USDT',   // N/A: only 1 trade in 12 months
+    'BNB/USDT:USDT',   // Not tested
+    'UNI/USDT:USDT',   // Not tested
+    'LTC/USDT:USDT',   // Not tested
+    'BCH/USDT:USDT',   // Not tested
   ],
   
-  // Default: TOP 6 performers pour les nouveaux agents
+  // V5.92: Updated based on individual symbol analysis (Jan-Dec 2025)
+  // STRONG symbols only — all have positive PnL, WR>55%, Sharpe>0.7
   SYMBOLS: [
-    'DOGE/USDT:USDT',  // 🏆 #1
-    'IMX/USDT:USDT',   // 🏆 #2
-    'SEI/USDT:USDT',   // 🏆 #3
-    'SUI/USDT:USDT',   // 🏆 #4
-    'XRP/USDT:USDT',   // #5
-    'ETH/USDT:USDT',   // #6
+    'IMX/USDT:USDT',   // #1 PnL=$5,289, WR=70.2%, Sharpe=2.74
+    'AVAX/USDT:USDT',  // #2 PnL=$3,108, WR=69.7%, Sharpe=2.61
+    'SEI/USDT:USDT',   // #3 PnL=$1,963, WR=61.1%, Sharpe=1.61
+    'ADA/USDT:USDT',   // #4 PnL=$1,832, WR=61.1%, Sharpe=1.58
+    'DOT/USDT:USDT',   // #5 PnL=$996, WR=55.8%, Sharpe=1.23
+    'DOGE/USDT:USDT',  // #6 PnL=$657, WR=58.1%, Sharpe=0.88
+    'BTC/USDT:USDT',   // #7 PnL=$569, WR=71.4%, Sharpe=1.58
+    'APT/USDT:USDT',   // #8 PnL=$547, WR=59.3%, Sharpe=0.80
+    'OP/USDT:USDT',    // #9 PnL=$602, WR=57.4%, Sharpe=0.76
   ],
   
   // V5.8: Leverage 5x uniforme - Validé sûr (SL max 4.5% × 5 = 22.5% << 80% liquidation)
@@ -665,6 +674,9 @@ export const MomentumConfig = {
     'ADA/USDT:USDT': 5,
     'LINK/USDT:USDT': 5,
     'AVAX/USDT:USDT': 5,
+    'APT/USDT:USDT': 5,
+    'OP/USDT:USDT': 5,
+    'NEAR/USDT:USDT': 5,
   } as Record<string, number>,
 
   // ═══════════════════════════════════════════════════════════════════════════

@@ -34,13 +34,15 @@ async function main() {
   const startDate = new Date(process.env.START_DATE || '2025-01-01T00:00:00.000Z');
   const endDate = new Date(process.env.END_DATE || '2025-12-16T00:00:00.000Z');
 
+  // V5.92: Balanced set — 7 best STRONG symbols
   const defaultSymbols = [
-    'DOGE/USDT:USDT',
     'IMX/USDT:USDT',
+    'AVAX/USDT:USDT',
     'SEI/USDT:USDT',
-    'SUI/USDT:USDT',
-    'XRP/USDT:USDT',
-    'ETH/USDT:USDT',
+    'ADA/USDT:USDT',
+    'DOT/USDT:USDT',
+    'DOGE/USDT:USDT',
+    'BTC/USDT:USDT',
   ];
 
   const params = {

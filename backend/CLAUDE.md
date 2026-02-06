@@ -188,6 +188,19 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
     - Max positions: backtest uses static `initialCapital`, live uses dynamic `totalCapitalUsd`
     - Fee recording: live DB records only exchange fee; backtest/paper include slippage + funding
 
+- V5.92: Strategy optimization — parameter sweep + critical bug fix:
+  - **CRITICAL BUG FIX: NFS HIGH exit price reverted** from `current.close` back to `trailingStopPrice`. V5.91 change destroyed strategy (51.9% WR, -54% ROI). Fix restores edge because live uses proactive LIMIT orders at trailing stop (V5.87).
+  - **Wick breakout entry**: Kept disabled in backtest (V5.91 correct — live can't replicate wick entries).
+  - **MAX_POSITIONS_BASE**: Reverted from 3 back to 2 (V5.90 change caused overexposure on small capital).
+  - **STAGNANT_TRADE_TIME_MINUTES**: 45 → 60 (optimization showed +67% PnL, -6% DD, +1.8% WR).
+  - **TRAILING_ACTIVATION_PCT**: 0.8 → 1.0 (later activation = more room for trade to develop).
+  - **TRAILING_DISTANCE_PCT**: 0.5 → 0.4 (tighter trail = faster profit lock-in).
+  - **ETH removed from default symbols**: ETH drags WR and PnL (-$172 over 68 trades). Without ETH: 61.5% WR vs 58.4%, +688% vs +212% PnL.
+  - **Default symbols**: DOGE, IMX, SEI, SUI, XRP (5 symbols, no ETH).
+  - **fundingRateService.ts fix**: Replaced broken `import { errMsg }` with local function definition.
+  - **Optimization script**: `scripts/optimize-strategy.ts` — 3-phase parameter sweep (entry, exit, symbols). `scripts/test-all-symbols.ts` — individual symbol profitability testing.
+  - **Findings document**: `docs/optimization-findings-v5.92.md` — full analysis of 28+ backtest runs.
+
 ## Refactoring (completed)
 
 Major codebase refactoring reducing `simpleAgent.ts` from ~5500 to ~3660 lines:
