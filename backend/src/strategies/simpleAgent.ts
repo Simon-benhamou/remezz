@@ -2070,9 +2070,9 @@ export class SimpleAgent {
     this.lastSignal = null;
 
     if (this.config.mode === 'paper') {
-      // Paper close
-      this.position = null;
-      
+      // Paper close — position nulled AFTER DB save (see below) to prevent orphans on DB failure.
+      // closingPosition flag prevents re-entry in the meantime.
+
       // V5.30: Close additional positions too
       let totalPnlUsd = pnlUsd;
       let totalMarginReleased = marginToRelease;
@@ -2131,6 +2131,9 @@ export class SimpleAgent {
         // Don't send notification - position might still be open
         return;
       }
+
+      // V5.91: Null position AFTER DB save succeeds — prevents orphan if DB fails
+      this.position = null;
 
       logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${totalPnlUsd.toFixed(2)}) | margin released=$${totalMarginReleased.toFixed(2)} | costs=$${paperFeeUsd.toFixed(2)}`);
 
@@ -2905,6 +2908,12 @@ export class SimpleAgent {
       
       // Case 1: We think we have a position but exchange says NO
       if (this.position && exchangeQty === 0) {
+        // V5.91: Guard against race with closePosition() — if close is already in progress,
+        // skip to prevent double capital release + double DB save
+        if (this.closingPosition) {
+          logger.info(`🔄 [${symbol}] SYNC: closePosition() in progress — skipping to prevent double processing`);
+          return;
+        }
         logger.info(`🔴 [${symbol}] SYNC MISMATCH: Position closed on exchange (likely stop loss hit)`);
         
         // Try to get the last trade to find exit price and orderId

@@ -529,24 +529,21 @@ interface NfsScore {
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
 }
 
+// V5.91: Read NFS config from MomentumConfig.EXIT — single source of truth
+// (was hardcoded; now shares values with live realtimeExitHandler)
 const NFS_CONFIG = {
-  HIGH_THRESHOLD: 70,     // Score >= 70 = high confidence (exit at trailing stop)
-  MEDIUM_THRESHOLD: 40,   // Score 40-69 = medium confidence (1-candle confirm)
-  // Below 40 = low confidence (2-candle confirm)
-
-  // Weights (sum = 100)
-  WEIGHT_BREACH_ATR: 35,    // Breach depth vs ATR (most discriminative)
-  WEIGHT_BREACH_DEPTH: 25,  // Raw breach depth %
-  WEIGHT_VOLUME: 20,        // Volume confirmation
-  WEIGHT_BODY_RATIO: 10,    // Candle body vs range
-  WEIGHT_MOMENTUM: 10,      // ROC5 momentum alignment
-
-  // Thresholds (from statistical analysis)
-  BREACH_ATR_THRESHOLD: 0.40,      // Good if breach/ATR >= 0.40
-  BREACH_DEPTH_THRESHOLD: 0.25,    // Good if breach depth >= 0.25%
-  VOLUME_RATIO_THRESHOLD: 1.5,     // Good if volume >= 1.5x average
-  BODY_RATIO_THRESHOLD: 0.5,       // Good if body >= 50% of range
-  MOMENTUM_THRESHOLD: 0.5,         // Good if |ROC5| >= 0.5%
+  get HIGH_THRESHOLD()          { return MomentumConfig.EXIT.NFS_HIGH_SCORE_THRESHOLD; },
+  get MEDIUM_THRESHOLD()        { return MomentumConfig.EXIT.NFS_MEDIUM_SCORE_THRESHOLD; },
+  get WEIGHT_BREACH_ATR()       { return MomentumConfig.EXIT.NFS_WEIGHT_BREACH_ATR; },
+  get WEIGHT_BREACH_DEPTH()     { return MomentumConfig.EXIT.NFS_WEIGHT_BREACH_DEPTH; },
+  get WEIGHT_VOLUME()           { return MomentumConfig.EXIT.NFS_WEIGHT_VOLUME; },
+  get WEIGHT_BODY_RATIO()       { return MomentumConfig.EXIT.NFS_WEIGHT_CANDLE_BODY; },
+  get WEIGHT_MOMENTUM()         { return MomentumConfig.EXIT.NFS_WEIGHT_MOMENTUM; },
+  get BREACH_ATR_THRESHOLD()    { return MomentumConfig.EXIT.NFS_BREACH_ATR_THRESHOLD; },
+  get BREACH_DEPTH_THRESHOLD()  { return MomentumConfig.EXIT.NFS_BREACH_DEPTH_THRESHOLD; },
+  get VOLUME_RATIO_THRESHOLD()  { return MomentumConfig.EXIT.NFS_VOLUME_RATIO_THRESHOLD; },
+  get BODY_RATIO_THRESHOLD()    { return MomentumConfig.EXIT.NFS_CANDLE_BODY_RATIO_THRESHOLD; },
+  get MOMENTUM_THRESHOLD()      { return MomentumConfig.EXIT.NFS_MOMENTUM_ROC5_THRESHOLD; },
 };
 
 function calculateNfsScoreForBreach(
@@ -743,12 +740,18 @@ function checkBacktestExit(
         trailingStopPrice
       );
 
+      // NOTE: Backtest uses EXIT_TRAIL_NFS_HIGH/MED/LOW (immediate per-candle evaluation).
+      // Live 15m layer uses EXIT_TRAIL_NFS_HIGH_15M/MED_15M/LOW_15M (deferred to 15m close
+      // per V5.90). The _15M suffix distinguishes the deferral path — same scoring logic,
+      // different timing. This is intentional, not a parity bug.
       if (nfsScore.confidence === 'HIGH') {
-        // HIGH confidence: Exit at trailing stop price (theoretical/perfect)
+        // V5.91: Exit at candle close (realistic) — matches paper mode.
+        // Previously used trailingStopPrice (theoretical/perfect) which gave
+        // backtest unrealistically better fills than paper/live market orders.
         return {
           shouldExit: true,
           exitReason: EXIT_TRAIL_NFS_HIGH,
-          exitPrice: trailingStopPrice,
+          exitPrice: current.close,
         };
       } else if (nfsScore.confidence === 'MEDIUM') {
         // MEDIUM confidence: 1-candle confirmation, exit at best of trailing stop or close
@@ -1961,10 +1964,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
           const wickBreakout = checkWickBreakout(current, bb, signal.side);
 
-          // Use early entry price if wick breakout triggered, otherwise use close
-          const entryPrice = wickBreakout.triggered && wickBreakout.entryPrice
-            ? wickBreakout.entryPrice
-            : current.close;
+          // V5.91: Always use close price for entry — wick breakout gives unrealistically
+          // better fills in backtest vs live (disabled in live since V5.78).
+          // Keep detection above for logging/analysis only.
+          const entryPrice = current.close;
           
           // V5.51: In parity mode, skip capital checks - we're testing pure signal logic
           if (!parityMode) {

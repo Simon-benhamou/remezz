@@ -174,6 +174,19 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **XRP example**: 4.55% profit + HIGH vol → 1.5% × 1.6 = 2.4% trailing. Bounce was 2.33% → SURVIVES
   - **Config**: `TRAILING_PROGRESSIVE_ENABLED`, `TRAILING_VOL_ADAPT_ENABLED`, `TRAILING_VOL_HIGH_MULT`, etc.
   - **Applies to**: Live, paper, and backtest (all use shared `shouldExitPosition()`).
+- V5.91: Audit fixes — backtest parity + execution safety:
+  - **Wick breakout entry disabled in backtest**: Always uses `current.close` instead of wick breakout price. Wick breakout gave backtest unrealistically better entries vs live (disabled in live since V5.78).
+  - **NFS HIGH exit uses close price**: Backtest NFS HIGH exits now use candle close (like paper) instead of theoretical trailing stop price. Eliminates three-way parity split — backtest, paper, and live all use realistic exit prices.
+  - **syncWithExchange race condition guard**: Added `closingPosition` check in Case 1 of `syncWithExchange()`. Prevents double capital release + double DB save when `closePosition()` is in progress and exchange simultaneously fills the order.
+  - **NFS_CONFIG reads from MomentumConfig.EXIT**: Backtest NFS scoring config replaced hardcoded values with getter-based object reading from `MomentumConfig.EXIT.NFS_*` fields. Single source of truth for weights/thresholds.
+  - **Paper capital release ordering**: Moved `this.position = null` to after successful DB save in paper `closePosition()`. Prevents orphan positions in DB if save fails. `closingPosition` flag prevents re-entry during the gap.
+  - **Exit reason documentation**: Clarifying comment explaining `EXIT_TRAIL_NFS_HIGH` (backtest) vs `EXIT_TRAIL_NFS_HIGH_15M` (live 15m layer) naming difference is intentional (deferral path distinction, not parity bug).
+  - **Known remaining parity gaps** (documented, not yet fixed):
+    - Position sizing: backtest uses simplified inline calc; live uses full `calculatePositionSize()` with ATR-based leverage, 24h volume caps, risk-based sizing
+    - Symbol blacklist: not checked in backtest (only affects blacklisted symbols like BNB/ATOM)
+    - Toxic hours: backtest uses candle open time, live uses wall clock (boundary-case at hour transitions)
+    - Max positions: backtest uses static `initialCapital`, live uses dynamic `totalCapitalUsd`
+    - Fee recording: live DB records only exchange fee; backtest/paper include slippage + funding
 
 ## Refactoring (completed)
 
