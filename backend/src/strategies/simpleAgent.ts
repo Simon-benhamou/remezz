@@ -3011,9 +3011,48 @@ export class SimpleAgent {
         const syncFeeUsd = syncExitNotionalUsd * 0.0004;
         
         // Save exit to DB with exchange orderId and calculated fee
-        await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd, exchangeOrderId, syncFeeUsd);
-        
+        const syncDbSuccess = await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd, exchangeOrderId, syncFeeUsd);
+
         logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%, fee: $${syncFeeUsd.toFixed(2)}, margin released: $${marginToRelease.toFixed(2)}`);
+
+        // V5.89: Send Telegram notification for exchange-triggered exits (was missing!)
+        // Previously only closePosition() sent notifications, but exchange-side SL/trailing
+        // exits go through syncWithExchange and silently saved without notifying.
+        if (syncDbSuccess) {
+          const balanceAfterSync = this.config.capitalPool.getTotalCapital();
+          void notifyPositionClosed({
+            agentId: this.config.sessionId,
+            symbol,
+            side: this.position.side,
+            quantity: this.position.qty,
+            entryPrice: this.position.entryPrice,
+            exitPrice,
+            pnl: pnlUsd,
+            pnlPct,
+            reason,
+            mode: 'live',
+            balanceAfter: balanceAfterSync,
+            feesUsd: syncFeeUsd,
+          });
+
+          notifyTradeExit({
+            symbol,
+            side: this.position.side,
+            entryPrice: this.position.entryPrice,
+            exitPrice,
+            qty: this.position.qty,
+            notionalUsd,
+            pnlUsd,
+            pnlPct,
+            reason,
+            mode: 'live',
+          });
+
+          // Record trade for consecutive loser tracking + daily report
+          const isWinnerSync = (pnlUsd - syncFeeUsd) > 0;
+          this.config.capitalPool.recordTradeResult(isWinnerSync, symbol);
+          recordTrade(pnlUsd - syncFeeUsd);
+        }
         
         // V5.12: Cancel any remaining orders (trailing stop, backup SL) to avoid orphans
         // This is CRITICAL - when Binance trailing triggers, the STOP_MARKET remains!

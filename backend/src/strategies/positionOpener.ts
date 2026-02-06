@@ -491,6 +491,9 @@ export class PositionOpener {
       mode: 'paper',
     });
 
+    // V5.89: Start RT exit monitor for paper too (parity with live mode)
+    this.ctx.startRealtimeExitMonitorIfNeeded();
+
     return {
       position,
       additionalPositions,
