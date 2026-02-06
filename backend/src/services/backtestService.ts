@@ -295,7 +295,7 @@ const CONFIG = {
     POSITION_SIZE_PCT_BOOST_PER_5K: 0.03, // +3% per $5k capital (gentler scaling)
     POSITION_SIZE_PCT_MAX: 0.55,         // Cap at 55% (was 70%)
     // V5.18: Max concurrent positions - more aggressive scaling
-    MAX_POSITIONS_BASE: 2,               // Base for tiny accounts
+    MAX_POSITIONS_BASE: 3,               // V5.90: Increased from 2 → 3 (crash analysis showed slot-blocking as #1 missed opportunity)
     POSITIONS_PER_1500: 1,               // Add 1 slot per $1.5k (faster scaling)
     MAX_POSITIONS_CAP: 10,               // Cap at 10 (was 8)
   },

@@ -603,7 +603,7 @@ export const MomentumConfig = {
     POSITION_SIZE_PCT_MAX: 0.55,       // Cap at 55%
     // V5.18: Dynamic max positions based on capital
     MAX_POSITIONS: 4,                  // Legacy: base max positions
-    MAX_POSITIONS_BASE: 2,             // Base for tiny accounts (<$500)
+    MAX_POSITIONS_BASE: 3,             // V5.90: Increased from 2 → 3 (crash analysis: slot-blocking was #1 bottleneck)
     POSITIONS_PER_1500: 1,             // Add 1 slot per $1.5k capital
     MAX_POSITIONS_CAP: 10,             // Cap at 10 concurrent positions
     // V5.18: Minimum thresholds
