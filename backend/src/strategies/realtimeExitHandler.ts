@@ -762,8 +762,9 @@ export class RealtimeExitHandler {
           logger.info(
             `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (${exitReason}, 2-close) | exec=${execPx.toFixed(4)} | trailStop=${trailingStopPx?.toFixed(4) ?? 'n/a'} | close=${closePx.toFixed(4)} | confirmCandles=${confirmCandles}`,
           );
-        await this.ctx.closePosition(updatedPosition, execPx, exitReason);
-        return;
+          await this.ctx.closePosition(updatedPosition, execPx, exitReason);
+          return;
+        }
       }
 
       // Fallback: ticker-based trailing (legacy).
