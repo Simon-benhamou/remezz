@@ -1964,10 +1964,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
           const wickBreakout = checkWickBreakout(current, bb, signal.side);
 
-          // Use early entry price if wick breakout triggered, otherwise use close
-          const entryPrice = wickBreakout.triggered && wickBreakout.entryPrice
-            ? wickBreakout.entryPrice
-            : current.close;
+          // V5.91: Use close price for entry — wick breakout is disabled in live since V5.78.
+          // Wick breakout gives unrealistically better fills in backtest. Live always enters at
+          // market price ~= close. Keep detection above for analysis/logging only.
+          const entryPrice = current.close;
           
           // V5.51: In parity mode, skip capital checks - we're testing pure signal logic
           if (!parityMode) {
