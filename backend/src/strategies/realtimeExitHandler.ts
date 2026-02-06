@@ -729,11 +729,14 @@ export class RealtimeExitHandler {
             await this.ctx.closePosition(updatedPosition, execPx, EXIT_TRAIL_NFS_HIGH);
             return;
           } else if (nfsResult.confidence === 'MEDIUM' && this.nfsBreachCount >= 1) {
-            // MEDIUM confidence - 1 candle confirmation, exit at CANDLE CLOSE
+            // MEDIUM confidence - 1 candle confirmation
+            // V5.90: Use best of trailing stop or close (matches backtest & 15m layer parity)
             this.stop();
-            const execPx = closePx;
+            const execPx = updatedPosition.side === 'long'
+              ? Math.max(trailingStopPrice, closePx)
+              : Math.min(trailingStopPrice, closePx);
             logger.info(
-              `⚡⚡ [${symbol}] NFS MEDIUM EXIT (score=${nfsResult.score.toFixed(0)}, breaches=${this.nfsBreachCount}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | reason=medium_confidence_confirmed`,
+              `⚡⚡ [${symbol}] NFS MEDIUM EXIT (score=${nfsResult.score.toFixed(0)}, breaches=${this.nfsBreachCount}) | exec=${execPx.toFixed(4)} | stop=${stopPrice} | close=${closePx.toFixed(4)} | reason=medium_confidence_confirmed`,
             );
             await this.ctx.closePosition(updatedPosition, execPx, EXIT_TRAIL_NFS_MED);
             return;
@@ -764,7 +767,12 @@ export class RealtimeExitHandler {
 
         this.stop();
         const trailingStopPx = candidateStop ?? updatedPosition.appTrailingStop ?? this.lastAppTrailingStop;
-        const execPx = closePx;
+        // V5.90: Use best of trailing stop or close (matches backtest & 15m layer parity)
+        const execPx = trailingStopPx != null
+          ? (updatedPosition.side === 'long'
+            ? Math.max(trailingStopPx, closePx)
+            : Math.min(trailingStopPx, closePx))
+          : closePx;
         const exitReason = nfsEnabled && this.lastNfsResult ? EXIT_TRAIL_NFS_LOW : EXIT_TRAIL_RT;
         logger.info(
           `⚡⚡⚡ [${symbol}] REALTIME EXIT CONFIRMED (${exitReason}, 2-close) | exec=${execPx.toFixed(4)} | trailStop=${trailingStopPx?.toFixed(4) ?? 'n/a'} | close=${closePx.toFixed(4)} | confirmCandles=${confirmCandles}${this.lastNfsResult ? ` | nfs=${this.lastNfsResult.score.toFixed(0)}` : ''}`,
