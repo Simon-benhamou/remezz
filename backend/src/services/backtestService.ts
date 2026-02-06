@@ -295,7 +295,7 @@ const CONFIG = {
     POSITION_SIZE_PCT_BOOST_PER_5K: 0.03, // +3% per $5k capital (gentler scaling)
     POSITION_SIZE_PCT_MAX: 0.55,         // Cap at 55% (was 70%)
     // V5.18: Max concurrent positions - more aggressive scaling
-    MAX_POSITIONS_BASE: 3,               // V5.90: Increased from 2 → 3 (crash analysis showed slot-blocking as #1 missed opportunity)
+    MAX_POSITIONS_BASE: 2,               // Base for tiny accounts
     POSITIONS_PER_1500: 1,               // Add 1 slot per $1.5k (faster scaling)
     MAX_POSITIONS_CAP: 10,               // Cap at 10 (was 8)
   },
@@ -745,13 +745,13 @@ function checkBacktestExit(
       // per V5.90). The _15M suffix distinguishes the deferral path — same scoring logic,
       // different timing. This is intentional, not a parity bug.
       if (nfsScore.confidence === 'HIGH') {
-        // V5.91: Exit at candle close (realistic) — matches paper mode.
-        // Previously used trailingStopPrice (theoretical/perfect) which gave
-        // backtest unrealistically better fills than paper/live market orders.
+        // HIGH confidence: Exit at trailing stop price (best available fill).
+        // In live, proactive limit order is placed at trailing stop BEFORE breach
+        // (V5.87), so fill is at trailing price — matching this backtest behavior.
         return {
           shouldExit: true,
           exitReason: EXIT_TRAIL_NFS_HIGH,
-          exitPrice: current.close,
+          exitPrice: trailingStopPrice,
         };
       } else if (nfsScore.confidence === 'MEDIUM') {
         // MEDIUM confidence: 1-candle confirmation, exit at best of trailing stop or close
@@ -1964,10 +1964,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
           const wickBreakout = checkWickBreakout(current, bb, signal.side);
 
-          // V5.91: Always use close price for entry — wick breakout gives unrealistically
-          // better fills in backtest vs live (disabled in live since V5.78).
-          // Keep detection above for logging/analysis only.
-          const entryPrice = current.close;
+          // Use early entry price if wick breakout triggered, otherwise use close
+          const entryPrice = wickBreakout.triggered && wickBreakout.entryPrice
+            ? wickBreakout.entryPrice
+            : current.close;
           
           // V5.51: In parity mode, skip capital checks - we're testing pure signal logic
           if (!parityMode) {
