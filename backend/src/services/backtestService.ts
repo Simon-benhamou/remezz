@@ -2005,6 +2005,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             'LTC/USDT:USDT': 100_000,
             'BCH/USDT:USDT': 100_000,
             'UNI/USDT:USDT': 100_000,
+            'NEAR/USDT:USDT': 100_000,
+            'TIA/USDT:USDT': 100_000,
+            'OP/USDT:USDT': 100_000,
+            'ARB/USDT:USDT': 100_000,
+            'INJ/USDT:USDT': 100_000,
             // Tier LOW: $25K
             'SEI/USDT:USDT': 25_000,
             'IMX/USDT:USDT': 25_000,
@@ -2012,6 +2017,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
             'SUI/USDT:USDT': 25_000,
             'SONIC/USDT:USDT': 25_000,
             'APT/USDT:USDT': 25_000,
+            'FET/USDT:USDT': 25_000,
+            'WIF/USDT:USDT': 25_000,
+            'STX/USDT:USDT': 25_000,
+            'RENDER/USDT:USDT': 25_000,
+            'JUP/USDT:USDT': 25_000,
           };
           const cap = LIQUIDITY_CAPS[symbol] ?? Infinity;
           const wasCapped = Number.isFinite(cap) && notionalUsd > cap;
