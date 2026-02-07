@@ -19,30 +19,27 @@ import path from 'node:path';
 
 const logger = createLogger('CandleSeeder');
 
-// Symbols to seed - matches the trading universe
+// V5.93: Symbols to seed - active trading universe + extras for agent creation
 const SEED_SYMBOLS = [
-  'BTC/USDT:USDT',
-  'ETH/USDT:USDT',
-  'SOL/USDT:USDT',
-  'DOGE/USDT:USDT',
+  // Top 10 combined winners
   'AVAX/USDT:USDT',
-  'SUI/USDT:USDT',
-  'SEI/USDT:USDT',
-  'IMX/USDT:USDT',
-  'APT/USDT:USDT',
-  'ARB/USDT:USDT',
-  'OP/USDT:USDT',
-  'NEAR/USDT:USDT',
-  'FTM/USDT:USDT',
-  'ATOM/USDT:USDT',
+  'FET/USDT:USDT',
+  'WIF/USDT:USDT',
   'DOT/USDT:USDT',
+  'TIA/USDT:USDT',
+  'IMX/USDT:USDT',
+  'STX/USDT:USDT',
+  'DOGE/USDT:USDT',
   'ADA/USDT:USDT',
+  'BTC/USDT:USDT',
+  // Available in agent creation modal
+  'RENDER/USDT:USDT',
+  'SOL/USDT:USDT',
   'XRP/USDT:USDT',
+  'NEAR/USDT:USDT',
   'LINK/USDT:USDT',
-  'UNI/USDT:USDT',
-  'BCH/USDT:USDT',
-  'LTC/USDT:USDT',
-  'SONIC/USDT:USDT',
+  'ETH/USDT:USDT',
+  'SEI/USDT:USDT',
 ];
 
 // How many candles to fetch

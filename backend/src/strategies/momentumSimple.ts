@@ -403,13 +403,13 @@ export const MomentumConfig = {
 
     // TIER 2: Most altcoins (P90 0.8-1.2%)
     // SOL, SEI, DOGE, AVAX, XRP, LINK, ADA, ATOM, DOT, ARB, NEAR, SUI, APT
-    TIER2_SYMBOLS: ['SOL', 'SEI', 'DOGE', 'AVAX', 'XRP', 'LINK', 'ADA', 'ATOM', 'DOT', 'ARB', 'NEAR', 'SUI', 'APT'],
+    TIER2_SYMBOLS: ['SOL', 'SEI', 'DOGE', 'AVAX', 'XRP', 'LINK', 'ADA', 'ATOM', 'DOT', 'ARB', 'NEAR', 'SUI', 'APT', 'STX', 'TIA'],
     TIER2_SL_LOW_VOL_PCT: 2.0,       // Low vol: 2.0% (was 1.5% - too tight!)
     TIER2_SL_MED_VOL_PCT: 2.5,       // Med vol: 2.5%
     TIER2_SL_HIGH_VOL_PCT: 3.0,      // High vol: 3.0%
 
     // TIER 3: High volatility alts (P90 > 1.2%)
-    TIER3_SYMBOLS: ['IMX', 'OP', 'FTM'],
+    TIER3_SYMBOLS: ['IMX', 'OP', 'FTM', 'FET', 'WIF'],
     TIER3_SL_LOW_VOL_PCT: 2.5,       // Low vol: 2.5%
     TIER3_SL_MED_VOL_PCT: 3.0,       // Med vol: 3.0%
     TIER3_SL_HIGH_VOL_PCT: 3.5,      // High vol: 3.5%
@@ -634,29 +634,35 @@ export const MomentumConfig = {
     'LINK/USDT:USDT',  // OK: +7%, 50.6% WR
   ],
 
-  // V5.92: AVOID — negative or marginal PnL, no edge
+  // V5.93: AVOID — negative or marginal PnL in combined backtests
   SYMBOLS_NOT_COMPATIBLE: [
-    'ETH/USDT:USDT',   // MARGINAL: +3%, 49.4% WR (worse than coin flip)
+    'ETH/USDT:USDT',   // MARGINAL: ~0% ROI, 49.4% WR (worse than coin flip)
+    'SEI/USDT:USDT',   // NEGATIVE in combined: -$1,160 (positive solo but loses slots to better symbols)
     'ARB/USDT:USDT',   // MARGINAL: -3%, 49.5% WR (negative PnL)
     'FTM/USDT:USDT',   // N/A: only 1 trade in 12 months
+    'INJ/USDT:USDT',   // MARGINAL: +0.3% ROI, not worth a slot
+    'JUP/USDT:USDT',   // AVOID: -29% ROI, 52.6% WR
+    'APT/USDT:USDT',   // NEGATIVE in combined: -$319 (ok solo but loses in competition)
+    'OP/USDT:USDT',    // NEGATIVE in combined: -$389 (ok solo but loses in competition)
     'BNB/USDT:USDT',   // Not tested
     'UNI/USDT:USDT',   // Not tested
     'LTC/USDT:USDT',   // Not tested
     'BCH/USDT:USDT',   // Not tested
   ],
   
-  // V5.92: Updated based on individual symbol analysis (Jan-Dec 2025)
-  // STRONG symbols only — all have positive PnL, WR>55%, Sharpe>0.7
+  // V5.93: Combined backtest 11 symbols (Jan-Dec 2025, $2000, 4.5x) → +1308% ROI, 61% WR, 29.8% DD
+  // Ranked by combined PnL — SEI/APT/OP dropped (negative in combined mode)
   SYMBOLS: [
-    'IMX/USDT:USDT',   // #1 PnL=$5,289, WR=70.2%, Sharpe=2.74
-    'AVAX/USDT:USDT',  // #2 PnL=$3,108, WR=69.7%, Sharpe=2.61
-    'SEI/USDT:USDT',   // #3 PnL=$1,963, WR=61.1%, Sharpe=1.61
-    'ADA/USDT:USDT',   // #4 PnL=$1,832, WR=61.1%, Sharpe=1.58
-    'DOT/USDT:USDT',   // #5 PnL=$996, WR=55.8%, Sharpe=1.23
-    'DOGE/USDT:USDT',  // #6 PnL=$657, WR=58.1%, Sharpe=0.88
-    'BTC/USDT:USDT',   // #7 PnL=$569, WR=71.4%, Sharpe=1.58
-    'APT/USDT:USDT',   // #8 PnL=$547, WR=59.3%, Sharpe=0.80
-    'OP/USDT:USDT',    // #9 PnL=$602, WR=57.4%, Sharpe=0.76
+    'AVAX/USDT:USDT',  // #1 PnL=$4,850, 54 trades, avg=$89.81
+    'FET/USDT:USDT',   // #2 PnL=$4,558, 81 trades, avg=$56.28 (NEW - AI narrative)
+    'WIF/USDT:USDT',   // #3 PnL=$3,686, 86 trades, avg=$42.86 (NEW - meme momentum)
+    'DOT/USDT:USDT',   // #4 PnL=$3,630, 49 trades, avg=$74.07
+    'TIA/USDT:USDT',   // #5 PnL=$3,087, 79 trades, avg=$39.07 (NEW - L1 volatile)
+    'IMX/USDT:USDT',   // #6 PnL=$2,552, 69 trades, avg=$36.98
+    'STX/USDT:USDT',   // #7 PnL=$1,761, 50 trades, avg=$35.23 (NEW - Bitcoin L2)
+    'DOGE/USDT:USDT',  // #8 PnL=$1,617, 84 trades, avg=$19.25
+    'ADA/USDT:USDT',   // #9 PnL=$1,241, 66 trades, avg=$18.81
+    'BTC/USDT:USDT',   // #10 PnL=$339, 25 trades, avg=$13.56
   ],
   
   // V5.8: Leverage 5x uniforme - Validé sûr (SL max 4.5% × 5 = 22.5% << 80% liquidation)
@@ -677,6 +683,10 @@ export const MomentumConfig = {
     'APT/USDT:USDT': 5,
     'OP/USDT:USDT': 5,
     'NEAR/USDT:USDT': 5,
+    'FET/USDT:USDT': 5,
+    'WIF/USDT:USDT': 5,
+    'TIA/USDT:USDT': 5,
+    'STX/USDT:USDT': 5,
   } as Record<string, number>,
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -3026,6 +3036,8 @@ export const LIQUIDITY_CONFIG = {
         'SEI/USDT:USDT', 'IMX/USDT:USDT', 'DOT/USDT:USDT', 'SUI/USDT:USDT',
         // V5.30: Added missing low-liquidity cryptos from scanner
         'FIL/USDT:USDT', 'ETC/USDT:USDT', 'WLD/USDT:USDT', 'ORDI/USDT:USDT', 'STX/USDT:USDT', 'JUP/USDT:USDT',
+        // V5.93: New winners
+        'FET/USDT:USDT', 'WIF/USDT:USDT', 'RENDER/USDT:USDT',
       ],
       maxPositionUsd: 25_000,  // $25K max - beyond this, massive slippage
       minVolume24h: 50_000_000,

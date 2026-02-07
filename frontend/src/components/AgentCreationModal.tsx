@@ -40,35 +40,33 @@ type CreationFormShape = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CRYPTOS V5.6 - Classées par ROI backtest 24 mois (Nov 2023 - Nov 2025)
+// CRYPTOS V5.93 - Classées par PnL combiné backtest 12 mois (Jan - Dec 2025)
+// Combined: +1308% ROI, 61% WR, 29.8% DD ($2000, 4.5x, 710 trades)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ✅ RECOMMANDÉES V5.6 - Backtest ROI positif sur 24 mois
-// Toutes ces cryptos ont un ROI positif avec la stratégie V5 (Momentum Simple)
+// ✅ RECOMMANDÉES V5.93 - Top 10 winners en backtest combiné
 const V5_RECOMMENDED_CRYPTOS = [
-  { symbol: 'DOGE/USDT', name: 'Dogecoin', category: '🏆 TOP 1', icon: '🐕', roi: '+438%', badge: 'gold', recommended: true },
-  { symbol: 'IMX/USDT', name: 'Immutable X', category: '🏆 TOP 2', icon: '🔷', roi: '+344%', badge: 'gold', recommended: true },
-  { symbol: 'SEI/USDT', name: 'Sei', category: '🏆 TOP 3', icon: '🌊', roi: '+280%', badge: 'gold', recommended: true },
-  { symbol: 'SUI/USDT', name: 'Sui', category: '🏆 TOP 4', icon: '💧', roi: '+266%', badge: 'gold', recommended: true },
-  { symbol: 'XRP/USDT', name: 'Ripple', category: '✅ Excellent', icon: '✕', roi: '+185%', badge: 'green', recommended: true },
-  { symbol: 'ETH/USDT', name: 'Ethereum', category: '✅ Excellent', icon: 'Ξ', roi: '+173%', badge: 'green', recommended: true },
-  { symbol: 'ADA/USDT', name: 'Cardano', category: '✅ Excellent', icon: '₳', roi: '+173%', badge: 'green', recommended: true },
-  { symbol: 'DOT/USDT', name: 'Polkadot', category: '✅ Excellent', icon: '⬤', roi: '+173%', badge: 'green', recommended: true },
-  { symbol: 'LINK/USDT', name: 'Chainlink', category: '✅ Bon', icon: '🔗', roi: '+143%', badge: 'blue', recommended: true },
-  { symbol: 'AVAX/USDT', name: 'Avalanche', category: '✅ Bon', icon: '🔺', roi: '+118%', badge: 'blue', recommended: true },
-  { symbol: 'SOL/USDT', name: 'Solana', category: '✅ Bon', icon: '◎', roi: '+111%', badge: 'blue', recommended: true },
-  { symbol: 'BTC/USDT', name: 'Bitcoin', category: '⚡ Stable', icon: '₿', roi: '+65%', badge: 'cyan', recommended: true },
+  { symbol: 'AVAX/USDT', name: 'Avalanche', category: '🏆 TOP 1', icon: '🔺', roi: '+$4,850', badge: 'gold', recommended: true },
+  { symbol: 'FET/USDT', name: 'Fetch.ai', category: '🏆 TOP 2', icon: '🤖', roi: '+$4,558', badge: 'gold', recommended: true },
+  { symbol: 'WIF/USDT', name: 'dogwifhat', category: '🏆 TOP 3', icon: '🎩', roi: '+$3,686', badge: 'gold', recommended: true },
+  { symbol: 'DOT/USDT', name: 'Polkadot', category: '🏆 TOP 4', icon: '⬤', roi: '+$3,630', badge: 'gold', recommended: true },
+  { symbol: 'TIA/USDT', name: 'Celestia', category: '✅ Excellent', icon: '🌌', roi: '+$3,087', badge: 'green', recommended: true },
+  { symbol: 'IMX/USDT', name: 'Immutable X', category: '✅ Excellent', icon: '🔷', roi: '+$2,552', badge: 'green', recommended: true },
+  { symbol: 'STX/USDT', name: 'Stacks', category: '✅ Bon', icon: '📦', roi: '+$1,761', badge: 'blue', recommended: true },
+  { symbol: 'DOGE/USDT', name: 'Dogecoin', category: '✅ Bon', icon: '🐕', roi: '+$1,617', badge: 'blue', recommended: true },
+  { symbol: 'ADA/USDT', name: 'Cardano', category: '✅ Bon', icon: '₳', roi: '+$1,241', badge: 'blue', recommended: true },
+  { symbol: 'BTC/USDT', name: 'Bitcoin', category: '⚡ Stable', icon: '₿', roi: '+$339', badge: 'cyan', recommended: true },
 ];
 
-// ⚠️ AUTRES CRYPTOS - Disponibles mais moins testées
+// ⚠️ AUTRES CRYPTOS - Disponibles mais pas dans le top 10 combiné
 const NON_RECOMMENDED_CRYPTOS = [
-  { symbol: 'BNB/USDT', name: 'Binance Coin', category: '⚠️ Non testé', icon: '🔶', roi: 'N/A', badge: 'default', recommended: false },
-  { symbol: 'ATOM/USDT', name: 'Cosmos', category: '⚠️ Non testé', icon: '⚛️', roi: 'N/A', badge: 'default', recommended: false },
-  { symbol: 'UNI/USDT', name: 'Uniswap', category: '⚠️ Non testé', icon: '🦄', roi: 'N/A', badge: 'default', recommended: false },
-  { symbol: 'LTC/USDT', name: 'Litecoin', category: '⚠️ Non testé', icon: 'Ł', roi: 'N/A', badge: 'default', recommended: false },
-  { symbol: 'SONIC/USDT', name: 'Sonic', category: '⚠️ Non testé', icon: '🎵', roi: 'N/A', badge: 'default', recommended: false },
-  { symbol: 'BCH/USDT', name: 'Bitcoin Cash', category: '⚠️ Non testé', icon: '💵', roi: 'N/A', badge: 'default', recommended: false },
-  { symbol: 'APT/USDT', name: 'Aptos', category: '⚠️ Non testé', icon: '🅰️', roi: 'N/A', badge: 'default', recommended: false },
+  { symbol: 'RENDER/USDT', name: 'Render', category: '⚠️ OK solo', icon: '🎨', roi: '+15%', badge: 'default', recommended: false },
+  { symbol: 'SOL/USDT', name: 'Solana', category: '⚠️ OK solo', icon: '◎', roi: '+25%', badge: 'default', recommended: false },
+  { symbol: 'XRP/USDT', name: 'Ripple', category: '⚠️ OK solo', icon: '✕', roi: '+12%', badge: 'default', recommended: false },
+  { symbol: 'NEAR/USDT', name: 'NEAR Protocol', category: '⚠️ OK solo', icon: '🌐', roi: '+19%', badge: 'default', recommended: false },
+  { symbol: 'LINK/USDT', name: 'Chainlink', category: '⚠️ OK solo', icon: '🔗', roi: '+7%', badge: 'default', recommended: false },
+  { symbol: 'ETH/USDT', name: 'Ethereum', category: '⚠️ Marginal', icon: 'Ξ', roi: '~0%', badge: 'default', recommended: false },
+  { symbol: 'SEI/USDT', name: 'Sei', category: '⚠️ Neg. combiné', icon: '🌊', roi: '-$1,160', badge: 'default', recommended: false },
 ];
 
 // Combiner les deux listes (recommandées d'abord)

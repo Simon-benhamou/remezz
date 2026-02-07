@@ -316,21 +316,22 @@ export default function BacktestPage() {
   const [selectedSymbol, setSelectedSymbol] = useState<string | 'all'>('all');
   const [selectedSide, setSelectedSide] = useState<'all' | 'long' | 'short'>('all');
 
-  // V5.92: Updated based on individual symbol analysis (Jan-Dec 2025)
-  const defaultSymbols = ['IMX/USDT:USDT', 'AVAX/USDT:USDT', 'SEI/USDT:USDT', 'ADA/USDT:USDT', 'DOT/USDT:USDT', 'DOGE/USDT:USDT', 'BTC/USDT:USDT'];
+  // V5.93: Combined backtest winners (Jan-Dec 2025, $2000, 4.5x) → +1308% ROI
+  const defaultSymbols = ['AVAX/USDT:USDT', 'FET/USDT:USDT', 'WIF/USDT:USDT', 'DOT/USDT:USDT', 'TIA/USDT:USDT', 'IMX/USDT:USDT', 'STX/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'BTC/USDT:USDT'];
   const symbolOptions = [
-    // STRONG symbols
-    { value: 'IMX/USDT:USDT', label: 'IMX/USDT (+264%)' },
-    { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT (+155%)' },
-    { value: 'SEI/USDT:USDT', label: 'SEI/USDT (+98%)' },
-    { value: 'ADA/USDT:USDT', label: 'ADA/USDT (+92%)' },
-    { value: 'DOT/USDT:USDT', label: 'DOT/USDT (+50%)' },
-    { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT (+33%)' },
-    { value: 'BTC/USDT:USDT', label: 'BTC/USDT (+29%)' },
-    { value: 'APT/USDT:USDT', label: 'APT/USDT (+27%)' },
-    { value: 'OP/USDT:USDT', label: 'OP/USDT (+30%)' },
-    // OK symbols
-    { value: 'SUI/USDT:USDT', label: 'SUI/USDT (+33%)' },
+    // TOP 10 — combined backtest winners
+    { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT (+$4,850)' },
+    { value: 'FET/USDT:USDT', label: 'FET/USDT (+$4,558)' },
+    { value: 'WIF/USDT:USDT', label: 'WIF/USDT (+$3,686)' },
+    { value: 'DOT/USDT:USDT', label: 'DOT/USDT (+$3,630)' },
+    { value: 'TIA/USDT:USDT', label: 'TIA/USDT (+$3,087)' },
+    { value: 'IMX/USDT:USDT', label: 'IMX/USDT (+$2,552)' },
+    { value: 'STX/USDT:USDT', label: 'STX/USDT (+$1,761)' },
+    { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT (+$1,617)' },
+    { value: 'ADA/USDT:USDT', label: 'ADA/USDT (+$1,241)' },
+    { value: 'BTC/USDT:USDT', label: 'BTC/USDT (+$339)' },
+    // OK — available but not defaults
+    { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT (+15%)' },
     { value: 'SOL/USDT:USDT', label: 'SOL/USDT (+25%)' },
     { value: 'XRP/USDT:USDT', label: 'XRP/USDT (+12%)' },
     { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT (+19%)' },
