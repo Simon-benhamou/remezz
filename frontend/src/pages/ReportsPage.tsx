@@ -963,7 +963,19 @@ function pct(val?: number | null, digits = 2) {
 }
 
 // ============================================================================
-// DAILY REPORTS TABLE (with expand, sort, pagination)
+// MAIN REPORTS PAGE
+// ============================================================================
+
+export default function ReportsPage() {
+  return (
+    <div className="p-5">
+      <ParityVerificationPanel />
+    </div>
+  );
+}
+
+// ============================================================================
+// LEGACY: DailyReportsTable (kept for reference, unused)
 // ============================================================================
 
 type DailySortField = 'date' | 'sessionsCount' | 'totalTrades' | 'winRate' | 'expectancy' | 'totalPnl' | 'profitFactor';
@@ -1164,136 +1176,4 @@ function DailyReportsTable({ reports, sessions, isRefreshing, isInitialLoad, han
   );
 }
 
-// ============================================================================
-// MAIN REPORTS PAGE
-// ============================================================================
-
-export default function ReportsPage() {
-  const { mode } = useMode();
-  const {
-    reports,
-    sessions,
-    isRefreshing,
-    isInitialLoad,
-    error,
-    loadReports,
-    setupAutoRefresh
-  } = useReportsCache();
-
-  // Initial load and mode change
-  React.useEffect(() => {
-    loadReports(mode as AppMode).catch(console.error);
-  }, [mode, loadReports]);
-
-  // Setup auto-refresh (every 60s)
-  React.useEffect(() => {
-    return setupAutoRefresh(mode as AppMode);
-  }, [mode, setupAutoRefresh]);
-
-  // Manual refresh handler
-  const handleRefresh = React.useCallback(() => {
-    loadReports(mode as AppMode, true).catch(console.error);
-  }, [mode, loadReports]);
-
-  // Show error toast only once
-  React.useEffect(() => {
-    if (error) {
-      toast.error(error);
-    }
-  }, [error]);
-
-  const globalStats = React.useMemo(() => {
-    const totalTrades = reports.reduce((sum: number, r: any) => sum + r.totalTrades, 0);
-    const avgWinRate = reports.length > 0 ?
-      reports.reduce((sum: number, r: any) => sum + r.winRate, 0) / reports.length : 0;
-    const totalPnl = reports.reduce((sum: number, r: any) => sum + r.totalPnl, 0);
-    const maxDrawdown = Math.min(...reports.map((r: any) => r.maxDrawdown), 0);
-
-    return { totalTrades, avgWinRate, totalPnl, maxDrawdown };
-  }, [reports]);
-
-  return (
-    <div className="p-5">
-      <Tabs defaultValue="daily">
-        <TabsList>
-          <TabsTrigger value="daily">Daily Reports</TabsTrigger>
-          <TabsTrigger value="parity">Backtest Parity</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="daily">
-          <div className="flex flex-col gap-4">
-            <div className="rounded-xl border border-border bg-card p-6">
-              <h3 className="m-0 text-xl font-semibold text-foreground">Global Trading Reports</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Comprehensive dashboard with performance metrics across all agents
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-              <div className="rounded-xl border border-border bg-card p-6">
-                <span className="text-xs uppercase tracking-wider text-muted-foreground">Total Trades</span>
-                <div className="text-2xl font-bold text-blue-500">{globalStats.totalTrades}</div>
-              </div>
-              <div className="rounded-xl border border-border bg-card p-6">
-                <span className="text-xs uppercase tracking-wider text-muted-foreground">Average Win Rate</span>
-                <div className={cn("text-2xl font-bold", globalStats.avgWinRate > 0.5 ? "text-emerald-500" : "text-red-500")}>
-                  {pct(globalStats.avgWinRate)}
-                </div>
-              </div>
-              <div className="rounded-xl border border-border bg-card p-6">
-                <span className="text-xs uppercase tracking-wider text-muted-foreground">Total P&L</span>
-                <div className={cn("text-2xl font-bold", globalStats.totalPnl >= 0 ? "text-emerald-500" : "text-red-500")}>
-                  ${globalStats.totalPnl.toFixed(2)}
-                </div>
-              </div>
-              <div className="rounded-xl border border-border bg-card p-6">
-                <span className="text-xs uppercase tracking-wider text-muted-foreground">Max Drawdown</span>
-                <div className="text-2xl font-bold text-red-500">
-                  ${globalStats.maxDrawdown.toFixed(2)}
-                </div>
-              </div>
-            </div>
-
-            <DailyReportsTable
-              reports={reports}
-              sessions={sessions}
-              isRefreshing={isRefreshing}
-              isInitialLoad={isInitialLoad}
-              handleRefresh={handleRefresh}
-            />
-
-            <div className="rounded-xl border border-border bg-card">
-              <div className="border-b border-border px-6 py-3">
-                <span className="text-sm font-semibold text-foreground">Active Sessions</span>
-              </div>
-              <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 md:grid-cols-3">
-                {sessions.filter((s: any) => !s.stoppedAt).map((session: any) => (
-                  <div key={session.id} className="rounded-lg border border-border bg-card p-3">
-                    <span className="font-semibold text-foreground">{session.symbol}</span>
-                    <br />
-                    <span className="text-sm text-muted-foreground">
-                      Mode: {session.mode?.toUpperCase()}
-                    </span>
-                    <br />
-                    <span className="text-sm text-muted-foreground">
-                      Started: {dayjs(session.startedAt).format('MM-DD HH:mm')}
-                    </span>
-                  </div>
-                ))}
-                {sessions.filter((s: any) => !s.stoppedAt).length === 0 && (
-                  <div className="col-span-full py-4 text-center text-sm text-muted-foreground">
-                    No active sessions
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="parity">
-          <ParityVerificationPanel />
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
-}
+/* Old ReportsPage export removed — now defined above as a simple wrapper around ParityVerificationPanel */

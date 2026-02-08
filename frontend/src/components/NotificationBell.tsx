@@ -5,7 +5,21 @@
  */
 
 import React from 'react';
-import { Bell, Volume2, CheckCircle } from 'lucide-react';
+import {
+  Bell,
+  Volume2,
+  CheckCircle,
+  Rocket,
+  XCircle,
+  OctagonX,
+  Target,
+  Bot,
+  Square,
+  RefreshCw,
+  Zap,
+  BarChart3,
+  Megaphone,
+} from 'lucide-react';
 import { useTradeNotifications } from '@/providers/TradeNotificationProvider';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
@@ -35,29 +49,32 @@ export default function NotificationBell() {
     (n) => Date.now() - n.timestamp < 5 * 60 * 1000
   ).length;
 
-  const getTypeInfo = (item: (typeof recentNotifications)[number]) => {
+  const getTypeIcon = (item: (typeof recentNotifications)[number]) => {
     const isWin = (item.pnlUsd ?? 0) >= 0;
+    const size = 'h-3.5 w-3.5';
     switch (item.type) {
       case 'trade_entry':
-        return { icon: '\uD83D\uDE80', color: 'text-[var(--accent)]' };
+        return { icon: <Rocket className={cn(size, 'text-[var(--accent)]')} />, color: 'text-[var(--accent)]' };
       case 'trade_exit':
-        return { icon: isWin ? '\u2705' : '\u274C', color: isWin ? 'text-[var(--success)]' : 'text-[var(--error)]' };
+        return isWin
+          ? { icon: <CheckCircle className={cn(size, 'text-[var(--success)]')} />, color: 'text-[var(--success)]' }
+          : { icon: <XCircle className={cn(size, 'text-[var(--error)]')} />, color: 'text-[var(--error)]' };
       case 'stop_loss_hit':
-        return { icon: '\uD83D\uDED1', color: 'text-[var(--error)]' };
+        return { icon: <OctagonX className={cn(size, 'text-[var(--error)]')} />, color: 'text-[var(--error)]' };
       case 'take_profit_hit':
-        return { icon: '\uD83C\uDFAF', color: 'text-[var(--success)]' };
+        return { icon: <Target className={cn(size, 'text-[var(--success)]')} />, color: 'text-[var(--success)]' };
       case 'agent_started':
-        return { icon: '\uD83E\uDD16', color: 'text-[var(--success)]' };
+        return { icon: <Bot className={cn(size, 'text-[var(--success)]')} />, color: 'text-[var(--success)]' };
       case 'agent_stopped':
-        return { icon: '\u23F9\uFE0F', color: 'text-yellow-500' };
+        return { icon: <Square className={cn(size, 'text-yellow-500')} />, color: 'text-yellow-500' };
       case 'regime_change':
-        return { icon: '\uD83D\uDD04', color: 'text-purple-500' };
+        return { icon: <RefreshCw className={cn(size, 'text-purple-500')} />, color: 'text-purple-500' };
       case 'high_volatility':
-        return { icon: '\u26A1', color: 'text-yellow-500' };
+        return { icon: <Zap className={cn(size, 'text-yellow-500')} />, color: 'text-yellow-500' };
       case 'signal_detected':
-        return { icon: '\uD83D\uDCCA', color: 'text-cyan-500' };
+        return { icon: <BarChart3 className={cn(size, 'text-cyan-500')} />, color: 'text-cyan-500' };
       default:
-        return { icon: '\uD83D\uDCE2', color: 'text-muted-foreground' };
+        return { icon: <Megaphone className={cn(size, 'text-muted-foreground')} />, color: 'text-muted-foreground' };
     }
   };
 
@@ -142,7 +159,7 @@ export default function NotificationBell() {
                   item.type === 'stop_loss_hit' ||
                   item.type === 'take_profit_hit';
                 const isWin = (item.pnlUsd ?? 0) >= 0;
-                const typeInfo = getTypeInfo(item);
+                const typeInfo = getTypeIcon(item);
 
                 return (
                   <div
@@ -151,7 +168,7 @@ export default function NotificationBell() {
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1">
-                        <span className="text-xs">{typeInfo.icon}</span>
+                        {typeInfo.icon}
                         {item.mode && (
                           <Badge
                             variant={item.mode === 'live' ? 'destructive' : 'default'}

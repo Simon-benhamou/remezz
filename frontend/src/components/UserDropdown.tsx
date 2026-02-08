@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { User, Settings, Pencil, LogOut } from 'lucide-react';
+import { User, LogOut } from 'lucide-react';
 import { clearApiKey, api } from '../api';
-import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -21,15 +19,7 @@ interface UserInfo {
   createdAt?: string;
 }
 
-const AVATAR_COLORS = ['#1890ff', '#52c41a', '#fa8c16', '#eb2f96', '#13c2c2', '#722ed1'];
-
-function getAvatarColor(username: string) {
-  const index = username.charCodeAt(0) % AVATAR_COLORS.length;
-  return AVATAR_COLORS[index];
-}
-
 export default function UserDropdown() {
-  const navigate = useNavigate();
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
 
   useEffect(() => {
@@ -67,61 +57,32 @@ export default function UserDropdown() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          className="h-11 px-3 flex items-center gap-2.5 rounded-xl border border-cyan-500/25 bg-[var(--bg-primary)] text-[var(--text-primary)] hover:bg-blue-600/20 hover:border-cyan-500/55 transition-all"
+        <button
+          className="h-9 w-9 rounded-full flex items-center justify-content cursor-pointer border-0 outline-none focus:ring-2 focus:ring-emerald-400/40 transition-all hover:scale-105"
+          style={{ background: 'linear-gradient(135deg, #3b82f6, #34d399)' }}
         >
-          <Avatar className="h-8 w-8">
+          <Avatar className="h-9 w-9">
             <AvatarFallback
-              className="text-sm font-semibold text-white"
-              style={{ backgroundColor: getAvatarColor(userInfo?.username || 'U') }}
+              className="text-sm font-bold text-white"
+              style={{ background: 'linear-gradient(135deg, #3b82f6, #34d399)' }}
             >
               {userInfo?.username?.[0]?.toUpperCase() || <User className="h-4 w-4" />}
             </AvatarFallback>
           </Avatar>
-          <div className="text-left leading-tight">
-            <div className="text-[13px] font-semibold text-[var(--text-primary)] max-w-[120px] truncate">
-              {userInfo?.username || 'Loading...'}
-            </div>
-            <div className="text-[11px] text-[var(--text-muted)] flex items-center gap-1">
-              {userInfo?.role || 'User'}
-            </div>
-          </div>
-        </Button>
+        </button>
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-col gap-1 py-1">
-            <p className="text-sm font-semibold text-[var(--text-primary)]">
+            <p className="text-sm font-semibold text-foreground">
               {userInfo?.username || 'User'}
             </p>
-            <p className="text-xs text-[var(--text-muted)]">
+            <p className="text-xs text-muted-foreground">
               {userInfo?.email}
-            </p>
-            <p className="text-[11px] text-[var(--text-muted)]">
-              {userInfo?.role === 'admin' ? 'Administrator' : 'Trader'}
             </p>
           </div>
         </DropdownMenuLabel>
-
-        <DropdownMenuSeparator />
-
-        <DropdownMenuItem
-          className="cursor-pointer"
-          onClick={() => navigate('/settings')}
-        >
-          <Settings className="mr-2 h-4 w-4" />
-          Settings & API Keys
-        </DropdownMenuItem>
-
-        <DropdownMenuItem
-          className="cursor-pointer"
-          onClick={() => navigate('/settings')}
-        >
-          <Pencil className="mr-2 h-4 w-4" />
-          Edit Profile
-        </DropdownMenuItem>
 
         <DropdownMenuSeparator />
 

@@ -13,6 +13,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
 import { toast } from '@/lib/toast';
+import { BarChart3 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   CockpitHeader,
@@ -52,7 +53,7 @@ const LoadingOverlay: React.FC<LoadingOverlayProps> = ({
     <div className="cockpit-loading-overlay">
       <div className="cockpit-loading-card">
         <div className="cockpit-loading-header">
-          <div className="cockpit-loading-icon">📊</div>
+          <div className="cockpit-loading-icon"><BarChart3 className="h-8 w-8" /></div>
           <h3>Loading Trading Monitor</h3>
         </div>
 

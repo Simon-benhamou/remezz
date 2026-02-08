@@ -1,5 +1,5 @@
 import React from 'react';
-import { RefreshCw, Download, Search, Loader2 } from 'lucide-react';
+import { RefreshCw, Download, Search, Loader2, ListChecks } from 'lucide-react';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
@@ -154,7 +154,7 @@ export default function ExecutionLedgerPageNew() {
       {/* Header */}
       <div className="flex flex-col gap-3 mb-5 sm:flex-row sm:justify-between sm:items-center">
         <h3 className="text-xl font-semibold text-foreground flex items-center gap-2.5">
-          <span className="text-xl">📊</span> Execution Ledger
+          <ListChecks className="h-5 w-5" /> Execution Ledger
         </h3>
         <div className="flex flex-wrap gap-2 sm:gap-3 items-center">
           <div className="relative flex-1 min-w-[140px] sm:flex-none">

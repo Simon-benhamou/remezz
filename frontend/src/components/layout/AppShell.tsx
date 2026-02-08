@@ -81,10 +81,11 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/agents', label: 'Agents', icon: Bot },
   { path: '/ledger', label: 'Execution', icon: ListChecks },
   { path: '/reports', label: 'Reports', icon: BarChart },
-  { path: '/feed', label: 'Feed', icon: Radio },
-  { path: '/backtest', label: 'Backtest', icon: LineChart },
-  { path: '/settings', label: 'Settings', icon: Settings },
+  { path: '/feed', label: 'Activity', icon: Radio },
+  { path: '/backtest', label: 'Simulator', icon: LineChart },
 ];
+
+const SETTINGS_ITEM: NavItem = { path: '/settings', label: 'Settings', icon: Settings };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -223,15 +224,46 @@ function Sidebar({ collapsed, onToggle, activeKey, onNavigate, themeMode }: Side
         </TooltipProvider>
       </nav>
 
-      {/* Tagline (expanded only) */}
-      {!collapsed && (
-        <div className="border-t border-border px-4 py-4">
-          <div className="text-xs font-semibold text-primary">Signal Engine</div>
-          <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-            Detect the signal. Trade the momentum.
-          </div>
-        </div>
-      )}
+      {/* Settings pinned at bottom */}
+      <div className="px-2 pb-1">
+        <TooltipProvider delayDuration={0}>
+          {(() => {
+            const Icon = SETTINGS_ITEM.icon;
+            const isActive = activeKey === SETTINGS_ITEM.path;
+            const btn = (
+              <button
+                onClick={() => onNavigate(SETTINGS_ITEM.path)}
+                className={cn(
+                  'group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer',
+                  'hover:bg-primary/10 hover:text-primary',
+                  isActive
+                    ? 'bg-primary/15 text-primary'
+                    : 'text-muted-foreground',
+                  collapsed && 'justify-center px-0',
+                )}
+              >
+                <span className="shrink-0">
+                  <Icon className="h-[18px] w-[18px]" />
+                </span>
+                {!collapsed && <span className="truncate">{SETTINGS_ITEM.label}</span>}
+              </button>
+            );
+
+            if (collapsed) {
+              return (
+                <Tooltip>
+                  <TooltipTrigger asChild>{btn}</TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={8}>
+                    {SETTINGS_ITEM.label}
+                  </TooltipContent>
+                </Tooltip>
+              );
+            }
+
+            return btn;
+          })()}
+        </TooltipProvider>
+      </div>
 
       {/* Collapse toggle */}
       <button
@@ -334,12 +366,29 @@ function MobileNav({ open, onOpenChange, activeKey, onNavigate, themeMode }: Mob
           </ul>
         </nav>
 
-        {/* Tagline */}
-        <div className="mt-auto border-t border-border px-5 py-4">
-          <div className="text-xs font-semibold text-primary">Signal Engine</div>
-          <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-            Detect the signal. Trade the momentum.
-          </div>
+        {/* Settings pinned at bottom */}
+        <div className="border-t border-border px-3 py-3">
+          {(() => {
+            const Icon = SETTINGS_ITEM.icon;
+            const isActive = activeKey === SETTINGS_ITEM.path;
+            return (
+              <button
+                onClick={() => handleNav(SETTINGS_ITEM.path)}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer',
+                  'hover:bg-primary/10 hover:text-primary',
+                  isActive
+                    ? 'bg-primary/15 text-primary'
+                    : 'text-muted-foreground',
+                )}
+              >
+                <span className="shrink-0">
+                  <Icon className="h-[18px] w-[18px]" />
+                </span>
+                <span>{SETTINGS_ITEM.label}</span>
+              </button>
+            );
+          })()}
         </div>
       </aside>
     </>
@@ -549,11 +598,6 @@ export default function AppShell({
         <main className="flex-1 overflow-auto p-6 md:p-8">
           {children}
         </main>
-
-        {/* Footer */}
-        <footer className="shrink-0 border-t border-border bg-card px-6 py-4 text-center text-xs text-muted-foreground">
-          Remezz &middot; Signal Detection &middot; Momentum Trading &middot; AI Risk Governance
-        </footer>
       </div>
     </div>
   );

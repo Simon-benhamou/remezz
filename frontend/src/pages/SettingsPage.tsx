@@ -14,6 +14,13 @@ import {
   Plus,
   Mail,
   Lock,
+  Info,
+  TrendingUp,
+  Target,
+  ShieldCheck,
+  Zap,
+  BarChart3,
+  Clock,
 } from 'lucide-react';
 
 import { api } from '@/api';
@@ -812,6 +819,122 @@ function DangerZoneTab() {
 }
 
 // ---------------------------------------------------------------------------
+// About Tab
+// ---------------------------------------------------------------------------
+
+function AboutTab() {
+  const pillars = [
+    {
+      icon: Target,
+      title: 'Signal Detection',
+      description:
+        'Our engine continuously scans 10+ crypto pairs on the 15-minute timeframe, analyzing momentum indicators (RSI, MACD, Bollinger Bands) combined with multi-timeframe confirmation (1H, 4H) to identify high-probability entry signals.',
+    },
+    {
+      icon: TrendingUp,
+      title: 'Momentum Trading',
+      description:
+        'Each agent trades a momentum-based strategy: enter on confirmed trend alignment across timeframes, ride the move with trailing stops, and exit when momentum fades. Positions are sized based on volatility (ATR) and account equity.',
+    },
+    {
+      icon: ShieldCheck,
+      title: 'Risk Governance',
+      description:
+        'Every position is protected by a hard stop-loss (max 2% risk per trade), proactive limit orders, and a real-time exit system that monitors drawdown, NFS (Negative Feedback Signals), and trailing breach conditions to cut losses early.',
+    },
+    {
+      icon: Zap,
+      title: 'Real-Time Execution',
+      description:
+        'Agents execute 24/7 autonomously on Binance Futures via WebSocket feeds. Sub-second order placement, automatic leverage management, and position synchronization ensure no signal is missed.',
+    },
+    {
+      icon: BarChart3,
+      title: 'Walk-Forward Validation',
+      description:
+        'Before going live, every strategy parameter is validated through walk-forward backtesting across multiple market regimes. This ensures robustness against overfitting and adapts to changing market conditions.',
+    },
+    {
+      icon: Clock,
+      title: 'Cash Mode & Regime Detection',
+      description:
+        'When market conditions deteriorate (low ADX, high volatility, unfavorable trend), agents automatically switch to cash mode — staying flat until conditions improve. This preserves capital during choppy or bear markets.',
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-3">
+            <div
+              className="flex h-10 w-10 items-center justify-center rounded-xl"
+              style={{ background: 'linear-gradient(135deg, #3b82f6, #34d399)' }}
+            >
+              <Info className="h-5 w-5 text-white" />
+            </div>
+            <div>
+              <CardTitle>About Remezz</CardTitle>
+              <CardDescription>How our autonomous trading agents work</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Remezz is an autonomous crypto trading platform powered by AI-driven signal detection and
+            momentum-based execution. Each agent operates independently, scanning the market for
+            high-probability setups, managing risk in real-time, and adapting to changing market
+            regimes — all without manual intervention.
+          </p>
+          <div
+            className="rounded-lg p-3 text-sm font-medium"
+            style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(52, 211, 153, 0.1))', border: '1px solid rgba(52, 211, 153, 0.2)' }}
+          >
+            <span style={{ background: 'linear-gradient(135deg, #3b82f6, #34d399)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+              Detect the signal. Trade the momentum. Manage the risk.
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        {pillars.map((pillar) => {
+          const Icon = pillar.icon;
+          return (
+            <Card key={pillar.title}>
+              <CardContent className="pt-6">
+                <div className="flex items-start gap-3">
+                  <div
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                    style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(52, 211, 153, 0.15))' }}
+                  >
+                    <Icon className="h-4 w-4 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-foreground">{pillar.title}</h4>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {pillar.description}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      <Card>
+        <CardContent className="py-4">
+          <p className="text-center text-xs text-muted-foreground">
+            Remezz v5.89 &middot; Momentum Strategy Engine &middot; Built for autonomous crypto trading
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Settings Page
 // ---------------------------------------------------------------------------
 
@@ -840,8 +963,12 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="profile" className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
+      <Tabs defaultValue="about" className="w-full">
+        <TabsList className="grid w-full grid-cols-5">
+          <TabsTrigger value="about" className="flex items-center gap-1.5">
+            <Info className="h-4 w-4" />
+            <span className="hidden sm:inline">About</span>
+          </TabsTrigger>
           <TabsTrigger value="profile" className="flex items-center gap-1.5">
             <User className="h-4 w-4" />
             <span className="hidden sm:inline">Profile</span>
@@ -859,6 +986,10 @@ export default function SettingsPage() {
             <span className="hidden sm:inline">Danger Zone</span>
           </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="about">
+          <AboutTab />
+        </TabsContent>
 
         <TabsContent value="profile">
           <ProfileTab userInfo={userInfo} onUserUpdate={loadUserInfo} />
