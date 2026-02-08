@@ -225,7 +225,7 @@ export default function SessionsPage() {
                   {currentMode?.toUpperCase()}
                 </span>
               </h3>
-              <span className="text-[var(--text-muted)] text-[13px]">
+              <span className="text-muted-foreground text-[13px]">
                 Autonomous multi-agent system with intelligent portfolio diversification
               </span>
             </div>
@@ -234,7 +234,7 @@ export default function SessionsPage() {
                 type="single"
                 value={viewMode}
                 onValueChange={(v) => v && setViewMode(v as ViewMode)}
-                className="bg-[var(--bg-primary)] rounded-md"
+                className="bg-muted rounded-md"
               >
                 <ToggleGroupItem value="cards" aria-label="Card view" size="sm">
                   <LayoutGrid className="h-4 w-4" />
@@ -260,43 +260,170 @@ export default function SessionsPage() {
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-[var(--success)]" />
-              <span className="text-[var(--text-secondary)] text-[13px]">{activeSessions.length} Active</span>
+              <div className="w-2 h-2 rounded-full bg-success" />
+              <span className="text-muted-foreground text-[13px]">{activeSessions.length} Active</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-[var(--warning)]" />
-              <span className="text-[var(--text-secondary)] text-[13px]">{pausedSessions.length} Paused</span>
+              <div className="w-2 h-2 rounded-full bg-warning" />
+              <span className="text-muted-foreground text-[13px]">{pausedSessions.length} Paused</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
-              <span className="text-[var(--text-secondary)] text-[13px]">{stoppedSessions.length} Stopped</span>
+              <div className="w-2 h-2 rounded-full bg-muted-foreground" />
+              <span className="text-muted-foreground text-[13px]">{stoppedSessions.length} Stopped</span>
             </div>
           </div>
         </div>
 
         {/* Table View */}
         {viewMode === 'table' && (
-          <div className="bg-[var(--bg-primary)] rounded-2xl border border-[var(--border-subtle)] overflow-hidden">
-            {/* Header Row */}
-            <div
-              className="grid px-5 py-3.5 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]"
-              style={{ gridTemplateColumns: '2fr 100px 100px 120px 120px 100px 100px 80px 140px' }}
-            >
-              <span className="text-[var(--text-muted)] text-[11px] uppercase tracking-wide font-medium">Agent</span>
-              <span className="text-[var(--text-muted)] text-[11px] uppercase tracking-wide font-medium">Selection</span>
-              <span className="text-[var(--text-muted)] text-[11px] uppercase tracking-wide font-medium">Status</span>
-              <span className="text-[var(--text-muted)] text-[11px] uppercase tracking-wide font-medium">Capital Source</span>
-              <span className="text-[var(--text-muted)] text-[11px] uppercase tracking-wide font-medium text-right">PnL</span>
-              <span className="text-[var(--text-muted)] text-[11px] uppercase tracking-wide font-medium text-right">ROI</span>
-              <span className="text-[var(--text-muted)] text-[11px] uppercase tracking-wide font-medium text-right">Win Rate</span>
-              <span className="text-[var(--text-muted)] text-[11px] uppercase tracking-wide font-medium text-center">Trades</span>
-              <span className="text-[var(--text-muted)] text-[11px] uppercase tracking-wide font-medium text-right">Actions</span>
-            </div>
+          <div className="overflow-auto rounded-2xl border border-border bg-card">
+            <div className="min-w-[900px]">
+              {/* Header Row */}
+              <div className="grid grid-cols-[2fr_85px_80px_100px_100px_80px_80px_60px_120px] px-4 py-3 border-b border-border bg-card">
+                {['Agent', 'Selection', 'Status', 'Capital', 'PnL', 'ROI', 'Win Rate', 'Trades', 'Actions'].map((h, i) => (
+                  <span key={h} className={cn("text-[11px] uppercase tracking-wide text-muted-foreground whitespace-nowrap", i >= 4 && i <= 7 && "text-right", i === 8 && "text-right")}>{h}</span>
+                ))}
+              </div>
 
+              {sessionsList.length === 0 ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-3">
+                  <Bot className="h-10 w-10 text-muted-foreground" />
+                  <span className="text-muted-foreground text-sm">No agents yet</span>
+                  <Button onClick={() => setCreateModalOpen(true)}>Create Your First Agent</Button>
+                </div>
+              ) : (
+                sessionsList.map((session) => {
+                  const pnl = Number(session.pnlUsd ?? 0);
+                  const roi = Number(session.roiPct ?? 0);
+                  const winRate = Number(session.winRate ?? 0);
+                  const isActive = isSessionActive(session);
+                  const hasPosition = (session.openPositions ?? 0) > 0;
+
+                  return (
+                    <div
+                      key={session.id}
+                      onClick={() => navigate(`/agents/${session.id}`)}
+                      className="grid grid-cols-[2fr_85px_80px_100px_100px_80px_80px_60px_120px] px-4 py-2.5 border-b border-border items-center transition-colors duration-150 cursor-pointer hover:bg-muted/30"
+                    >
+                      {/* Agent */}
+                      <div className="flex items-center gap-2">
+                        <span className="text-foreground font-semibold text-[13px]">{resolveAgentLabel(session)}</span>
+                        <span
+                          className={cn(
+                            'inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold w-fit',
+                            session.mode === 'live'
+                              ? 'bg-destructive/15 text-destructive'
+                              : 'bg-accent/15 text-accent'
+                          )}
+                        >
+                          {session.mode?.toUpperCase()}
+                        </span>
+                      </div>
+
+                      {/* Selection */}
+                      <span className="text-muted-foreground text-[11px]">{session.isSmartAgent ? 'Smart Auto' : 'Manual'}</span>
+
+                      {/* Status */}
+                      <span
+                        className={cn(
+                          'inline-flex items-center w-fit rounded px-1.5 py-0.5 text-[9px] font-semibold',
+                          isActive
+                            ? hasPosition
+                              ? 'bg-success/15 text-success'
+                              : 'bg-warning/15 text-warning'
+                            : 'bg-muted text-muted-foreground'
+                        )}
+                      >
+                        {isActive ? (hasPosition ? 'Trading' : 'Watching') : session.haltedAt ? 'Paused' : 'Stopped'}
+                      </span>
+
+                      {/* Capital */}
+                      <span className="inline-flex items-center w-fit rounded px-1.5 py-0.5 text-[9px] font-semibold bg-accent/12 text-accent">
+                        Shared pool
+                      </span>
+
+                      {/* PnL */}
+                      <span className={cn("text-xs font-semibold text-right block", pnl >= 0 ? "text-success" : "text-destructive")}>
+                        {formatUsd(pnl)}
+                      </span>
+
+                      {/* ROI */}
+                      <span className={cn("text-[11px] font-medium text-right block", roi >= 0 ? "text-success" : "text-destructive")}>
+                        {formatPercent(roi)}
+                      </span>
+
+                      {/* Win Rate */}
+                      <span className={cn("text-[11px] font-medium text-right block", winRate >= 50 ? "text-success" : "text-destructive")}>
+                        {formatPercent(winRate)}
+                      </span>
+
+                      {/* Trades */}
+                      <span className="text-muted-foreground text-[11px] text-right block">
+                        {session.totalTrades ?? 0}
+                      </span>
+
+                      {/* Actions */}
+                      <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className={cn(
+                                'h-7 w-7 rounded-md',
+                                isActive
+                                  ? 'text-destructive hover:bg-destructive/15'
+                                  : 'text-success hover:bg-success/15'
+                              )}
+                              onClick={() => handleAction(isActive ? 'stop' : 'start', session)}
+                            >
+                              {isActive ? <PauseCircle className="h-3.5 w-3.5" /> : <PlayCircle className="h-3.5 w-3.5" />}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{isActive ? 'Pause' : 'Start'}</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 rounded-md text-muted-foreground hover:bg-muted"
+                              onClick={() => navigate(`/agents/${session.id}`)}
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>View</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 rounded-md text-destructive hover:bg-destructive/15"
+                              onClick={() => handleAction('delete', session)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Delete</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Cards View */}
+        {viewMode === 'cards' && (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
             {sessionsList.length === 0 ? (
-              <div className="py-12 flex flex-col items-center justify-center gap-3">
-                <Bot className="h-10 w-10 text-[var(--text-muted)]" />
-                <span className="text-[var(--text-secondary)] text-sm">No agents yet</span>
+              <div className="col-span-full py-12 flex flex-col items-center justify-center gap-3">
+                <Bot className="h-10 w-10 text-muted-foreground" />
+                <span className="text-muted-foreground text-sm">No agents yet</span>
                 <Button onClick={() => setCreateModalOpen(true)}>Create Your First Agent</Button>
               </div>
             ) : (
@@ -311,203 +438,115 @@ export default function SessionsPage() {
                   <div
                     key={session.id}
                     onClick={() => navigate(`/agents/${session.id}`)}
-                    className="grid px-5 py-4 border-b border-[var(--border-subtle)] cursor-pointer transition-colors duration-150 items-center hover:bg-[var(--bg-card-hover)]"
-                    style={{ gridTemplateColumns: '2fr 100px 100px 120px 120px 100px 100px 80px 140px' }}
+                    className="rounded-2xl border border-border bg-card p-5 cursor-pointer transition-all duration-200 hover:border-primary/30 hover:shadow-md"
                   >
-                    {/* Agent */}
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-[var(--text-primary)] font-semibold text-sm">{resolveAgentLabel(session)}</span>
-                      <span
-                        className={cn(
-                          'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] leading-snug font-medium',
-                          session.mode === 'live'
-                            ? 'bg-red-500/12 text-[var(--error)]'
-                            : 'bg-blue-500/12 text-[var(--accent)]'
-                        )}
-                      >
-                        {session.mode?.toUpperCase()}
-                      </span>
-                    </div>
-
-                    {/* Selection */}
-                    <span className="text-[var(--text-secondary)] text-[13px]">{session.isSmartAgent ? 'Smart Auto' : 'Manual'}</span>
-
-                    {/* Status */}
-                    <span
-                      className={cn(
-                        'inline-flex items-center w-fit rounded px-2 py-0.5 text-[11px] font-medium',
-                        isActive
-                          ? hasPosition
-                            ? 'bg-green-500/12 text-[var(--success)]'
-                            : 'bg-amber-400/12 text-[var(--warning)]'
-                          : 'bg-slate-400/10 text-[var(--text-secondary)]'
-                      )}
-                    >
-                      {isActive ? (hasPosition ? 'Trading' : 'Watching') : session.haltedAt ? 'Paused' : 'Stopped'}
-                    </span>
-
-                    {/* Capital Source */}
-                    <span className="inline-flex items-center w-fit rounded px-2 py-0.5 text-[11px] font-medium bg-blue-500/10 text-[var(--accent)]">
-                      Shared pool
-                    </span>
-
-                    {/* PnL */}
-                    <div className="text-right">
-                      <span className={cn('block font-semibold text-sm', pnl >= 0 ? 'text-[var(--success)]' : 'text-[var(--error)]')}>
-                        {formatUsd(pnl)}
-                      </span>
-                      <span className={cn('text-[11px]', roi >= 0 ? 'text-green-400/70' : 'text-red-400/70')}>
-                        {formatPercent(roi)}
-                      </span>
-                    </div>
-
-                    {/* ROI */}
-                    <span className={cn('block text-right font-medium text-[13px]', roi >= 0 ? 'text-[var(--success)]' : 'text-[var(--error)]')}>
-                      {formatPercent(roi)}
-                    </span>
-
-                    {/* Win Rate */}
-                    <span className={cn('block text-right font-medium text-[13px]', winRate >= 50 ? 'text-[var(--success)]' : 'text-[var(--error)]')}>
-                      {formatPercent(winRate)}
-                    </span>
-
-                    {/* Trades */}
-                    <span className="block text-center text-[var(--text-secondary)] text-[13px]">
-                      {session.totalTrades ?? 0}
-                    </span>
-
-                    {/* Actions */}
-                    <div className="flex gap-1.5 justify-end" onClick={(e) => e.stopPropagation()}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
+                    {/* Card header: name + badges */}
+                    <div className="flex items-start justify-between gap-2 mb-4">
+                      <div className="min-w-0">
+                        <span className="text-foreground font-semibold text-sm block truncate">{resolveAgentLabel(session)}</span>
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          <span
                             className={cn(
-                              'h-8 w-8 rounded-md',
-                              isActive
-                                ? 'bg-red-500/8 text-[var(--error)] hover:bg-red-500/15'
-                                : 'bg-green-500/8 text-[var(--success)] hover:bg-green-500/15'
+                              'inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold',
+                              session.mode === 'live'
+                                ? 'bg-destructive/15 text-destructive'
+                                : 'bg-accent/15 text-accent'
                             )}
-                            onClick={() => handleAction(isActive ? 'stop' : 'start', session)}
                           >
-                            {isActive ? <PauseCircle className="h-4 w-4" /> : <PlayCircle className="h-4 w-4" />}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>{isActive ? 'Pause' : 'Start'}</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 rounded-md bg-slate-400/8 hover:bg-slate-400/15"
-                            onClick={() => navigate(`/agents/${session.id}`)}
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>View</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 rounded-md bg-red-500/8 text-[var(--error)] hover:bg-red-500/15"
-                            onClick={() => handleAction('delete', session)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Delete</TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
-
-        {/* Cards View */}
-        {viewMode === 'cards' && (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
-            {sessionsList.length === 0 ? (
-              <div className="col-span-full py-12 flex flex-col items-center justify-center gap-3">
-                <Bot className="h-10 w-10 text-[var(--text-muted)]" />
-                <span className="text-[var(--text-secondary)] text-sm">No agents yet</span>
-                <Button onClick={() => setCreateModalOpen(true)}>Create Your First Agent</Button>
-              </div>
-            ) : (
-              sessionsList.map((session) => {
-                const pnl = Number(session.pnlUsd ?? 0);
-                const isActive = isSessionActive(session);
-                const hasPosition = (session.openPositions ?? 0) > 0;
-
-                return (
-                  <div
-                    key={session.id}
-                    onClick={() => navigate(`/agents/${session.id}`)}
-                    className="bg-[var(--bg-primary)] rounded-2xl border border-[var(--border-subtle)] p-5 cursor-pointer transition-all duration-200 hover:border-blue-500/30 hover:-translate-y-0.5"
-                  >
-                    <div className="flex justify-between mb-4">
-                      <div>
-                        <span className="text-[var(--text-primary)] font-semibold text-base block">{resolveAgentLabel(session)}</span>
-                        <span
-                          className={cn(
-                            'inline-flex items-center mt-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium',
-                            session.mode === 'live'
-                              ? 'bg-red-500/12 text-[var(--error)]'
-                              : 'bg-blue-500/12 text-[var(--accent)]'
-                          )}
-                        >
-                          {session.mode?.toUpperCase()}
-                        </span>
+                            {session.mode?.toUpperCase()}
+                          </span>
+                          <span className="text-muted-foreground text-[10px]">{session.isSmartAgent ? 'Smart Auto' : 'Manual'}</span>
+                        </div>
                       </div>
                       <span
                         className={cn(
-                          'inline-flex items-center h-fit rounded px-2 py-0.5 text-[11px] font-medium',
+                          'inline-flex items-center shrink-0 rounded px-2 py-0.5 text-[9px] font-semibold',
                           isActive
                             ? hasPosition
-                              ? 'bg-green-500/12 text-[var(--success)]'
-                              : 'bg-amber-400/12 text-[var(--warning)]'
-                            : 'bg-slate-400/10 text-[var(--text-secondary)]'
+                              ? 'bg-success/15 text-success'
+                              : 'bg-warning/15 text-warning'
+                            : 'bg-muted text-muted-foreground'
                         )}
                       >
                         {isActive ? (hasPosition ? 'Trading' : 'Watching') : session.haltedAt ? 'Paused' : 'Stopped'}
                       </span>
                     </div>
-                    <div className="grid grid-cols-2 gap-3 mb-4">
+
+                    {/* Metrics grid */}
+                    <div className="grid grid-cols-4 gap-3 mb-4 py-3 border-t border-b border-border">
                       <div>
-                        <span className="text-[var(--text-muted)] text-[11px] block">PnL</span>
-                        <span className={cn('font-bold text-xl', pnl >= 0 ? 'text-[var(--success)]' : 'text-[var(--error)]')}>
+                        <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">PnL</span>
+                        <span className={cn('font-semibold text-sm block', pnl >= 0 ? 'text-success' : 'text-destructive')}>
                           {formatUsd(pnl)}
                         </span>
                       </div>
                       <div>
-                        <span className="text-[var(--text-muted)] text-[11px] block">Win Rate</span>
-                        <span className={cn('font-semibold text-base', (session.winRate ?? 0) >= 50 ? 'text-[var(--success)]' : 'text-[var(--error)]')}>
-                          {formatPercent(session.winRate)}
+                        <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">ROI</span>
+                        <span className={cn('font-semibold text-sm block', roi >= 0 ? 'text-success' : 'text-destructive')}>
+                          {formatPercent(roi)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">Win Rate</span>
+                        <span className={cn('font-semibold text-sm block', winRate >= 50 ? 'text-success' : 'text-destructive')}>
+                          {formatPercent(winRate)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">Trades</span>
+                        <span className="font-semibold text-sm block text-foreground">
+                          {session.totalTrades ?? 0}
                         </span>
                       </div>
                     </div>
-                    <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        size="sm"
-                        variant={isActive ? 'destructive' : 'default'}
-                        className="flex-1"
-                        onClick={() => handleAction(isActive ? 'stop' : 'start', session)}
-                      >
-                        {isActive ? <PauseCircle className="h-4 w-4" /> : <PlayCircle className="h-4 w-4" />}
-                        {isActive ? 'Pause' : 'Start'}
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => navigate(`/agents/${session.id}`)}>
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      <Button size="sm" variant="destructive" onClick={() => handleAction('delete', session)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              'h-8 rounded-md flex-1',
+                              isActive
+                                ? 'text-destructive hover:bg-destructive/10'
+                                : 'text-success hover:bg-success/10'
+                            )}
+                            onClick={() => handleAction(isActive ? 'stop' : 'start', session)}
+                          >
+                            {isActive ? <PauseCircle className="h-3.5 w-3.5 mr-1.5" /> : <PlayCircle className="h-3.5 w-3.5 mr-1.5" />}
+                            {isActive ? 'Pause' : 'Start'}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>{isActive ? 'Pause agent' : 'Start agent'}</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 rounded-md text-muted-foreground hover:bg-muted"
+                            onClick={() => navigate(`/agents/${session.id}`)}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>View cockpit</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 rounded-md text-destructive hover:bg-destructive/10"
+                            onClick={() => handleAction('delete', session)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Delete agent</TooltipContent>
+                      </Tooltip>
                     </div>
                   </div>
                 );

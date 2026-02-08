@@ -640,7 +640,7 @@ export default function BacktestPage() {
                     type="number"
                     min={100}
                     max={1000000}
-                    step={1000}
+                    step={1}
                     value={field.value}
                     onChange={(e) => field.onChange(Number(e.target.value))}
                     className="h-9 w-[120px] rounded-md border border-border bg-card px-3 text-sm text-foreground"
