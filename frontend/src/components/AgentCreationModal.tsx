@@ -17,8 +17,6 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
-import { Separator } from '@/components/ui/separator';
 import {
   Tooltip,
   TooltipContent,
@@ -183,19 +181,23 @@ export default function AgentCreationModal({
       }}
     >
       <DialogContent
-        className="border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-primary)] p-0 gap-0 max-w-[860px]"
+        className="p-0 gap-0 max-w-[860px] border-0 text-foreground"
+        style={{ background: '#0f172a', borderRadius: 16, border: '1px solid rgba(40, 68, 105, 0.4)' }}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
         {/* Header */}
-        <DialogHeader className="border-b border-[var(--border-subtle)] px-6 py-4">
-          <DialogTitle className="flex items-center gap-2.5 text-[var(--text-primary)]">
+        <DialogHeader
+          className="px-6 py-4"
+          style={{ borderBottom: '1px solid rgba(40, 68, 105, 0.4)', background: '#0c1322' }}
+        >
+          <DialogTitle className="flex items-center gap-2.5 text-slate-100">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 via-blue-500 to-cyan-500">
               <Rocket className="h-4 w-4 text-white" />
             </div>
             <span className="text-lg font-semibold">Create AI Trading Agent</span>
             {selectedCount > 0 && (
-              <span className="ml-2 inline-flex items-center rounded-full bg-gradient-to-r from-indigo-500/20 via-blue-500/20 to-cyan-500/20 border border-indigo-500/30 px-2.5 py-0.5 text-xs font-semibold text-blue-400">
+              <span className="ml-2 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold text-blue-400" style={{ background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
                 {selectedCount} selected
               </span>
             )}
@@ -206,36 +208,41 @@ export default function AgentCreationModal({
         </DialogHeader>
 
         {/* Body */}
-        <div className="px-6 py-5 max-h-[65vh] overflow-y-auto">
+        <div className="px-6 py-5 max-h-[65vh] overflow-y-auto" style={{ background: '#0f172a' }}>
           {/* Info banner */}
-          <Alert className="mb-5 rounded-xl border-indigo-500/20 bg-gradient-to-r from-indigo-500/[0.06] via-blue-500/[0.06] to-cyan-500/[0.06]">
-            <Sparkles className="h-4 w-4 text-blue-400" />
-            <AlertTitle className="bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400 bg-clip-text text-transparent font-semibold">
-              Cryptos Backtestees V5.93 (12 mois)
-            </AlertTitle>
-            <AlertDescription className="text-[var(--text-secondary)] text-[13px]">
-              Classees par PnL combine sur 12 mois (Jan - Dec 2025). V5 Momentum Simple.
-              Selectionnez une ou plusieurs cryptos pour creer vos agents.
-            </AlertDescription>
-          </Alert>
+          <div className="mb-5 rounded-xl p-4 flex gap-3" style={{ background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(59, 130, 246, 0.08), rgba(6, 182, 212, 0.08))', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
+            <Sparkles className="h-4 w-4 text-blue-400 mt-0.5 shrink-0" />
+            <div>
+              <div className="font-semibold text-sm bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                Cryptos Backtestees V5.93 (12 mois)
+              </div>
+              <p className="text-slate-400 text-[13px] mt-0.5">
+                Classees par PnL combine sur 12 mois (Jan - Dec 2025). V5 Momentum Simple.
+                Selectionnez une ou plusieurs cryptos pour creer vos agents.
+              </p>
+            </div>
+          </div>
 
           {/* Select All Recommended */}
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Trophy className="h-4 w-4 text-yellow-500" />
-              <span className="text-sm font-semibold text-[var(--text-primary)]">
+              <span className="text-sm font-semibold text-slate-100">
                 Recommandees — ROI Positif 12 mois
               </span>
             </div>
             <button
               type="button"
               onClick={selectAllRecommended}
-              className={cn(
-                'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
-                allRecommendedSelected
-                  ? 'bg-gradient-to-r from-indigo-500/20 via-blue-500/20 to-cyan-500/20 text-blue-400 border border-blue-500/30'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-blue-500/30'
-              )}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all"
+              style={allRecommendedSelected ? {
+                background: 'linear-gradient(90deg, rgba(99, 102, 241, 0.15), rgba(59, 130, 246, 0.15), rgba(6, 182, 212, 0.15))',
+                color: '#60a5fa',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+              } : {
+                color: '#94a3b8',
+                border: '1px solid rgba(40, 68, 105, 0.35)',
+              }}
             >
               <Check className="h-3 w-3" />
               {allRecommendedSelected ? 'Deselect All' : 'Select All'}
@@ -251,12 +258,15 @@ export default function AgentCreationModal({
                   key={crypto.symbol}
                   type="button"
                   onClick={() => toggleSymbol(crypto.symbol)}
-                  className={cn(
-                    'relative rounded-xl text-center transition-all duration-200 p-3 group',
-                    isSelected
-                      ? 'bg-gradient-to-b from-indigo-500/15 via-blue-500/10 to-cyan-500/15 border-2 border-blue-500/50 shadow-[0_0_20px_rgba(59,130,246,0.1)]'
-                      : 'bg-[var(--bg-elevated)]/60 border border-[var(--border-subtle)] hover:border-blue-500/30 hover:bg-[var(--bg-elevated)]'
-                  )}
+                  className="relative rounded-xl text-center transition-all duration-200 p-3"
+                  style={isSelected ? {
+                    background: 'linear-gradient(180deg, rgba(99, 102, 241, 0.18) 0%, rgba(59, 130, 246, 0.12) 50%, rgba(6, 182, 212, 0.18) 100%)',
+                    border: '2px solid rgba(59, 130, 246, 0.5)',
+                    boxShadow: '0 0 20px rgba(59, 130, 246, 0.15)',
+                  } : {
+                    background: '#1a2436',
+                    border: '1px solid rgba(40, 68, 105, 0.35)',
+                  }}
                 >
                   {/* Selection indicator */}
                   {isSelected && (
@@ -265,10 +275,10 @@ export default function AgentCreationModal({
                     </div>
                   )}
                   <div className="text-2xl mb-1">{crypto.icon}</div>
-                  <span className="block font-semibold text-sm text-[var(--text-primary)]">
+                  <span className="block font-semibold text-sm text-slate-100">
                     {crypto.symbol.replace('/USDT', '')}
                   </span>
-                  <span className="block text-[10px] text-[var(--text-secondary)] mb-1.5">
+                  <span className="block text-[10px] text-slate-400 mb-1.5">
                     {crypto.name}
                   </span>
                   <span
@@ -280,7 +290,7 @@ export default function AgentCreationModal({
                     {crypto.category}
                   </span>
                   <div>
-                    <span className="text-xs font-bold text-[var(--success)]">
+                    <span className="text-xs font-bold text-emerald-400">
                       {crypto.roi}
                     </span>
                   </div>
@@ -290,15 +300,13 @@ export default function AgentCreationModal({
           </div>
 
           {/* Non-recommended section */}
-          <Alert className="mb-3 rounded-xl border-[var(--border-subtle)] bg-[var(--bg-elevated)]/40">
-            <Info className="h-4 w-4 text-[var(--text-secondary)]" />
-            <AlertTitle className="text-[var(--text-secondary)] text-sm">
-              Autres Cryptos Disponibles
-            </AlertTitle>
-            <AlertDescription className="text-[var(--text-secondary)] text-[12px]">
-              Non testees sur 12 mois en combine. Performances variables.
-            </AlertDescription>
-          </Alert>
+          <div className="mb-3 rounded-xl p-3 flex items-start gap-2.5" style={{ background: '#151e2e', border: '1px solid rgba(40, 68, 105, 0.3)' }}>
+            <Info className="h-4 w-4 text-slate-500 mt-0.5 shrink-0" />
+            <div>
+              <div className="text-sm font-medium text-slate-400">Autres Cryptos Disponibles</div>
+              <p className="text-[12px] text-slate-500 mt-0.5">Non testees sur 12 mois en combine. Performances variables.</p>
+            </div>
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 mb-6">
             {NON_RECOMMENDED_CRYPTOS.map((crypto) => {
               const isSelected = selectedSymbols.has(crypto.symbol);
@@ -307,23 +315,26 @@ export default function AgentCreationModal({
                   key={crypto.symbol}
                   type="button"
                   onClick={() => toggleSymbol(crypto.symbol)}
-                  className={cn(
-                    'relative rounded-xl text-center transition-all duration-200 p-3 opacity-60 hover:opacity-80',
-                    isSelected
-                      ? 'bg-[var(--bg-elevated)] border-2 border-[var(--text-secondary)]/50 opacity-90'
-                      : 'bg-[var(--bg-elevated)]/40 border border-[var(--border-subtle)] hover:border-[var(--text-secondary)]/30'
-                  )}
+                  className="relative rounded-xl text-center transition-all duration-200 p-3 opacity-60 hover:opacity-85"
+                  style={isSelected ? {
+                    background: '#1a2436',
+                    border: '2px solid rgba(148, 163, 184, 0.4)',
+                    opacity: 0.9,
+                  } : {
+                    background: '#141c2b',
+                    border: '1px solid rgba(40, 68, 105, 0.25)',
+                  }}
                 >
                   {isSelected && (
-                    <div className="absolute top-1.5 right-1.5 h-4 w-4 rounded-full bg-[var(--text-secondary)] flex items-center justify-center">
-                      <Check className="h-2.5 w-2.5 text-[var(--bg-primary)]" />
+                    <div className="absolute top-1.5 right-1.5 h-4 w-4 rounded-full flex items-center justify-center" style={{ background: '#94a3b8' }}>
+                      <Check className="h-2.5 w-2.5 text-slate-900" />
                     </div>
                   )}
                   <div className="text-xl mb-1">{crypto.icon}</div>
-                  <span className="block font-semibold text-xs text-[var(--text-secondary)]">
+                  <span className="block font-semibold text-xs text-slate-400">
                     {crypto.symbol.replace('/USDT', '')}
                   </span>
-                  <span className="block text-[10px] text-[var(--text-secondary)] mb-1">
+                  <span className="block text-[10px] text-slate-500 mb-1">
                     {crypto.name}
                   </span>
                   <span
@@ -339,8 +350,8 @@ export default function AgentCreationModal({
                       className={cn(
                         'text-[11px] font-semibold',
                         crypto.roi.startsWith('+') || crypto.roi.startsWith('~')
-                          ? 'text-[var(--text-secondary)]'
-                          : 'text-[var(--error)]'
+                          ? 'text-slate-500'
+                          : 'text-red-400'
                       )}
                     >
                       {crypto.roi}
@@ -351,25 +362,25 @@ export default function AgentCreationModal({
             })}
           </div>
 
-          <Separator className="my-5" />
+          <div className="my-5" style={{ height: 1, background: 'rgba(40, 68, 105, 0.3)' }} />
 
           {/* Configuration */}
           <div className="space-y-4">
             {/* Leverage Slider */}
             <div>
               <div className="flex items-center gap-2 mb-3">
-                <span className="text-sm text-[var(--text-primary)]">Max Leverage</span>
+                <span className="text-sm text-slate-200">Max Leverage</span>
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Info className="h-3.5 w-3.5 text-[var(--text-secondary)] cursor-help" />
+                      <Info className="h-3.5 w-3.5 text-slate-500 cursor-help" />
                     </TooltipTrigger>
                     <TooltipContent>
                       Maximum leverage the agent can use for trades
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
-                <span className="ml-auto text-sm font-semibold text-[var(--text-primary)]">
+                <span className="ml-auto text-sm font-semibold text-slate-200">
                   {maxLeverage}x
                 </span>
               </div>
@@ -381,7 +392,7 @@ export default function AgentCreationModal({
                   value={[maxLeverage]}
                   onValueChange={(value) => setMaxLeverage(value[0])}
                 />
-                <div className="flex justify-between mt-1.5 text-xs text-[var(--text-secondary)]">
+                <div className="flex justify-between mt-1.5 text-xs text-slate-500">
                   <span>1x</span>
                   <span>5x</span>
                   <span>10x</span>
@@ -390,29 +401,29 @@ export default function AgentCreationModal({
             </div>
 
             {/* Strategy summary card */}
-            <div className="bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-xl p-4 flex flex-wrap gap-6">
+            <div className="rounded-xl p-4 flex flex-wrap gap-6" style={{ background: '#1a2436', border: '1px solid rgba(40, 68, 105, 0.35)' }}>
               <div className="flex-1 min-w-[100px]">
-                <span className="block text-xs text-[var(--text-secondary)] mb-1">
+                <span className="block text-xs text-slate-500 mb-1">
                   Position Size
                 </span>
-                <span className="text-lg font-semibold text-[var(--text-primary)]">40%</span>
+                <span className="text-lg font-semibold text-slate-200">40%</span>
               </div>
               <div className="flex-1 min-w-[100px]">
-                <span className="block text-xs text-[var(--text-secondary)] mb-1">Stop Loss</span>
-                <span className="text-lg font-semibold text-[var(--error)]">1.5%</span>
-                <span className="block text-[10px] text-[var(--text-secondary)]">
+                <span className="block text-xs text-slate-500 mb-1">Stop Loss</span>
+                <span className="text-lg font-semibold text-red-400">1.5%</span>
+                <span className="block text-[10px] text-slate-500">
                   ~7.5% avec 5x lev
                 </span>
               </div>
               <div className="flex-1 min-w-[100px]">
-                <span className="block text-xs text-[var(--text-secondary)] mb-1">Take Profit</span>
-                <span className="text-lg font-semibold text-[var(--success)]">3.0%</span>
-                <span className="block text-[10px] text-[var(--text-secondary)]">
+                <span className="block text-xs text-slate-500 mb-1">Take Profit</span>
+                <span className="text-lg font-semibold text-emerald-400">3.0%</span>
+                <span className="block text-[10px] text-slate-500">
                   ~15% avec 5x lev
                 </span>
               </div>
               <div className="flex-1 min-w-[100px]">
-                <span className="block text-xs text-[var(--text-secondary)] mb-1">Strategy</span>
+                <span className="block text-xs text-slate-500 mb-1">Strategy</span>
                 <span className="text-lg font-semibold bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400 bg-clip-text text-transparent">
                   V5 Momentum
                 </span>
@@ -422,7 +433,7 @@ export default function AgentCreationModal({
         </div>
 
         {/* Footer */}
-        <DialogFooter className="border-t border-[var(--border-subtle)] px-6 py-4 flex items-center gap-3">
+        <DialogFooter className="px-6 py-4 flex items-center gap-3" style={{ borderTop: '1px solid rgba(40, 68, 105, 0.4)', background: '#0c1322' }}>
           <Button variant="outline" onClick={handleClose} disabled={creating}>
             Cancel
           </Button>

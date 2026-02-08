@@ -116,6 +116,9 @@ router.delete('/runs', authenticateUser, (req: AuthenticatedRequest, res) => {
  * Run a detailed backtest with all individual trades
  */
 router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  // Allow up to 10 minutes for long backtests (data fetching + simulation)
+  req.setTimeout(10 * 60 * 1000);
+  res.setTimeout(10 * 60 * 1000);
   try {
     const { 
       startDate, 

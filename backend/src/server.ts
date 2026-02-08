@@ -4281,6 +4281,10 @@ runStartupSequence().catch(error => {
   logger.error('❌ Startup sequence failed:', error);
 });
 
+// Increase default server timeout from 2min to 10min for long-running backtest requests
+server.timeout = 10 * 60 * 1000;
+server.keepAliveTimeout = 10 * 60 * 1000;
+
 server.listen(cfg.PORT, () => {
   logger.info(`✅ Server listening on :${cfg.PORT}`);
   logger.info(`📈 Strategy: Momentum Simple (Vol 5x + BTC MA50 + 2h Mom)`);

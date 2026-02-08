@@ -254,7 +254,7 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
         {/* Styles - scoped to this component */}
         <style>{`
           .cockpit-header {
-            background: linear-gradient(135deg, rgba(30, 64, 175, 0.92), rgba(12, 74, 110, 0.88));
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.85) 0%, rgba(59, 130, 246, 0.80) 50%, rgba(6, 182, 212, 0.75) 100%);
             border-radius: 16px;
             padding: 20px 24px;
             color: var(--text-primary);
