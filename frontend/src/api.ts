@@ -95,6 +95,8 @@ export const api = {
     (await client.post('/api/agent/creation/create-session', { creationId, symbol })).data,
   activateAgentCreation: async (creationId: string) =>
     (await client.post('/api/agent/creation/activate', { creationId })).data,
+  createBulkAgentSessions: async (payload: { mode: string; symbols: string[]; maxLeverage?: number; strategyEngine?: string }) =>
+    (await client.post('/api/agent/creation/bulk', payload)).data,
   restartSession: async (sessionId: string, payload: Record<string, any>) =>
     (await client.post('/api/agent/restart', { sessionId, ...payload })).data,
   stopSession: async (sessionId: string, closePosition?: boolean) => (await client.post("/api/agent/stop", { sessionId, closePosition })).data,

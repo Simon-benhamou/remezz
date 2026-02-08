@@ -2317,6 +2317,190 @@ app.post("/api/agent/creation/activate", async (req, res) => {
   }
 });
 
+// Bulk create agents for multiple symbols at once
+app.post("/api/agent/creation/bulk", async (req, res) => {
+  try {
+    const userId = (req as any)?.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const { mode = 'paper', symbols, maxLeverage } = req.body;
+
+    if (!Array.isArray(symbols) || symbols.length === 0) {
+      return res.status(400).json({ error: "symbols must be a non-empty array" });
+    }
+
+    if (symbols.length > 20) {
+      return res.status(400).json({ error: "Maximum 20 symbols per bulk creation" });
+    }
+
+    const modeTyped = mode as 'paper' | 'live';
+
+    // Read user's saved paper balance (default 10000)
+    let defaultCapital = 10000;
+    try {
+      const userSetting = await prisma.userSetting.findUnique({
+        where: { userId_key: { userId, key: 'paperTradingCapital' } }
+      });
+      if (userSetting?.value) {
+        const parsed = parseFloat(userSetting.value);
+        if (parsed > 0) defaultCapital = parsed;
+      }
+    } catch (err) {
+      console.warn('Could not read user paper trading capital:', err);
+    }
+
+    // Get existing running agents
+    const agentKey = getAgentKey(userId, modeTyped);
+    const existingAgents = userAgents.get(agentKey);
+    const runningSymbols = existingAgents?.agents.map(a => a.getStatus().symbol) || [];
+
+    // Get exchange
+    const exchange = await getExchangeForUser(userId);
+
+    // Calculate actual starting balance based on mode
+    let actualStartBalance = defaultCapital;
+
+    if (modeTyped === 'live') {
+      try {
+        try {
+          const credentials = await getUserCredentials(userId);
+          if (credentials && credentials.apiKey && credentials.apiSecret) {
+            const binanceWs = getBinanceWebSocket();
+            await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
+          }
+        } catch (wsErr: any) {
+          logger.warn(`[Bulk] Failed to subscribe to user data stream:`, wsErr?.message);
+        }
+
+        const wsBalance = await waitForWebSocketBalance(userId, 'USDT');
+        if (wsBalance && wsBalance.total > 0) {
+          actualStartBalance = wsBalance.total;
+        } else {
+          const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
+          if (!globalRestCircuitBreaker.canMakeRequest()) {
+            return res.status(429).json({ error: 'Rate limited by Binance. Please wait and try again.' });
+          }
+          const balance = await exchange.fetchBalance({ type: 'future' });
+          const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
+          const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
+          if (totalUsdt > 0) {
+            actualStartBalance = totalUsdt;
+            seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt });
+          } else {
+            return res.status(400).json({ error: 'Binance balance is $0. Please deposit funds.' });
+          }
+        }
+      } catch (err: any) {
+        return res.status(500).json({ error: 'Failed to fetch Binance balance.', detail: err?.message });
+      }
+    } else {
+      try {
+        const pastKpis = await prisma.sessionKpi.findMany({
+          where: { session: { userId, mode: 'paper' } },
+          select: { realizedPnlUsd: true }
+        });
+        const accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+        actualStartBalance = defaultCapital + accumulatedPnl;
+      } catch (err) {
+        logger.warn('[Bulk Paper] Failed to fetch accumulated PnL:', err);
+      }
+    }
+
+    // Get or create capital pool (shared across all agents)
+    let capitalPool = getCapitalPool(userId, undefined, modeTyped);
+    if (!capitalPool) {
+      capitalPool = resetCapitalPool(userId, actualStartBalance, modeTyped);
+    } else if (modeTyped === 'live') {
+      capitalPool = resetCapitalPool(userId, actualStartBalance, modeTyped);
+    }
+    if (modeTyped === 'live' && exchange) {
+      capitalPool.setExchange(exchange);
+    }
+
+    const results: { symbol: string; sessionId: string }[] = [];
+    const errors: { symbol: string; error: string }[] = [];
+
+    for (const rawSymbol of symbols) {
+      const selectedSymbol = rawSymbol.includes(':') ? rawSymbol : `${rawSymbol}:USDT`;
+
+      // Skip already running
+      if (runningSymbols.includes(selectedSymbol)) {
+        errors.push({ symbol: rawSymbol, error: `Already running in ${mode} mode` });
+        continue;
+      }
+
+      try {
+        // Create session in DB
+        const session = await prisma.agentSession.create({
+          data: {
+            userId,
+            symbol: selectedSymbol,
+            mode,
+            startBalanceUsd: actualStartBalance,
+            profileJson: { capitalUsd: actualStartBalance, symbol: selectedSymbol },
+          }
+        });
+
+        await prisma.sessionKpi.create({
+          data: {
+            sessionId: session.id,
+            realizedPnlUsd: 0,
+            unrealizedPnlUsd: 0,
+            roiPct: 0,
+            winRate: 0,
+            expectancy: 0,
+            maxDrawdownPct: 0,
+            avgHoldingMin: 0,
+          }
+        });
+
+        // Create and start agent
+        const agent = new SimpleAgent({
+          symbol: selectedSymbol,
+          exchange,
+          prisma,
+          userId,
+          sessionId: session.id,
+          capitalPool,
+          mode: modeTyped,
+          riskPerTradePct: 1,
+        });
+
+        const existingData = userAgents.get(agentKey);
+        if (existingData) {
+          existingData.agents.push(agent);
+        } else {
+          userAgents.set(agentKey, { agents: [agent], capitalPool, mode: modeTyped });
+        }
+
+        await agent.start();
+        runningSymbols.push(selectedSymbol);
+        results.push({ symbol: selectedSymbol, sessionId: session.id });
+        logger.info(`[Bulk] Created agent for ${selectedSymbol}`);
+      } catch (err: any) {
+        errors.push({ symbol: rawSymbol, error: err?.message || 'Failed to create' });
+        logger.error(`[Bulk] Failed to create agent for ${rawSymbol}:`, err?.message);
+      }
+    }
+
+    logger.info(`[Bulk] Created ${results.length}/${symbols.length} agents for ${userId}`);
+
+    res.json({
+      success: true,
+      created: results.length,
+      failed: errors.length,
+      sessions: results,
+      errors,
+      mode,
+    });
+  } catch (error) {
+    logger.error('Failed bulk creation:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to bulk create" });
+  }
+});
+
 // Restart session - stops and restarts agents with fresh state
 app.post("/api/agent/restart", async (req, res) => {
   try {
