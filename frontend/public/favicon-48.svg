@@ -1,17 +1,14 @@
-<svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="quantai-zap-48" x1="12" y1="0" x2="12" y2="24" gradientUnits="userSpaceOnUse" gradientTransform="rotate(135 12 12)">
-      <stop offset="0" stop-color="#2563eb" />
-      <stop offset="1" stop-color="#1d4ed8" />
+    <linearGradient id="bg" x1="4" y1="44" x2="44" y2="4" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e3a5f"/>
+      <stop offset="100%" stop-color="#0d9488"/>
     </linearGradient>
   </defs>
-  <rect width="24" height="24" rx="7" fill="url(#quantai-zap-48)" />
-  <path
-    d="M12.8 4.2L8.1 12.6h3.8l-1.2 7.2 6.4-8.8h-3.7l0.5-6.8z"
-    fill="none"
-    stroke="#f8fafc"
-    stroke-width="1.9"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
+
+  <!-- Background -->
+  <rect width="48" height="48" rx="12" fill="url(#bg)"/>
+
+  <!-- Bold ascending wave (white) -->
+  <path d="M8 34 C13 34 15 20 20 20 C25 20 27 34 32 34 C37 34 39 8 42 8" stroke="#f8fafc" stroke-width="5.5" stroke-linecap="round" fill="none" opacity="0.9"/>
 </svg>

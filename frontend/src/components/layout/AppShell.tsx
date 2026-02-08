@@ -167,13 +167,13 @@ function Sidebar({ collapsed, onToggle, activeKey, onNavigate, themeMode }: Side
           <img
             src="/favicon.svg"
             alt="Remezz"
-            className={cn('h-7 w-7', themeMode === 'light' && 'invert')}
+            className="h-7 w-7"
           />
         ) : (
           <img
-            src="/remezz-logo.svg"
+            src={themeMode === 'light' ? '/remezz-logo-light.svg' : '/remezz-logo.svg'}
             alt="Remezz"
-            className={cn('h-8', themeMode === 'light' && 'invert')}
+            className="h-8"
           />
         )}
       </div>
@@ -293,9 +293,9 @@ function MobileNav({ open, onOpenChange, activeKey, onNavigate, themeMode }: Mob
         {/* Header */}
         <div className="flex h-[72px] items-center justify-between border-b border-border bg-card px-5">
           <img
-            src="/remezz-logo.svg"
+            src={themeMode === 'light' ? '/remezz-logo-light.svg' : '/remezz-logo.svg'}
             alt="Remezz"
-            className={cn('h-7', themeMode === 'light' && 'invert')}
+            className="h-7"
           />
           <button
             onClick={() => onOpenChange(false)}

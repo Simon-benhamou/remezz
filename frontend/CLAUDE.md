@@ -108,23 +108,29 @@ src/
 
 - **Dark/light** toggle via `.dark` class on `<html>` (standard shadcn/ui)
 - Theme state in Zustand store: `themeMode: 'dark' | 'light'`
-- CSS variables defined in `src/styles/tailwind.css` (HSL format)
-- Legacy CSS variables in `src/styles/global.css` (used by some cockpit `<style>` blocks)
-- Use `hsl(var(--primary))` pattern in Tailwind config, `var(--success)` in inline CSS
+- **Two CSS files define theme variables** (both use `.dark` class selector):
+  - `src/styles/tailwind.css` — HSL variables for shadcn/ui (`--background`, `--card`, `--border`, etc.)
+  - `src/styles/global.css` — Legacy hex/rgba variables for cockpit `<style>` blocks (`--bg-primary`, `--text-secondary`, etc.)
+- `:root` in both files = **light** defaults; `.dark` block = **dark** overrides
+- Dark background is `#0f172a` (slate-900, ~11% lightness) — not pure black
+- **Prefer Tailwind semantic colors** (`text-foreground`, `bg-card`, `text-muted-foreground`, `text-success`, `text-destructive`) over legacy `var(--text-primary)` / `var(--bg-card)` in new code
+- Use `hsl(var(--primary))` pattern in Tailwind config; legacy `var(--success)` only in existing cockpit inline styles
+- `ProfessionalChart.tsx` reads `themeMode` from Zustand and recreates the chart on theme switch via `getChartColors(isDark)` helper
 
 ## Patterns & Conventions
 
 ### Styling
 - Use Tailwind utility classes, not inline styles
 - Use `cn()` from `@/lib/utils` for conditional classes
-- Color-coded tags: `bg-green-500/20 text-green-400 ring-1 ring-green-500/30` pattern
-- PnL positive: `text-green-400` / negative: `text-red-400`
+- **Badges**: `inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold w-fit` with `bg-{color}/15 text-{color}`
+- **PnL coloring**: `text-success` (positive) / `text-destructive` (negative) — not raw `text-green-400`/`text-red-400`
+- **Tables**: CSS Grid divs (not `<table>`), matching ExecutionLedgerPageNew pattern: `overflow-auto rounded-2xl border border-border bg-card` wrapper, `grid` rows with `hover:bg-muted/30`, `text-[11px]` cells
 - Monospace for numbers: `font-mono`
 
 ### Components
 - **Modals**: Use shadcn `Dialog` (not `window.confirm` for complex flows)
 - **Toasts**: Use `toast` from `@/lib/toast` (wraps Sonner)
-- **Tables**: Use `DataTable` shared component or raw HTML `<table>` with Tailwind
+- **Tables**: Prefer CSS Grid div pattern (see ExecutionLedgerPageNew, SessionsPage) or `DataTable` shared component
 - **Icons**: Import from `lucide-react` directly
 - **Forms**: React Hook Form + Zod schemas for validation
 - **Tooltips**: Always wrap in `TooltipProvider` when using multiple tooltips

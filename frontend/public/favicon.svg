@@ -1,26 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
   <defs>
-    <linearGradient id="s" x1="0" y1="0" x2="48" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#06b6d4"/>
-      <stop offset="50%" stop-color="#3b82f6"/>
-      <stop offset="100%" stop-color="#6366f1"/>
+    <linearGradient id="wave" x1="4" y1="0" x2="44" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e3a5f"/>
+      <stop offset="50%" stop-color="#0d9488"/>
+      <stop offset="100%" stop-color="#22c55e"/>
     </linearGradient>
-    <filter id="g">
-      <feGaussianBlur stdDeviation="1.5" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
   </defs>
-  <path d="M5 24
-           C7 24, 8 22, 10 20 C12 18, 13 28, 15 24
-           C17 20, 18 16, 20 12 C22 8, 23 40, 26 24
-           C29 8, 30 6, 32 6 C34 6, 35 42, 37 42 C39 42, 40 6, 42 6 C44 6, 45 24, 46 24"
-        stroke="url(#s)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#g)"/>
-  <path d="M5 24
-           C7 24, 8 22, 10 20 C12 18, 13 28, 15 24
-           C17 20, 18 16, 20 12 C22 8, 23 40, 26 24
-           C29 8, 30 6, 32 6 C34 6, 35 42, 37 42 C39 42, 40 6, 42 6 C44 6, 45 24, 46 24"
-        stroke="url(#s)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Bold ascending wave -->
+  <path d="M4 38 C10 38 12 22 18 22 C24 22 26 38 32 38 C38 38 40 6 44 6" stroke="url(#wave)" stroke-width="7" stroke-linecap="round" fill="none"/>
 </svg>
