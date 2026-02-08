@@ -501,7 +501,7 @@ export default function DashboardPageCompact() {
             </div>
 
             {/* Bottom Stats */}
-            <div className="mt-5 grid grid-cols-4 gap-6 border-t border-border pt-4">
+            <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6 border-t border-border pt-4">
               <div>
                 <span className="mb-1 block text-[11px] text-muted-foreground">Sample Size</span>
                 <span className="text-lg font-bold text-foreground">{trades.length}</span>

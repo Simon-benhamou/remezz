@@ -84,7 +84,7 @@ const loadingStyles = `
   .cockpit-loading-overlay {
     position: fixed;
     top: 0;
-    left: 200px;
+    left: 0;
     right: 0;
     bottom: 0;
     background: var(--bg-overlay);

@@ -194,7 +194,7 @@ export default function FeedPage() {
   };
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 pb-6">
+    <div className="mx-auto max-w-[1400px] px-4 pb-4 sm:px-6 sm:pb-6">
       {/* Header */}
       <div className="mb-5 flex items-center justify-between">
         <div>

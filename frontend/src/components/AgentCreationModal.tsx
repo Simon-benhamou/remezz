@@ -181,7 +181,7 @@ export default function AgentCreationModal({
       }}
     >
       <DialogContent
-        className="p-0 gap-0 max-w-[860px] border-0 text-foreground"
+        className="p-0 gap-0 max-w-[min(92vw,860px)] border-0 text-foreground"
         style={{ background: '#0f172a', borderRadius: 16, border: '1px solid rgba(40, 68, 105, 0.4)' }}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}

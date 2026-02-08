@@ -549,7 +549,7 @@ function ParityVerificationPanel() {
   return (
     <div className="flex flex-col gap-4">
       {/* Header */}
-      <div className="rounded-xl border border-border bg-card px-6 py-4">
+      <div className="rounded-xl border border-border bg-card px-4 py-3 sm:px-6 sm:py-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h4 className="m-0 text-lg font-semibold text-foreground">Parity Verification</h4>
@@ -583,7 +583,7 @@ function ParityVerificationPanel() {
         <div className="col-span-1 md:col-span-2">
           <div className="rounded-xl border border-border bg-card p-4">
             <TooltipProvider>
-              <div className="grid grid-cols-3 gap-4 md:grid-cols-6">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6 sm:gap-4">
                 <div>
                   <span className="text-xs uppercase tracking-wider text-muted-foreground">Total</span>
                   <div className="text-2xl font-bold text-blue-500">{summary.total}</div>
@@ -664,7 +664,7 @@ function ParityVerificationPanel() {
       {/* Table */}
       <div className="rounded-xl border border-border bg-card">
         {/* Table header bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-foreground">Verification Results</span>
             {(symbolFilter.length > 0 || categoryFilter.length > 0 || sideFilter.length > 0) && (
@@ -740,7 +740,7 @@ function ParityVerificationPanel() {
 
         {/* Table content */}
         {!loading && (
-          <>
+          <div className="overflow-x-auto">
             <UITable>
               <TableHeader>
                 <TableRow>
@@ -950,7 +950,7 @@ function ParityVerificationPanel() {
                 </div>
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
     </div>

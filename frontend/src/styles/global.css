@@ -416,13 +416,38 @@ a:hover {
 
 
 @media (max-width: 768px) {
+  .agent-page {
+    gap: 16px;
+  }
+
   .agent-page__header {
     align-items: flex-start;
+    gap: 12px;
   }
 
   .auth-form-card,
   .auth-panel {
-    padding: 32px;
+    padding: 24px;
+  }
+
+  .agent-card {
+    padding: 16px;
+  }
+
+  .agent-card__metrics {
+    gap: 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  .agent-page {
+    gap: 12px;
+  }
+
+  .auth-form-card,
+  .auth-panel {
+    padding: 16px;
+    border-radius: 16px;
   }
 }
 .w-full {

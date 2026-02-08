@@ -254,7 +254,7 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
         {/* Styles - scoped to this component */}
         <style>{`
           .cockpit-header {
-            background: linear-gradient(135deg, rgba(99, 102, 241, 0.85) 0%, rgba(59, 130, 246, 0.80) 50%, rgba(6, 182, 212, 0.75) 100%);
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.88) 0%, rgba(52, 211, 153, 0.80) 100%);
             border-radius: 16px;
             padding: 20px 24px;
             color: var(--text-primary);
@@ -361,13 +361,22 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
 
           @media (max-width: 768px) {
             .cockpit-header {
-              padding: 16px;
+              padding: 14px 16px;
+              border-radius: 12px;
             }
 
             .cockpit-header__main {
               flex-direction: column;
               align-items: stretch;
-              gap: 16px;
+              gap: 12px;
+            }
+
+            .cockpit-header__title {
+              font-size: 16px;
+            }
+
+            .cockpit-header__title-row {
+              gap: 8px;
             }
 
             .cockpit-header__pnl {
@@ -377,6 +386,14 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
 
             .cockpit-header__pnl-main {
               align-items: flex-start;
+            }
+
+            .cockpit-header__pnl-value {
+              font-size: 22px;
+            }
+
+            .cockpit-header__sparkline {
+              display: none;
             }
 
             .cockpit-header__actions {

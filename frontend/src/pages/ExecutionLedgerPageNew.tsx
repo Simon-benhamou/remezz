@@ -150,41 +150,34 @@ export default function ExecutionLedgerPageNew() {
   const gridCols = 'grid-cols-[90px_55px_55px_55px_95px_50px_70px_70px_70px_75px_55px_65px_45px_50px_110px_55px_55px]';
 
   return (
-    <div className="px-6 pb-6 max-w-[1600px] mx-auto">
+    <div className="px-4 pb-4 sm:px-6 sm:pb-6 max-w-[1600px] mx-auto">
       {/* Header */}
-      <div className="flex justify-between items-center mb-5">
+      <div className="flex flex-col gap-3 mb-5 sm:flex-row sm:justify-between sm:items-center">
         <h3 className="text-xl font-semibold text-foreground flex items-center gap-2.5">
           <span className="text-xl">📊</span> Execution Ledger
         </h3>
-        <div className="flex gap-3 items-center">
-          {/* Mode Filter */}
-          <div className="flex gap-2 items-center">
-            <span className="text-muted-foreground text-xs">Mode:</span>
-            <div className="flex gap-1">
-            </div>
-          </div>
-          <div className="relative">
+        <div className="flex flex-wrap gap-2 sm:gap-3 items-center">
+          <div className="relative flex-1 min-w-[140px] sm:flex-none">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input
               placeholder="Search..."
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              className="h-9 w-[200px] rounded-md border border-border bg-card pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              className="h-9 w-full sm:w-[200px] rounded-md border border-border bg-card pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
           <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing}>
             <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
           {isRefreshing && !isInitialLoad && (
             <span className="inline-flex items-center gap-1.5 rounded-md bg-accent/15 px-2.5 py-1 text-xs font-medium text-accent">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Updating...
             </span>
           )}
           <Button size="sm" onClick={exportCsv} disabled={!trades.length}>
             <Download className="h-4 w-4" />
-            Export CSV
+            <span className="hidden sm:inline">Export CSV</span>
           </Button>
         </div>
       </div>

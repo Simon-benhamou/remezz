@@ -108,7 +108,8 @@ async function enrichSession(session: AgentSession): Promise<AgentSession> {
 export default function SessionsPage() {
   const navigate = useNavigate();
   const { mode: currentMode } = useMode();
-  const [viewMode, setViewMode] = React.useState<ViewMode>('table');
+  const isMobile = React.useMemo(() => typeof window !== 'undefined' && window.innerWidth < 768, []);
+  const [viewMode, setViewMode] = React.useState<ViewMode>(isMobile ? 'cards' : 'table');
   const [createModalOpen, setCreateModalOpen] = React.useState(false);
 
   const [confirmState, setConfirmState] = React.useState<{

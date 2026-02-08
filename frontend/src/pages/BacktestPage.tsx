@@ -216,7 +216,7 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
   const areaD = pathD + ` L ${xScale(data.length - 1)} ${height - padding.bottom} L ${padding.left} ${height - padding.bottom} Z`;
 
   return (
-    <svg width={width} height={height} style={{ background: 'var(--bg-primary)', borderRadius: 8 }}>
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', background: 'var(--bg-primary)', borderRadius: 8 }}>
       {/* Grid lines */}
       {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => (
         <g key={i}>
@@ -281,7 +281,7 @@ const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }
   const areaD = `M ${padding.left} ${padding.top} ` + pathD.substring(2) + ` L ${xScale(data.length - 1)} ${padding.top} Z`;
 
   return (
-    <svg width={width} height={height} style={{ background: 'var(--bg-primary)', borderRadius: 8 }}>
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', background: 'var(--bg-primary)', borderRadius: 8 }}>
       {/* Area fill */}
       <defs>
         <linearGradient id="ddGradient" x1="0" x2="0" y1="0" y2="1">
@@ -515,7 +515,7 @@ export default function BacktestPage() {
 
   return (
     <TooltipProvider>
-      <div className="mx-auto max-w-[1600px] p-6">
+      <div className="mx-auto max-w-[1600px] px-4 py-4 sm:p-6">
         <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-foreground">
           <LineChart className="h-7 w-7" />
           Strategy Backtester

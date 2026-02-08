@@ -9,9 +9,8 @@ import NotificationBell from '@/components/NotificationBell';
 import { useAuth } from '@/hooks/useAuth';
 import { useDashboard } from '@/hooks/useDashboard';
 import ExecutionLedgerPageNew from '@/pages/ExecutionLedgerPageNew';
-import LoginPage from '@/pages/LoginPage';
+import LandingPage from '@/pages/LandingPage';
 import OperationsDashboardPage from '@/pages/DashboardPageCompact';
-import RegisterPage from '@/pages/RegisterPage';
 import SessionsPage from '@/pages/SessionsPage';
 import ReportsPage from '@/pages/ReportsPage';
 import SessionCockpitPage from '@/pages/SessionCockpitPageNew';
@@ -130,8 +129,8 @@ function AppInner() {
   if (!isAuthenticated) {
     return (
       <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/login" element={<LandingPage />} />
+        <Route path="/register" element={<LandingPage />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     );
