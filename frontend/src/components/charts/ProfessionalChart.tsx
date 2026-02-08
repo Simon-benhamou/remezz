@@ -4,6 +4,7 @@ import { api } from '../../api';
 import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatPriceDisplay } from '../../utils/number';
+import { useAppStore } from '../../store';
 
 interface PositionInfo {
   entryPrice?: number;
@@ -55,6 +56,35 @@ interface CandleData {
   volume?: number;
 }
 
+function getChartColors(isDark: boolean) {
+  if (isDark) {
+    return {
+      background: '#0f172a',
+      text: '#94a3b8',
+      grid: 'rgba(148, 163, 184, 0.06)',
+      crosshair: 'rgba(148, 163, 184, 0.5)',
+      crosshairLabel: '#1e40af',
+      border: 'rgba(40, 68, 105, 0.3)',
+      upColor: '#10b981',
+      downColor: '#ef4444',
+      volumeUp: 'rgba(16, 185, 129, 0.3)',
+      volumeDown: 'rgba(239, 68, 68, 0.3)',
+    };
+  }
+  return {
+    background: '#f8fafc',
+    text: '#64748b',
+    grid: 'rgba(100, 116, 139, 0.1)',
+    crosshair: 'rgba(100, 116, 139, 0.4)',
+    crosshairLabel: '#2563eb',
+    border: '#e2e8f0',
+    upColor: '#059669',
+    downColor: '#dc2626',
+    volumeUp: 'rgba(5, 150, 105, 0.3)',
+    volumeDown: 'rgba(220, 38, 38, 0.3)',
+  };
+}
+
 export default function ProfessionalChart({
   symbol,
   sessionId,
@@ -73,7 +103,8 @@ export default function ProfessionalChart({
   const supportLineRef = useRef<IPriceLine | null>(null);
   const resistanceLineRef = useRef<IPriceLine | null>(null);
   const targetLinesRef = useRef<IPriceLine[]>([]);
-  
+
+  const themeMode = useAppStore((s) => s.themeMode);
   const [timeframe, setTimeframe] = useState<Timeframe>('15m');
   const [loading, setLoading] = useState(true);
   const [chartData, setChartData] = useState<CandleData[]>([]);
@@ -84,60 +115,53 @@ export default function ProfessionalChart({
     return formatPriceDisplay(value);
   }, []);
 
-  // Initialize chart
+  const isDark = themeMode === 'dark';
+  const colors = useMemo(() => getChartColors(isDark), [isDark]);
+
+  // Initialize chart — recreate on theme switch
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
-    const cs = getComputedStyle(document.documentElement);
-    const resolve = (v: string, fb: string) => cs.getPropertyValue(v).trim() || fb;
-    const bgPrimary = resolve('--bg-primary', '#0a0e1a');
-    const textSecondary = resolve('--text-secondary', '#94a3b8');
-    const borderSubtle = resolve('--border-subtle', 'rgba(148,163,184,0.1)');
-    const success = resolve('--success', '#10b981');
-    const error = resolve('--error', '#ef4444');
-    const accentSecondary = resolve('--accent-secondary', '#2563eb');
-
     const chart = createChart(chartContainerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: bgPrimary },
-        textColor: textSecondary,
+        background: { type: ColorType.Solid, color: colors.background },
+        textColor: colors.text,
         fontSize: 12,
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       },
       grid: {
-        vertLines: { color: 'rgba(148, 163, 184, 0.06)' },
-        horzLines: { color: 'rgba(148, 163, 184, 0.06)' },
+        vertLines: { color: colors.grid },
+        horzLines: { color: colors.grid },
       },
       crosshair: {
         mode: 1,
         vertLine: {
-          color: 'rgba(148, 163, 184, 0.5)',
+          color: colors.crosshair,
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: '#1e40af',
+          labelBackgroundColor: colors.crosshairLabel,
         },
         horzLine: {
-          color: 'rgba(148, 163, 184, 0.5)',
+          color: colors.crosshair,
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: '#1e40af',
+          labelBackgroundColor: colors.crosshairLabel,
         },
       },
       localization: {
         priceFormatter: (value: number) => {
-          // Smart precision: more decimals for lower prices
           if (value >= 1000) return value.toFixed(2);
           if (value >= 100) return value.toFixed(3);
           return value.toFixed(4);
         },
       },
       rightPriceScale: {
-        borderColor: borderSubtle,
-        textColor: textSecondary,
+        borderColor: colors.border,
+        textColor: colors.text,
         scaleMargins: { top: 0.1, bottom: 0.2 },
       },
       timeScale: {
-        borderColor: borderSubtle,
+        borderColor: colors.border,
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 12,
@@ -158,12 +182,12 @@ export default function ProfessionalChart({
 
     // Candlestick series
     const candleSeries = chart.addCandlestickSeries({
-      upColor: success,
-      downColor: error,
-      borderUpColor: success,
-      borderDownColor: error,
-      wickUpColor: success,
-      wickDownColor: error,
+      upColor: colors.upColor,
+      downColor: colors.downColor,
+      borderUpColor: colors.upColor,
+      borderDownColor: colors.downColor,
+      wickUpColor: colors.upColor,
+      wickDownColor: colors.downColor,
     });
 
     // Volume series
@@ -206,7 +230,7 @@ export default function ProfessionalChart({
       targetLinesRef.current = [];
       setChartReady(false);
     };
-  }, []);
+  }, [colors]);
 
   // Fetch historical data
   const fetchHistoricalData = useCallback(async () => {
@@ -218,7 +242,7 @@ export default function ProfessionalChart({
 
     setLoading(true);
     setError(null);
-    
+
     try {
       // Map timeframe to candle count
       const candleCount = {
@@ -230,7 +254,7 @@ export default function ProfessionalChart({
 
       // Fetch OHLCV data from backend using API client
       const response = await api.getOHLCV(symbol, timeframe, candleCount);
-      
+
       if (!response.data || !Array.isArray(response.data)) {
         throw new Error('Invalid data format received');
       }
@@ -249,35 +273,35 @@ export default function ProfessionalChart({
       candles.sort((a, b) => a.time - b.time);
 
 
-      
+
       setChartData(candles);
-      
+
       // Update chart
       if (candleSeriesRef.current && candles.length > 0) {
         candleSeriesRef.current.setData(candles);
       }
-      
+
       if (volumeSeriesRef.current && candles.length > 0) {
         const volumeData = candles.map(c => ({
           time: c.time,
           value: c.volume || 0,
-          color: c.close >= c.open ? 'rgba(16, 185, 129, 0.5)' : 'rgba(239, 68, 68, 0.5)',
+          color: c.close >= c.open ? colors.volumeUp : colors.volumeDown,
         }));
         volumeSeriesRef.current.setData(volumeData);
       }
-      
+
       // Fit content
       if (chartRef.current) {
         chartRef.current.timeScale().fitContent();
       }
-      
+
     } catch (err) {
       console.error('Failed to fetch chart data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load chart data');
     } finally {
       setLoading(false);
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, colors]);
 
   // Load data when chart is ready and symbol or timeframe changes
   useEffect(() => {
@@ -444,11 +468,6 @@ export default function ProfessionalChart({
 
     const markers: any[] = [];
 
-    // Add markers from orders (both entry and exit)
-    const cs = getComputedStyle(document.documentElement);
-    const resolvedSuccess = cs.getPropertyValue('--success').trim() || '#10b981';
-    const resolvedError = cs.getPropertyValue('--error').trim() || '#ef4444';
-
     orders?.forEach(order => {
       if (!order.createdAt) return;
 
@@ -462,7 +481,7 @@ export default function ProfessionalChart({
           markers.push({
             time,
             position: 'aboveBar',
-            color: resolvedError,
+            color: colors.downColor,
             shape: 'arrowDown',
             text: `Exit @ ${formatPriceDisplay(Number(order.price || order.avgPrice || 0))}`,
           });
@@ -470,7 +489,7 @@ export default function ProfessionalChart({
           markers.push({
             time,
             position: 'belowBar',
-            color: resolvedSuccess,
+            color: colors.upColor,
             shape: 'arrowUp',
             text: `Entry @ ${formatPriceDisplay(Number(order.price || order.avgPrice || 0))}`,
           });
@@ -480,17 +499,17 @@ export default function ProfessionalChart({
 
     // Sort markers by time
     markers.sort((a, b) => a.time - b.time);
-    
+
     candleSeriesRef.current.setMarkers(markers);
-  }, [orders, fills, chartData]);
+  }, [orders, fills, chartData, colors]);
 
   // Update price line for current order
   useEffect(() => {
     if (!candleSeriesRef.current) return;
 
     // Find active order for this session
-    const activeOrder = orders?.find(o => 
-      o.sessionId === sessionId && 
+    const activeOrder = orders?.find(o =>
+      o.sessionId === sessionId &&
       o.status?.toLowerCase() !== 'filled' &&
       o.status?.toLowerCase() !== 'canceled'
     );
@@ -537,7 +556,7 @@ export default function ProfessionalChart({
             {chartData.length > 0 ? `${chartData.length} candles` : 'No data'}
           </div>
         </div>
-        
+
         <div className="flex items-center gap-1">
           {timeframeButtons.map(btn => (
             <button
@@ -604,7 +623,7 @@ export default function ProfessionalChart({
             </div>
           </div>
         )}
-        
+
         {error && (
           <div style={{
             position: 'absolute',
@@ -618,10 +637,10 @@ export default function ProfessionalChart({
             color: '#fca5a5',
             zIndex: 10,
           }}>
-            ⚠️ {error}
+            {error}
           </div>
         )}
-        
+
         <div
           ref={chartContainerRef}
           style={{

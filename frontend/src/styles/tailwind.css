@@ -81,18 +81,18 @@
 
 /* ===== Dark theme ===== */
 .dark {
-  --background: 222.2 47.4% 5.2%;
+  --background: 222 47% 11%;
   --foreground: 210 40% 96%;
-  --card: 222.2 47.4% 11%;
+  --card: 220 35% 15%;
   --card-foreground: 210 40% 96%;
-  --popover: 215 28% 17%;
+  --popover: 217 30% 18%;
   --popover-foreground: 210 40% 96%;
   --primary: 187 72% 43%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 215 28% 17%;
+  --secondary: 217 28% 20%;
   --secondary-foreground: 210 40% 96%;
-  --muted: 215 28% 17%;
-  --muted-foreground: 215 16% 57%;
+  --muted: 217 28% 18%;
+  --muted-foreground: 215 16% 63%;
   --accent: 217 91% 60%;
   --accent-foreground: 0 0% 100%;
   --destructive: 0 84% 60%;
@@ -101,8 +101,8 @@
   --success-foreground: 0 0% 100%;
   --warning: 38 92% 50%;
   --warning-foreground: 0 0% 0%;
-  --border: 215 50% 24% / 0.4;
-  --input: 215 50% 24% / 0.4;
+  --border: 215 35% 25% / 0.5;
+  --input: 215 35% 25% / 0.5;
   --ring: 187 72% 43%;
   --radius: 0.75rem;
   --chart-1: 187 72% 43%;

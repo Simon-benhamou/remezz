@@ -1,35 +1,5 @@
-:root,
-[data-theme='dark'] {
-  color-scheme: dark;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --bg-primary: #0a0e1a;
-  --bg-card: rgba(17, 24, 39, 0.92);
-  --bg-elevated: #1e293b;
-  --border-color: rgba(30, 58, 95, 0.4);
-  --border-subtle: rgba(30, 58, 95, 0.25);
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --accent: #06b6d4;
-  --accent-secondary: #3b82f6;
-  --success: #10b981;
-  --error: #ef4444;
-  --warning: #f59e0b;
-  --bg-card-hover: rgba(59, 130, 246, 0.08);
-  --bg-overlay: rgba(15, 23, 42, 0.85);
-  --text-muted: rgba(148, 163, 184, 0.6);
-  --card-gradient: linear-gradient(155deg, rgba(17, 24, 39, 0.94) 0%, rgba(10, 14, 26, 0.94) 100%);
-  --card-shadow: 0 18px 45px -30px rgba(2, 6, 23, 0.9);
-  --card-hover-shadow: 0 24px 60px -28px rgba(6, 182, 212, 0.2);
-  --table-header-bg: rgba(17, 24, 39, 0.88);
-  --modal-bg: rgba(10, 14, 26, 0.98);
-  --modal-border: rgba(6, 182, 212, 0.2);
-  --scrollbar-track: rgba(17, 24, 39, 0.6);
-  --scrollbar-thumb: rgba(148, 163, 184, 0.35);
-  --scrollbar-thumb-hover: rgba(148, 163, 184, 0.55);
-  background-color: #0a0e1a;
-}
-
-[data-theme='light'] {
+/* ===== Light theme defaults ===== */
+:root {
   color-scheme: light;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --bg-primary: #f8fafc;
@@ -57,6 +27,36 @@
   --scrollbar-thumb: #cbd5e1;
   --scrollbar-thumb-hover: #94a3b8;
   background-color: #f8fafc;
+}
+
+/* ===== Dark theme overrides (triggered by .dark class on <html>) ===== */
+.dark {
+  color-scheme: dark;
+  --bg-primary: #0f172a;
+  --bg-card: rgba(23, 32, 51, 0.92);
+  --bg-elevated: #1e293b;
+  --border-color: rgba(40, 68, 105, 0.45);
+  --border-subtle: rgba(40, 68, 105, 0.3);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --accent: #06b6d4;
+  --accent-secondary: #3b82f6;
+  --success: #10b981;
+  --error: #ef4444;
+  --warning: #f59e0b;
+  --bg-card-hover: rgba(59, 130, 246, 0.08);
+  --bg-overlay: rgba(15, 23, 42, 0.85);
+  --text-muted: rgba(148, 163, 184, 0.6);
+  --card-gradient: linear-gradient(155deg, rgba(17, 24, 39, 0.94) 0%, rgba(15, 23, 42, 0.94) 100%);
+  --card-shadow: 0 18px 45px -30px rgba(2, 6, 23, 0.9);
+  --card-hover-shadow: 0 24px 60px -28px rgba(6, 182, 212, 0.2);
+  --table-header-bg: rgba(17, 24, 39, 0.88);
+  --modal-bg: rgba(15, 23, 42, 0.98);
+  --modal-border: rgba(6, 182, 212, 0.2);
+  --scrollbar-track: rgba(17, 24, 39, 0.6);
+  --scrollbar-thumb: rgba(148, 163, 184, 0.35);
+  --scrollbar-thumb-hover: rgba(148, 163, 184, 0.55);
+  background-color: #0f172a;
 }
 
 * {
@@ -170,7 +170,7 @@ a:hover {
 }
 
 .auth-panel__subtitle {
-  color: rgba(226, 232, 240, 0.72);
+  color: var(--text-muted);
   font-size: 16px;
   margin-bottom: 40px;
 }
@@ -193,7 +193,7 @@ a:hover {
 }
 
 .auth-panel__metric-label {
-  color: rgba(148, 163, 184, 0.7);
+  color: var(--text-muted);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -237,14 +237,14 @@ a:hover {
 }
 
 .auth-panel__feature-label {
-  color: rgba(226, 232, 240, 0.85);
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
 .auth-panel__footer {
   margin-top: 32px;
   font-size: 12px;
-  color: rgba(226, 232, 240, 0.6);
+  color: var(--text-muted);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -307,7 +307,7 @@ a:hover {
 }
 
 .agent-page__title span:last-child {
-  color: rgba(148, 163, 184, 0.7);
+  color: var(--text-muted);
 }
 
 .agent-summary-grid {
@@ -325,7 +325,7 @@ a:hover {
 }
 
 .agent-summary-label {
-  color: rgba(148, 163, 184, 0.68);
+  color: var(--text-muted);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -379,7 +379,7 @@ a:hover {
 }
 
 .agent-card__title span:last-child {
-  color: rgba(148, 163, 184, 0.7);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -396,7 +396,7 @@ a:hover {
 }
 
 .agent-card__metric span:first-child {
-  color: rgba(148, 163, 184, 0.65);
+  color: var(--text-muted);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
