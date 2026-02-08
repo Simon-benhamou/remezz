@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Avatar, Dropdown, Space, Typography, Button, Modal, Badge } from 'antd';
-import { UserOutlined, SettingOutlined, LogoutOutlined, EditOutlined } from '../icons';
-import type { MenuProps } from 'antd';
-import { clearApiKey } from '../api';
 import { useNavigate } from 'react-router-dom';
-import UserSettingsModal from './UserSettingsModal';
-import EditProfileModal from './EditProfileModal';
-import { api } from '../api';
-
-const { Text } = Typography;
+import { User, Settings, Pencil, LogOut } from 'lucide-react';
+import { clearApiKey, api } from '../api';
+import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
 
 interface UserInfo {
   id: string;
@@ -18,11 +21,16 @@ interface UserInfo {
   createdAt?: string;
 }
 
+const AVATAR_COLORS = ['#1890ff', '#52c41a', '#fa8c16', '#eb2f96', '#13c2c2', '#722ed1'];
+
+function getAvatarColor(username: string) {
+  const index = username.charCodeAt(0) % AVATAR_COLORS.length;
+  return AVATAR_COLORS[index];
+}
+
 export default function UserDropdown() {
-  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
-  const [settingsVisible, setSettingsVisible] = useState(false);
-  const [editProfileVisible, setEditProfileVisible] = useState(false);
   const navigate = useNavigate();
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
 
   useEffect(() => {
     loadUserInfo();
@@ -39,161 +47,92 @@ export default function UserDropdown() {
 
   const handleLogout = () => {
     try {
-      // Nettoyer toutes les données stockées
       clearApiKey();
-      
-      // Nettoyer le localStorage pour tout l'état de l'app
-      const keysToKeep = ['appMode']; // Garder le mode de trading
+
+      const keysToKeep = ['appMode'];
       const allKeys = Object.keys(localStorage);
-      allKeys.forEach(key => {
+      allKeys.forEach((key) => {
         if (!keysToKeep.includes(key)) {
           localStorage.removeItem(key);
         }
       });
-      
-      // Force une redirection complète pour assurer un état propre
+
       window.location.href = '/login';
     } catch (error) {
       console.error('Logout error:', error);
-      // Fallback en cas d'erreur
       window.location.href = '/login';
     }
   };
 
-  const items: MenuProps['items'] = [
-    {
-      key: 'profile',
-      label: (
-        <div style={{ padding: '8px 0', borderBottom: '1px solid var(--border-subtle)' }}>
-          <div style={{ fontWeight: 600, fontSize: '14px', color: 'var(--text-primary)' }}>
-            {userInfo?.username || 'User'}
-          </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {userInfo?.email}
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            {userInfo?.role === 'admin' ? '👑 Administrator' : '📈 Trader'}
-          </div>
-        </div>
-      ),
-      disabled: true,
-    },
-    {
-      type: 'divider',
-    },
-    {
-      key: 'settings',
-      label: 'Settings & API Keys',
-      icon: <SettingOutlined />,
-      onClick: () => setSettingsVisible(true),
-    },
-    {
-      key: 'profile-edit',
-      label: 'Edit Profile',
-      icon: <EditOutlined />,
-      onClick: () => setEditProfileVisible(true),
-    },
-    {
-      type: 'divider',
-    },
-    {
-      key: 'logout',
-      label: 'Sign out',
-      icon: <LogoutOutlined />,
-      onClick: handleLogout,
-      danger: true,
-    },
-  ];
-
-  const getAvatarColor = (username: string) => {
-    const colors = ['#1890ff', '#52c41a', '#fa8c16', '#eb2f96', '#13c2c2', '#722ed1'];
-    const index = username.charCodeAt(0) % colors.length;
-    return colors[index];
-  };
-
   return (
-    <>
-      <Dropdown 
-        menu={{ items }} 
-        placement="bottomRight"
-        trigger={['click']}
-      >
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
         <Button
-          type="text"
-          style={{
-            height: '44px',
-            padding: '0 12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            borderRadius: '12px',
-            border: '1px solid rgba(6, 182, 212, 0.25)',
-            transition: 'all 0.2s ease',
-            background: 'var(--bg-primary)',
-            color: 'var(--text-primary)',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = 'rgba(37, 99, 235, 0.18)';
-            e.currentTarget.style.borderColor = 'rgba(6, 182, 212, 0.55)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = 'var(--bg-primary)';
-            e.currentTarget.style.borderColor = 'rgba(6, 182, 212, 0.25)';
-          }}
+          variant="ghost"
+          className="h-11 px-3 flex items-center gap-2.5 rounded-xl border border-cyan-500/25 bg-[var(--bg-primary)] text-[var(--text-primary)] hover:bg-blue-600/20 hover:border-cyan-500/55 transition-all"
         >
-          <Space>
-            <Avatar
-              size={32}
-              style={{
-                backgroundColor: getAvatarColor(userInfo?.username || 'U'),
-                fontSize: '14px',
-                fontWeight: '600'
-              }}
-              icon={<UserOutlined />}
+          <Avatar className="h-8 w-8">
+            <AvatarFallback
+              className="text-sm font-semibold text-white"
+              style={{ backgroundColor: getAvatarColor(userInfo?.username || 'U') }}
             >
-              {userInfo?.username?.[0]?.toUpperCase()}
-            </Avatar>
-            <div style={{ textAlign: 'left', lineHeight: '1.2' }}>
-              <div style={{
-                fontSize: '13px',
-                fontWeight: '600',
-                color: 'var(--text-primary)',
-                maxWidth: '120px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap'
-              }}>
-                {userInfo?.username || 'Loading...'}
-              </div>
-              <div style={{
-                fontSize: '11px',
-                color: 'var(--text-muted)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}>
-                {userInfo?.role === 'admin' && '👑'}
-                {userInfo?.role === 'trader' && '📈'}
-                {userInfo?.role || 'User'}
-              </div>
+              {userInfo?.username?.[0]?.toUpperCase() || <User className="h-4 w-4" />}
+            </AvatarFallback>
+          </Avatar>
+          <div className="text-left leading-tight">
+            <div className="text-[13px] font-semibold text-[var(--text-primary)] max-w-[120px] truncate">
+              {userInfo?.username || 'Loading...'}
             </div>
-          </Space>
+            <div className="text-[11px] text-[var(--text-muted)] flex items-center gap-1">
+              {userInfo?.role || 'User'}
+            </div>
+          </div>
         </Button>
-      </Dropdown>
+      </DropdownMenuTrigger>
 
-      <UserSettingsModal
-        visible={settingsVisible}
-        onClose={() => setSettingsVisible(false)}
-        userInfo={userInfo}
-        onUserUpdate={loadUserInfo}
-      />
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuLabel className="font-normal">
+          <div className="flex flex-col gap-1 py-1">
+            <p className="text-sm font-semibold text-[var(--text-primary)]">
+              {userInfo?.username || 'User'}
+            </p>
+            <p className="text-xs text-[var(--text-muted)]">
+              {userInfo?.email}
+            </p>
+            <p className="text-[11px] text-[var(--text-muted)]">
+              {userInfo?.role === 'admin' ? 'Administrator' : 'Trader'}
+            </p>
+          </div>
+        </DropdownMenuLabel>
 
-      <EditProfileModal
-        visible={editProfileVisible}
-        onClose={() => setEditProfileVisible(false)}
-        userInfo={userInfo}
-        onUserUpdate={loadUserInfo}
-      />
-    </>
+        <DropdownMenuSeparator />
+
+        <DropdownMenuItem
+          className="cursor-pointer"
+          onClick={() => navigate('/settings')}
+        >
+          <Settings className="mr-2 h-4 w-4" />
+          Settings & API Keys
+        </DropdownMenuItem>
+
+        <DropdownMenuItem
+          className="cursor-pointer"
+          onClick={() => navigate('/settings')}
+        >
+          <Pencil className="mr-2 h-4 w-4" />
+          Edit Profile
+        </DropdownMenuItem>
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuItem
+          className="cursor-pointer text-destructive focus:text-destructive"
+          onClick={handleLogout}
+        >
+          <LogOut className="mr-2 h-4 w-4" />
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

@@ -26,20 +26,9 @@
   justify-content: flex-end;
 }
 
-.session-hero-actions .ant-select,
-.session-hero-actions .ant-btn {
-  min-width: 140px;
-}
-
 @media (max-width: 768px) {
   .session-hero-actions {
     flex: 1 1 100%;
-    width: 100%;
-  }
-
-  .session-hero-actions .ant-select,
-  .session-hero-actions .ant-btn {
-    min-width: unset;
     width: 100%;
   }
 }
@@ -86,17 +75,6 @@
   padding: 16px;
   border: 1px solid rgba(148, 163, 184, 0.22);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 24px rgba(2, 6, 23, 0.35);
-}
-
-.session-hero-metric .ant-statistic-title {
-  color: rgba(226, 232, 240, 0.75) !important;
-  letter-spacing: 0.04em;
-  font-size: 12px;
-  text-transform: uppercase;
-}
-
-.session-hero-metric .ant-statistic-content {
-  color: #f8fafc !important;
 }
 
 /* Compact Equity Card */
@@ -179,13 +157,6 @@
   }
 }
 
-.session-monitor-hero .ant-typography,
-.session-monitor-hero .ant-statistic-title,
-.session-monitor-hero .ant-statistic-content,
-.session-monitor-hero .ant-tag {
-  color: inherit !important;
-}
-
 .session-monitor-chip {
   border-radius: 999px !important;
   padding: 0 12px !important;
@@ -214,27 +185,8 @@
   box-shadow: 0 18px 36px rgba(2, 6, 23, 0.35);
 }
 
-.session-section-card .ant-card-head {
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16) !important;
-}
-
-.session-section-card .ant-card-head-title {
-  font-size: 14px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #cbd5f5;
-}
-
-.session-section-card .ant-card-body {
-  background: transparent;
-}
-
 .session-chart-card {
   padding: 12px 16px 4px;
-}
-
-.session-section-card--flush .ant-card-body {
-  padding: 0;
 }
 
 .session-grid {
@@ -305,24 +257,6 @@
   border-radius: 16px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.14);
-}
-
-.session-table .ant-table {
-  background: transparent;
-}
-
-.session-table .ant-table-thead > tr > th {
-  background: rgba(15, 23, 42, 0.9) !important;
-  color: rgba(226, 232, 240, 0.85) !important;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 11px;
-}
-
-.session-table .ant-table-tbody > tr > td {
-  background: rgba(15, 23, 42, 0.75);
-  border-color: rgba(71, 85, 105, 0.24);
-  color: #e2e8f0;
 }
 
 .session-table__time {
@@ -641,26 +575,6 @@
 .agent-diagnostics__empty {
   color: rgba(226, 232, 240, 0.6);
   font-size: 12px;
-}
-
-.session-monitor-page .ant-list-item {
-  background: rgba(15, 23, 42, 0.8);
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  margin-bottom: 12px;
-  padding: 16px;
-}
-
-.session-monitor-page .ant-list-item:last-child {
-  margin-bottom: 0;
-}
-
-.session-monitor-page .ant-drawer-body {
-  background: var(--bg-primary, #0a0e1a);
-}
-
-.session-monitor-page .ant-empty-description {
-  color: #cbd5f5;
 }
 
 @media (max-width: 768px) {

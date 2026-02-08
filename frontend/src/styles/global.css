@@ -122,81 +122,6 @@ a:hover {
   background: var(--scrollbar-thumb-hover);
 }
 
-.ant-layout,
-.ant-layout-sider,
-.ant-layout-content,
-.ant-layout-header,
-.ant-layout-footer {
-  background: transparent !important;
-}
-
-.ant-card {
-  border-radius: 18px;
-  border: 1px solid var(--border-color);
-  background: var(--card-gradient);
-  box-shadow: var(--card-shadow);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.ant-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--card-hover-shadow);
-}
-
-.ant-card-head {
-  border-bottom: 1px solid var(--border-subtle);
-  padding: 20px 24px;
-}
-
-.ant-card-head-title {
-  font-weight: 600;
-  color: var(--text-primary);
-  font-size: 16px;
-}
-
-.ant-card-body {
-  padding: 24px;
-}
-
-.ant-table {
-  background: transparent;
-  color: var(--text-primary);
-}
-
-.ant-table-thead > tr > th {
-  background: var(--table-header-bg) !important;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
-  text-transform: uppercase;
-  font-size: 12px;
-  letter-spacing: 0.06em;
-}
-
-.ant-table-tbody > tr > td {
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.ant-table-tbody > tr:hover > td {
-  background: rgba(6, 182, 212, 0.08) !important;
-}
-
-.ant-modal-content {
-  background: var(--modal-bg);
-  border: 1px solid var(--modal-border);
-  border-radius: 18px;
-  box-shadow: 0 30px 80px -32px rgba(0, 0, 0, 0.3);
-}
-
-.ant-modal-header,
-.ant-modal-footer {
-  background: transparent;
-  border-color: var(--border-color);
-}
-
-.ant-form-item-label > label {
-  color: var(--text-primary);
-}
-
 .auth-layout {
   display: flex;
   min-height: 100vh;
@@ -344,22 +269,6 @@ a:hover {
   font-weight: 700;
 }
 
-.auth-form-card .ant-btn-primary {
-  height: 48px;
-  font-size: 15px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
-  border: none;
-}
-
-.auth-form-card .ant-btn-default {
-  height: 48px;
-  font-size: 15px;
-  border-radius: 12px;
-  border-color: rgba(6, 182, 212, 0.3);
-  color: var(--accent);
-  background: transparent;
-}
 
 @media (max-width: 1024px) {
   .auth-layout {
@@ -505,21 +414,6 @@ a:hover {
   gap: 12px;
 }
 
-.agent-card__actions .ant-btn {
-  flex: 1;
-  height: 42px;
-  border-radius: 12px;
-}
-
-.agent-card__actions .ant-btn-primary {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  border: none;
-}
-
-.agent-card__actions .ant-btn-default {
-  border-color: rgba(239, 68, 68, 0.4);
-  color: var(--error);
-}
 
 @media (max-width: 768px) {
   .agent-page__header {

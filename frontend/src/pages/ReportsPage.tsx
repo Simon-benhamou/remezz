@@ -1,7 +1,4 @@
 import React from 'react';
-import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message, Tabs, Tag, InputNumber, Tooltip, Select, Badge, Divider, Progress, theme } from 'antd';
-import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, ReloadOutlined, FilterOutlined, ExclamationCircleOutlined, WarningOutlined, InfoCircleOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
-import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { api } from '../api';
@@ -9,12 +6,30 @@ import { useMode } from '../contexts/ModeContext';
 import { useReportsCache } from '../hooks/useReportsCache';
 import { AppMode } from '../store';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
+import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Table as UITable, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
+import { Separator } from '@/components/ui/separator';
+import { Button } from '@/components/ui/button';
+import {
+  CheckCircle,
+  XCircle,
+  Loader2,
+  RefreshCw,
+  Filter,
+  AlertCircle,
+  AlertTriangle,
+  Info,
+  ChevronDown,
+  ChevronRight,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+} from 'lucide-react';
 
 dayjs.extend(relativeTime);
-
-const { Title, Text, Paragraph } = Typography;
-const { RangePicker } = DatePicker;
-const { TabPane } = Tabs;
 
 // ============================================================================
 // TYPES
@@ -58,38 +73,62 @@ interface ParsedMismatchDetails {
 // CATEGORY STYLING
 // ============================================================================
 
-const categoryConfig: Record<ParityCategory, { color: string; icon: React.ReactNode; label: string; description: string }> = {
+const categoryConfig: Record<ParityCategory, { colorClass: string; bgClass: string; icon: React.ReactNode; label: string; description: string }> = {
   MATCH: {
-    color: 'success',
-    icon: <CheckCircleOutlined />,
+    colorClass: 'text-emerald-500',
+    bgClass: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
+    icon: <CheckCircle className="h-3.5 w-3.5" />,
     label: 'Match',
-    description: 'Live and backtest behavior are identical'
+    description: 'Live and backtest behavior are identical',
   },
   EXIT_MISMATCH: {
-    color: 'error',
-    icon: <CloseCircleOutlined />,
+    colorClass: 'text-red-500',
+    bgClass: 'bg-red-500/10 text-red-500 border-red-500/20',
+    icon: <XCircle className="h-3.5 w-3.5" />,
     label: 'Exit Mismatch',
-    description: 'Same entry, but different exit reason - needs investigation'
+    description: 'Same entry, but different exit reason - needs investigation',
   },
   NO_SIGNAL: {
-    color: 'warning',
-    icon: <ExclamationCircleOutlined />,
+    colorClass: 'text-amber-500',
+    bgClass: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
+    icon: <AlertCircle className="h-3.5 w-3.5" />,
     label: 'No Signal',
-    description: 'Live entered but backtest would not have - potential regime bug'
+    description: 'Live entered but backtest would not have - potential regime bug',
   },
   PNL_VARIANCE: {
-    color: 'processing',
-    icon: <InfoCircleOutlined />,
+    colorClass: 'text-blue-500',
+    bgClass: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
+    icon: <Info className="h-3.5 w-3.5" />,
     label: 'PnL Variance',
-    description: 'Same exit reason but PnL differs - usually acceptable slippage'
+    description: 'Same exit reason but PnL differs - usually acceptable slippage',
   },
   DATA_ERROR: {
-    color: 'default',
-    icon: <WarningOutlined />,
+    colorClass: 'text-muted-foreground',
+    bgClass: 'bg-muted text-muted-foreground border-border',
+    icon: <AlertTriangle className="h-3.5 w-3.5" />,
     label: 'Data Error',
-    description: 'Could not verify due to missing data'
+    description: 'Could not verify due to missing data',
   },
 };
+
+// ============================================================================
+// SORT HELPERS
+// ============================================================================
+
+type SortDir = 'asc' | 'desc' | null;
+type SortField = 'symbol' | 'entry' | 'livePnl' | 'btPnl' | 'pnlDiff' | 'verifiedAt';
+
+function nextSort(current: SortDir): SortDir {
+  if (current === null) return 'asc';
+  if (current === 'asc') return 'desc';
+  return null;
+}
+
+function SortIcon({ dir }: { dir: SortDir }) {
+  if (dir === 'asc') return <ArrowUp className="ml-1 inline h-3 w-3" />;
+  if (dir === 'desc') return <ArrowDown className="ml-1 inline h-3 w-3" />;
+  return <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-40" />;
+}
 
 // ============================================================================
 // PARITY VERIFICATION PANEL
@@ -112,10 +151,16 @@ function ParityVerificationPanel() {
   const [sideFilter, setSideFilter] = React.useState<string[]>([]);
   const [expandedRowKeys, setExpandedRowKeys] = React.useState<string[]>([]);
 
-  // Theme detection for dark mode compatibility
-  const { token } = theme.useToken();
-  const base = token.colorBgBase.toLowerCase();
-  const isDarkTheme = base.startsWith('#0') || base === 'black' || base.includes('dark');
+  // Sorting
+  const [sortField, setSortField] = React.useState<SortField>('verifiedAt');
+  const [sortDir, setSortDir] = React.useState<SortDir>('desc');
+
+  // Pagination
+  const [page, setPage] = React.useState(0);
+  const [pageSize, setPageSize] = React.useState(15);
+
+  // Dark mode detection
+  const isDarkTheme = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
 
   React.useEffect(() => {
     loadResults();
@@ -184,6 +229,7 @@ function ParityVerificationPanel() {
     }
 
     setFilteredResults(filtered);
+    setPage(0);
   }, [results, symbolFilter, categoryFilter, sideFilter, getCategory]);
 
   // Get unique symbols from results
@@ -220,7 +266,7 @@ function ParityVerificationPanel() {
       setSummary(data.summary || { total: 0, matched: 0, mismatched: 0, matchRate: 0 });
     } catch (error) {
       console.error('Failed to load parity results:', error);
-      message.error('Failed to load parity results');
+      toast.error('Failed to load parity results');
     } finally {
       setLoading(false);
     }
@@ -229,13 +275,13 @@ function ParityVerificationPanel() {
   const refreshAll = async () => {
     setVerifying(true);
     try {
-      message.info(`Starting verification for last ${days} days...`);
+      toast.info(`Starting verification for last ${days} days...`);
       const result = await api.backtest.verifyAll({ days });
-      message.success(`Verified ${result.total} trades: ${result.matched} matched, ${result.mismatched} mismatched`);
+      toast.success(`Verified ${result.total} trades: ${result.matched} matched, ${result.mismatched} mismatched`);
       await loadResults();
     } catch (error) {
       console.error('Bulk verification failed:', error);
-      message.error('Bulk verification failed');
+      toast.error('Bulk verification failed');
     } finally {
       setVerifying(false);
     }
@@ -258,142 +304,60 @@ function ParityVerificationPanel() {
     return c1 === c2;
   };
 
-
   const PNL_TOLERANCE = 0.5;
 
-  // Table columns with sorting
-  const columns: ColumnsType<ParityResult> = [
-    {
-      title: 'Symbol',
-      dataIndex: 'symbol',
-      key: 'symbol',
-      width: 90,
-      sorter: (a, b) => a.symbol.localeCompare(b.symbol),
-      render: (symbol: string, record) => (
-        <Space direction="vertical" size={0}>
-          <Text strong style={{ fontSize: '13px' }}>{symbol.replace('/USDT:USDT', '')}</Text>
-          <Tag color={record.side === 'long' ? 'green' : 'red'} style={{ fontSize: '10px', margin: 0 }}>
-            {record.side.toUpperCase()}
-          </Tag>
-        </Space>
-      ),
-    },
-    {
-      title: 'Category',
-      key: 'category',
-      width: 130,
-      filters: [
-        { text: 'Match', value: 'MATCH' },
-        { text: 'No Signal', value: 'NO_SIGNAL' },
-        { text: 'Exit Mismatch', value: 'EXIT_MISMATCH' },
-        { text: 'PnL Variance', value: 'PNL_VARIANCE' },
-        { text: 'Data Error', value: 'DATA_ERROR' },
-      ],
-      onFilter: (value, record) => getCategory(record) === value,
-      render: (_, record) => {
-        const category = getCategory(record);
-        const config = categoryConfig[category];
-        return (
-          <Tooltip title={config.description}>
-            <Tag icon={config.icon} color={config.color} style={{ cursor: 'help' }}>
-              {config.label}
-            </Tag>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: 'Entry',
-      key: 'entry',
-      width: 120,
-      sorter: (a, b) => dayjs(a.liveEntryTs).valueOf() - dayjs(b.liveEntryTs).valueOf(),
-      render: (_, record) => (
-        <Tooltip title={dayjs(record.liveEntryTs).format('YYYY-MM-DD HH:mm:ss')}>
-          <Text style={{ fontSize: '12px' }}>{dayjs(record.liveEntryTs).format('MM-DD HH:mm')}</Text>
-        </Tooltip>
-      ),
-    },
-    {
-      title: 'Exit Reason',
-      key: 'exitReason',
-      width: 140,
-      filters: [
-        { text: 'TRAIL', value: 'TRAIL' },
-        { text: 'SL', value: 'SL' },
-        { text: 'TIME', value: 'TIME' },
-        { text: 'REGIME_CHANGE', value: 'REGIME_CHANGE' },
-        { text: 'STAGNANT', value: 'STAGNANT' },
-      ],
-      onFilter: (value, record) => record.liveExitReason?.includes(String(value)),
-      render: (_, record) => (
-        <Space direction="vertical" size={0}>
-          <Tag color="blue" style={{ fontSize: '10px' }}>{record.liveExitReason}</Tag>
-          {record.btExitReason && record.btExitReason !== record.liveExitReason && (
-            <Tag color="orange" style={{ fontSize: '10px' }}>BT: {record.btExitReason}</Tag>
-          )}
-        </Space>
-      ),
-    },
-    {
-      title: 'Live PnL',
-      dataIndex: 'livePnlPct',
-      key: 'livePnl',
-      width: 90,
-      sorter: (a, b) => (a.livePnlPct || 0) - (b.livePnlPct || 0),
-      render: (pnl: number) => (
-        <Text strong style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: '13px' }}>
-          {pnl >= 0 ? '+' : ''}{pnl?.toFixed(2)}%
-        </Text>
-      ),
-    },
-    {
-      title: 'BT PnL',
-      dataIndex: 'btPnlPct',
-      key: 'btPnl',
-      width: 90,
-      sorter: (a, b) => (a.btPnlPct || 0) - (b.btPnlPct || 0),
-      render: (pnl: number | null) => (
-        pnl != null ? (
-          <Text style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: '12px' }}>
-            {pnl >= 0 ? '+' : ''}{pnl?.toFixed(2)}%
-          </Text>
-        ) : <Text type="secondary">-</Text>
-      ),
-    },
-    {
-      title: 'Δ PnL',
-      key: 'pnlDiff',
-      width: 80,
-      sorter: (a, b) => {
-        const diffA = a.btPnlPct != null ? Math.abs((a.livePnlPct || 0) - a.btPnlPct) : 0;
-        const diffB = b.btPnlPct != null ? Math.abs((b.livePnlPct || 0) - b.btPnlPct) : 0;
-        return diffA - diffB;
-      },
-      render: (_, record) => {
-        if (record.btPnlPct == null) return <Text type="secondary">-</Text>;
-        const diff = Math.abs((record.livePnlPct || 0) - record.btPnlPct);
-        const ok = diff <= PNL_TOLERANCE;
-        return (
-          <Tag color={ok ? 'green' : 'orange'} style={{ fontSize: '10px' }}>
-            {diff.toFixed(2)}%
-          </Tag>
-        );
-      },
-    },
-    {
-      title: 'Verified',
-      dataIndex: 'verifiedAt',
-      key: 'verifiedAt',
-      width: 90,
-      sorter: (a, b) => dayjs(a.verifiedAt).valueOf() - dayjs(b.verifiedAt).valueOf(),
-      defaultSortOrder: 'descend',
-      render: (ts: string) => (
-        <Tooltip title={dayjs(ts).format('YYYY-MM-DD HH:mm:ss')}>
-          <Text type="secondary" style={{ fontSize: '11px' }}>{dayjs(ts).fromNow()}</Text>
-        </Tooltip>
-      ),
-    },
-  ];
+  // Sort + paginate
+  const sortedAndPaged = React.useMemo(() => {
+    let sorted = [...filteredResults];
+    if (sortField && sortDir) {
+      sorted.sort((a, b) => {
+        let cmp = 0;
+        switch (sortField) {
+          case 'symbol':
+            cmp = a.symbol.localeCompare(b.symbol);
+            break;
+          case 'entry':
+            cmp = dayjs(a.liveEntryTs).valueOf() - dayjs(b.liveEntryTs).valueOf();
+            break;
+          case 'livePnl':
+            cmp = (a.livePnlPct || 0) - (b.livePnlPct || 0);
+            break;
+          case 'btPnl':
+            cmp = (a.btPnlPct || 0) - (b.btPnlPct || 0);
+            break;
+          case 'pnlDiff': {
+            const diffA = a.btPnlPct != null ? Math.abs((a.livePnlPct || 0) - a.btPnlPct) : 0;
+            const diffB = b.btPnlPct != null ? Math.abs((b.livePnlPct || 0) - b.btPnlPct) : 0;
+            cmp = diffA - diffB;
+            break;
+          }
+          case 'verifiedAt':
+            cmp = dayjs(a.verifiedAt).valueOf() - dayjs(b.verifiedAt).valueOf();
+            break;
+        }
+        return sortDir === 'desc' ? -cmp : cmp;
+      });
+    }
+    return sorted;
+  }, [filteredResults, sortField, sortDir]);
+
+  const pagedResults = sortedAndPaged.slice(page * pageSize, (page + 1) * pageSize);
+  const totalPages = Math.max(1, Math.ceil(sortedAndPaged.length / pageSize));
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      const next = nextSort(sortDir);
+      setSortDir(next);
+      if (next === null) setSortField('verifiedAt');
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
+
+  const toggleFilter = <T,>(arr: T[], val: T, setter: React.Dispatch<React.SetStateAction<T[]>>) => {
+    setter(arr.includes(val) ? arr.filter(v => v !== val) : [...arr, val]);
+  };
 
   // Render expanded row details
   const renderExpandedRow = (record: ParityResult) => {
@@ -410,141 +374,166 @@ function ParityVerificationPanel() {
     const category = getCategory(record);
     const config = categoryConfig[category];
 
-    // Theme-aware colors for expanded row
-    const containerBg = isDarkTheme
-      ? 'linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(15, 23, 42, 0.85) 100%)'
-      : 'linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%)';
-    const headerBg = isDarkTheme ? 'rgba(30, 41, 59, 0.8)' : '#fff';
-    const tableBorder = isDarkTheme ? 'rgba(255, 255, 255, 0.1)' : '#f0f0f0';
-    const labelColor = isDarkTheme ? 'rgba(255, 255, 255, 0.65)' : '#8c8c8c';
-
     return (
-      <div style={{ padding: '16px', background: containerBg, borderRadius: 8 }}>
-        {/* Category Header */}
-        <div style={{ marginBottom: 16, padding: '12px 16px', background: headerBg, borderRadius: 8, borderLeft: `4px solid ${category === 'MATCH' ? 'var(--success)' : category === 'NO_SIGNAL' ? '#faad14' : 'var(--error)'}` }}>
-          <Space>
-            <Tag icon={config.icon} color={config.color} style={{ fontSize: '13px', padding: '4px 12px' }}>
-              {config.label}
-            </Tag>
-            <Text type="secondary">{config.description}</Text>
-          </Space>
-          {parsed?.signalCheck && !parsed.signalCheck.wouldBacktestEnter && (
-            <div style={{ marginTop: 8 }}>
-              <Text type="danger" strong>Signal Rejection Reason: </Text>
-              <Text code>{parsed.signalCheck.signalReason}</Text>
+      <TableCell colSpan={8} className="p-0">
+        <div className={cn(
+          "rounded-lg p-4",
+          isDarkTheme ? "bg-slate-900/95" : "bg-muted/50"
+        )}>
+          {/* Category Header */}
+          <div className={cn(
+            "mb-4 rounded-lg p-3",
+            isDarkTheme ? "bg-slate-800/80" : "bg-card",
+            category === 'MATCH' ? "border-l-4 border-l-emerald-500" :
+            category === 'NO_SIGNAL' ? "border-l-4 border-l-amber-500" :
+            "border-l-4 border-l-red-500"
+          )}>
+            <div className="flex items-center gap-2">
+              <span className={cn(
+                "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+                config.bgClass
+              )}>
+                {config.icon}
+                {config.label}
+              </span>
+              <span className="text-sm text-muted-foreground">{config.description}</span>
             </div>
-          )}
-        </div>
+            {parsed?.signalCheck && !parsed.signalCheck.wouldBacktestEnter && (
+              <div className="mt-2">
+                <span className="font-semibold text-red-500">Signal Rejection Reason: </span>
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{parsed.signalCheck.signalReason}</code>
+              </div>
+            )}
+          </div>
 
-        <Row gutter={[16, 16]}>
-          {/* Time Comparison */}
-          <Col xs={24} lg={12}>
-            <Card size="small" title={<><Text strong>Time Comparison</Text></>} styles={{ body: { padding: '12px' } }}>
-              <table style={{ width: '100%', fontSize: '12px' }}>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* Time Comparison */}
+            <div className="rounded-xl border border-border bg-card p-4">
+              <h4 className="mb-3 text-sm font-semibold text-foreground">Time Comparison</h4>
+              <table className="w-full text-xs">
                 <thead>
-                  <tr style={{ borderBottom: `1px solid ${tableBorder}` }}>
-                    <th style={{ textAlign: 'left', padding: '8px 0' }}></th>
-                    <th style={{ textAlign: 'left', padding: '8px 0' }}>LIVE</th>
-                    <th style={{ textAlign: 'left', padding: '8px 0' }}>BACKTEST</th>
-                    <th style={{ textAlign: 'left', padding: '8px 0' }}>Δ</th>
+                  <tr className="border-b border-border">
+                    <th className="py-2 text-left"></th>
+                    <th className="py-2 text-left">LIVE</th>
+                    <th className="py-2 text-left">BACKTEST</th>
+                    <th className="py-2 text-left">Delta</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td style={{ padding: '6px 0', color: labelColor }}>Entry</td>
+                    <td className="py-1.5 text-muted-foreground">Entry</td>
                     <td>{dayjs(record.liveEntryTs).format('MM-DD HH:mm:ss')}</td>
                     <td>{record.btEntryTs ? dayjs(record.btEntryTs).format('MM-DD HH:mm:ss') : '-'}</td>
                     <td>
-                      <Tag color={isSameCandle(record.liveEntryTs, record.btEntryTs) ? 'green' : 'orange'} style={{ margin: 0, fontSize: '10px' }}>
+                      <span className={cn(
+                        "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                        isSameCandle(record.liveEntryTs, record.btEntryTs) ? "bg-emerald-500/10 text-emerald-500" : "bg-amber-500/10 text-amber-500"
+                      )}>
                         {getTimeDiffMinutes(record.liveEntryTs, record.btEntryTs)}
-                      </Tag>
+                      </span>
                     </td>
                   </tr>
                   <tr>
-                    <td style={{ padding: '6px 0', color: labelColor }}>Exit</td>
+                    <td className="py-1.5 text-muted-foreground">Exit</td>
                     <td>{dayjs(record.liveExitTs).format('MM-DD HH:mm:ss')}</td>
                     <td>{record.btExitTs ? dayjs(record.btExitTs).format('MM-DD HH:mm:ss') : '-'}</td>
                     <td>
-                      <Tag color={isSameCandle(record.liveExitTs, record.btExitTs) ? 'green' : 'orange'} style={{ margin: 0, fontSize: '10px' }}>
+                      <span className={cn(
+                        "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                        isSameCandle(record.liveExitTs, record.btExitTs) ? "bg-emerald-500/10 text-emerald-500" : "bg-amber-500/10 text-amber-500"
+                      )}>
                         {getTimeDiffMinutes(record.liveExitTs, record.btExitTs)}
-                      </Tag>
+                      </span>
                     </td>
                   </tr>
                   <tr>
-                    <td style={{ padding: '6px 0', color: labelColor }}>Hold</td>
+                    <td className="py-1.5 text-muted-foreground">Hold</td>
                     <td>{holdTimeLive != null ? `${holdTimeLive}m (${(holdTimeLive/15).toFixed(1)} candles)` : '-'}</td>
                     <td>{holdTimeBt != null ? `${holdTimeBt}m (${(holdTimeBt/15).toFixed(1)} candles)` : '-'}</td>
                     <td>
                       {holdTimeLive != null && holdTimeBt != null && (
-                        <Tag color={Math.abs(holdTimeLive - holdTimeBt) <= 15 ? 'green' : 'orange'} style={{ margin: 0, fontSize: '10px' }}>
+                        <span className={cn(
+                          "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                          Math.abs(holdTimeLive - holdTimeBt) <= 15 ? "bg-emerald-500/10 text-emerald-500" : "bg-amber-500/10 text-amber-500"
+                        )}>
                           {Math.abs(holdTimeLive - holdTimeBt)}m
-                        </Tag>
+                        </span>
                       )}
                     </td>
                   </tr>
                 </tbody>
               </table>
-            </Card>
-          </Col>
+            </div>
 
-          {/* PnL Comparison */}
-          <Col xs={24} lg={12}>
-            <Card size="small" title={<><Text strong>PnL Comparison</Text></>} styles={{ body: { padding: '12px' } }}>
-              <Row gutter={16}>
-                <Col span={8}>
-                  <div style={{ textAlign: 'center' }}>
-                    <Text type="secondary" style={{ fontSize: '11px' }}>Live PnL</Text>
-                    <div style={{ fontSize: '18px', fontWeight: 600, color: livePnl >= 0 ? 'var(--success)' : 'var(--error)' }}>
-                      {livePnl >= 0 ? '+' : ''}{livePnl.toFixed(2)}%
-                    </div>
+            {/* PnL Comparison */}
+            <div className="rounded-xl border border-border bg-card p-4">
+              <h4 className="mb-3 text-sm font-semibold text-foreground">PnL Comparison</h4>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="text-center">
+                  <span className="text-[11px] text-muted-foreground">Live PnL</span>
+                  <div className={cn("text-lg font-semibold", livePnl >= 0 ? "text-emerald-500" : "text-red-500")}>
+                    {livePnl >= 0 ? '+' : ''}{livePnl.toFixed(2)}%
                   </div>
-                </Col>
-                <Col span={8}>
-                  <div style={{ textAlign: 'center' }}>
-                    <Text type="secondary" style={{ fontSize: '11px' }}>Backtest PnL</Text>
-                    <div style={{ fontSize: '18px', fontWeight: 600, color: (btPnl ?? 0) >= 0 ? 'var(--success)' : 'var(--error)' }}>
-                      {btPnl != null ? `${btPnl >= 0 ? '+' : ''}${btPnl.toFixed(2)}%` : '-'}
-                    </div>
+                </div>
+                <div className="text-center">
+                  <span className="text-[11px] text-muted-foreground">Backtest PnL</span>
+                  <div className={cn("text-lg font-semibold", (btPnl ?? 0) >= 0 ? "text-emerald-500" : "text-red-500")}>
+                    {btPnl != null ? `${btPnl >= 0 ? '+' : ''}${btPnl.toFixed(2)}%` : '-'}
                   </div>
-                </Col>
-                <Col span={8}>
-                  <div style={{ textAlign: 'center' }}>
-                    <Text type="secondary" style={{ fontSize: '11px' }}>Difference</Text>
-                    <div style={{ fontSize: '18px', fontWeight: 600, color: pnlDiff != null && Math.abs(pnlDiff) <= PNL_TOLERANCE ? 'var(--success)' : 'var(--error)' }}>
-                      {pnlDiff != null ? `${Math.abs(pnlDiff).toFixed(2)}%` : '-'}
-                    </div>
+                </div>
+                <div className="text-center">
+                  <span className="text-[11px] text-muted-foreground">Difference</span>
+                  <div className={cn("text-lg font-semibold", pnlDiff != null && Math.abs(pnlDiff) <= PNL_TOLERANCE ? "text-emerald-500" : "text-red-500")}>
+                    {pnlDiff != null ? `${Math.abs(pnlDiff).toFixed(2)}%` : '-'}
                   </div>
-                </Col>
-              </Row>
-              <Divider style={{ margin: '12px 0 8px' }} />
-              <Space>
-                <Tag color={record.entryMatch ? 'green' : 'red'}>Entry {record.entryMatch ? '✓' : '✗'}</Tag>
-                <Tag color={record.exitMatch ? 'green' : 'red'}>Exit {record.exitMatch ? '✓' : '✗'}</Tag>
-                <Tag color={record.pnlMatch ? 'green' : 'red'}>PnL {record.pnlMatch ? '✓' : '✗'}</Tag>
-              </Space>
-            </Card>
-          </Col>
-        </Row>
+                </div>
+              </div>
+              <Separator className="my-3" />
+              <div className="flex gap-2">
+                <span className={cn(
+                  "rounded-full border px-2 py-0.5 text-xs font-medium",
+                  record.entryMatch ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-red-500/10 text-red-500 border-red-500/20"
+                )}>
+                  Entry {record.entryMatch ? '\u2713' : '\u2717'}
+                </span>
+                <span className={cn(
+                  "rounded-full border px-2 py-0.5 text-xs font-medium",
+                  record.exitMatch ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-red-500/10 text-red-500 border-red-500/20"
+                )}>
+                  Exit {record.exitMatch ? '\u2713' : '\u2717'}
+                </span>
+                <span className={cn(
+                  "rounded-full border px-2 py-0.5 text-xs font-medium",
+                  record.pnlMatch ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-red-500/10 text-red-500 border-red-500/20"
+                )}>
+                  PnL {record.pnlMatch ? '\u2713' : '\u2717'}
+                </span>
+              </div>
+            </div>
+          </div>
 
-        {/* Details Section */}
-        {parsed?.details && category !== 'MATCH' && (
-          <Card size="small" style={{
-            marginTop: 16,
-            background: isDarkTheme ? 'rgba(250, 173, 20, 0.1)' : '#fffbe6',
-            border: isDarkTheme ? '1px solid rgba(250, 173, 20, 0.3)' : '1px solid #ffe58f'
-          }}
-                title={<><WarningOutlined style={{ color: '#faad14', marginRight: 8 }} /><Text strong>Details</Text></>}>
-            <Paragraph style={{ margin: 0 }}>{parsed.details}</Paragraph>
-          </Card>
-        )}
+          {/* Details Section */}
+          {parsed?.details && category !== 'MATCH' && (
+            <div className={cn(
+              "mt-4 rounded-lg border p-4",
+              isDarkTheme ? "border-amber-500/30 bg-amber-500/10" : "border-amber-300 bg-amber-50"
+            )}>
+              <div className="mb-2 flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                <span className="font-semibold text-foreground">Details</span>
+              </div>
+              <p className="m-0 text-sm text-foreground">{parsed.details}</p>
+            </div>
+          )}
 
-        {/* Footer */}
-        <div style={{ marginTop: 12, textAlign: 'right' }}>
-          <Text type="secondary" style={{ fontSize: '11px' }}>
-            Verified {dayjs(record.verifiedAt).fromNow()} • Duration: {record.backtestDurationMs ? `${record.backtestDurationMs}ms` : 'N/A'}
-          </Text>
+          {/* Footer */}
+          <div className="mt-3 text-right">
+            <span className="text-[11px] text-muted-foreground">
+              Verified {dayjs(record.verifiedAt).fromNow()} &bull; Duration: {record.backtestDurationMs ? `${record.backtestDurationMs}ms` : 'N/A'}
+            </span>
+          </div>
         </div>
-      </div>
+      </TableCell>
     );
   };
 
@@ -558,73 +547,101 @@ function ParityVerificationPanel() {
   }, [categoryStats]);
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size="middle">
+    <div className="flex flex-col gap-4">
       {/* Header */}
-      <Card styles={{ body: { padding: '16px 24px' } }}>
-        <Row justify="space-between" align="middle">
-          <Col>
-            <Title level={4} style={{ margin: 0 }}>Parity Verification</Title>
-            <Text type="secondary">Compare live trades against backtest simulation</Text>
-          </Col>
-          <Col>
-            <Space>
-              <Text type="secondary">Last</Text>
-              <InputNumber min={1} max={365} value={days} onChange={(v) => setDays(v || 30)} style={{ width: 70 }} />
-              <Text type="secondary">days</Text>
-              <Button
-                type="primary"
-                icon={verifying ? <SyncOutlined spin /> : <ReloadOutlined />}
-                onClick={refreshAll}
-                loading={verifying}
-              >
-                Verify All
-              </Button>
-              <Button onClick={loadResults} loading={loading}>Refresh</Button>
-            </Space>
-          </Col>
-        </Row>
-      </Card>
+      <div className="rounded-xl border border-border bg-card px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h4 className="m-0 text-lg font-semibold text-foreground">Parity Verification</h4>
+            <span className="text-sm text-muted-foreground">Compare live trades against backtest simulation</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Last</span>
+            <input
+              type="number"
+              min={1}
+              max={365}
+              value={days}
+              onChange={(e) => setDays(Number(e.target.value) || 30)}
+              className="h-9 w-[70px] rounded-md border border-border bg-card px-2 text-sm text-foreground"
+            />
+            <span className="text-sm text-muted-foreground">days</span>
+            <Button onClick={refreshAll} disabled={verifying}>
+              {verifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Verify All
+            </Button>
+            <Button variant="outline" onClick={loadResults} disabled={loading}>
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              Refresh
+            </Button>
+          </div>
+        </div>
+      </div>
 
       {/* Statistics Row */}
-      <Row gutter={[16, 16]}>
-        <Col xs={24} md={16}>
-          <Card styles={{ body: { padding: '16px' } }}>
-            <Row gutter={16}>
-              <Col span={4}>
-                <Statistic title="Total" value={summary.total} valueStyle={{ color: '#1890ff', fontSize: '24px' }} />
-              </Col>
-              <Col span={4}>
-                <Statistic title="Match" value={categoryStats.MATCH} valueStyle={{ color: 'var(--success)', fontSize: '24px' }} prefix={<CheckCircleOutlined />} />
-              </Col>
-              <Col span={4}>
-                <Tooltip title="Live entered but backtest wouldn't">
-                  <Statistic title="No Signal" value={categoryStats.NO_SIGNAL} valueStyle={{ color: '#faad14', fontSize: '24px' }} prefix={<ExclamationCircleOutlined />} />
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="col-span-1 md:col-span-2">
+          <div className="rounded-xl border border-border bg-card p-4">
+            <TooltipProvider>
+              <div className="grid grid-cols-3 gap-4 md:grid-cols-6">
+                <div>
+                  <span className="text-xs uppercase tracking-wider text-muted-foreground">Total</span>
+                  <div className="text-2xl font-bold text-blue-500">{summary.total}</div>
+                </div>
+                <div>
+                  <span className="text-xs uppercase tracking-wider text-muted-foreground">Match</span>
+                  <div className="flex items-center gap-1 text-2xl font-bold text-emerald-500">
+                    <CheckCircle className="h-4 w-4" /> {categoryStats.MATCH}
+                  </div>
+                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="cursor-help">
+                      <span className="text-xs uppercase tracking-wider text-muted-foreground">No Signal</span>
+                      <div className="flex items-center gap-1 text-2xl font-bold text-amber-500">
+                        <AlertCircle className="h-4 w-4" /> {categoryStats.NO_SIGNAL}
+                      </div>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>Live entered but backtest wouldn&apos;t</TooltipContent>
                 </Tooltip>
-              </Col>
-              <Col span={4}>
-                <Tooltip title="Same entry, different exit">
-                  <Statistic title="Exit Δ" value={categoryStats.EXIT_MISMATCH} valueStyle={{ color: 'var(--error)', fontSize: '24px' }} prefix={<CloseCircleOutlined />} />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="cursor-help">
+                      <span className="text-xs uppercase tracking-wider text-muted-foreground">Exit Delta</span>
+                      <div className="flex items-center gap-1 text-2xl font-bold text-red-500">
+                        <XCircle className="h-4 w-4" /> {categoryStats.EXIT_MISMATCH}
+                      </div>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>Same entry, different exit</TooltipContent>
                 </Tooltip>
-              </Col>
-              <Col span={4}>
-                <Tooltip title="Same exit, PnL differs">
-                  <Statistic title="PnL Δ" value={categoryStats.PNL_VARIANCE} valueStyle={{ color: '#1890ff', fontSize: '24px' }} prefix={<InfoCircleOutlined />} />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="cursor-help">
+                      <span className="text-xs uppercase tracking-wider text-muted-foreground">PnL Delta</span>
+                      <div className="flex items-center gap-1 text-2xl font-bold text-blue-500">
+                        <Info className="h-4 w-4" /> {categoryStats.PNL_VARIANCE}
+                      </div>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>Same exit, PnL differs</TooltipContent>
                 </Tooltip>
-              </Col>
-              <Col span={4}>
-                <Statistic
-                  title="Match Rate"
-                  value={summary.matchRate}
-                  precision={1}
-                  suffix="%"
-                  valueStyle={{ color: summary.matchRate >= 90 ? 'var(--success)' : summary.matchRate >= 70 ? '#faad14' : 'var(--error)', fontSize: '24px' }}
-                />
-              </Col>
-            </Row>
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card styles={{ body: { padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' } }}>
+                <div>
+                  <span className="text-xs uppercase tracking-wider text-muted-foreground">Match Rate</span>
+                  <div className={cn(
+                    "text-2xl font-bold",
+                    summary.matchRate >= 90 ? "text-emerald-500" : summary.matchRate >= 70 ? "text-amber-500" : "text-red-500"
+                  )}>
+                    {summary.matchRate.toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+            </TooltipProvider>
+          </div>
+        </div>
+        <div className="col-span-1">
+          <div className="flex h-full items-center justify-center rounded-xl border border-border bg-card p-2">
             {chartData.length > 0 ? (
               <ResponsiveContainer width="100%" height={80}>
                 <PieChart>
@@ -638,89 +655,305 @@ function ParityVerificationPanel() {
                 </PieChart>
               </ResponsiveContainer>
             ) : (
-              <Text type="secondary">No data</Text>
+              <span className="text-sm text-muted-foreground">No data</span>
             )}
-          </Card>
-        </Col>
-      </Row>
+          </div>
+        </div>
+      </div>
 
       {/* Table */}
-      <Card
-        title={
-          <Space>
-            <Text strong>Verification Results</Text>
+      <div className="rounded-xl border border-border bg-card">
+        {/* Table header bar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-foreground">Verification Results</span>
             {(symbolFilter.length > 0 || categoryFilter.length > 0 || sideFilter.length > 0) && (
-              <Tag color="blue">{filteredResults.length} / {results.length}</Tag>
+              <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-500">
+                {filteredResults.length} / {results.length}
+              </span>
             )}
-          </Space>
-        }
-        extra={
-          <Space wrap>
-            <Select
-              mode="multiple"
-              placeholder="Symbol"
-              value={symbolFilter}
-              onChange={setSymbolFilter}
-              style={{ minWidth: 120 }}
-              allowClear
-              options={availableSymbols.map(s => ({ label: s, value: s }))}
-              maxTagCount={1}
-            />
-            <Select
-              mode="multiple"
-              placeholder="Category"
-              value={categoryFilter}
-              onChange={setCategoryFilter}
-              style={{ minWidth: 120 }}
-              allowClear
-              options={[
-                { label: 'Match', value: 'MATCH' },
-                { label: 'No Signal', value: 'NO_SIGNAL' },
-                { label: 'Exit Mismatch', value: 'EXIT_MISMATCH' },
-                { label: 'PnL Variance', value: 'PNL_VARIANCE' },
-              ]}
-              maxTagCount={1}
-            />
-            <Select
-              mode="multiple"
-              placeholder="Side"
-              value={sideFilter}
-              onChange={setSideFilter}
-              style={{ minWidth: 80 }}
-              allowClear
-              options={[
-                { label: 'Long', value: 'long' },
-                { label: 'Short', value: 'short' },
-              ]}
-              maxTagCount={1}
-            />
-          </Space>
-        }
-        loading={loading}
-        styles={{ body: { padding: 0 } }}
-      >
-        <Table
-          dataSource={filteredResults}
-          columns={columns}
-          rowKey="id"
-          pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'] }}
-          size="small"
-          expandable={{
-            expandedRowRender: renderExpandedRow,
-            expandedRowKeys,
-            onExpand: (expanded, record) => {
-              setExpandedRowKeys(expanded ? [record.id] : []);
-            },
-            rowExpandable: () => true,
-          }}
-          scroll={{ x: 900 }}
-          locale={{ emptyText: results.length === 0
-            ? 'No verification results yet. Click "Verify All" to compare trades against backtest.'
-            : 'No trades match the current filters.'
-          }}
-        />
-      </Card>
-    </Space>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Symbol filter */}
+            <div>
+              <span className="mr-1 text-xs text-muted-foreground">Symbol:</span>
+              <div className="inline-flex flex-wrap gap-1">
+                {availableSymbols.map(sym => (
+                  <button
+                    key={sym}
+                    onClick={() => toggleFilter(symbolFilter, sym, setSymbolFilter)}
+                    className={cn(
+                      "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors",
+                      symbolFilter.includes(sym) ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                    )}
+                  >
+                    {sym}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Category filter */}
+            <div>
+              <span className="mr-1 text-xs text-muted-foreground">Category:</span>
+              <div className="inline-flex flex-wrap gap-1">
+                {(['MATCH', 'NO_SIGNAL', 'EXIT_MISMATCH', 'PNL_VARIANCE'] as ParityCategory[]).map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => toggleFilter(categoryFilter, cat, setCategoryFilter)}
+                    className={cn(
+                      "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors",
+                      categoryFilter.includes(cat) ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                    )}
+                  >
+                    {categoryConfig[cat].label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Side filter */}
+            <div>
+              <span className="mr-1 text-xs text-muted-foreground">Side:</span>
+              <div className="inline-flex flex-wrap gap-1">
+                {(['long', 'short'] as const).map(side => (
+                  <button
+                    key={side}
+                    onClick={() => toggleFilter(sideFilter, side, setSideFilter)}
+                    className={cn(
+                      "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors",
+                      sideFilter.includes(side) ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                    )}
+                  >
+                    {side.charAt(0).toUpperCase() + side.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Loading overlay */}
+        {loading && (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        )}
+
+        {/* Table content */}
+        {!loading && (
+          <>
+            <UITable>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-8"></TableHead>
+                  <TableHead className="w-[90px] cursor-pointer select-none" onClick={() => handleSort('symbol')}>
+                    Symbol <SortIcon dir={sortField === 'symbol' ? sortDir : null} />
+                  </TableHead>
+                  <TableHead className="w-[130px]">Category</TableHead>
+                  <TableHead className="w-[120px] cursor-pointer select-none" onClick={() => handleSort('entry')}>
+                    Entry <SortIcon dir={sortField === 'entry' ? sortDir : null} />
+                  </TableHead>
+                  <TableHead className="w-[140px]">Exit Reason</TableHead>
+                  <TableHead className="w-[90px] cursor-pointer select-none" onClick={() => handleSort('livePnl')}>
+                    Live PnL <SortIcon dir={sortField === 'livePnl' ? sortDir : null} />
+                  </TableHead>
+                  <TableHead className="w-[90px] cursor-pointer select-none" onClick={() => handleSort('btPnl')}>
+                    BT PnL <SortIcon dir={sortField === 'btPnl' ? sortDir : null} />
+                  </TableHead>
+                  <TableHead className="w-[80px] cursor-pointer select-none" onClick={() => handleSort('pnlDiff')}>
+                    Delta PnL <SortIcon dir={sortField === 'pnlDiff' ? sortDir : null} />
+                  </TableHead>
+                  <TableHead className="w-[90px] cursor-pointer select-none" onClick={() => handleSort('verifiedAt')}>
+                    Verified <SortIcon dir={sortField === 'verifiedAt' ? sortDir : null} />
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pagedResults.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
+                      {results.length === 0
+                        ? 'No verification results yet. Click "Verify All" to compare trades against backtest.'
+                        : 'No trades match the current filters.'}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  <TooltipProvider>
+                    {pagedResults.map(record => {
+                      const category = getCategory(record);
+                      const config = categoryConfig[category];
+                      const isExpanded = expandedRowKeys.includes(record.id);
+
+                      return (
+                        <React.Fragment key={record.id}>
+                          <TableRow
+                            className="cursor-pointer"
+                            onClick={() => setExpandedRowKeys(isExpanded ? [] : [record.id])}
+                          >
+                            <TableCell className="w-8 px-2">
+                              {isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                            </TableCell>
+                            {/* Symbol */}
+                            <TableCell>
+                              <div className="flex flex-col">
+                                <span className="text-[13px] font-semibold">{record.symbol.replace('/USDT:USDT', '')}</span>
+                                <span className={cn(
+                                  "mt-0.5 w-fit rounded-full px-1.5 py-0 text-[10px] font-medium",
+                                  record.side === 'long' ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
+                                )}>
+                                  {record.side.toUpperCase()}
+                                </span>
+                              </div>
+                            </TableCell>
+                            {/* Category */}
+                            <TableCell>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className={cn(
+                                    "inline-flex cursor-help items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
+                                    config.bgClass
+                                  )}>
+                                    {config.icon}
+                                    {config.label}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>{config.description}</TooltipContent>
+                              </Tooltip>
+                            </TableCell>
+                            {/* Entry */}
+                            <TableCell>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-xs">{dayjs(record.liveEntryTs).format('MM-DD HH:mm')}</span>
+                                </TooltipTrigger>
+                                <TooltipContent>{dayjs(record.liveEntryTs).format('YYYY-MM-DD HH:mm:ss')}</TooltipContent>
+                              </Tooltip>
+                            </TableCell>
+                            {/* Exit Reason */}
+                            <TableCell>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="rounded-full bg-blue-500/10 px-1.5 py-0 text-[10px] font-medium text-blue-500 w-fit">
+                                  {record.liveExitReason}
+                                </span>
+                                {record.btExitReason && record.btExitReason !== record.liveExitReason && (
+                                  <span className="rounded-full bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-amber-500 w-fit">
+                                    BT: {record.btExitReason}
+                                  </span>
+                                )}
+                              </div>
+                            </TableCell>
+                            {/* Live PnL */}
+                            <TableCell>
+                              <span className={cn("text-[13px] font-semibold", record.livePnlPct >= 0 ? "text-emerald-500" : "text-red-500")}>
+                                {record.livePnlPct >= 0 ? '+' : ''}{record.livePnlPct?.toFixed(2)}%
+                              </span>
+                            </TableCell>
+                            {/* BT PnL */}
+                            <TableCell>
+                              {record.btPnlPct != null ? (
+                                <span className={cn("text-xs", record.btPnlPct >= 0 ? "text-emerald-500" : "text-red-500")}>
+                                  {record.btPnlPct >= 0 ? '+' : ''}{record.btPnlPct?.toFixed(2)}%
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
+                              )}
+                            </TableCell>
+                            {/* Delta PnL */}
+                            <TableCell>
+                              {record.btPnlPct != null ? (
+                                <span className={cn(
+                                  "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                                  Math.abs((record.livePnlPct || 0) - record.btPnlPct) <= PNL_TOLERANCE
+                                    ? "bg-emerald-500/10 text-emerald-500"
+                                    : "bg-amber-500/10 text-amber-500"
+                                )}>
+                                  {Math.abs((record.livePnlPct || 0) - record.btPnlPct).toFixed(2)}%
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
+                              )}
+                            </TableCell>
+                            {/* Verified */}
+                            <TableCell>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-[11px] text-muted-foreground">{dayjs(record.verifiedAt).fromNow()}</span>
+                                </TooltipTrigger>
+                                <TooltipContent>{dayjs(record.verifiedAt).format('YYYY-MM-DD HH:mm:ss')}</TooltipContent>
+                              </Tooltip>
+                            </TableCell>
+                          </TableRow>
+                          {isExpanded && (
+                            <TableRow>
+                              {renderExpandedRow(record)}
+                            </TableRow>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </TooltipProvider>
+                )}
+              </TableBody>
+            </UITable>
+
+            {/* Pagination */}
+            {sortedAndPaged.length > 0 && (
+              <div className="flex items-center justify-between border-t border-border px-4 py-3">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span>Rows per page:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => { setPageSize(Number(e.target.value)); setPage(0); }}
+                    className="h-8 rounded-md border border-border bg-card px-2 text-sm text-foreground"
+                  >
+                    {[10, 15, 25, 50].map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <span>
+                    {page * pageSize + 1}-{Math.min((page + 1) * pageSize, sortedAndPaged.length)} of {sortedAndPaged.length}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(0)}
+                    disabled={page === 0}
+                  >
+                    First
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(p => Math.max(0, p - 1))}
+                    disabled={page === 0}
+                  >
+                    Prev
+                  </Button>
+                  <span className="px-2 text-sm text-muted-foreground">
+                    {page + 1} / {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                    disabled={page >= totalPages - 1}
+                  >
+                    Next
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(totalPages - 1)}
+                    disabled={page >= totalPages - 1}
+                  >
+                    Last
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -728,6 +961,212 @@ function pct(val?: number | null, digits = 2) {
   if (val == null || Number.isNaN(Number(val))) return '-';
   return `${(Number(val) * 100).toFixed(digits)}%`;
 }
+
+// ============================================================================
+// DAILY REPORTS TABLE (with expand, sort, pagination)
+// ============================================================================
+
+type DailySortField = 'date' | 'sessionsCount' | 'totalTrades' | 'winRate' | 'expectancy' | 'totalPnl' | 'profitFactor';
+
+function DailyReportsTable({ reports, sessions, isRefreshing, isInitialLoad, handleRefresh }: {
+  reports: any[];
+  sessions: any[];
+  isRefreshing: boolean;
+  isInitialLoad: boolean;
+  handleRefresh: () => void;
+}) {
+  const [expandedDate, setExpandedDate] = React.useState<string | null>(null);
+  const [sortField, setSortField] = React.useState<DailySortField>('date');
+  const [sortDir, setSortDir] = React.useState<SortDir>('desc');
+  const [page, setPage] = React.useState(0);
+  const pageSize = 10;
+
+  const handleSort = (field: DailySortField) => {
+    if (sortField === field) {
+      const next = nextSort(sortDir);
+      setSortDir(next);
+      if (next === null) { setSortField('date'); setSortDir('desc'); }
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedReports = React.useMemo(() => {
+    if (!sortDir) return reports;
+    const sorted = [...reports];
+    sorted.sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case 'date': cmp = dayjs(a.date).valueOf() - dayjs(b.date).valueOf(); break;
+        case 'sessionsCount': cmp = (a.sessionsCount || 0) - (b.sessionsCount || 0); break;
+        case 'totalTrades': cmp = (a.totalTrades || 0) - (b.totalTrades || 0); break;
+        case 'winRate': cmp = (a.winRate || 0) - (b.winRate || 0); break;
+        case 'expectancy': cmp = (a.expectancy || 0) - (b.expectancy || 0); break;
+        case 'totalPnl': cmp = (a.totalPnl || 0) - (b.totalPnl || 0); break;
+        case 'profitFactor': cmp = (a.profitFactor || 0) - (b.profitFactor || 0); break;
+      }
+      return sortDir === 'desc' ? -cmp : cmp;
+    });
+    return sorted;
+  }, [reports, sortField, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedReports.length / pageSize));
+  const pagedReports = sortedReports.slice(page * pageSize, (page + 1) * pageSize);
+
+  return (
+    <div className="rounded-xl border border-border bg-card">
+      <div className="flex items-center justify-between border-b border-border px-6 py-3">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-foreground">Daily Reports</span>
+          {isRefreshing && !isInitialLoad && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-500">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Updating...
+            </span>
+          )}
+        </div>
+        <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
+          {isRefreshing && <Loader2 className="h-4 w-4 animate-spin" />}
+          Refresh Reports
+        </Button>
+      </div>
+
+      {isInitialLoad ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : reports.length === 0 ? (
+        <div className="py-10 text-center text-muted-foreground">
+          {sessions.length === 0 ? 'No trading sessions found' : 'No daily reports available yet'}
+        </div>
+      ) : (
+        <>
+          <UITable>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-8"></TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort('date')}>
+                  Date <SortIcon dir={sortField === 'date' ? sortDir : null} />
+                </TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort('sessionsCount')}>
+                  Sessions <SortIcon dir={sortField === 'sessionsCount' ? sortDir : null} />
+                </TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort('totalTrades')}>
+                  Trades <SortIcon dir={sortField === 'totalTrades' ? sortDir : null} />
+                </TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort('winRate')}>
+                  Win Rate <SortIcon dir={sortField === 'winRate' ? sortDir : null} />
+                </TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort('expectancy')}>
+                  Expectancy <SortIcon dir={sortField === 'expectancy' ? sortDir : null} />
+                </TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort('totalPnl')}>
+                  PnL <SortIcon dir={sortField === 'totalPnl' ? sortDir : null} />
+                </TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort('profitFactor')}>
+                  Profit Factor <SortIcon dir={sortField === 'profitFactor' ? sortDir : null} />
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pagedReports.map((record: any) => {
+                const isExpanded = expandedDate === record.date;
+                const hasExpandable = record.sessions && record.sessions.length > 0;
+                return (
+                  <React.Fragment key={record.date}>
+                    <TableRow
+                      className={cn(hasExpandable && "cursor-pointer")}
+                      onClick={() => hasExpandable && setExpandedDate(isExpanded ? null : record.date)}
+                    >
+                      <TableCell className="w-8 px-2">
+                        {hasExpandable && (
+                          isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </TableCell>
+                      <TableCell>{dayjs(record.date).format('MMM DD, YYYY')}</TableCell>
+                      <TableCell><span className="text-blue-500">{record.sessionsCount}</span></TableCell>
+                      <TableCell>{record.totalTrades}</TableCell>
+                      <TableCell>
+                        <span className={cn(
+                          record.winRate > 0.5 ? "text-emerald-500" : record.winRate > 0.3 ? "text-amber-500" : "text-red-500"
+                        )}>
+                          {pct(record.winRate)}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className={cn(record.expectancy > 0 ? "text-emerald-500" : "text-red-500")}>
+                          {record.expectancy.toFixed(2)}%
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className={cn(record.totalPnl >= 0 ? "text-emerald-500" : "text-red-500")}>
+                          ${record.totalPnl.toFixed(2)}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className={cn(record.profitFactor > 1 ? "text-emerald-500" : "text-red-500")}>
+                          {record.profitFactor.toFixed(2)}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                    {isExpanded && hasExpandable && (
+                      <TableRow>
+                        <TableCell colSpan={8} className="p-4">
+                          <p className="mb-2 font-semibold text-foreground">Sessions for {dayjs(record.date).format('MMM DD, YYYY')}:</p>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
+                            {record.sessions?.map((session: any, index: number) => (
+                              <div key={index} className="rounded-lg border border-border bg-card p-3">
+                                <span className="font-semibold text-foreground">{session.symbol}</span>
+                                <br />
+                                <span className="text-sm text-muted-foreground">Trades: {session.totalTrades}</span>
+                                <br />
+                                <span className="text-sm text-muted-foreground">WR: {pct(session.winRate)}</span>
+                                <br />
+                                <span className="text-sm text-muted-foreground">PnL: ${session.totalPnl.toFixed(2)}</span>
+                                {session.llmSummary && (
+                                  <>
+                                    <br />
+                                    <span className="text-[11px] text-muted-foreground">
+                                      {session.llmSummary.substring(0, 100)}
+                                      {session.llmSummary.length > 100 ? '...' : ''}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </TableBody>
+          </UITable>
+
+          {/* Pagination */}
+          {sortedReports.length > pageSize && (
+            <div className="flex items-center justify-between border-t border-border px-4 py-3">
+              <span className="text-sm text-muted-foreground">
+                {page * pageSize + 1}-{Math.min((page + 1) * pageSize, sortedReports.length)} of {sortedReports.length}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>Prev</Button>
+                <span className="px-2 text-sm text-muted-foreground">{page + 1} / {totalPages}</span>
+                <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}>Next</Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// MAIN REPORTS PAGE
+// ============================================================================
 
 export default function ReportsPage() {
   const { mode } = useMode();
@@ -759,226 +1198,102 @@ export default function ReportsPage() {
   // Show error toast only once
   React.useEffect(() => {
     if (error) {
-      message.error(error);
+      toast.error(error);
     }
   }, [error]);
 
   const globalStats = React.useMemo(() => {
-    const totalTrades = reports.reduce((sum, r) => sum + r.totalTrades, 0);
-    const avgWinRate = reports.length > 0 ? 
-      reports.reduce((sum, r) => sum + r.winRate, 0) / reports.length : 0;
-    const totalPnl = reports.reduce((sum, r) => sum + r.totalPnl, 0);
-    const maxDrawdown = Math.min(...reports.map(r => r.maxDrawdown), 0);
+    const totalTrades = reports.reduce((sum: number, r: any) => sum + r.totalTrades, 0);
+    const avgWinRate = reports.length > 0 ?
+      reports.reduce((sum: number, r: any) => sum + r.winRate, 0) / reports.length : 0;
+    const totalPnl = reports.reduce((sum: number, r: any) => sum + r.totalPnl, 0);
+    const maxDrawdown = Math.min(...reports.map((r: any) => r.maxDrawdown), 0);
 
     return { totalTrades, avgWinRate, totalPnl, maxDrawdown };
   }, [reports]);
 
-  const columns = React.useMemo(() => [
-    {
-      title: 'Date',
-      dataIndex: 'date',
-      key: 'date',
-      render: (date: string) => dayjs(date).format('MMM DD, YYYY')
-    },
-    {
-      title: 'Sessions',
-      dataIndex: 'sessionsCount',
-      key: 'sessionsCount',
-      render: (count: number) => <span style={{ color: '#1890ff' }}>{count}</span>
-    },
-    {
-      title: 'Trades',
-      dataIndex: 'totalTrades',
-      key: 'totalTrades',
-    },
-    {
-      title: 'Win Rate',
-      dataIndex: 'winRate',
-      key: 'winRate',
-      render: (rate: number) => (
-        <span style={{ color: rate > 0.5 ? 'var(--success)' : rate > 0.3 ? '#faad14' : 'var(--error)' }}>
-          {pct(rate)}
-        </span>
-      ),
-    },
-    {
-      title: 'Expectancy',
-      dataIndex: 'expectancy',
-      key: 'expectancy',
-      render: (exp: number) => (
-        <span style={{ color: exp > 0 ? 'var(--success)' : 'var(--error)' }}>
-          {exp.toFixed(2)}%
-        </span>
-      ),
-    },
-    {
-      title: 'PnL',
-      dataIndex: 'totalPnl',
-      key: 'totalPnl',
-      render: (pnl: number) => (
-        <span style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)' }}>
-          ${pnl.toFixed(2)}
-        </span>
-      ),
-    },
-    {
-      title: 'Profit Factor',
-      dataIndex: 'profitFactor',
-      key: 'profitFactor',
-      render: (pf: number) => (
-        <span style={{ color: pf > 1 ? 'var(--success)' : 'var(--error)' }}>
-          {pf.toFixed(2)}
-        </span>
-      ),
-    }
-  ], []);
-
   return (
-    <Tabs defaultActiveKey="daily" style={{ padding: '20px' }}>
-      <TabPane tab="📊 Daily Reports" key="daily">
-        <Space direction="vertical" style={{ width: '100%' }} size="large">
-          <Card>
-            <Title level={3}>📊 Global Trading Reports</Title>
-            <Text type="secondary">
-              Comprehensive dashboard with performance metrics across all agents
-            </Text>
-          </Card>
+    <div className="p-5">
+      <Tabs defaultValue="daily">
+        <TabsList>
+          <TabsTrigger value="daily">Daily Reports</TabsTrigger>
+          <TabsTrigger value="parity">Backtest Parity</TabsTrigger>
+        </TabsList>
 
-          <Row gutter={[16, 16]}>
-            <Col xs={24} sm={12} md={6}>
-              <Card>
-                <Statistic
-                  title="Total Trades"
-                  value={globalStats.totalTrades}
-                  valueStyle={{ color: '#1890ff' }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Card>
-                <Statistic
-                  title="Average Win Rate"
-                  value={globalStats.avgWinRate}
-                  formatter={(value) => pct(value as number)}
-                  valueStyle={{ color: globalStats.avgWinRate > 0.5 ? 'var(--success)' : 'var(--error)' }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Card>
-                <Statistic
-                  title="Total P&L"
-                  value={globalStats.totalPnl}
-                  prefix="$"
-                  precision={2}
-                  valueStyle={{ color: globalStats.totalPnl >= 0 ? 'var(--success)' : 'var(--error)' }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Card>
-                <Statistic
-                  title="Max Drawdown"
-                  value={globalStats.maxDrawdown}
-                  prefix="$"
-                  precision={2}
-                  valueStyle={{ color: 'var(--error)' }}
-                />
-              </Card>
-            </Col>
-          </Row>
+        <TabsContent value="daily">
+          <div className="flex flex-col gap-4">
+            <div className="rounded-xl border border-border bg-card p-6">
+              <h3 className="m-0 text-xl font-semibold text-foreground">Global Trading Reports</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Comprehensive dashboard with performance metrics across all agents
+              </p>
+            </div>
 
-          <Card
-            title={
-              <Space>
-                <span>📊 Daily Reports</span>
-                {isRefreshing && !isInitialLoad && (
-                  <Tag color="processing" icon={<SyncOutlined spin />}>
-                    Updating...
-                  </Tag>
-                )}
-              </Space>
-            }
-            loading={isInitialLoad}
-            extra={
-              <Button onClick={handleRefresh} loading={isRefreshing}>
-                Refresh Reports
-              </Button>
-            }
-          >
-            {reports.length === 0 && !isInitialLoad ? (
-              <div style={{ textAlign: 'center', padding: '40px' }}>
-                <Text type="secondary">
-                  {sessions.length === 0 ? 'No trading sessions found' : 'No daily reports available yet'}
-                </Text>
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div className="rounded-xl border border-border bg-card p-6">
+                <span className="text-xs uppercase tracking-wider text-muted-foreground">Total Trades</span>
+                <div className="text-2xl font-bold text-blue-500">{globalStats.totalTrades}</div>
               </div>
-            ) : reports.length > 0 ? (
-              <Table
-                dataSource={reports}
-                columns={columns}
-                rowKey="date"
-                pagination={{ pageSize: 10 }}
-                expandable={{
-                  expandedRowRender: (record) => (
-                    <div style={{ margin: 0 }}>
-                      <Text strong>Sessions for {dayjs(record.date).format('MMM DD, YYYY')}:</Text>
-                      <Row gutter={[16, 8]} style={{ marginTop: 8 }}>
-                        {record.sessions?.map((session: any, index: number) => (
-                          <Col xs={24} sm={12} md={8} key={index}>
-                            <Card size="small" style={{ marginBottom: 8 }}>
-                              <Text strong>{session.symbol}</Text>
-                              <br />
-                              <Text type="secondary">Trades: {session.totalTrades}</Text>
-                              <br />
-                              <Text type="secondary">WR: {pct(session.winRate)}</Text>
-                              <br />
-                              <Text type="secondary">PnL: ${session.totalPnl.toFixed(2)}</Text>
-                              {session.llmSummary && (
-                                <>
-                                  <br />
-                                  <Text type="secondary" style={{ fontSize: '11px' }}>
-                                    {session.llmSummary.substring(0, 100)}
-                                    {session.llmSummary.length > 100 ? '...' : ''}
-                                  </Text>
-                                </>
-                              )}
-                            </Card>
-                          </Col>
-                        ))}
-                      </Row>
-                    </div>
-                  ),
-                  rowExpandable: (record) => record.sessions && record.sessions.length > 0,
-                }}
-              />
-            ) : null}
-          </Card>
+              <div className="rounded-xl border border-border bg-card p-6">
+                <span className="text-xs uppercase tracking-wider text-muted-foreground">Average Win Rate</span>
+                <div className={cn("text-2xl font-bold", globalStats.avgWinRate > 0.5 ? "text-emerald-500" : "text-red-500")}>
+                  {pct(globalStats.avgWinRate)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-6">
+                <span className="text-xs uppercase tracking-wider text-muted-foreground">Total P&L</span>
+                <div className={cn("text-2xl font-bold", globalStats.totalPnl >= 0 ? "text-emerald-500" : "text-red-500")}>
+                  ${globalStats.totalPnl.toFixed(2)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-6">
+                <span className="text-xs uppercase tracking-wider text-muted-foreground">Max Drawdown</span>
+                <div className="text-2xl font-bold text-red-500">
+                  ${globalStats.maxDrawdown.toFixed(2)}
+                </div>
+              </div>
+            </div>
 
-          <Card title="Active Sessions" size="small">
-            <Row gutter={[16, 16]}>
-              {sessions.filter((s: any) => !s.stoppedAt).map((session: any) => (
-                <Col xs={24} sm={12} md={8} key={session.id}>
-                  <Card size="small">
-                    <Text strong>{session.symbol}</Text>
+            <DailyReportsTable
+              reports={reports}
+              sessions={sessions}
+              isRefreshing={isRefreshing}
+              isInitialLoad={isInitialLoad}
+              handleRefresh={handleRefresh}
+            />
+
+            <div className="rounded-xl border border-border bg-card">
+              <div className="border-b border-border px-6 py-3">
+                <span className="text-sm font-semibold text-foreground">Active Sessions</span>
+              </div>
+              <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 md:grid-cols-3">
+                {sessions.filter((s: any) => !s.stoppedAt).map((session: any) => (
+                  <div key={session.id} className="rounded-lg border border-border bg-card p-3">
+                    <span className="font-semibold text-foreground">{session.symbol}</span>
                     <br />
-                    <Text type="secondary">
+                    <span className="text-sm text-muted-foreground">
                       Mode: {session.mode?.toUpperCase()}
-                    </Text>
+                    </span>
                     <br />
-                    <Text type="secondary">
+                    <span className="text-sm text-muted-foreground">
                       Started: {dayjs(session.startedAt).format('MM-DD HH:mm')}
-                    </Text>
-                  </Card>
-                </Col>
-              ))}
-            </Row>
-          </Card>
-        </Space>
-      </TabPane>
+                    </span>
+                  </div>
+                ))}
+                {sessions.filter((s: any) => !s.stoppedAt).length === 0 && (
+                  <div className="col-span-full py-4 text-center text-sm text-muted-foreground">
+                    No active sessions
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </TabsContent>
 
-      <TabPane tab="🔬 Backtest Parity" key="parity">
-        <ParityVerificationPanel />
-      </TabPane>
-    </Tabs>
+        <TabsContent value="parity">
+          <ParityVerificationPanel />
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }

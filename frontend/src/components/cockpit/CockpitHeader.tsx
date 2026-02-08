@@ -5,12 +5,17 @@
  */
 
 import React, { useMemo } from 'react';
-import { Space, Tag, Typography, Tooltip, Button } from 'antd';
-import { ReloadOutlined, WifiOutlined } from '@ant-design/icons';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
+import { RefreshCw, Wifi } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from '@/components/ui/tooltip';
 import type { CockpitHeaderProps, SessionState } from '../../types/cockpit';
-
-const { Title, Text } = Typography;
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -33,18 +38,18 @@ const formatPercent = (value: number, digits = 2): string => {
   return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}%`;
 };
 
-const getStateColor = (state: SessionState): string => {
+const getStateClasses = (state: SessionState): string => {
   switch (state) {
     case 'IN_POSITION':
-      return 'green';
+      return 'bg-green-500/20 text-green-400 ring-1 ring-green-500/30';
     case 'WATCHING':
-      return 'blue';
+      return 'bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/30';
     case 'HALT':
-      return 'red';
+      return 'bg-red-500/20 text-red-400 ring-1 ring-red-500/30';
     case 'STOPPED':
-      return 'default';
+      return 'bg-zinc-500/20 text-zinc-400 ring-1 ring-zinc-500/30';
     default:
-      return 'default';
+      return 'bg-zinc-500/20 text-zinc-400 ring-1 ring-zinc-500/30';
   }
 };
 
@@ -153,224 +158,238 @@ const CockpitHeader: React.FC<ExtendedCockpitHeaderProps> = ({
   const pnlEmoji = netPnl >= 0 ? '' : '';
 
   return (
-    <div className="cockpit-header">
-      <div className="cockpit-header__main">
-        {/* Left: Session Info */}
-        <div className="cockpit-header__info">
-          <div className="cockpit-header__title-row">
-            <Title level={3} className="cockpit-header__title">
-              {sessionName || symbol || 'Trading Session'}
-            </Title>
-            <Space size={8} className="cockpit-header__tags">
-              {/* Mode badge - subtle indicator */}
-              <Tag
-                className="cockpit-header__mode-tag"
-                color={mode === 'live' ? 'gold' : 'default'}
-              >
-                {mode.toUpperCase()}
-              </Tag>
-              {/* State badge */}
-              <Tag className="cockpit-header__state-tag" color={getStateColor(state)}>
-                {getStateLabel(state)}
-              </Tag>
-              {/* Connection indicator */}
-              <Tooltip title={wsConnected ? 'Connected - Live data' : 'Disconnected'}>
-                <Tag
-                  className="cockpit-header__ws-tag"
-                  color={wsConnected ? 'green' : 'red'}
-                  icon={<WifiOutlined />}
+    <TooltipProvider>
+      <div className="cockpit-header">
+        <div className="cockpit-header__main">
+          {/* Left: Session Info */}
+          <div className="cockpit-header__info">
+            <div className="cockpit-header__title-row">
+              <h3 className="cockpit-header__title">
+                {sessionName || symbol || 'Trading Session'}
+              </h3>
+              <div className="flex items-center gap-2 cockpit-header__tags">
+                {/* Mode badge - subtle indicator */}
+                <span
+                  className={cn(
+                    'inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold tracking-wide',
+                    mode === 'live'
+                      ? 'bg-yellow-500/20 text-yellow-400 ring-1 ring-yellow-500/30'
+                      : 'bg-zinc-500/20 text-zinc-400 ring-1 ring-zinc-500/30'
+                  )}
                 >
-                  {wsConnected ? 'LIVE' : 'OFFLINE'}
-                </Tag>
-              </Tooltip>
-            </Space>
+                  {mode.toUpperCase()}
+                </span>
+                {/* State badge */}
+                <span
+                  className={cn(
+                    'inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold tracking-wide',
+                    getStateClasses(state)
+                  )}
+                >
+                  {getStateLabel(state)}
+                </span>
+                {/* Connection indicator */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      className={cn(
+                        'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold tracking-wide cursor-default',
+                        wsConnected
+                          ? 'bg-green-500/20 text-green-400 ring-1 ring-green-500/30'
+                          : 'bg-red-500/20 text-red-400 ring-1 ring-red-500/30'
+                      )}
+                    >
+                      <Wifi size={12} />
+                      {wsConnected ? 'LIVE' : 'OFFLINE'}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {wsConnected ? 'Connected - Live data' : 'Disconnected'}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            </div>
+            <span className="cockpit-header__symbol">{symbol}</span>
           </div>
-          <Text className="cockpit-header__symbol">{symbol}</Text>
+
+          {/* Center: PnL Focus */}
+          <div className="cockpit-header__pnl">
+            <div className="cockpit-header__pnl-main">
+              <span className="cockpit-header__pnl-label">Net P&L</span>
+              <span className="cockpit-header__pnl-value" style={{ color: pnlColor }}>
+                {pnlEmoji} {formatUsd(netPnl)}
+              </span>
+              <span
+                className="cockpit-header__pnl-pct"
+                style={{ color: pnlColor, opacity: 0.85 }}
+              >
+                {formatPercent(roiPct)}
+              </span>
+            </div>
+            {/* Sparkline */}
+            <div className="cockpit-header__sparkline">
+              <Sparkline data={sparklineData} width={100} height={36} />
+            </div>
+          </div>
+
+          {/* Right: Actions */}
+          <div className="cockpit-header__actions">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  onClick={onRefresh}
+                  disabled={isRefreshing}
+                  className="cockpit-header__refresh-btn"
+                >
+                  <RefreshCw size={14} className={cn(isRefreshing && 'animate-spin')} />
+                  Refresh
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Refresh session data</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
 
-        {/* Center: PnL Focus */}
-        <div className="cockpit-header__pnl">
-          <div className="cockpit-header__pnl-main">
-            <span className="cockpit-header__pnl-label">Net P&L</span>
-            <span className="cockpit-header__pnl-value" style={{ color: pnlColor }}>
-              {pnlEmoji} {formatUsd(netPnl)}
-            </span>
-            <span
-              className="cockpit-header__pnl-pct"
-              style={{ color: pnlColor, opacity: 0.85 }}
-            >
-              {formatPercent(roiPct)}
-            </span>
-          </div>
-          {/* Sparkline */}
-          <div className="cockpit-header__sparkline">
-            <Sparkline data={sparklineData} width={100} height={36} />
-          </div>
-        </div>
-
-        {/* Right: Actions */}
-        <div className="cockpit-header__actions">
-          <Tooltip title="Refresh session data">
-            <Button
-              icon={<ReloadOutlined spin={isRefreshing} />}
-              onClick={onRefresh}
-              loading={isRefreshing}
-              className="cockpit-header__refresh-btn"
-            >
-              Refresh
-            </Button>
-          </Tooltip>
-        </div>
-      </div>
-
-      {/* Styles - scoped to this component */}
-      <style>{`
-        .cockpit-header {
-          background: linear-gradient(135deg, rgba(30, 64, 175, 0.92), rgba(12, 74, 110, 0.88));
-          border-radius: 16px;
-          padding: 20px 24px;
-          color: var(--text-primary);
-          box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
-          border: 1px solid var(--border-subtle);
-        }
-
-        .cockpit-header__main {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 24px;
-          flex-wrap: wrap;
-        }
-
-        .cockpit-header__info {
-          flex: 1 1 200px;
-          min-width: 0;
-        }
-
-        .cockpit-header__title-row {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          flex-wrap: wrap;
-          margin-bottom: 4px;
-        }
-
-        .cockpit-header__title {
-          margin: 0 !important;
-          color: var(--text-primary) !important;
-          font-size: 20px !important;
-          font-weight: 600 !important;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .cockpit-header__tags {
-          flex-shrink: 0;
-        }
-
-        .cockpit-header__mode-tag,
-        .cockpit-header__state-tag,
-        .cockpit-header__ws-tag {
-          border-radius: 999px !important;
-          font-weight: 600;
-          font-size: 11px;
-          letter-spacing: 0.05em;
-          padding: 0 10px !important;
-        }
-
-        .cockpit-header__symbol {
-          font-size: 13px;
-          color: var(--text-muted);
-          font-family: 'JetBrains Mono', 'Menlo', monospace;
-        }
-
-        .cockpit-header__pnl {
-          display: flex;
-          align-items: center;
-          gap: 20px;
-          flex: 0 0 auto;
-        }
-
-        .cockpit-header__pnl-main {
-          display: flex;
-          flex-direction: column;
-          align-items: flex-end;
-          gap: 2px;
-        }
-
-        .cockpit-header__pnl-label {
-          font-size: 10px;
-          letter-spacing: 0.1em;
-          text-transform: uppercase;
-          color: var(--text-muted);
-        }
-
-        .cockpit-header__pnl-value {
-          font-size: 26px;
-          font-weight: 700;
-          font-family: 'JetBrains Mono', 'Menlo', monospace;
-          line-height: 1.1;
-        }
-
-        .cockpit-header__pnl-pct {
-          font-size: 14px;
-          font-weight: 600;
-          font-family: 'JetBrains Mono', 'Menlo', monospace;
-        }
-
-        .cockpit-header__sparkline {
-          background: rgba(15, 23, 42, 0.3);
-          border-radius: 8px;
-          padding: 4px 8px;
-          border: 1px solid var(--border-subtle);
-        }
-
-        .cockpit-header__actions {
-          flex: 0 0 auto;
-        }
-
-        .cockpit-header__refresh-btn {
-          background: rgba(255, 255, 255, 0.1) !important;
-          border-color: rgba(255, 255, 255, 0.2) !important;
-          color: var(--text-primary) !important;
-        }
-
-        .cockpit-header__refresh-btn:hover {
-          background: rgba(255, 255, 255, 0.15) !important;
-          border-color: rgba(255, 255, 255, 0.3) !important;
-        }
-
-        @media (max-width: 768px) {
+        {/* Styles - scoped to this component */}
+        <style>{`
           .cockpit-header {
-            padding: 16px;
+            background: linear-gradient(135deg, rgba(30, 64, 175, 0.92), rgba(12, 74, 110, 0.88));
+            border-radius: 16px;
+            padding: 20px 24px;
+            color: var(--text-primary);
+            box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+            border: 1px solid var(--border-subtle);
           }
 
           .cockpit-header__main {
-            flex-direction: column;
-            align-items: stretch;
-            gap: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 24px;
+            flex-wrap: wrap;
+          }
+
+          .cockpit-header__info {
+            flex: 1 1 200px;
+            min-width: 0;
+          }
+
+          .cockpit-header__title-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 4px;
+          }
+
+          .cockpit-header__title {
+            margin: 0;
+            color: var(--text-primary);
+            font-size: 20px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+
+          .cockpit-header__tags {
+            flex-shrink: 0;
+          }
+
+          .cockpit-header__symbol {
+            font-size: 13px;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', 'Menlo', monospace;
           }
 
           .cockpit-header__pnl {
-            justify-content: space-between;
-            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex: 0 0 auto;
           }
 
           .cockpit-header__pnl-main {
-            align-items: flex-start;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+          }
+
+          .cockpit-header__pnl-label {
+            font-size: 10px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+          }
+
+          .cockpit-header__pnl-value {
+            font-size: 26px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', 'Menlo', monospace;
+            line-height: 1.1;
+          }
+
+          .cockpit-header__pnl-pct {
+            font-size: 14px;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', 'Menlo', monospace;
+          }
+
+          .cockpit-header__sparkline {
+            background: rgba(15, 23, 42, 0.3);
+            border-radius: 8px;
+            padding: 4px 8px;
+            border: 1px solid var(--border-subtle);
           }
 
           .cockpit-header__actions {
-            width: 100%;
+            flex: 0 0 auto;
           }
 
           .cockpit-header__refresh-btn {
-            width: 100%;
+            background: rgba(255, 255, 255, 0.1) !important;
+            border-color: rgba(255, 255, 255, 0.2) !important;
+            color: var(--text-primary) !important;
           }
-        }
-      `}</style>
-    </div>
+
+          .cockpit-header__refresh-btn:hover {
+            background: rgba(255, 255, 255, 0.15) !important;
+            border-color: rgba(255, 255, 255, 0.3) !important;
+          }
+
+          @media (max-width: 768px) {
+            .cockpit-header {
+              padding: 16px;
+            }
+
+            .cockpit-header__main {
+              flex-direction: column;
+              align-items: stretch;
+              gap: 16px;
+            }
+
+            .cockpit-header__pnl {
+              justify-content: space-between;
+              width: 100%;
+            }
+
+            .cockpit-header__pnl-main {
+              align-items: flex-start;
+            }
+
+            .cockpit-header__actions {
+              width: 100%;
+            }
+
+            .cockpit-header__refresh-btn {
+              width: 100%;
+            }
+          }
+        `}</style>
+      </div>
+    </TooltipProvider>
   );
 };
 

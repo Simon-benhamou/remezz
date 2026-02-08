@@ -5,7 +5,15 @@
  */
 
 import React, { useMemo } from 'react';
-import { Progress, Tooltip, Skeleton, Tag } from 'antd';
+import { Progress } from '@/components/ui/progress';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from '@/components/ui/tooltip';
+import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 import {
   TrendingUp,
   TrendingDown,
@@ -61,7 +69,14 @@ const MetricCard: React.FC<MetricCardProps> = ({
     </div>
   );
 
-  return tooltip ? <Tooltip title={tooltip}>{content}</Tooltip> : content;
+  return tooltip ? (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>{content}</TooltipTrigger>
+        <TooltipContent>{tooltip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  ) : content;
 };
 
 // ============================================================================
@@ -89,81 +104,93 @@ const ParityStatus: React.FC<ParityStatusProps> = ({ parity }) => {
       color: 'var(--success)',
       icon: <CheckCircle size={16} color="var(--success)" />,
       label: 'Healthy',
-      tagColor: 'green',
+      tagClasses: 'bg-green-500/10 text-green-400 ring-1 ring-green-500/20',
     },
     warning: {
       color: 'var(--warning)',
       icon: <AlertTriangle size={16} color="var(--warning)" />,
       label: 'Warning',
-      tagColor: 'orange',
+      tagClasses: 'bg-orange-500/10 text-orange-400 ring-1 ring-orange-500/20',
     },
     critical: {
       color: 'var(--error)',
       icon: <XCircle size={16} color="var(--error)" />,
       label: 'Critical',
-      tagColor: 'red',
+      tagClasses: 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20',
     },
   };
 
   const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.healthy;
 
   return (
-    <div className="parity-status">
-      <div className="parity-status__header">
-        {config.icon}
-        <span className="parity-status__title">Backtest Parity</span>
-        <Tag color={config.tagColor} className="parity-status__tag">
-          {config.label}
-        </Tag>
-      </div>
-
-      <div className="parity-status__gauge">
-        <Progress
-          percent={matchRate}
-          strokeColor={config.color}
-          trailColor="rgba(100, 116, 139, 0.3)"
-          size="small"
-          format={(p) => `${p?.toFixed(0)}%`}
-        />
-      </div>
-
-      <div className="parity-status__stats">
-        <Tooltip title="Trades verified against backtest">
-          <span className="parity-status__stat">
-            {verifiedTrades}/{totalTrades} verified
+    <TooltipProvider>
+      <div className="parity-status">
+        <div className="parity-status__header">
+          {config.icon}
+          <span className="parity-status__title">Backtest Parity</span>
+          <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold', config.tagClasses)}>
+            {config.label}
           </span>
-        </Tooltip>
-        <span className="parity-status__divider">|</span>
-        <Tooltip title="Trades matching backtest behavior">
-          <span className="parity-status__stat">
-            {matchedTrades} matched
-          </span>
-        </Tooltip>
-        {mismatches.length > 0 && (
-          <>
-            <span className="parity-status__divider">|</span>
-            <Tooltip
-              title={
-                <div>
-                  <strong>Recent mismatches:</strong>
-                  <ul style={{ margin: '4px 0 0', paddingLeft: 16 }}>
-                    {mismatches.slice(0, 3).map((m: ParityResult['mismatches'][0], i: number) => (
-                      <li key={i} style={{ fontSize: 11 }}>
-                        {m.symbol}: {m.liveExitReason} vs {m.btExitReason}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              }
-            >
-              <span className="parity-status__stat parity-status__stat--warn">
-                {mismatches.length} mismatches
+        </div>
+
+        <div className="parity-status__gauge">
+          <div className="flex items-center gap-2">
+            <Progress
+              value={matchRate}
+              className="h-1.5 flex-1"
+              style={{ '--progress-color': config.color } as React.CSSProperties}
+            />
+            <span className="text-[11px] font-mono text-[var(--text-muted)]">
+              {matchRate?.toFixed(0)}%
+            </span>
+          </div>
+        </div>
+
+        <div className="parity-status__stats">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="parity-status__stat">
+                {verifiedTrades}/{totalTrades} verified
               </span>
-            </Tooltip>
-          </>
-        )}
+            </TooltipTrigger>
+            <TooltipContent>Trades verified against backtest</TooltipContent>
+          </Tooltip>
+          <span className="parity-status__divider">|</span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="parity-status__stat">
+                {matchedTrades} matched
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Trades matching backtest behavior</TooltipContent>
+          </Tooltip>
+          {mismatches.length > 0 && (
+            <>
+              <span className="parity-status__divider">|</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="parity-status__stat parity-status__stat--warn">
+                    {mismatches.length} mismatches
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <div>
+                    <strong>Recent mismatches:</strong>
+                    <ul style={{ margin: '4px 0 0', paddingLeft: 16 }}>
+                      {mismatches.slice(0, 3).map((m: ParityResult['mismatches'][0], i: number) => (
+                        <li key={i} style={{ fontSize: 11 }}>
+                          {m.symbol}: {m.liveExitReason} vs {m.btExitReason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 };
 
@@ -179,7 +206,10 @@ const PerformanceSummary: React.FC<PerformanceSummaryProps> = ({
   if (loading) {
     return (
       <div className="perf-summary perf-summary--loading">
-        <Skeleton active paragraph={{ rows: 3 }} />
+        <Skeleton className="h-4 w-3/4 mb-3" />
+        <Skeleton className="h-16 w-full mb-2" />
+        <Skeleton className="h-16 w-full mb-2" />
+        <Skeleton className="h-8 w-1/2" />
         <style>{styles}</style>
       </div>
     );
@@ -423,20 +453,8 @@ const styles = `
     color: var(--text-muted);
   }
 
-  .parity-status__tag {
-    font-size: 10px !important;
-    padding: 0 6px !important;
-    border-radius: 4px !important;
-  }
-
   .parity-status__gauge {
     padding: 0 4px;
-  }
-
-  .parity-status__gauge .ant-progress-text {
-    font-size: 11px !important;
-    color: var(--text-muted) !important;
-    font-family: 'JetBrains Mono', monospace;
   }
 
   .parity-status__stats {

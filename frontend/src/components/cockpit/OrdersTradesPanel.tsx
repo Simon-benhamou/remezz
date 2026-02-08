@@ -6,9 +6,22 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { Table, Tag, Segmented, Select, Empty, Tooltip, Progress } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { Filter, X } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from '@/components/ui/tooltip';
+import { Progress } from '@/components/ui/progress';
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select';
+import { cn } from '@/lib/utils';
+import { Filter, X, Inbox } from 'lucide-react';
 import type { Order, Trade, TradeFilters, OrdersTradesPanelProps } from '../../types/cockpit';
 
 // ============================================================================
@@ -16,7 +29,7 @@ import type { Order, Trade, TradeFilters, OrdersTradesPanelProps } from '../../t
 // ============================================================================
 
 const formatPrice = (value: number | undefined): string => {
-  if (!value || !Number.isFinite(value)) return '—';
+  if (!value || !Number.isFinite(value)) return '\u2014';
   return value >= 100 ? value.toFixed(2) : value.toFixed(4);
 };
 
@@ -34,69 +47,143 @@ const formatPercent = (value: number): string => {
 
 const formatTime = (ts: string | number): string => {
   const date = new Date(ts);
-  if (isNaN(date.getTime())) return '—';
+  if (isNaN(date.getTime())) return '\u2014';
   return date.toLocaleTimeString(undefined, { hour12: false });
 };
 
 const formatDateTime = (ts: string | number): string => {
   const date = new Date(ts);
-  if (isNaN(date.getTime())) return '—';
+  if (isNaN(date.getTime())) return '\u2014';
   return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, { hour12: false })}`;
 };
 
 const formatDuration = (mins: number | undefined): string => {
-  if (!mins || !Number.isFinite(mins)) return '—';
+  if (!mins || !Number.isFinite(mins)) return '\u2014';
   const hours = Math.floor(mins / 60);
   if (hours > 0) return `${hours}h ${Math.round(mins % 60)}m`;
   return `${Math.round(mins)}m`;
 };
 
-const getOrderStatusColor = (status: string): string => {
+const getOrderStatusClasses = (status: string): string => {
   switch (status.toLowerCase()) {
     case 'filled':
-      return 'green';
+      return 'bg-green-500/10 text-green-400 ring-1 ring-green-500/20';
     case 'pending':
     case 'open':
     case 'new':
-      return 'blue';
+      return 'bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20';
     case 'canceled':
     case 'expired':
-      return 'default';
+      return 'bg-zinc-500/10 text-zinc-400 ring-1 ring-zinc-500/20';
     case 'rejected':
-      return 'red';
+      return 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20';
     default:
-      return 'default';
+      return 'bg-zinc-500/10 text-zinc-400 ring-1 ring-zinc-500/20';
   }
 };
 
-const getOrderTypeColor = (type: string): string => {
+const getOrderTypeClasses = (type: string): string => {
   switch (type.toLowerCase()) {
     case 'market':
-      return 'cyan';
+      return 'bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20';
     case 'limit':
-      return 'purple';
+      return 'bg-purple-500/10 text-purple-400 ring-1 ring-purple-500/20';
     case 'stop_market':
-      return 'orange';
+      return 'bg-orange-500/10 text-orange-400 ring-1 ring-orange-500/20';
     case 'stop_loss':
-      return 'red';
+      return 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20';
     case 'take_profit_market':
     case 'take_profit':
-      return 'green';
+      return 'bg-green-500/10 text-green-400 ring-1 ring-green-500/20';
     case 'trailing_stop':
-      return 'magenta';
+      return 'bg-pink-500/10 text-pink-400 ring-1 ring-pink-500/20';
     default:
-      return 'default';
+      return 'bg-zinc-500/10 text-zinc-400 ring-1 ring-zinc-500/20';
   }
 };
 
-const getExitReasonColor = (reason: string): string => {
+const getExitReasonClasses = (reason: string): string => {
   const r = reason?.toLowerCase() || '';
-  if (r.includes('tp') || r.includes('take_profit')) return 'green';
-  if (r.includes('sl') || r.includes('stop_loss')) return 'red';
-  if (r.includes('trailing')) return 'orange';
-  if (r.includes('manual')) return 'blue';
-  if (r.includes('regime')) return 'purple';
-  return 'default';
+  if (r.includes('tp') || r.includes('take_profit')) return 'bg-green-500/10 text-green-400 ring-1 ring-green-500/20';
+  if (r.includes('sl') || r.includes('stop_loss')) return 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20';
+  if (r.includes('trailing')) return 'bg-orange-500/10 text-orange-400 ring-1 ring-orange-500/20';
+  if (r.includes('manual')) return 'bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20';
+  if (r.includes('regime')) return 'bg-purple-500/10 text-purple-400 ring-1 ring-purple-500/20';
+  return 'bg-zinc-500/10 text-zinc-400 ring-1 ring-zinc-500/20';
+};
+
+const tagBase = 'inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold whitespace-nowrap';
+
+// ============================================================================
+// EMPTY STATE COMPONENT
+// ============================================================================
+
+const EmptyState: React.FC<{ description: string }> = ({ description }) => (
+  <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+    <Inbox size={32} className="mb-2 opacity-50" />
+    <span className="text-sm">{description}</span>
+  </div>
+);
+
+// ============================================================================
+// PAGINATION COMPONENT
+// ============================================================================
+
+interface PaginationProps {
+  total: number;
+  page: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
+  label: string;
+}
+
+const SimplePagination: React.FC<PaginationProps> = ({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+  label,
+}) => {
+  const totalPages = Math.ceil(total / pageSize);
+  if (total === 0) return null;
+
+  return (
+    <div className="flex items-center justify-between px-4 py-3 text-xs text-[var(--text-muted)]">
+      <span className="font-mono">{total} {label}</span>
+      <div className="flex items-center gap-2">
+        <Select
+          value={String(pageSize)}
+          onValueChange={(v) => { onPageSizeChange(Number(v)); onPageChange(1); }}
+        >
+          <SelectTrigger className="h-7 w-[70px] text-xs bg-[rgba(30,41,59,0.8)] border-[var(--border-subtle)]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {[10, 15, 25, 50].map((s) => (
+              <SelectItem key={s} value={String(s)}>{s} / page</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <button
+          onClick={() => onPageChange(page - 1)}
+          disabled={page <= 1}
+          className="px-2 py-1 rounded border border-[var(--border-subtle)] disabled:opacity-30 hover:bg-[var(--bg-card-hover)]"
+        >
+          Prev
+        </button>
+        <span className="font-mono">{page}/{totalPages}</span>
+        <button
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= totalPages}
+          className="px-2 py-1 rounded border border-[var(--border-subtle)] disabled:opacity-30 hover:bg-[var(--bg-card-hover)]"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
 };
 
 // ============================================================================
@@ -108,275 +195,254 @@ interface OrdersTableProps {
 }
 
 const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
-  const columns: ColumnsType<Order> = [
-    {
-      title: 'Created',
-      dataIndex: 'createdAt',
-      key: 'createdAt',
-      width: 90,
-      fixed: 'left',
-      render: (ts: string) => (
-        <Tooltip title={formatDateTime(ts)}>
-          <span className="otp-table__time">{formatTime(ts)}</span>
-        </Tooltip>
-      ),
-    },
-    {
-      title: 'Updated',
-      dataIndex: 'updatedAt',
-      key: 'updatedAt',
-      width: 90,
-      render: (ts: string) => (
-        <Tooltip title={formatDateTime(ts)}>
-          <span className="otp-table__time">{formatTime(ts)}</span>
-        </Tooltip>
-      ),
-    },
-    {
-      title: 'Side',
-      dataIndex: 'side',
-      key: 'side',
-      width: 70,
-      render: (side: string) => (
-        <Tag color={side === 'buy' ? 'green' : 'red'} className="otp-table__tag">
-          {side?.toUpperCase() || '—'}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Symbol',
-      dataIndex: 'symbol',
-      key: 'symbol',
-      width: 90,
-      render: (symbol: string) => (
-        <Tag color="geekblue" className="otp-table__tag">
-          {symbol?.replace('/USDT:USDT', '') || '—'}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Type',
-      dataIndex: 'type',
-      key: 'type',
-      width: 100,
-      render: (type: string) => (
-        <Tag color={getOrderTypeColor(type)} className="otp-table__tag">
-          {type?.replace('_', ' ').toUpperCase() || '—'}
-        </Tag>
-      ),
-    },
-    {
-      title: 'TIF',
-      dataIndex: 'tif',
-      key: 'tif',
-      width: 50,
-      render: (tif: string) => tif ? <Tag>{tif}</Tag> : '—',
-    },
-    {
-      title: 'Price',
-      dataIndex: 'price',
-      key: 'price',
-      width: 90,
-      align: 'right',
-      render: (price: number, record: any) => {
-        const requested = record.requestedPrice;
-        return (
-          <Tooltip title={requested ? `Requested: $${formatPrice(requested)}` : undefined}>
-            <span className="otp-table__number">
-              {record.avgPrice ? `$${formatPrice(record.avgPrice)}` : price ? `$${formatPrice(price)}` : 'Market'}
-            </span>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: 'Qty',
-      dataIndex: 'qty',
-      key: 'qty',
-      width: 80,
-      align: 'right',
-      render: (qty: number, record: any) => (
-        <Tooltip title={record.requestedQty ? `Requested: ${record.requestedQty.toFixed(4)}` : undefined}>
-          <span className="otp-table__number">{qty?.toFixed(4) || '—'}</span>
-        </Tooltip>
-      ),
-    },
-    {
-      title: 'Notional',
-      key: 'notional',
-      width: 90,
-      align: 'right',
-      render: (_: unknown, record: any) => {
-        const notional = (record.qty || 0) * (record.price || 0);
-        return <span className="otp-table__number">{notional > 0 ? formatUsd(notional) : '—'}</span>;
-      },
-    },
-    {
-      title: 'Lev',
-      dataIndex: 'leverage',
-      key: 'leverage',
-      width: 50,
-      align: 'center',
-      render: (lev: number) => lev ? <Tag color="blue">{lev}x</Tag> : '—',
-    },
-    {
-      title: 'SL',
-      dataIndex: 'sl',
-      key: 'sl',
-      width: 80,
-      align: 'right',
-      render: (sl: number) => sl ? <span className="otp-table__number otp-table__number--negative">${formatPrice(sl)}</span> : '—',
-    },
-    {
-      title: 'TP',
-      dataIndex: 'tp',
-      key: 'tp',
-      width: 80,
-      align: 'right',
-      render: (tp: number) => tp ? <span className="otp-table__number otp-table__number--positive">${formatPrice(tp)}</span> : '—',
-    },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      width: 80,
-      render: (status: string) => (
-        <Tag color={getOrderStatusColor(status)} className="otp-table__tag">
-          {status?.toUpperCase() || '—'}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Fill %',
-      dataIndex: 'fillRatio',
-      key: 'fillRatio',
-      width: 80,
-      render: (ratio: number) => {
-        if (!ratio || !Number.isFinite(ratio)) return '—';
-        const pct = Math.round(ratio * 100);
-        return <Progress percent={pct} size="small" status={pct >= 100 ? 'success' : 'active'} strokeWidth={5} />;
-      },
-    },
-    {
-      title: 'Slip',
-      dataIndex: 'slippageBps',
-      key: 'slippageBps',
-      width: 60,
-      align: 'right',
-      render: (bps: number) => {
-        if (!bps || !Number.isFinite(bps)) return '—';
-        const tone = bps > 10 ? 'otp-table__number--negative' : bps < 0 ? 'otp-table__number--positive' : '';
-        return <span className={`otp-table__number ${tone}`}>{bps.toFixed(1)}</span>;
-      },
-    },
-    {
-      title: 'Latency',
-      dataIndex: 'latencyMs',
-      key: 'latencyMs',
-      width: 70,
-      align: 'right',
-      render: (ms: number) => {
-        if (!ms || !Number.isFinite(ms)) return '—';
-        const tone = ms > 1000 ? 'otp-table__number--negative' : ms < 200 ? 'otp-table__number--positive' : '';
-        return <span className={`otp-table__number ${tone}`}>{ms}ms</span>;
-      },
-    },
-    {
-      title: 'Chg %',
-      dataIndex: 'pctChange',
-      key: 'pctChange',
-      width: 70,
-      align: 'right',
-      render: (pct: number) => {
-        if (!pct || !Number.isFinite(pct)) return '—';
-        const tone = pct >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
-        return <span className={`otp-table__number ${tone}`}>{formatPercent(pct)}</span>;
-      },
-    },
-    {
-      title: 'Source',
-      dataIndex: 'source',
-      key: 'source',
-      width: 70,
-      render: (source: string) => {
-        if (!source) return '—';
-        const colorMap: Record<string, string> = { agent: 'blue', manual: 'green', api: 'purple', system: 'orange' };
-        return <Tag color={colorMap[source.toLowerCase()] || 'default'}>{source}</Tag>;
-      },
-    },
-    {
-      title: 'Strategy',
-      dataIndex: 'strategyUsed',
-      key: 'strategyUsed',
-      width: 100,
-      render: (strat: string, record: any) => {
-        if (!strat) return '—';
-        const conf = record.strategyConfidence;
-        return (
-          <Tooltip title={conf ? `Confidence: ${(conf * 100).toFixed(1)}%` : undefined}>
-            <Tag color="purple">{strat}</Tag>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: 'Retry',
-      key: 'retries',
-      width: 60,
-      align: 'center',
-      render: (_: unknown, record: any) => {
-        const attempts = record.attempts || 0;
-        const cancels = record.cancelCount || 0;
-        if (!attempts && !cancels) return '—';
-        return (
-          <Tooltip title={`Attempts: ${attempts}, Cancels: ${cancels}`}>
-            <span className="otp-table__number">{attempts}/{cancels}</span>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: 'Error',
-      dataIndex: 'error',
-      key: 'error',
-      width: 100,
-      render: (err: string) => {
-        if (!err) return '—';
-        return (
-          <Tooltip title={err}>
-            <Tag color="red" style={{ maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {err.substring(0, 12)}...
-            </Tag>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: 'Order ID',
-      dataIndex: 'clientOrderId',
-      key: 'clientOrderId',
-      width: 120,
-      render: (id: string, record: any) => (
-        <Tooltip title={`Exchange: ${record.exchangeOrderId || 'N/A'}`}>
-          <span className="otp-table__muted" style={{ fontSize: 10 }}>
-            {id ? id.substring(0, 14) + '...' : '—'}
-          </span>
-        </Tooltip>
-      ),
-    },
-  ];
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
+
+  const pagedOrders = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return orders.slice(start, start + pageSize);
+  }, [orders, page, pageSize]);
+
+  if (orders.length === 0) {
+    return <EmptyState description="No orders" />;
+  }
 
   return (
-    <Table
-      dataSource={orders}
-      columns={columns}
-      rowKey="id"
-      size="small"
-      pagination={{ pageSize: 15, showSizeChanger: true, showTotal: (t) => `${t} orders` }}
-      className="otp-table"
-      scroll={{ x: 1800 }}
-      locale={{ emptyText: <Empty description="No orders" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-    />
+    <TooltipProvider>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-muted/50">
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider sticky left-0 bg-[rgba(30,41,59,0.6)] z-10">Created</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Updated</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Side</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Symbol</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Type</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">TIF</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Price</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Qty</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Notional</th>
+              <th className="px-2 py-1.5 text-center font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Lev</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">SL</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">TP</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Status</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Fill %</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Slip</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Latency</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Chg %</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Source</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Strategy</th>
+              <th className="px-2 py-1.5 text-center font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Retry</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Error</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Order ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pagedOrders.map((order: any) => {
+              const notional = (order.qty || 0) * (order.price || 0);
+              return (
+                <tr key={order.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                  {/* Created */}
+                  <td className="px-2 py-1.5 whitespace-nowrap sticky left-0 bg-[var(--bg-primary)] z-10">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="otp-table__time">{formatTime(order.createdAt)}</span>
+                      </TooltipTrigger>
+                      <TooltipContent>{formatDateTime(order.createdAt)}</TooltipContent>
+                    </Tooltip>
+                  </td>
+                  {/* Updated */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="otp-table__time">{formatTime(order.updatedAt)}</span>
+                      </TooltipTrigger>
+                      <TooltipContent>{formatDateTime(order.updatedAt)}</TooltipContent>
+                    </Tooltip>
+                  </td>
+                  {/* Side */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <span className={cn(tagBase, order.side === 'buy' ? 'bg-green-500/10 text-green-400 ring-1 ring-green-500/20' : 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20')}>
+                      {order.side?.toUpperCase() || '\u2014'}
+                    </span>
+                  </td>
+                  {/* Symbol */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <span className={cn(tagBase, 'bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20')}>
+                      {order.symbol?.replace('/USDT:USDT', '') || '\u2014'}
+                    </span>
+                  </td>
+                  {/* Type */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <span className={cn(tagBase, getOrderTypeClasses(order.type))}>
+                      {order.type?.replace('_', ' ').toUpperCase() || '\u2014'}
+                    </span>
+                  </td>
+                  {/* TIF */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {order.tif ? (
+                      <span className={cn(tagBase, 'bg-zinc-500/10 text-zinc-400 ring-1 ring-zinc-500/20')}>{order.tif}</span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Price */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="otp-table__number">
+                          {order.avgPrice ? `$${formatPrice(order.avgPrice)}` : order.price ? `$${formatPrice(order.price)}` : 'Market'}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>{order.requestedPrice ? `Requested: $${formatPrice(order.requestedPrice)}` : 'No requested price'}</TooltipContent>
+                    </Tooltip>
+                  </td>
+                  {/* Qty */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="otp-table__number">{order.qty?.toFixed(4) || '\u2014'}</span>
+                      </TooltipTrigger>
+                      <TooltipContent>{order.requestedQty ? `Requested: ${order.requestedQty.toFixed(4)}` : 'No requested qty'}</TooltipContent>
+                    </Tooltip>
+                  </td>
+                  {/* Notional */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <span className="otp-table__number">{notional > 0 ? formatUsd(notional) : '\u2014'}</span>
+                  </td>
+                  {/* Lev */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-center">
+                    {order.leverage ? (
+                      <span className={cn(tagBase, 'bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20')}>{order.leverage}x</span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* SL */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    {order.sl ? <span className="otp-table__number otp-table__number--negative">${formatPrice(order.sl)}</span> : '\u2014'}
+                  </td>
+                  {/* TP */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    {order.tp ? <span className="otp-table__number otp-table__number--positive">${formatPrice(order.tp)}</span> : '\u2014'}
+                  </td>
+                  {/* Status */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <span className={cn(tagBase, getOrderStatusClasses(order.status))}>
+                      {order.status?.toUpperCase() || '\u2014'}
+                    </span>
+                  </td>
+                  {/* Fill % */}
+                  <td className="px-2 py-1.5 whitespace-nowrap" style={{ minWidth: 80 }}>
+                    {order.fillRatio && Number.isFinite(order.fillRatio) ? (
+                      <div className="flex items-center gap-1.5">
+                        <Progress
+                          value={Math.round(order.fillRatio * 100)}
+                          className={cn('h-1.5 w-12', Math.round(order.fillRatio * 100) >= 100 && '[&>div]:bg-green-500')}
+                        />
+                        <span className="otp-table__number text-[10px]">{Math.round(order.fillRatio * 100)}%</span>
+                      </div>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Slip */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    {order.slippageBps && Number.isFinite(order.slippageBps) ? (
+                      <span className={cn('otp-table__number', order.slippageBps > 10 && 'otp-table__number--negative', order.slippageBps < 0 && 'otp-table__number--positive')}>
+                        {order.slippageBps.toFixed(1)}
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Latency */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    {order.latencyMs && Number.isFinite(order.latencyMs) ? (
+                      <span className={cn('otp-table__number', order.latencyMs > 1000 && 'otp-table__number--negative', order.latencyMs < 200 && 'otp-table__number--positive')}>
+                        {order.latencyMs}ms
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Chg % */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    {order.pctChange && Number.isFinite(order.pctChange) ? (
+                      <span className={cn('otp-table__number', order.pctChange >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative')}>
+                        {formatPercent(order.pctChange)}
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Source */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {order.source ? (() => {
+                      const sourceClasses: Record<string, string> = {
+                        agent: 'bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20',
+                        manual: 'bg-green-500/10 text-green-400 ring-1 ring-green-500/20',
+                        api: 'bg-purple-500/10 text-purple-400 ring-1 ring-purple-500/20',
+                        system: 'bg-orange-500/10 text-orange-400 ring-1 ring-orange-500/20',
+                      };
+                      return (
+                        <span className={cn(tagBase, sourceClasses[order.source.toLowerCase()] || 'bg-zinc-500/10 text-zinc-400 ring-1 ring-zinc-500/20')}>
+                          {order.source}
+                        </span>
+                      );
+                    })() : '\u2014'}
+                  </td>
+                  {/* Strategy */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {order.strategyUsed ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className={cn(tagBase, 'bg-purple-500/10 text-purple-400 ring-1 ring-purple-500/20')}>
+                            {order.strategyUsed}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>{order.strategyConfidence ? `Confidence: ${(order.strategyConfidence * 100).toFixed(1)}%` : 'No confidence data'}</TooltipContent>
+                      </Tooltip>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Retry */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-center">
+                    {(order.attempts || order.cancelCount) ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="otp-table__number">{order.attempts || 0}/{order.cancelCount || 0}</span>
+                        </TooltipTrigger>
+                        <TooltipContent>Attempts: {order.attempts || 0}, Cancels: {order.cancelCount || 0}</TooltipContent>
+                      </Tooltip>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Error */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {order.error ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className={cn(tagBase, 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20 max-w-[90px] overflow-hidden text-ellipsis')}>
+                            {order.error.substring(0, 12)}...
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>{order.error}</TooltipContent>
+                      </Tooltip>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Order ID */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="otp-table__muted" style={{ fontSize: 10 }}>
+                          {order.clientOrderId ? order.clientOrderId.substring(0, 14) + '...' : '\u2014'}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>Exchange: {order.exchangeOrderId || 'N/A'}</TooltipContent>
+                    </Tooltip>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <SimplePagination
+        total={orders.length}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+        label="orders"
+      />
+    </TooltipProvider>
   );
 };
 
@@ -389,206 +455,177 @@ interface TradesTableProps {
 }
 
 const TradesTable: React.FC<TradesTableProps> = ({ trades }) => {
-  const columns: ColumnsType<Trade> = [
-    {
-      title: 'Entry',
-      dataIndex: 'entryTs',
-      key: 'entryTs',
-      width: 90,
-      fixed: 'left',
-      render: (ts: string) => (
-        <Tooltip title={formatDateTime(ts)}>
-          <span className="otp-table__time">{formatTime(ts)}</span>
-        </Tooltip>
-      ),
-    },
-    {
-      title: 'Exit',
-      dataIndex: 'exitTs',
-      key: 'exitTs',
-      width: 90,
-      render: (ts: string) => (
-        <Tooltip title={formatDateTime(ts)}>
-          <span className="otp-table__time">{formatTime(ts)}</span>
-        </Tooltip>
-      ),
-    },
-    {
-      title: 'Side',
-      dataIndex: 'positionSide',
-      key: 'positionSide',
-      width: 70,
-      render: (side: string) => (
-        <Tag color={side === 'long' ? 'green' : 'red'} className="otp-table__tag">
-          {side?.toUpperCase() || '—'}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Symbol',
-      dataIndex: 'symbol',
-      key: 'symbol',
-      width: 90,
-      render: (symbol: string) => (
-        <Tag color="geekblue" className="otp-table__tag">
-          {symbol?.replace('/USDT:USDT', '') || '—'}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Entry $',
-      dataIndex: 'entryPrice',
-      key: 'entryPrice',
-      width: 90,
-      align: 'right',
-      render: (price: number) => <span className="otp-table__number">${formatPrice(price)}</span>,
-    },
-    {
-      title: 'Exit $',
-      dataIndex: 'exitPrice',
-      key: 'exitPrice',
-      width: 90,
-      align: 'right',
-      render: (price: number) => <span className="otp-table__number">${formatPrice(price)}</span>,
-    },
-    {
-      title: 'Qty',
-      dataIndex: 'qty',
-      key: 'qty',
-      width: 80,
-      align: 'right',
-      render: (qty: number) => <span className="otp-table__number">{qty?.toFixed(4) || '—'}</span>,
-    },
-    {
-      title: 'Notional',
-      dataIndex: 'entryNotional',
-      key: 'entryNotional',
-      width: 90,
-      align: 'right',
-      render: (val: number) => <span className="otp-table__number">{val ? formatUsd(val) : '—'}</span>,
-    },
-    {
-      title: 'Lev',
-      dataIndex: 'leverage',
-      key: 'leverage',
-      width: 50,
-      align: 'center',
-      render: (lev: number) => lev ? <Tag color="blue">{lev}x</Tag> : '—',
-    },
-    {
-      title: 'P&L',
-      dataIndex: 'realizedPnlUsd',
-      key: 'realizedPnlUsd',
-      width: 90,
-      align: 'right',
-      render: (pnl: number) => {
-        const isPositive = pnl >= 0;
-        return (
-          <span className={`otp-table__number ${isPositive ? 'otp-table__number--positive' : 'otp-table__number--negative'}`}>
-            {formatUsd(pnl)}
-          </span>
-        );
-      },
-    },
-    {
-      title: 'ROI %',
-      dataIndex: 'roiPct',
-      key: 'roiPct',
-      width: 70,
-      align: 'right',
-      render: (roi: number) => {
-        if (!roi || !Number.isFinite(roi)) return '—';
-        const tone = roi >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
-        return <span className={`otp-table__number ${tone}`}>{formatPercent(roi)}</span>;
-      },
-    },
-    {
-      title: 'ROE %',
-      dataIndex: 'roePct',
-      key: 'roePct',
-      width: 70,
-      align: 'right',
-      render: (roe: number) => {
-        if (!roe || !Number.isFinite(roe)) return '—';
-        const tone = roe >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
-        return <span className={`otp-table__number ${tone}`}>{formatPercent(roe)}</span>;
-      },
-    },
-    {
-      title: 'Chg %',
-      dataIndex: 'pctChange',
-      key: 'pctChange',
-      width: 70,
-      align: 'right',
-      render: (pct: number) => {
-        if (!pct || !Number.isFinite(pct)) return '—';
-        const tone = pct >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
-        return <span className={`otp-table__number ${tone}`}>{formatPercent(pct)}</span>;
-      },
-    },
-    {
-      title: 'Max %',
-      dataIndex: 'maxPnlPct',
-      key: 'maxPnlPct',
-      width: 70,
-      align: 'right',
-      render: (max: number) => {
-        if (!max || !Number.isFinite(max)) return '—';
-        const tone = max >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative';
-        return <span className={`otp-table__number ${tone}`}>{formatPercent(max)}</span>;
-      },
-    },
-    {
-      title: 'Fees',
-      dataIndex: 'feesUsd',
-      key: 'feesUsd',
-      width: 70,
-      align: 'right',
-      render: (fees: number) => <span className="otp-table__muted">{fees ? formatUsd(fees) : '—'}</span>,
-    },
-    {
-      title: 'Duration',
-      dataIndex: 'durationMinutes',
-      key: 'durationMinutes',
-      width: 80,
-      align: 'right',
-      render: (mins: number) => <span className="otp-table__number">{formatDuration(mins)}</span>,
-    },
-    {
-      title: 'Exit Reason',
-      dataIndex: 'exitReason',
-      key: 'exitReason',
-      width: 110,
-      render: (reason: string) => {
-        if (!reason) return '—';
-        return (
-          <Tooltip title={reason}>
-            <Tag color={getExitReasonColor(reason)}>{reason}</Tag>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: 'Orders',
-      dataIndex: 'orderCount',
-      key: 'orderCount',
-      width: 60,
-      align: 'center',
-      render: (count: number) => count ? <span className="otp-table__number">{count}</span> : '—',
-    },
-  ];
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
+
+  const pagedTrades = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return trades.slice(start, start + pageSize);
+  }, [trades, page, pageSize]);
+
+  if (trades.length === 0) {
+    return <EmptyState description="No trades yet" />;
+  }
 
   return (
-    <Table
-      dataSource={trades}
-      columns={columns}
-      rowKey="id"
-      size="small"
-      pagination={{ pageSize: 15, showSizeChanger: true, showTotal: (t) => `${t} trades` }}
-      className="otp-table"
-      scroll={{ x: 1600 }}
-      locale={{ emptyText: <Empty description="No trades yet" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-    />
+    <TooltipProvider>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-muted/50">
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider sticky left-0 bg-[rgba(30,41,59,0.6)] z-10">Entry</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Exit</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Side</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Symbol</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Entry $</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Exit $</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Qty</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Notional</th>
+              <th className="px-2 py-1.5 text-center font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Lev</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">P&L</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">ROI %</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">ROE %</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Chg %</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Max %</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Fees</th>
+              <th className="px-2 py-1.5 text-right font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Duration</th>
+              <th className="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Exit Reason</th>
+              <th className="px-2 py-1.5 text-center font-medium text-muted-foreground whitespace-nowrap text-[10px] uppercase tracking-wider">Orders</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pagedTrades.map((trade: any) => {
+              const isPositive = trade.realizedPnlUsd >= 0;
+              return (
+                <tr key={trade.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                  {/* Entry */}
+                  <td className="px-2 py-1.5 whitespace-nowrap sticky left-0 bg-[var(--bg-primary)] z-10">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="otp-table__time">{formatTime(trade.entryTs)}</span>
+                      </TooltipTrigger>
+                      <TooltipContent>{formatDateTime(trade.entryTs)}</TooltipContent>
+                    </Tooltip>
+                  </td>
+                  {/* Exit */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="otp-table__time">{formatTime(trade.exitTs)}</span>
+                      </TooltipTrigger>
+                      <TooltipContent>{formatDateTime(trade.exitTs)}</TooltipContent>
+                    </Tooltip>
+                  </td>
+                  {/* Side */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <span className={cn(tagBase, trade.positionSide === 'long' ? 'bg-green-500/10 text-green-400 ring-1 ring-green-500/20' : 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20')}>
+                      {trade.positionSide?.toUpperCase() || '\u2014'}
+                    </span>
+                  </td>
+                  {/* Symbol */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <span className={cn(tagBase, 'bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20')}>
+                      {trade.symbol?.replace('/USDT:USDT', '') || '\u2014'}
+                    </span>
+                  </td>
+                  {/* Entry $ */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <span className="otp-table__number">${formatPrice(trade.entryPrice)}</span>
+                  </td>
+                  {/* Exit $ */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <span className="otp-table__number">${formatPrice(trade.exitPrice)}</span>
+                  </td>
+                  {/* Qty */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <span className="otp-table__number">{trade.qty?.toFixed(4) || '\u2014'}</span>
+                  </td>
+                  {/* Notional */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <span className="otp-table__number">{trade.entryNotional ? formatUsd(trade.entryNotional) : '\u2014'}</span>
+                  </td>
+                  {/* Lev */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-center">
+                    {trade.leverage ? (
+                      <span className={cn(tagBase, 'bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20')}>{trade.leverage}x</span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* P&L */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <span className={cn('otp-table__number', isPositive ? 'otp-table__number--positive' : 'otp-table__number--negative')}>
+                      {formatUsd(trade.realizedPnlUsd)}
+                    </span>
+                  </td>
+                  {/* ROI % */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    {trade.roiPct && Number.isFinite(trade.roiPct) ? (
+                      <span className={cn('otp-table__number', trade.roiPct >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative')}>
+                        {formatPercent(trade.roiPct)}
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* ROE % */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    {trade.roePct && Number.isFinite(trade.roePct) ? (
+                      <span className={cn('otp-table__number', trade.roePct >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative')}>
+                        {formatPercent(trade.roePct)}
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Chg % */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    {trade.pctChange && Number.isFinite(trade.pctChange) ? (
+                      <span className={cn('otp-table__number', trade.pctChange >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative')}>
+                        {formatPercent(trade.pctChange)}
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Max % */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    {trade.maxPnlPct && Number.isFinite(trade.maxPnlPct) ? (
+                      <span className={cn('otp-table__number', trade.maxPnlPct >= 0 ? 'otp-table__number--positive' : 'otp-table__number--negative')}>
+                        {formatPercent(trade.maxPnlPct)}
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Fees */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <span className="otp-table__muted">{trade.feesUsd ? formatUsd(trade.feesUsd) : '\u2014'}</span>
+                  </td>
+                  {/* Duration */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                    <span className="otp-table__number">{formatDuration(trade.durationMinutes)}</span>
+                  </td>
+                  {/* Exit Reason */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {trade.exitReason ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className={cn(tagBase, getExitReasonClasses(trade.exitReason))}>{trade.exitReason}</span>
+                        </TooltipTrigger>
+                        <TooltipContent>{trade.exitReason}</TooltipContent>
+                      </Tooltip>
+                    ) : '\u2014'}
+                  </td>
+                  {/* Orders */}
+                  <td className="px-2 py-1.5 whitespace-nowrap text-center">
+                    {trade.orderCount ? <span className="otp-table__number">{trade.orderCount}</span> : '\u2014'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <SimplePagination
+        total={trades.length}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+        label="trades"
+      />
+    </TooltipProvider>
   );
 };
 
@@ -610,46 +647,51 @@ const FiltersBar: React.FC<FiltersBarProps> = ({ filters, onFilterChange, showSi
   };
 
   return (
-    <div className="otp-filters">
-      <Filter size={14} color="var(--text-muted)" />
+    <TooltipProvider>
+      <div className="otp-filters">
+        <Filter size={14} color="var(--text-muted)" />
 
-      {showSideFilter && (
+        {showSideFilter && (
+          <Select
+            value={filters.side || ''}
+            onValueChange={(value) => onFilterChange({ ...filters, side: value as TradeFilters['side'] })}
+          >
+            <SelectTrigger className="h-7 min-w-[100px] text-xs bg-[rgba(30,41,59,0.8)] border-[var(--border-subtle)]">
+              <SelectValue placeholder="Side" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="long">Long</SelectItem>
+              <SelectItem value="short">Short</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+
         <Select
-          placeholder="Side"
-          value={filters.side}
-          onChange={(value) => onFilterChange({ ...filters, side: value })}
-          allowClear
-          size="small"
-          className="otp-filters__select"
-          options={[
-            { value: 'long', label: 'Long' },
-            { value: 'short', label: 'Short' },
-          ]}
-        />
-      )}
+          value={filters.result || ''}
+          onValueChange={(value) => onFilterChange({ ...filters, result: value as TradeFilters['result'] })}
+        >
+          <SelectTrigger className="h-7 min-w-[100px] text-xs bg-[rgba(30,41,59,0.8)] border-[var(--border-subtle)]">
+            <SelectValue placeholder="Result" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="win">Win</SelectItem>
+            <SelectItem value="loss">Loss</SelectItem>
+            <SelectItem value="breakeven">Break-even</SelectItem>
+          </SelectContent>
+        </Select>
 
-      <Select
-        placeholder="Result"
-        value={filters.result}
-        onChange={(value) => onFilterChange({ ...filters, result: value })}
-        allowClear
-        size="small"
-        className="otp-filters__select"
-        options={[
-          { value: 'win', label: 'Win' },
-          { value: 'loss', label: 'Loss' },
-          { value: 'breakeven', label: 'Break-even' },
-        ]}
-      />
-
-      {hasFilters && (
-        <Tooltip title="Clear filters">
-          <button className="otp-filters__clear" onClick={clearFilters}>
-            <X size={14} />
-          </button>
-        </Tooltip>
-      )}
-    </div>
+        {hasFilters && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button className="otp-filters__clear" onClick={clearFilters}>
+                <X size={14} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Clear filters</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    </TooltipProvider>
   );
 };
 
@@ -707,32 +749,38 @@ const OrdersTradesPanel: React.FC<OrdersTradesPanelProps> = ({
   return (
     <div className="otp-panel">
       <div className="otp-panel__header">
-        <Segmented
-          value={activeTab}
-          onChange={(value) => setActiveTab(value as 'orders' | 'trades')}
-          options={[
-            {
-              label: (
-                <span className="otp-tab">
-                  Trades <span className="otp-tab__count">{filteredTrades.length}</span>
-                </span>
-              ),
-              value: 'trades',
-            },
-            {
-              label: (
-                <span className="otp-tab">
-                  Orders{' '}
-                  {activeOrdersCount > 0 && (
-                    <span className="otp-tab__count otp-tab__count--active">{activeOrdersCount}</span>
-                  )}
-                </span>
-              ),
-              value: 'orders',
-            },
-          ]}
-          className="otp-panel__tabs"
-        />
+        {/* Segmented toggle group */}
+        <div className="inline-flex rounded-lg bg-muted p-1">
+          <button
+            className={cn(
+              'inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+              activeTab === 'trades'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            onClick={() => setActiveTab('trades')}
+          >
+            <span className="otp-tab">
+              Trades <span className="otp-tab__count">{filteredTrades.length}</span>
+            </span>
+          </button>
+          <button
+            className={cn(
+              'inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+              activeTab === 'orders'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            onClick={() => setActiveTab('orders')}
+          >
+            <span className="otp-tab">
+              Orders{' '}
+              {activeOrdersCount > 0 && (
+                <span className="otp-tab__count otp-tab__count--active">{activeOrdersCount}</span>
+              )}
+            </span>
+          </button>
+        </div>
 
         {activeTab === 'trades' && (
           <FiltersBar filters={filters} onFilterChange={onFilterChange} />
@@ -774,11 +822,6 @@ const styles = `
     flex-wrap: wrap;
   }
 
-  .otp-panel__tabs {
-    background: rgba(30, 41, 59, 0.8) !important;
-    border-radius: 8px !important;
-  }
-
   .otp-tab {
     display: flex;
     align-items: center;
@@ -804,15 +847,6 @@ const styles = `
     gap: 8px;
   }
 
-  .otp-filters__select {
-    min-width: 100px;
-  }
-
-  .otp-filters__select .ant-select-selector {
-    background: rgba(30, 41, 59, 0.8) !important;
-    border-color: var(--border-subtle) !important;
-  }
-
   .otp-filters__clear {
     display: flex;
     align-items: center;
@@ -836,43 +870,10 @@ const styles = `
     overflow-x: auto;
   }
 
-  .otp-table .ant-table {
-    background: transparent !important;
-  }
-
-  .otp-table .ant-table-thead > tr > th {
-    background: rgba(30, 41, 59, 0.6) !important;
-    color: var(--text-muted) !important;
-    border-bottom: 1px solid var(--border-subtle) !important;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    padding: 6px 8px !important;
-    white-space: nowrap;
-  }
-
-  .otp-table .ant-table-tbody > tr > td {
-    background: transparent !important;
-    border-bottom: 1px solid var(--border-subtle) !important;
-    color: var(--text-muted);
-    padding: 6px 8px !important;
-  }
-
-  .otp-table .ant-table-tbody > tr:hover > td {
-    background: var(--bg-card-hover) !important;
-  }
-
   .otp-table__time {
     font-size: 11px;
     font-family: 'JetBrains Mono', monospace;
     color: var(--text-muted);
-  }
-
-  .otp-table__tag {
-    font-size: 9px !important;
-    padding: 0 5px !important;
-    border-radius: 3px !important;
-    font-weight: 600;
   }
 
   .otp-table__number {
@@ -922,19 +923,6 @@ const styles = `
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .otp-table .ant-pagination {
-    margin: 12px !important;
-  }
-
-  .otp-table .ant-empty-description {
-    color: var(--text-muted);
-  }
-
-  .otp-table .ant-table-cell-fix-left,
-  .otp-table .ant-table-cell-fix-right {
-    background: var(--bg-primary) !important;
   }
 
   @media (max-width: 768px) {

@@ -5,7 +5,6 @@
  */
 
 import React, { useMemo } from 'react';
-import { Alert, Tooltip, Skeleton } from 'antd';
 import {
   ArrowUp,
   ArrowDown,
@@ -13,7 +12,16 @@ import {
   TrendingDown,
   BarChart3,
   Waves,
+  AlertCircle,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from '@/components/ui/tooltip';
 import type { LiveMetricsBarProps } from '../../types/cockpit';
 
 // ============================================================================
@@ -76,7 +84,14 @@ const MetricItem: React.FC<MetricItemProps> = ({
     </div>
   );
 
-  return tooltip ? <Tooltip title={tooltip}>{content}</Tooltip> : content;
+  if (!tooltip) return content;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{content}</TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
+  );
 };
 
 // ============================================================================
@@ -118,7 +133,13 @@ const LiveMetricsBar: React.FC<LiveMetricsBarProps> = ({ symbol, ticker, status 
   if (status === 'loading' && !data) {
     return (
       <div className="live-metrics live-metrics--loading">
-        <Skeleton active paragraph={false} />
+        <div className="flex items-center gap-4">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-4 w-16" />
+          <Skeleton className="h-4 w-20" />
+        </div>
         <style>{styles}</style>
       </div>
     );
@@ -128,13 +149,17 @@ const LiveMetricsBar: React.FC<LiveMetricsBarProps> = ({ symbol, ticker, status 
   if (status === 'error') {
     return (
       <div className="live-metrics live-metrics--error">
-        <Alert
-          type="error"
-          showIcon
-          message="Market data unavailable"
-          description="Unable to fetch ticker. Retrying..."
-          style={{ background: 'rgba(239, 68, 68, 0.1)', border: 'none' }}
-        />
+        <div
+          className="flex items-center gap-3 rounded-lg border border-red-500/30 px-4 py-3 text-sm"
+          style={{ background: 'rgba(239, 68, 68, 0.1)' }}
+          role="alert"
+        >
+          <AlertCircle size={16} className="shrink-0 text-red-400" />
+          <div>
+            <p className="font-medium text-red-400">Market data unavailable</p>
+            <p className="text-xs text-red-400/70">Unable to fetch ticker. Retrying...</p>
+          </div>
+        </div>
         <style>{styles}</style>
       </div>
     );
@@ -144,100 +169,102 @@ const LiveMetricsBar: React.FC<LiveMetricsBarProps> = ({ symbol, ticker, status 
   const isWarming = data && (data.price === 0 || data.volume === 0);
 
   return (
-    <div className={`live-metrics ${status === 'stale' ? 'live-metrics--stale' : ''}`}>
-      {status === 'stale' && (
-        <div className="live-metrics__stale-banner">
-          Data may be stale - waiting for reconnection
-        </div>
-      )}
-
-      {isWarming && (
-        <div className="live-metrics__warming">
-          WebSocket warming up... live data will appear shortly
-        </div>
-      )}
-
-      <div className="live-metrics__grid">
-        {/* Price */}
-        <MetricItem
-          label={symbol || 'Price'}
-          value={`$${formatPrice(data?.price || 0)}`}
-          icon={
-            data?.isPositive ? (
-              <TrendingUp size={16} color="var(--success)" />
-            ) : (
-              <TrendingDown size={16} color="var(--error)" />
-            )
-          }
-          color="neutral"
-          tooltip="Current market price"
-        />
-
-        {/* 24h Change */}
-        <MetricItem
-          label="24h Change"
-          value={formatPercent(data?.changePct || 0)}
-          subValue={`$${formatPrice(data?.change || 0)}`}
-          icon={
-            data?.isPositive ? (
-              <ArrowUp size={14} color="var(--success)" />
-            ) : (
-              <ArrowDown size={14} color="var(--error)" />
-            )
-          }
-          color={data?.isPositive ? 'positive' : 'negative'}
-          tooltip="Price change in last 24 hours"
-        />
-
-        {/* 24h Range */}
-        <div className="live-metrics__item live-metrics__range-item">
-          <div className="live-metrics__range-header">
-            <span className="live-metrics__label">24h Range</span>
+    <TooltipProvider>
+      <div className={cn('live-metrics', status === 'stale' && 'live-metrics--stale')}>
+        {status === 'stale' && (
+          <div className="live-metrics__stale-banner">
+            Data may be stale - waiting for reconnection
           </div>
-          <div className="live-metrics__range">
-            <span className="live-metrics__range-low">${formatPrice(data?.low || 0)}</span>
-            <div className="live-metrics__range-bar">
-              <div
-                className="live-metrics__range-fill"
-                style={{ width: `${data?.range || 50}%` }}
-              />
-              <div
-                className="live-metrics__range-marker"
-                style={{ left: `${data?.range || 50}%` }}
-              />
+        )}
+
+        {isWarming && (
+          <div className="live-metrics__warming">
+            WebSocket warming up... live data will appear shortly
+          </div>
+        )}
+
+        <div className="live-metrics__grid">
+          {/* Price */}
+          <MetricItem
+            label={symbol || 'Price'}
+            value={`$${formatPrice(data?.price || 0)}`}
+            icon={
+              data?.isPositive ? (
+                <TrendingUp size={16} color="var(--success)" />
+              ) : (
+                <TrendingDown size={16} color="var(--error)" />
+              )
+            }
+            color="neutral"
+            tooltip="Current market price"
+          />
+
+          {/* 24h Change */}
+          <MetricItem
+            label="24h Change"
+            value={formatPercent(data?.changePct || 0)}
+            subValue={`$${formatPrice(data?.change || 0)}`}
+            icon={
+              data?.isPositive ? (
+                <ArrowUp size={14} color="var(--success)" />
+              ) : (
+                <ArrowDown size={14} color="var(--error)" />
+              )
+            }
+            color={data?.isPositive ? 'positive' : 'negative'}
+            tooltip="Price change in last 24 hours"
+          />
+
+          {/* 24h Range */}
+          <div className="live-metrics__item live-metrics__range-item">
+            <div className="live-metrics__range-header">
+              <span className="live-metrics__label">24h Range</span>
             </div>
-            <span className="live-metrics__range-high">${formatPrice(data?.high || 0)}</span>
+            <div className="live-metrics__range">
+              <span className="live-metrics__range-low">${formatPrice(data?.low || 0)}</span>
+              <div className="live-metrics__range-bar">
+                <div
+                  className="live-metrics__range-fill"
+                  style={{ width: `${data?.range || 50}%` }}
+                />
+                <div
+                  className="live-metrics__range-marker"
+                  style={{ left: `${data?.range || 50}%` }}
+                />
+              </div>
+              <span className="live-metrics__range-high">${formatPrice(data?.high || 0)}</span>
+            </div>
           </div>
+
+          {/* Volume */}
+          <MetricItem
+            label="24h Volume"
+            value={formatVolume(data?.volume || 0)}
+            icon={<BarChart3 size={14} color="var(--text-muted)" />}
+            color="neutral"
+            tooltip="Trading volume in last 24 hours"
+          />
+
+          {/* Spread */}
+          <MetricItem
+            label="Spread"
+            value={`${(data?.spread || 0).toFixed(3)}%`}
+            subValue={data?.bid && data?.ask ? `${formatPrice(data.bid)} / ${formatPrice(data.ask)}` : undefined}
+            icon={<Waves size={14} color="var(--text-muted)" />}
+            color={
+              (data?.spread || 0) < 0.05
+                ? 'positive'
+                : (data?.spread || 0) > 0.1
+                  ? 'negative'
+                  : 'neutral'
+            }
+            tooltip="Bid-Ask spread (lower is better)"
+          />
         </div>
 
-        {/* Volume */}
-        <MetricItem
-          label="24h Volume"
-          value={formatVolume(data?.volume || 0)}
-          icon={<BarChart3 size={14} color="var(--text-muted)" />}
-          color="neutral"
-          tooltip="Trading volume in last 24 hours"
-        />
-
-        {/* Spread */}
-        <MetricItem
-          label="Spread"
-          value={`${(data?.spread || 0).toFixed(3)}%`}
-          subValue={data?.bid && data?.ask ? `${formatPrice(data.bid)} / ${formatPrice(data.ask)}` : undefined}
-          icon={<Waves size={14} color="var(--text-muted)" />}
-          color={
-            (data?.spread || 0) < 0.05
-              ? 'positive'
-              : (data?.spread || 0) > 0.1
-                ? 'negative'
-                : 'neutral'
-          }
-          tooltip="Bid-Ask spread (lower is better)"
-        />
+        <style>{styles}</style>
       </div>
-
-      <style>{styles}</style>
-    </div>
+    </TooltipProvider>
   );
 };
 

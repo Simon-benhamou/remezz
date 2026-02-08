@@ -12,7 +12,8 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
-import { Skeleton, message } from 'antd';
+import { toast } from '@/lib/toast';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   CockpitHeader,
   LiveMetricsBar,
@@ -265,7 +266,7 @@ export default function SessionCockpitPage() {
   // Handle error state
   useEffect(() => {
     if (error && !session) {
-      message.error(`Monitor unavailable: ${error}`);
+      toast.error(`Monitor unavailable: ${error}`);
     }
   }, [error, session]);
 
@@ -314,7 +315,7 @@ export default function SessionCockpitPage() {
   // Refresh handler
   const handleRefresh = useCallback(async () => {
     await actions.refresh();
-    message.success('Data refreshed');
+    toast.success('Data refreshed');
   }, [actions]);
 
   // Redirect on error after timeout
@@ -381,7 +382,11 @@ export default function SessionCockpitPage() {
                 }
               />
             ) : (
-              <Skeleton active paragraph={{ rows: 10 }} />
+              <div className="space-y-3 p-6">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-1/2" />
+                <Skeleton className="h-[300px] w-full" />
+              </div>
             )}
           </div>
 

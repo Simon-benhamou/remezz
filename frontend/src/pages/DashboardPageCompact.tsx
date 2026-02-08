@@ -1,11 +1,11 @@
 import React from 'react';
-import { Card, Row, Col, Space, Button, Tag, Typography, Spin, Skeleton } from 'antd';
-import { SyncOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../api';
-import { useMode } from '../contexts/ModeContext';
-import { useMultiDataCache } from '../hooks/useMultiDataCache';
-import { AppMode } from '../store';
+import { api } from '@/api';
+import { useMode } from '@/contexts/ModeContext';
+import { useMultiDataCache } from '@/hooks/useMultiDataCache';
+import { AppMode } from '@/store';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import {
   Area,
   AreaChart,
@@ -22,9 +22,8 @@ import {
   TrendingDown,
   RefreshCw,
   Activity,
+  Loader2,
 } from 'lucide-react';
-
-const { Text } = Typography;
 
 // Market Conditions types V5
 type MarketConditionsStatus = 'favorable_long' | 'favorable_short' | 'neutral' | 'unfavorable' | 'unknown';
@@ -53,20 +52,6 @@ type Trade = {
   feesUsd?: number;
   roePct?: number | null;
   estLev?: number | null;
-};
-
-// Styles
-const cardStyle: React.CSSProperties = {
-  background: 'var(--bg-card, rgba(17, 24, 39, 0.92))',
-  borderRadius: 16,
-  border: '1px solid var(--border-color, rgba(30, 58, 95, 0.4))',
-};
-
-const statCardStyle: React.CSSProperties = {
-  background: 'var(--card-gradient, linear-gradient(135deg, rgba(17, 24, 39, 0.9), rgba(30, 41, 59, 0.9)))',
-  borderRadius: 12,
-  border: '1px solid var(--border-color, rgba(30, 58, 95, 0.4))',
-  padding: '16px 20px',
 };
 
 export default function DashboardPageCompact() {
@@ -175,285 +160,286 @@ export default function DashboardPageCompact() {
   const watchingCount = (ov?.sessions || []).filter((s: any) => s.state === 'WATCHING').length;
 
   return (
-    <div style={{ padding: '20px', maxWidth: 1400, margin: '0 auto', background: 'transparent', minHeight: '100vh' }}>
+    <div className="mx-auto min-h-screen max-w-[1400px] p-5">
 
       {/* Refresh indicator - shows when updating data in background */}
       {isRefreshing && !isInitialLoad && (
-        <div style={{ textAlign: 'right', marginBottom: 8 }}>
-          <Tag color="processing" icon={<SyncOutlined spin />}>
+        <div className="mb-2 flex justify-end">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+            <Loader2 className="h-3 w-3 animate-spin" />
             Updating...
-          </Tag>
+          </span>
         </div>
       )}
 
       {/* Top Stats Bar */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
-        <Col xs={12} sm={6}>
-          <div style={statCardStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <Bot size={14} color="#38bdf8" />
-              <Text style={{ color: '#38bdf8', fontSize: 12, fontWeight: 500 }}>Active Agents</Text>
-            </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: 'var(--text-primary)' }}>{ov?.activeCount || 0}</div>
-            <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>{tradingCount} Trading Now</Text>
+      <div className="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {/* Active Agents */}
+        <div className="rounded-xl border border-border bg-gradient-to-br from-card to-muted/50 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <Bot className="h-3.5 w-3.5 text-primary" />
+            <span className="text-xs font-medium text-primary">Active Agents</span>
           </div>
-        </Col>
-        <Col xs={12} sm={6}>
-          <div style={statCardStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              {(ov?.todayPnlUsd ?? 0) >= 0 ? <TrendingUp size={14} color="var(--success)" /> : <TrendingDown size={14} color="var(--error)" />}
-              <Text style={{ color: (ov?.todayPnlUsd ?? 0) >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 12, fontWeight: 500 }}>Today's PnL</Text>
-            </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: (ov?.todayPnlUsd ?? 0) >= 0 ? 'var(--success)' : 'var(--error)' }}>
-              {(ov?.todayPnlUsd ?? 0) >= 0 ? '+' : '-'}${Math.abs(ov?.todayPnlUsd ?? 0).toFixed(2)}
-            </div>
-            <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>{ov?.todayTrades ?? stats.todayTrades} trades today</Text>
+          <div className="text-3xl font-bold text-foreground">{ov?.activeCount || 0}</div>
+          <span className="text-xs text-muted-foreground">{tradingCount} Trading Now</span>
+        </div>
+
+        {/* Today's PnL */}
+        <div className="rounded-xl border border-border bg-gradient-to-br from-card to-muted/50 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            {(ov?.todayPnlUsd ?? 0) >= 0
+              ? <TrendingUp className="h-3.5 w-3.5 text-success" />
+              : <TrendingDown className="h-3.5 w-3.5 text-destructive" />
+            }
+            <span className={cn(
+              "text-xs font-medium",
+              (ov?.todayPnlUsd ?? 0) >= 0 ? "text-success" : "text-destructive"
+            )}>
+              Today's PnL
+            </span>
           </div>
-        </Col>
-        <Col xs={12} sm={6}>
-          <div style={statCardStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ color: 'var(--warning)', fontSize: 14 }}>%</span>
-              <Text style={{ color: 'var(--warning)', fontSize: 12, fontWeight: 500 }}>Today Win Rate</Text>
-            </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: stats.todayWinRate >= 50 ? 'var(--success)' : stats.todayTrades > 0 ? 'var(--error)' : 'var(--text-secondary)' }}>
-              {stats.todayTrades > 0 ? `${stats.todayWinRate.toFixed(0)}%` : '—'}
-            </div>
-            <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>All-time: {stats.winRate.toFixed(0)}% ({stats.wins}W/{stats.losses}L)</Text>
+          <div className={cn(
+            "text-3xl font-bold",
+            (ov?.todayPnlUsd ?? 0) >= 0 ? "text-success" : "text-destructive"
+          )}>
+            {(ov?.todayPnlUsd ?? 0) >= 0 ? '+' : '-'}${Math.abs(ov?.todayPnlUsd ?? 0).toFixed(2)}
           </div>
-        </Col>
-        <Col xs={12} sm={6}>
-          <div style={statCardStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <Activity size={14} color="#a78bfa" />
-              <Text style={{ color: '#a78bfa', fontSize: 12, fontWeight: 500 }}>Total Trades</Text>
-            </div>
-            <div style={{ fontSize: 32, fontWeight: 700, color: 'var(--text-primary)' }}>{trades.length}</div>
-            <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>Avg ROE: {stats.avgRoe >= 0 ? '+' : ''}{stats.avgRoe.toFixed(1)}%</Text>
+          <span className="text-xs text-muted-foreground">{ov?.todayTrades ?? stats.todayTrades} trades today</span>
+        </div>
+
+        {/* Today Win Rate */}
+        <div className="rounded-xl border border-border bg-gradient-to-br from-card to-muted/50 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-sm font-bold text-warning">%</span>
+            <span className="text-xs font-medium text-warning">Today Win Rate</span>
           </div>
-        </Col>
-      </Row>
+          <div className={cn(
+            "text-3xl font-bold",
+            stats.todayWinRate >= 50 ? "text-success" : stats.todayTrades > 0 ? "text-destructive" : "text-muted-foreground"
+          )}>
+            {stats.todayTrades > 0 ? `${stats.todayWinRate.toFixed(0)}%` : '\u2014'}
+          </div>
+          <span className="text-xs text-muted-foreground">
+            All-time: {stats.winRate.toFixed(0)}% ({stats.wins}W/{stats.losses}L)
+          </span>
+        </div>
+
+        {/* Total Trades */}
+        <div className="rounded-xl border border-border bg-gradient-to-br from-card to-muted/50 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <Activity className="h-3.5 w-3.5 text-accent" />
+            <span className="text-xs font-medium text-accent">Total Trades</span>
+          </div>
+          <div className="text-3xl font-bold text-foreground">{trades.length}</div>
+          <span className="text-xs text-muted-foreground">
+            Avg ROE: {stats.avgRoe >= 0 ? '+' : ''}{stats.avgRoe.toFixed(1)}%
+          </span>
+        </div>
+      </div>
 
       {/* Market Conditions */}
       {marketConditions && (
-        <Card style={{ ...cardStyle, marginBottom: 20, padding: '20px 24px' }} bodyStyle={{ padding: 0 }}>
-          <Text style={{ color: 'var(--text-primary)', fontSize: 16, fontWeight: 600, display: 'block', marginBottom: 20 }}>
+        <div className="mb-5 rounded-2xl border border-border bg-card px-6 py-5">
+          <h3 className="mb-5 text-base font-semibold text-foreground">
             Market Conditions
-          </Text>
-          <Row gutter={[32, 16]} align="middle">
-            <Col xs={24} sm={6}>
-              <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
+          </h3>
+          <div className="grid grid-cols-2 items-center gap-x-8 gap-y-4 sm:grid-cols-4">
+            {/* Overall Sentiment */}
+            <div>
+              <span className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">
                 Overall Sentiment
-              </Text>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              </span>
+              <div className="flex items-center gap-2">
                 {marketConditions.status === 'favorable_long' && (
                   <>
-                    <TrendingUp size={16} color="var(--success)" />
-                    <Text style={{ color: 'var(--success)', fontSize: 16, fontWeight: 700 }}>FAVORABLE LONG</Text>
+                    <TrendingUp className="h-4 w-4 text-success" />
+                    <span className="text-base font-bold text-success">FAVORABLE LONG</span>
                   </>
                 )}
                 {marketConditions.status === 'favorable_short' && (
                   <>
-                    <TrendingDown size={16} color="var(--error)" />
-                    <Text style={{ color: 'var(--error)', fontSize: 16, fontWeight: 700 }}>FAVORABLE SHORT</Text>
+                    <TrendingDown className="h-4 w-4 text-destructive" />
+                    <span className="text-base font-bold text-destructive">FAVORABLE SHORT</span>
                   </>
                 )}
                 {marketConditions.status === 'neutral' && (
-                  <Text style={{ color: 'var(--warning)', fontSize: 16, fontWeight: 700 }}>NEUTRAL</Text>
+                  <span className="text-base font-bold text-warning">NEUTRAL</span>
                 )}
                 {marketConditions.status === 'unfavorable' && (
-                  <Text style={{ color: 'var(--error)', fontSize: 16, fontWeight: 700 }}>UNFAVORABLE</Text>
+                  <span className="text-base font-bold text-destructive">UNFAVORABLE</span>
                 )}
                 {marketConditions.status === 'unknown' && (
-                  <Text style={{ color: 'var(--text-secondary)', fontSize: 16, fontWeight: 700 }}>UNKNOWN</Text>
+                  <span className="text-base font-bold text-muted-foreground">UNKNOWN</span>
                 )}
               </div>
-            </Col>
-            <Col xs={12} sm={6}>
-              <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
+            </div>
+
+            {/* BTC 6H Momentum */}
+            <div>
+              <span className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">
                 BTC 6H Momentum
-              </Text>
-              <Text style={{
-                color: (marketConditions.btcMomentum6h || 0) >= 0 ? 'var(--success)' : 'var(--error)',
-                fontSize: 18, 
-                fontWeight: 700 
-              }}>
+              </span>
+              <span className={cn(
+                "text-lg font-bold",
+                (marketConditions.btcMomentum6h || 0) >= 0 ? "text-success" : "text-destructive"
+              )}>
                 {(marketConditions.btcMomentum6h || 0) >= 0 ? '+' : ''}{(marketConditions.btcMomentum6h || 0).toFixed(2)}%
-              </Text>
-            </Col>
-            <Col xs={12} sm={6}>
-              <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
+              </span>
+            </div>
+
+            {/* BTC vs MA200 */}
+            <div>
+              <span className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">
                 BTC vs MA200 (1H)
-              </Text>
-              <Text style={{
-                color: marketConditions.btcAboveMa50 ? 'var(--success)' : 'var(--error)',
-                fontSize: 18, 
-                fontWeight: 700 
-              }}>
+              </span>
+              <span className={cn(
+                "text-lg font-bold",
+                marketConditions.btcAboveMa50 ? "text-success" : "text-destructive"
+              )}>
                 {marketConditions.btcAboveMa50 ? 'BULLISH' : 'BEARISH'}
-              </Text>
-            </Col>
-            <Col xs={24} sm={6}>
-              <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 8 }}>
+              </span>
+            </div>
+
+            {/* Trade Signal */}
+            <div>
+              <span className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">
                 Trade Signal
-              </Text>
-              <Tag
-                style={{
-                  background: marketConditions.tradingRecommended ? 'rgba(52, 211, 153, 0.15)' : 'rgba(148, 163, 184, 0.15)',
-                  border: marketConditions.tradingRecommended ? '1px solid var(--success)' : '1px solid rgba(148, 163, 184, 0.3)',
-                  color: marketConditions.tradingRecommended ? 'var(--success)' : 'var(--text-secondary)',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  padding: '6px 16px',
-                  borderRadius: 6,
-                }}
-              >
+              </span>
+              <span className={cn(
+                "inline-flex items-center rounded-md px-4 py-1.5 text-[13px] font-semibold",
+                marketConditions.tradingRecommended
+                  ? "border border-success bg-success/15 text-success"
+                  : "border border-muted-foreground/30 bg-muted-foreground/15 text-muted-foreground"
+              )}>
                 {marketConditions.tradingRecommended ? 'RECOMMENDED' : 'WAIT'}
-              </Tag>
-            </Col>
-          </Row>
-        </Card>
+              </span>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Active Agents Grid */}
-      <Card 
-        style={{ ...cardStyle, marginBottom: 20 }} 
-        bodyStyle={{ padding: 20 }}
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Space>
-              <Bot size={16} color="#38bdf8" />
-              <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600 }}>Active Agents</Text>
-              <Tag color="gold" style={{ marginLeft: 8 }}>{tradingCount} Trading</Tag>
-            </Space>
-            <Text style={{ color: 'var(--text-muted)', fontSize: 13 }}>{watchingCount} watching</Text>
+      <div className="mb-5 rounded-2xl border border-border bg-card">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-primary" />
+            <span className="text-[15px] font-semibold text-foreground">Active Agents</span>
+            <span className="ml-2 inline-flex items-center rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning">
+              {tradingCount} Trading
+            </span>
           </div>
-        }
-        headStyle={{ background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}
-      >
-        {isInitialLoad ? (
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <Skeleton active paragraph={{ rows: 4 }} />
-          </div>
-        ) : (ov?.sessions || []).length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
-            <Bot size={48} style={{ marginBottom: 16, opacity: 0.5 }} />
-            <div>No active agents</div>
-            <Button type="primary" style={{ marginTop: 16 }} onClick={() => navigate('/agents')}>
-              Create Agent
-            </Button>
-          </div>
-        ) : (
-          <Row gutter={[16, 16]}>
-            {(ov?.sessions || []).map((session: any) => (
-              <Col xs={12} sm={8} md={6} key={session.id}>
+          <span className="text-[13px] text-muted-foreground">{watchingCount} watching</span>
+        </div>
+
+        {/* Body */}
+        <div className="p-5">
+          {isInitialLoad ? (
+            <div className="flex justify-center py-10">
+              <div className="w-full max-w-md animate-pulse space-y-4">
+                <div className="h-4 rounded bg-muted" />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="h-20 rounded-xl bg-muted" />
+                  <div className="h-20 rounded-xl bg-muted" />
+                </div>
+                <div className="h-4 w-3/4 rounded bg-muted" />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="h-20 rounded-xl bg-muted" />
+                  <div className="h-20 rounded-xl bg-muted" />
+                </div>
+              </div>
+            </div>
+          ) : (ov?.sessions || []).length === 0 ? (
+            <div className="flex flex-col items-center py-10 text-muted-foreground">
+              <Bot className="mb-4 h-12 w-12 opacity-50" />
+              <div>No active agents</div>
+              <Button className="mt-4" onClick={() => navigate('/agents')}>
+                Create Agent
+              </Button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+              {(ov?.sessions || []).map((session: any) => (
                 <div
+                  key={session.id}
                   onClick={() => navigate(`/agents/${session.id}`)}
-                  style={{
-                    background: 'var(--bg-primary)',
-                    borderRadius: 12,
-                    border: '1px solid var(--border-subtle)',
-                    padding: 16,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    height: '100%',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'var(--bg-elevated)';
-                    e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.3)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'var(--bg-primary)';
-                    e.currentTarget.style.borderColor = 'var(--border-subtle)';
-                  }}
+                  className="cursor-pointer rounded-xl border border-border bg-background p-4 transition-all hover:border-primary/30 hover:bg-muted/50"
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                    <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 14 }}>
+                  <div className="mb-3 flex items-start justify-between">
+                    <span className="text-sm font-semibold text-foreground">
                       {session.symbol?.replace('/USDT', '').replace(':USDT', '')}
-                    </Text>
-                    <Tag 
-                      color={session.state === 'IN_POSITION' ? 'blue' : 'gold'}
-                      style={{ fontSize: 10, padding: '2px 8px', margin: 0 }}
-                    >
+                    </span>
+                    <span className={cn(
+                      "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
+                      session.state === 'IN_POSITION'
+                        ? "bg-primary/15 text-primary"
+                        : "bg-warning/15 text-warning"
+                    )}>
                       {session.state === 'IN_POSITION' ? 'TRADING' : 'WATCHING'}
-                    </Tag>
+                    </span>
                   </div>
-                  <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 8 }}>
-                    PnL
-                  </Text>
-                  <div style={{
-                    color: (session.pnlUsd || 0) >= 0 ? 'var(--success)' : 'var(--error)',
-                    fontSize: 22, 
-                    fontWeight: 700,
-                    marginBottom: 4
-                  }}>
+                  <span className="mb-2 block text-[11px] text-muted-foreground">PnL</span>
+                  <div className={cn(
+                    "mb-1 text-[22px] font-bold",
+                    (session.pnlUsd || 0) >= 0 ? "text-success" : "text-destructive"
+                  )}>
                     {(session.pnlUsd || 0) >= 0 ? '' : '-'}${Math.abs(session.pnlUsd || 0).toFixed(2)}
                   </div>
-                  <Text style={{
-                    color: (session.winRate || 0) >= 50 ? 'var(--success)' : 'var(--error)',
-                    fontSize: 12 
-                  }}>
+                  <span className={cn(
+                    "text-xs",
+                    (session.winRate || 0) >= 50 ? "text-success" : "text-destructive"
+                  )}>
                     Win Rate: {(session.winRate || 0).toFixed(0)}%
-                  </Text>
+                  </span>
                 </div>
-              </Col>
-            ))}
-          </Row>
-        )}
-      </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Performance Overview + Recent Trades Side by Side */}
-      <Row gutter={[20, 20]} style={{ marginBottom: 20 }}>
+      <div className="mb-5 grid gap-5 lg:grid-cols-[1.4fr_1fr]">
         {/* Performance Chart */}
-        <Col xs={24} lg={14}>
-          <Card 
-            style={cardStyle} 
-            bodyStyle={{ padding: 20 }}
-            title={
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600, display: 'block' }}>Performance Overview</Text>
-                  <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>Cumulative PnL across all sessions</Text>
-                </div>
-                <Button
-                  type="text"
-                  icon={<RefreshCw size={16} className={isRefreshing ? 'spin' : ''} />}
-                  onClick={handleRefresh}
-                  style={{ color: 'var(--text-secondary)' }}
-                />
-              </div>
-            }
-            headStyle={{ background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}
-          >
+        <div className="rounded-2xl border border-border bg-card">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-border px-5 py-4">
+            <div>
+              <span className="block text-[15px] font-semibold text-foreground">Performance Overview</span>
+              <span className="text-xs text-muted-foreground">Cumulative PnL across all sessions</span>
+            </div>
+            <button
+              onClick={handleRefresh}
+              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+            </button>
+          </div>
+
+          {/* Body */}
+          <div className="p-5">
             {/* Big PnL Display - use ov.pnlUsd from backend (accurate, includes all trades & fees) */}
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ marginBottom: 4 }}>
-                <Text style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <div className="mb-5">
+              <div className="mb-1">
+                <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
                   Total PnL (All-Time)
-                </Text>
+                </span>
               </div>
-              <span style={{ fontSize: 36, fontWeight: 700, color: (ov?.pnlUsd ?? 0) >= 0 ? 'var(--success)' : 'var(--error)' }}>
+              <span className={cn(
+                "text-4xl font-bold",
+                (ov?.pnlUsd ?? 0) >= 0 ? "text-success" : "text-destructive"
+              )}>
                 {(ov?.pnlUsd ?? 0) >= 0 ? '+' : '-'}${Math.abs(ov?.pnlUsd ?? 0).toFixed(2)}
               </span>
-              <span style={{ 
-                marginLeft: 12, 
-                fontSize: 16, 
-                color: 'var(--text-muted)'
-              }}>
+              <span className="ml-3 text-base text-muted-foreground">
                 {ov?.totalTrades ?? trades.length} trades · {(ov?.avgWinRate ?? stats.winRate).toFixed(0)}% win rate
               </span>
             </div>
 
             {/* Chart */}
-            <div style={{ height: 220 }}>
+            <div className="h-[220px]">
               {chartData.length === 0 ? (
-                <div style={{ 
-                  height: '100%', 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  justifyContent: 'center',
-                  color: 'var(--text-secondary)' 
-                }}>
+                <div className="flex h-full items-center justify-center text-muted-foreground">
                   No trade data available
                 </div>
               ) : (
@@ -461,27 +447,27 @@ export default function DashboardPageCompact() {
                   <AreaChart data={chartData}>
                     <defs>
                       <linearGradient id="pnlGradientPositive" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="var(--success)" stopOpacity={0.4} />
-                        <stop offset="95%" stopColor="var(--success)" stopOpacity={0} />
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                       </linearGradient>
                       <linearGradient id="pnlGradientNegative" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="var(--error)" stopOpacity={0.4} />
-                        <stop offset="95%" stopColor="var(--error)" stopOpacity={0} />
+                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-                    <XAxis 
-                      dataKey="date" 
-                      tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} 
-                      axisLine={{ stroke: 'var(--border-subtle)' }}
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(30, 58, 95, 0.25)" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fill: '#94a3b8', fontSize: 11 }}
+                      axisLine={{ stroke: 'rgba(30, 58, 95, 0.25)' }}
                     />
-                    <YAxis 
-                      tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} 
-                      axisLine={{ stroke: 'var(--border-subtle)' }}
+                    <YAxis
+                      tick={{ fill: '#94a3b8', fontSize: 11 }}
+                      axisLine={{ stroke: 'rgba(30, 58, 95, 0.25)' }}
                       tickFormatter={(v) => `$${v}`}
                       width={60}
                     />
-                    <ReferenceLine y={0} stroke="var(--text-secondary)" strokeDasharray="3 3" />
+                    <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="3 3" />
                     <RechartsTooltip
                       content={({ label, payload }) => {
                         if (!payload || payload.length === 0) return null;
@@ -495,8 +481,8 @@ export default function DashboardPageCompact() {
                             color: 'var(--text-primary, #f1f5f9)',
                           }}>
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                            <div style={{ color: value >= 0 ? 'var(--success)' : 'var(--error)' }}>
-                              value : {value >= 0 ? '' : '-'}${Math.abs(value).toFixed(2)}
+                            <div style={{ color: value >= 0 ? '#10b981' : '#ef4444' }}>
+                              PnL: {value >= 0 ? '+' : '-'}${Math.abs(value).toFixed(2)}
                             </div>
                           </div>
                         );
@@ -505,7 +491,7 @@ export default function DashboardPageCompact() {
                     <Area
                       type="monotone"
                       dataKey="value"
-                      stroke={stats.totalPnl >= 0 ? 'var(--success)' : 'var(--error)'}
+                      stroke={stats.totalPnl >= 0 ? '#10b981' : '#ef4444'}
                       strokeWidth={2}
                       fill={stats.totalPnl >= 0 ? 'url(#pnlGradientPositive)' : 'url(#pnlGradientNegative)'}
                     />
@@ -515,144 +501,114 @@ export default function DashboardPageCompact() {
             </div>
 
             {/* Bottom Stats */}
-            <Row gutter={[24, 12]} style={{ marginTop: 20, borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
-              <Col xs={6}>
-                <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 4 }}>Sample Size</Text>
-                <Text style={{ color: 'var(--text-primary)', fontSize: 18, fontWeight: 700 }}>{trades.length}</Text>
-              </Col>
-              <Col xs={6}>
-                <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 4 }}>Avg ROE</Text>
-                <Text style={{ color: stats.avgRoe >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 18, fontWeight: 700 }}>
+            <div className="mt-5 grid grid-cols-4 gap-6 border-t border-border pt-4">
+              <div>
+                <span className="mb-1 block text-[11px] text-muted-foreground">Sample Size</span>
+                <span className="text-lg font-bold text-foreground">{trades.length}</span>
+              </div>
+              <div>
+                <span className="mb-1 block text-[11px] text-muted-foreground">Avg ROE</span>
+                <span className={cn("text-lg font-bold", stats.avgRoe >= 0 ? "text-success" : "text-destructive")}>
                   {stats.avgRoe >= 0 ? '+' : ''}{stats.avgRoe.toFixed(1)}%
-                </Text>
-              </Col>
-              <Col xs={6}>
-                <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 4 }}>Avg Leverage</Text>
-                <Text style={{ color: 'var(--text-primary)', fontSize: 18, fontWeight: 700 }}>{stats.avgLev.toFixed(2)}x</Text>
-              </Col>
-              <Col xs={6}>
-                <Text style={{ color: 'var(--text-muted)', fontSize: 11, display: 'block', marginBottom: 4 }}>Direction</Text>
-                <Text style={{ color: 'var(--text-primary)', fontSize: 18, fontWeight: 700 }}>{stats.longs}L / {stats.shorts}S</Text>
-              </Col>
-            </Row>
-          </Card>
-        </Col>
+                </span>
+              </div>
+              <div>
+                <span className="mb-1 block text-[11px] text-muted-foreground">Avg Leverage</span>
+                <span className="text-lg font-bold text-foreground">{stats.avgLev.toFixed(2)}x</span>
+              </div>
+              <div>
+                <span className="mb-1 block text-[11px] text-muted-foreground">Direction</span>
+                <span className="text-lg font-bold text-foreground">{stats.longs}L / {stats.shorts}S</span>
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Recent Trades Cards */}
-        <Col xs={24} lg={10}>
-          <Card 
-            style={cardStyle} 
-            bodyStyle={{ padding: 16 }}
-            title={
-              <div>
-                <Text style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600, display: 'block' }}>Recent Trades</Text>
-                <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>Last {recentTrades.length} executions</Text>
-              </div>
-            }
-            headStyle={{ background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}
-          >
-            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <div className="rounded-2xl border border-border bg-card">
+          {/* Header */}
+          <div className="border-b border-border px-5 py-4">
+            <span className="block text-[15px] font-semibold text-foreground">Recent Trades</span>
+            <span className="text-xs text-muted-foreground">Last {recentTrades.length} executions</span>
+          </div>
+
+          {/* Body */}
+          <div className="p-4">
+            <div className="flex flex-col gap-3">
               {recentTrades.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
+                <div className="py-10 text-center text-muted-foreground">
                   No recent trades
                 </div>
               ) : (
                 recentTrades.map((trade) => (
-                  <div 
+                  <div
                     key={trade.id}
-                    style={{
-                      background: 'var(--bg-elevated)',
-                      borderRadius: 10,
-                      padding: '12px 14px',
-                      border: '1px solid var(--border-subtle)',
-                    }}
+                    className="rounded-[10px] border border-border bg-muted/50 px-3.5 py-3"
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <Text style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 14 }}>
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-sm font-semibold text-foreground">
                         {trade.symbol?.replace('/USDT', '').replace(':USDT', '')}
-                      </Text>
-                      <Space size={4}>
+                      </span>
+                      <div className="flex items-center gap-1">
                         {(trade.realizedPnlUsd || 0) >= 0 ? (
-                          <TrendingUp size={12} color="var(--success)" />
+                          <TrendingUp className="h-3 w-3 text-success" />
                         ) : (
-                          <TrendingDown size={12} color="var(--error)" />
+                          <TrendingDown className="h-3 w-3 text-destructive" />
                         )}
-                        <Text style={{
-                          color: (trade.realizedPnlUsd || 0) >= 0 ? 'var(--success)' : 'var(--error)',
-                          fontWeight: 700,
-                          fontSize: 14
-                        }}>
+                        <span className={cn(
+                          "text-sm font-bold",
+                          (trade.realizedPnlUsd || 0) >= 0 ? "text-success" : "text-destructive"
+                        )}>
                           {(trade.realizedPnlUsd || 0) >= 0 ? '+' : ''}${(trade.realizedPnlUsd || 0).toFixed(0)}
-                        </Text>
-                      </Space>
+                        </span>
+                      </div>
                     </div>
-                    <Row gutter={16}>
-                      <Col span={8}>
-                        <Text style={{ color: 'var(--text-muted)', fontSize: 10, display: 'block' }}>Entry</Text>
-                        <Text style={{ color: 'var(--text-primary)', fontSize: 12 }}>{(trade.entryPrice || 0).toFixed(4)}</Text>
-                      </Col>
-                      <Col span={8}>
-                        <Text style={{ color: 'var(--text-muted)', fontSize: 10, display: 'block' }}>Exit</Text>
-                        <Text style={{ color: 'var(--text-primary)', fontSize: 12 }}>{(trade.exitPrice || 0).toFixed(4)}</Text>
-                      </Col>
-                      <Col span={8} style={{ textAlign: 'right' }}>
-                        <Text style={{ color: 'var(--text-muted)', fontSize: 10, display: 'block' }}>&nbsp;</Text>
-                        <Text style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div>
+                        <span className="block text-[10px] text-muted-foreground">Entry</span>
+                        <span className="text-xs text-foreground">{(trade.entryPrice || 0).toFixed(4)}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-muted-foreground">Exit</span>
+                        <span className="text-xs text-foreground">{(trade.exitPrice || 0).toFixed(4)}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="block text-[10px] text-muted-foreground">&nbsp;</span>
+                        <span className="text-[11px] text-muted-foreground">
                           {new Date(trade.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} {new Date(trade.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })}
-                        </Text>
-                      </Col>
-                    </Row>
-                    <div style={{ marginTop: 8 }}>
-                      <Text style={{
-                        color: (trade.roePct || 0) >= 0 ? 'var(--success)' : 'var(--error)',
-                        fontSize: 12,
-                        marginRight: 12
-                      }}>
+                        </span>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <span className={cn(
+                        "mr-3 text-xs",
+                        (trade.roePct || 0) >= 0 ? "text-success" : "text-destructive"
+                      )}>
                         {(trade.roePct || 0) >= 0 ? '+' : ''}{(trade.roePct || 0).toFixed(1)}%
-                      </Text>
-                      <Text style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                      </span>
+                      <span className="text-xs text-muted-foreground">
                         {(trade.estLev || 0).toFixed(0)}x
-                      </Text>
+                      </span>
                     </div>
                   </div>
                 ))
               )}
-            </Space>
-          </Card>
-        </Col>
-      </Row>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Quick Actions Footer */}
-      <div style={{ textAlign: 'center', marginTop: 20 }}>
-        <Space size={12}>
-          <Button 
-            onClick={() => navigate('/agents')}
-            style={{ 
-              background: 'var(--bg-elevated)', 
-              borderColor: 'var(--border-subtle)',
-              color: 'var(--text-primary)'
-            }}
-          >
-            All Sessions
-          </Button>
-          <Button 
-            type="primary" 
-            onClick={() => navigate('/agents')}
-            style={{ background: 'var(--accent-secondary)' }}
-          >
-            New Agent
-          </Button>
-          <Button 
-            onClick={() => navigate('/feed')}
-            style={{ 
-              background: 'var(--bg-elevated)', 
-              borderColor: 'var(--border-subtle)',
-              color: 'var(--text-primary)'
-            }}
-          >
-            Agent Feed
-          </Button>
-        </Space>
+      <div className="mt-5 flex items-center justify-center gap-3">
+        <Button variant="outline" onClick={() => navigate('/agents')}>
+          All Sessions
+        </Button>
+        <Button onClick={() => navigate('/agents')}>
+          New Agent
+        </Button>
+        <Button variant="outline" onClick={() => navigate('/feed')}>
+          Agent Feed
+        </Button>
       </div>
     </div>
   );

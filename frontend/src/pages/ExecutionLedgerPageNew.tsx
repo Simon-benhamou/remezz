@@ -1,12 +1,12 @@
 import React from 'react';
-import { Button, Typography, message, Tag, Input, Spin, Skeleton } from 'antd';
-import { ReloadOutlined, DownloadOutlined, SearchOutlined, SyncOutlined } from '../icons';
+import { RefreshCw, Download, Search, Loader2 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { useDataCache } from '../hooks/useDataCache';
-
-const { Title, Text } = Typography;
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 
 type Outcome = 'win' | 'loss' | 'breakeven';
 
@@ -147,68 +147,76 @@ export default function ExecutionLedgerPageNew() {
     return trades.filter(t => t.symbol?.toLowerCase().includes(s) || t.sessionSymbol?.toLowerCase().includes(s));
   }, [trades, searchText]);
 
-  const cardStyle: React.CSSProperties = { background: 'var(--bg-primary)', borderRadius: 12, border: '1px solid var(--border-subtle)', padding: '16px 20px' };
-  const headerStyle: React.CSSProperties = { color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 };
+  const gridCols = 'grid-cols-[90px_55px_55px_55px_95px_50px_70px_70px_70px_75px_55px_65px_45px_50px_110px_55px_55px]';
 
   return (
-    <div style={{ padding: '0 24px 24px', maxWidth: 1600, margin: '0 auto' }}>
+    <div className="px-6 pb-6 max-w-[1600px] mx-auto">
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <Title level={3} style={{ margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 20 }}>📊</span> Execution Ledger
-        </Title>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          {/* 🆕 Mode Filter */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Mode:</Text>
-            <div style={{ display: 'flex', gap: 4 }}>
-         
+      <div className="flex justify-between items-center mb-5">
+        <h3 className="text-xl font-semibold text-foreground flex items-center gap-2.5">
+          <span className="text-xl">📊</span> Execution Ledger
+        </h3>
+        <div className="flex gap-3 items-center">
+          {/* Mode Filter */}
+          <div className="flex gap-2 items-center">
+            <span className="text-muted-foreground text-xs">Mode:</span>
+            <div className="flex gap-1">
             </div>
           </div>
-          <Input
-            placeholder="Search..."
-            prefix={<SearchOutlined style={{ color: 'var(--text-secondary)' }} />}
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 200, background: 'var(--bg-primary)', borderColor: 'var(--border-subtle)' }}
-            allowClear
-          />
-          <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={isRefreshing}>Refresh</Button>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              placeholder="Search..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="h-9 w-[200px] rounded-md border border-border bg-card pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing}>
+            <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+            Refresh
+          </Button>
           {isRefreshing && !isInitialLoad && (
-            <Tag color="processing" icon={<SyncOutlined spin />}>Updating...</Tag>
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-accent/15 px-2.5 py-1 text-xs font-medium text-accent">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Updating...
+            </span>
           )}
-          <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!trades.length} type="primary">Export CSV</Button>
+          <Button size="sm" onClick={exportCsv} disabled={!trades.length}>
+            <Download className="h-4 w-4" />
+            Export CSV
+          </Button>
         </div>
       </div>
 
       {/* Stats Cards */}
       {summary && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 16, marginBottom: 24 }}>
-          <div style={cardStyle}>
-            <div style={headerStyle}>Total Trades</div>
-            <div style={{ color: 'var(--text-primary)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.total}</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+          <div className="rounded-xl border border-border bg-card px-5 py-4">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Total Trades</div>
+            <div className="text-2xl font-bold text-foreground mt-1">{summary.total}</div>
           </div>
-          <div style={cardStyle}>
-            <div style={headerStyle}>Win / Losses</div>
-            <div style={{ color: 'var(--text-primary)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.wins} / {summary.losses}</div>
+          <div className="rounded-xl border border-border bg-card px-5 py-4">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Win / Losses</div>
+            <div className="text-2xl font-bold text-foreground mt-1">{summary.wins} / {summary.losses}</div>
           </div>
-          <div style={cardStyle}>
-            <div style={headerStyle}>Win Rate</div>
-            <div style={{ color: 'var(--accent)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{summary.winRate.toFixed(1)}%</div>
+          <div className="rounded-xl border border-border bg-card px-5 py-4">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Win Rate</div>
+            <div className="text-2xl font-bold text-accent mt-1">{summary.winRate.toFixed(1)}%</div>
           </div>
-          <div style={cardStyle}>
-            <div style={headerStyle}>Total P&L</div>
-            <div style={{ color: summary.totalPnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+          <div className="rounded-xl border border-border bg-card px-5 py-4">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Total P&L</div>
+            <div className={cn("text-2xl font-bold mt-1", summary.totalPnl >= 0 ? "text-success" : "text-destructive")}>
               {summary.totalPnl >= 0 ? '+' : '-'}${Math.abs(summary.totalPnl).toFixed(2)}
             </div>
           </div>
-          <div style={cardStyle}>
-            <div style={headerStyle}>Total Fees</div>
-            <div style={{ color: 'var(--warning)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>-${summary.totalFees.toFixed(2)}</div>
+          <div className="rounded-xl border border-border bg-card px-5 py-4">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Total Fees</div>
+            <div className="text-2xl font-bold text-warning mt-1">-${summary.totalFees.toFixed(2)}</div>
           </div>
-          <div style={cardStyle}>
-            <div style={headerStyle}>Net P&L</div>
-            <div style={{ color: summary.netPnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+          <div className="rounded-xl border border-border bg-card px-5 py-4">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Net P&L</div>
+            <div className={cn("text-2xl font-bold mt-1", summary.netPnl >= 0 ? "text-success" : "text-destructive")}>
               {summary.netPnl >= 0 ? '+' : '-'}${Math.abs(summary.netPnl).toFixed(2)}
             </div>
           </div>
@@ -216,139 +224,130 @@ export default function ExecutionLedgerPageNew() {
       )}
 
       {/* Table */}
-      <div style={{ background: 'var(--bg-primary)', borderRadius: 16, border: '1px solid var(--border-subtle)', overflow: 'auto' }}>
-        {/* Table Header */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '90px 55px 55px 55px 95px 50px 70px 70px 70px 75px 55px 65px 45px 50px 110px 55px 55px',
-          padding: '12px 16px',
-          borderBottom: '1px solid var(--border-subtle)',
-          background: 'var(--bg-primary)',
-          minWidth: 1200,
-        }}>
-          {['Date', 'Outcome', 'Mode', 'Session', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'P&L', 'ROE%', 'Notional', 'Lev', 'Dur', 'Exit Type', 'MaxP&L', 'Fees'].map((h, i) => (
-            <span key={i} style={{ ...headerStyle, textAlign: i >= 6 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</span>
-          ))}
-        </div>
+      <div className="overflow-auto rounded-2xl border border-border bg-card">
+        <div className="min-w-[1200px]">
+          {/* Table Header */}
+          <div className={cn("grid px-4 py-3 border-b border-border bg-card", gridCols)}>
+            {['Date', 'Outcome', 'Mode', 'Session', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'P&L', 'ROE%', 'Notional', 'Lev', 'Dur', 'Exit Type', 'MaxP&L', 'Fees'].map((h, i) => (
+              <span key={i} className={cn("text-[11px] uppercase tracking-wide text-muted-foreground whitespace-nowrap", i >= 6 && "text-right")}>{h}</span>
+            ))}
+          </div>
 
-        {/* Loading - only show skeleton on initial load */}
-        {isInitialLoad && (
-          <div style={{ padding: 48, textAlign: 'center' }}><Skeleton active paragraph={{ rows: 8 }} /></div>
-        )}
-
-        {/* Rows */}
-        {filteredTrades.map((trade) => {
-          const pnl = Number(trade.realizedPnlUsd ?? 0);
-          const roe = Number(trade.roePct ?? 0);
-          return (
-            <div
-              key={trade.id}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '90px 55px 55px 55px 95px 50px 70px 70px 70px 75px 55px 65px 45px 50px 110px 55px 55px',
-                padding: '10px 16px',
-                borderBottom: '1px solid var(--border-subtle)',
-                alignItems: 'center',
-                transition: 'background 0.15s',
-                minWidth: 1200,
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(148, 163, 184, 0.03)')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-            >
-              {/* Date */}
-              <div style={{ whiteSpace: 'nowrap' }}>
-                <div style={{ color: 'var(--text-primary)', fontSize: 11 }}>{dayjs(trade.createdAt).format('YYYY-MM-DD')}</div>
-                <div style={{ color: 'var(--text-secondary)', fontSize: 9 }}>{dayjs(trade.createdAt).format('HH:mm:ss')}</div>
-              </div>
-
-              {/* Outcome */}
-              <Tag style={{
-                borderRadius: 4, border: 'none', fontSize: 9, fontWeight: 600, padding: '2px 4px',
-                background: trade.outcome === 'win' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                color: trade.outcome === 'win' ? 'var(--success)' : 'var(--error)',
-              }}>
-                {trade.outcome?.toUpperCase()}
-              </Tag>
-
-              {/* Mode */}
-              <Tag style={{
-                fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 4, border: 'none',
-                background: trade.sessionMode === 'live' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                color: trade.sessionMode === 'live' ? 'var(--success)' : 'var(--accent)',
-              }}>
-                {(trade.sessionMode || 'unknown').toUpperCase()}
-              </Tag>
-
-              {/* Session */}
-              <div style={{ whiteSpace: 'nowrap' }}>
-                <div style={{ color: 'var(--text-primary)', fontSize: 11 }}>{trade.sessionSymbol?.replace('/USDT:USDT', '')}</div>
-              </div>
-
-              {/* Symbol */}
-              <Text style={{ color: 'var(--text-primary)', fontSize: 11, whiteSpace: 'nowrap' }}>{trade.symbol?.replace('/USDT:USDT', '/USDT')}</Text>
-
-              {/* Side */}
-              <Tag style={{ borderRadius: 3, border: 'none', background: trade.positionSide === 'long' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)', color: trade.positionSide === 'long' ? 'var(--success)' : 'var(--error)', fontSize: 9, fontWeight: 600, padding: '2px 4px' }}>
-                {trade.positionSide?.toUpperCase()}
-              </Tag>
-
-              {/* Quantity */}
-              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.qty?.toFixed(4)}</Text>
-
-              {/* Entry */}
-              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.entryPrice?.toFixed(4)}</Text>
-
-              {/* Exit */}
-              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.exitPrice?.toFixed(4)}</Text>
-
-              {/* P&L */}
-              <Text style={{ color: pnl >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 12, fontWeight: 600, textAlign: 'right', display: 'block' }}>
-                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-              </Text>
-
-              {/* ROE */}
-              <Text style={{ color: roe >= 0 ? 'var(--success)' : 'var(--error)', fontSize: 11, fontWeight: 500, textAlign: 'right', display: 'block' }}>
-                {roe >= 0 ? '+' : ''}{roe.toFixed(1)}%
-              </Text>
-
-              {/* Notional */}
-              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>
-                ${(trade.notionalUsd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              </Text>
-
-              {/* Leverage */}
-              <Text style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'right', display: 'block' }}>{trade.leverage?.toFixed(1)}x</Text>
-
-              {/* Duration */}
-              <Text style={{ color: 'var(--text-secondary)', fontSize: 10, textAlign: 'right', display: 'block' }}>{formatDuration(trade.durationMinutes)}</Text>
-
-              {/* Exit Type */}
-              {trade.exitReason ? (
-                <Tag style={{
-                  borderRadius: 3, border: 'none', fontSize: 8, padding: '2px 4px', whiteSpace: 'nowrap',
-                  background: trade.exitReason.includes('PROFIT') || trade.exitReason.includes('TRAILING') ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                  color: trade.exitReason.includes('PROFIT') || trade.exitReason.includes('TRAILING') ? 'var(--success)' : 'var(--error)',
-                }}>
-                  {trade.exitReason.includes('trailing_stop_exchange') ? '🎯 TRAILING STOP' : trade.exitReason.replace(/_/g, ' ').toUpperCase()}
-                </Tag>
-              ) : <Text style={{ color: 'var(--text-secondary)', fontSize: 10 }}>-</Text>}
-
-              {/* Max P&L */}
-              <Text style={{ color: 'var(--text-secondary)', fontSize: 10, textAlign: 'right', display: 'block' }}>
-                {trade.maxPnlPct != null ? `+${trade.maxPnlPct.toFixed(1)}%` : '-'}
-              </Text>
-
-              {/* Fees */}
-              <Text style={{ color: 'var(--warning)', fontSize: 10, textAlign: 'right', display: 'block' }}>
-                -${(trade.feesUsd ?? 0).toFixed(2)}
-              </Text>
+          {/* Loading - only show skeleton on initial load */}
+          {isInitialLoad && (
+            <div className="p-12 space-y-3">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="h-5 w-full" />
+              ))}
             </div>
-          );
-        })}
+          )}
 
-        {!isInitialLoad && filteredTrades.length === 0 && (
-          <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>No trades found</div>
-        )}
+          {/* Rows */}
+          {filteredTrades.map((trade) => {
+            const pnl = Number(trade.realizedPnlUsd ?? 0);
+            const roe = Number(trade.roePct ?? 0);
+            return (
+              <div
+                key={trade.id}
+                className={cn("grid px-4 py-2.5 border-b border-border items-center transition-colors duration-150 hover:bg-muted/30", gridCols)}
+              >
+                {/* Date */}
+                <div className="whitespace-nowrap">
+                  <div className="text-foreground text-[11px]">{dayjs(trade.createdAt).format('YYYY-MM-DD')}</div>
+                  <div className="text-muted-foreground text-[9px]">{dayjs(trade.createdAt).format('HH:mm:ss')}</div>
+                </div>
+
+                {/* Outcome */}
+                <span className={cn(
+                  "inline-flex items-center rounded px-1 py-0.5 text-[9px] font-semibold w-fit",
+                  trade.outcome === 'win' ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
+                )}>
+                  {trade.outcome?.toUpperCase()}
+                </span>
+
+                {/* Mode */}
+                <span className={cn(
+                  "inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold w-fit",
+                  trade.sessionMode === 'live' ? "bg-success/15 text-success" : "bg-accent/15 text-accent"
+                )}>
+                  {(trade.sessionMode || 'unknown').toUpperCase()}
+                </span>
+
+                {/* Session */}
+                <div className="whitespace-nowrap">
+                  <div className="text-foreground text-[11px]">{trade.sessionSymbol?.replace('/USDT:USDT', '')}</div>
+                </div>
+
+                {/* Symbol */}
+                <span className="text-foreground text-[11px] whitespace-nowrap">{trade.symbol?.replace('/USDT:USDT', '/USDT')}</span>
+
+                {/* Side */}
+                <span className={cn(
+                  "inline-flex items-center rounded-sm px-1 py-0.5 text-[9px] font-semibold w-fit",
+                  trade.positionSide === 'long' ? "bg-success/12 text-success" : "bg-destructive/12 text-destructive"
+                )}>
+                  {trade.positionSide?.toUpperCase()}
+                </span>
+
+                {/* Quantity */}
+                <span className="text-muted-foreground text-[11px] text-right block">{trade.qty?.toFixed(4)}</span>
+
+                {/* Entry */}
+                <span className="text-muted-foreground text-[11px] text-right block">{trade.entryPrice?.toFixed(4)}</span>
+
+                {/* Exit */}
+                <span className="text-muted-foreground text-[11px] text-right block">{trade.exitPrice?.toFixed(4)}</span>
+
+                {/* P&L */}
+                <span className={cn("text-xs font-semibold text-right block", pnl >= 0 ? "text-success" : "text-destructive")}>
+                  {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                </span>
+
+                {/* ROE */}
+                <span className={cn("text-[11px] font-medium text-right block", roe >= 0 ? "text-success" : "text-destructive")}>
+                  {roe >= 0 ? '+' : ''}{roe.toFixed(1)}%
+                </span>
+
+                {/* Notional */}
+                <span className="text-muted-foreground text-[11px] text-right block">
+                  ${(trade.notionalUsd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </span>
+
+                {/* Leverage */}
+                <span className="text-muted-foreground text-[11px] text-right block">{trade.leverage?.toFixed(1)}x</span>
+
+                {/* Duration */}
+                <span className="text-muted-foreground text-[10px] text-right block">{formatDuration(trade.durationMinutes)}</span>
+
+                {/* Exit Type */}
+                {trade.exitReason ? (
+                  <span className={cn(
+                    "inline-flex items-center rounded-sm px-1 py-0.5 text-[8px] whitespace-nowrap w-fit",
+                    trade.exitReason.includes('PROFIT') || trade.exitReason.includes('TRAILING')
+                      ? "bg-success/10 text-success"
+                      : "bg-destructive/10 text-destructive"
+                  )}>
+                    {trade.exitReason.includes('trailing_stop_exchange') ? 'TRAILING STOP' : trade.exitReason.replace(/_/g, ' ').toUpperCase()}
+                  </span>
+                ) : <span className="text-muted-foreground text-[10px]">-</span>}
+
+                {/* Max P&L */}
+                <span className="text-muted-foreground text-[10px] text-right block">
+                  {trade.maxPnlPct != null ? `+${trade.maxPnlPct.toFixed(1)}%` : '-'}
+                </span>
+
+                {/* Fees */}
+                <span className="text-warning text-[10px] text-right block">
+                  -${(trade.feesUsd ?? 0).toFixed(2)}
+                </span>
+              </div>
+            );
+          })}
+
+          {!isInitialLoad && filteredTrades.length === 0 && (
+            <div className="p-12 text-center text-muted-foreground">No trades found</div>
+          )}
+        </div>
       </div>
     </div>
   );

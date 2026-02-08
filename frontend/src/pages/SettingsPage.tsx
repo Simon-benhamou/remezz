@@ -1,0 +1,881 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import {
+  User,
+  Key,
+  Settings,
+  Trash2,
+  Shield,
+  Eye,
+  EyeOff,
+  Loader2,
+  Plus,
+  Mail,
+  Lock,
+} from 'lucide-react';
+
+import { api } from '@/api';
+import { useAuth } from '@/hooks/useAuth';
+import { useAppStore } from '@/store';
+import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
+
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import {
+  Form,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormControl,
+  FormMessage,
+} from '@/components/ui/form';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface UserInfo {
+  id: string;
+  username: string;
+  email: string;
+  role: string;
+  createdAt?: string;
+}
+
+interface ApiKey {
+  id: string;
+  exchange: string;
+  keyName?: string;
+  apiKey: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Zod Schemas
+// ---------------------------------------------------------------------------
+
+const profileSchema = z.object({
+  email: z
+    .string()
+    .min(1, 'Please enter your email')
+    .email('Please enter a valid email address'),
+});
+
+type ProfileFormValues = z.infer<typeof profileSchema>;
+
+const passwordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Please enter your current password'),
+    newPassword: z.string().min(6, 'Password must be at least 6 characters'),
+    confirmNewPassword: z.string().min(1, 'Please confirm your new password'),
+  })
+  .refine((data) => data.newPassword === data.confirmNewPassword, {
+    message: 'Passwords do not match',
+    path: ['confirmNewPassword'],
+  });
+
+type PasswordFormValues = z.infer<typeof passwordSchema>;
+
+const apiKeySchema = z.object({
+  exchange: z.string().min(1, 'Please select an exchange'),
+  keyName: z.string().optional(),
+  apiKey: z.string().min(1, 'Please enter your API key'),
+  apiSecret: z.string().min(1, 'Please enter your API secret'),
+});
+
+type ApiKeyFormValues = z.infer<typeof apiKeySchema>;
+
+// ---------------------------------------------------------------------------
+// Profile Tab
+// ---------------------------------------------------------------------------
+
+function ProfileTab({ userInfo, onUserUpdate }: { userInfo: UserInfo | null; onUserUpdate: () => void }) {
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [passwordLoading, setPasswordLoading] = useState(false);
+
+  const profileForm = useForm<ProfileFormValues>({
+    resolver: zodResolver(profileSchema),
+    defaultValues: { email: userInfo?.email || '' },
+  });
+
+  const passwordForm = useForm<PasswordFormValues>({
+    resolver: zodResolver(passwordSchema),
+    defaultValues: {
+      currentPassword: '',
+      newPassword: '',
+      confirmNewPassword: '',
+    },
+  });
+
+  useEffect(() => {
+    if (userInfo?.email) {
+      profileForm.reset({ email: userInfo.email });
+    }
+  }, [userInfo, profileForm]);
+
+  const handleUpdateProfile = async (values: ProfileFormValues) => {
+    setProfileLoading(true);
+    try {
+      await api.client.put('/api/auth/profile', { email: values.email });
+      toast.success('Profile updated successfully');
+      onUserUpdate();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to update profile');
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const handleChangePassword = async (values: PasswordFormValues) => {
+    setPasswordLoading(true);
+    try {
+      await api.client.put('/api/auth/password', {
+        currentPassword: values.currentPassword,
+        newPassword: values.newPassword,
+      });
+      toast.success('Password changed successfully');
+      passwordForm.reset();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to change password');
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* User info (read only) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <User className="h-5 w-5" />
+            Profile Information
+          </CardTitle>
+          <CardDescription>
+            Your account details. Username and role cannot be changed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-2">
+              <Label className="text-muted-foreground text-xs uppercase tracking-wider">Username</Label>
+              <div className="flex h-9 items-center rounded-md border border-input bg-muted/50 px-3 text-sm">
+                {userInfo?.username || '-'}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-muted-foreground text-xs uppercase tracking-wider">Email</Label>
+              <div className="flex h-9 items-center rounded-md border border-input bg-muted/50 px-3 text-sm">
+                {userInfo?.email || '-'}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-muted-foreground text-xs uppercase tracking-wider">Role</Label>
+              <div className="flex h-9 items-center gap-2 rounded-md border border-input bg-muted/50 px-3 text-sm">
+                <Badge variant="outline" className="capitalize">
+                  {userInfo?.role === 'admin' ? 'Administrator' : userInfo?.role || 'User'}
+                </Badge>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Edit email */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="h-5 w-5" />
+            Update Email
+          </CardTitle>
+          <CardDescription>
+            Change the email address associated with your account.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Form {...profileForm}>
+            <form onSubmit={profileForm.handleSubmit(handleUpdateProfile)} className="space-y-4">
+              <FormField
+                control={profileForm.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Enter your email" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <Button type="submit" disabled={profileLoading}>
+                {profileLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Update Profile
+              </Button>
+            </form>
+          </Form>
+        </CardContent>
+      </Card>
+
+      {/* Change password */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Lock className="h-5 w-5" />
+            Change Password
+          </CardTitle>
+          <CardDescription>
+            Update your password to keep your account secure.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Form {...passwordForm}>
+            <form onSubmit={passwordForm.handleSubmit(handleChangePassword)} className="space-y-4">
+              <FormField
+                control={passwordForm.control}
+                name="currentPassword"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Current Password</FormLabel>
+                    <FormControl>
+                      <Input type="password" placeholder="Enter current password" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={passwordForm.control}
+                name="newPassword"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>New Password</FormLabel>
+                    <FormControl>
+                      <Input type="password" placeholder="Enter new password" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={passwordForm.control}
+                name="confirmNewPassword"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Confirm New Password</FormLabel>
+                    <FormControl>
+                      <Input type="password" placeholder="Confirm new password" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <Button type="submit" variant="outline" disabled={passwordLoading}>
+                {passwordLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Change Password
+              </Button>
+            </form>
+          </Form>
+        </CardContent>
+      </Card>
+
+      <Alert>
+        <Shield className="h-4 w-4" />
+        <AlertDescription>
+          For security reasons, changing sensitive account information may require re-authentication.
+          Contact support if you need assistance.
+        </AlertDescription>
+      </Alert>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// API Keys Tab
+// ---------------------------------------------------------------------------
+
+function ApiKeysTab() {
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
+  const [addLoading, setAddLoading] = useState(false);
+
+  const apiKeyForm = useForm<ApiKeyFormValues>({
+    resolver: zodResolver(apiKeySchema),
+    defaultValues: { exchange: '', keyName: '', apiKey: '', apiSecret: '' },
+  });
+
+  const loadApiKeys = useCallback(async () => {
+    try {
+      const result = await api.client.get('/api/user/api-keys');
+      setApiKeys(result.data.apiKeys || []);
+    } catch (error) {
+      console.error('Failed to load API keys:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadApiKeys();
+  }, [loadApiKeys]);
+
+  const handleAddApiKey = async (values: ApiKeyFormValues) => {
+    setAddLoading(true);
+    try {
+      await api.client.post('/api/user/api-keys', values);
+      toast.success('API Key added successfully');
+      apiKeyForm.reset();
+      loadApiKeys();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to add API key');
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
+  const handleDeleteApiKey = async (keyId: string) => {
+    try {
+      await api.client.delete(`/api/user/api-keys/${keyId}`);
+      toast.success('API Key deleted successfully');
+      loadApiKeys();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to delete API key');
+    }
+  };
+
+  const handleToggleApiKey = async (keyId: string) => {
+    try {
+      await api.client.patch(`/api/user/api-keys/${keyId}/toggle`);
+      toast.success('API key status updated');
+      loadApiKeys();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to toggle API key');
+    }
+  };
+
+  const toggleShowApiKey = (keyId: string) => {
+    setShowApiKeys((prev) => ({ ...prev, [keyId]: !prev[keyId] }));
+  };
+
+  const maskedApiKey = (key: string) => {
+    if (key.length <= 8) return '*'.repeat(key.length);
+    return key.slice(0, 4) + '*'.repeat(key.length - 8) + key.slice(-4);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Info alerts */}
+      <Alert>
+        <Shield className="h-4 w-4" />
+        <AlertDescription>
+          Your API keys are encrypted and stored securely in the database. The system will
+          automatically use your configured keys for trading operations instead of environment
+          variables.
+        </AlertDescription>
+      </Alert>
+
+      <Alert className="border-amber-500/30 bg-amber-500/5">
+        <Shield className="h-4 w-4 text-amber-500" />
+        <AlertDescription>
+          <span className="font-medium">Server IP Whitelist Required</span>
+          <br />
+          Add this IP to your Crypto.com API whitelist:{' '}
+          <code className="rounded bg-muted px-1.5 py-0.5 font-semibold text-cyan-400">
+            208.77.244.15
+          </code>
+        </AlertDescription>
+      </Alert>
+
+      <Alert className="border-amber-500/30 bg-amber-500/5">
+        <Shield className="h-4 w-4 text-amber-500" />
+        <AlertDescription>
+          Never share your API keys with anyone. Use read-only or trading permissions only.
+        </AlertDescription>
+      </Alert>
+
+      {/* Add new key form */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Plus className="h-5 w-5" />
+            Add New API Key
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Form {...apiKeyForm}>
+            <form onSubmit={apiKeyForm.handleSubmit(handleAddApiKey)} className="space-y-4">
+              <FormField
+                control={apiKeyForm.control}
+                name="exchange"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Exchange</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select exchange" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="crypto.com">Crypto.com</SelectItem>
+                        <SelectItem value="binance">Binance</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={apiKeyForm.control}
+                name="keyName"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Key Name (optional)</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g., Main Trading Account" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={apiKeyForm.control}
+                name="apiKey"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>API Key</FormLabel>
+                    <FormControl>
+                      <Input type="password" placeholder="Enter your API key" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={apiKeyForm.control}
+                name="apiSecret"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>API Secret</FormLabel>
+                    <FormControl>
+                      <Input type="password" placeholder="Enter your API secret" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <Alert className="border-emerald-500/30 bg-emerald-500/5">
+                <AlertDescription className="text-xs">
+                  <span className="font-medium">Whitelist Configuration</span>
+                  <br />
+                  Before using your API key, add our server IP to your Crypto.com whitelist:{' '}
+                  <code className="font-semibold text-cyan-400">208.77.244.15</code>
+                  <br />
+                  <span className="text-muted-foreground">
+                    Go to Crypto.com &rarr; API Management &rarr; Edit your API &rarr; IP Whitelist
+                  </span>
+                </AlertDescription>
+              </Alert>
+
+              <Button type="submit" disabled={addLoading}>
+                {addLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <Plus className="mr-2 h-4 w-4" />
+                Add API Key
+              </Button>
+            </form>
+          </Form>
+        </CardContent>
+      </Card>
+
+      {/* Existing keys */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            Your API Keys
+            {apiKeys.length > 0 && (
+              <Badge variant="secondary" className="ml-1">
+                {apiKeys.length}
+              </Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {apiKeys.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <Key className="mb-4 h-12 w-12 text-muted-foreground/40" />
+              <p className="text-muted-foreground">No API keys configured</p>
+              <p className="text-sm text-muted-foreground/60">
+                Add your first exchange API key above
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {apiKeys.map((key) => (
+                <div
+                  key={key.id}
+                  className="rounded-lg border border-border bg-muted/20 p-4"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Badge variant="outline">{key.exchange}</Badge>
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={key.isActive}
+                          onCheckedChange={() => handleToggleApiKey(key.id)}
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          {key.isActive ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        Added {new Date(key.createdAt).toLocaleDateString()}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => toggleShowApiKey(key.id)}
+                      >
+                        {showApiKeys[key.id] ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </Button>
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive">
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Delete API Key</DialogTitle>
+                            <DialogDescription>
+                              Are you sure you want to delete this API key? This action cannot be
+                              undone.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <DialogFooter>
+                            <Button variant="outline" onClick={() => {}}>
+                              Cancel
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              onClick={() => handleDeleteApiKey(key.id)}
+                            >
+                              Delete
+                            </Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                  </div>
+                  {key.keyName && (
+                    <p className="mt-2 text-sm font-medium">{key.keyName}</p>
+                  )}
+                  <div className="mt-2">
+                    <code className="text-xs text-muted-foreground">
+                      {showApiKeys[key.id] ? key.apiKey : maskedApiKey(key.apiKey)}
+                    </code>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Preferences Tab
+// ---------------------------------------------------------------------------
+
+function PreferencesTab() {
+  const { themeMode, toggleTheme } = useAppStore();
+  const [defaultTradingMode, setDefaultTradingMode] = useState('paper');
+  const [riskLevel, setRiskLevel] = useState('moderate');
+  const [tradeAlerts, setTradeAlerts] = useState(true);
+  const [dailyReports, setDailyReports] = useState(true);
+  const [emailNotifications, setEmailNotifications] = useState(false);
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings className="h-5 w-5" />
+            Preferences
+          </CardTitle>
+          <CardDescription>
+            Configure your display and notification settings.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Appearance */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Appearance</Label>
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={themeMode === 'dark'}
+                onCheckedChange={toggleTheme}
+              />
+              <span className="text-sm text-muted-foreground">
+                {themeMode === 'dark' ? 'Dark mode' : 'Light mode'}
+              </span>
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Default Trading Mode */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Default Trading Mode</Label>
+            <Select value={defaultTradingMode} onValueChange={setDefaultTradingMode}>
+              <SelectTrigger className="w-[240px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="paper">Paper Trading</SelectItem>
+                <SelectItem value="live">Live Trading</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Separator />
+
+          {/* Risk Level */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Risk Level</Label>
+            <Select value={riskLevel} onValueChange={setRiskLevel}>
+              <SelectTrigger className="w-[240px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="conservative">Conservative</SelectItem>
+                <SelectItem value="moderate">Moderate</SelectItem>
+                <SelectItem value="aggressive">Aggressive</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Separator />
+
+          {/* Notifications */}
+          <div className="space-y-4">
+            <Label className="text-sm font-medium">Notifications</Label>
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <Switch checked={tradeAlerts} onCheckedChange={setTradeAlerts} />
+                <span className="text-sm">Trade alerts</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <Switch checked={dailyReports} onCheckedChange={setDailyReports} />
+                <span className="text-sm">Daily reports</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <Switch checked={emailNotifications} onCheckedChange={setEmailNotifications} />
+                <span className="text-sm">Email notifications</span>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Danger Zone Tab
+// ---------------------------------------------------------------------------
+
+function DangerZoneTab() {
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteAccount = async () => {
+    setDeleting(true);
+    try {
+      await api.client.delete('/api/auth/account');
+      toast.success('Account deleted successfully');
+      window.location.href = '/login';
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to delete account');
+    } finally {
+      setDeleting(false);
+      setDeleteDialogOpen(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card className="border-destructive/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-destructive">
+            <Trash2 className="h-5 w-5" />
+            Delete Account
+          </CardTitle>
+          <CardDescription>
+            Permanently delete your account and all associated data. This action is irreversible.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Alert variant="destructive">
+            <Trash2 className="h-4 w-4" />
+            <AlertDescription>
+              Deleting your account will permanently remove all your data, API keys, trading
+              history, and settings. This action cannot be undone.
+            </AlertDescription>
+          </Alert>
+
+          <div className="mt-4">
+            <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="destructive">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete my account
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Are you absolutely sure?</DialogTitle>
+                  <DialogDescription>
+                    This action cannot be undone. This will permanently delete your account and
+                    remove all your data from our servers.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2 py-4">
+                  <Label>
+                    Type <span className="font-semibold text-destructive">DELETE</span> to confirm
+                  </Label>
+                  <Input
+                    value={confirmText}
+                    onChange={(e) => setConfirmText(e.target.value)}
+                    placeholder="Type DELETE to confirm"
+                  />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    disabled={confirmText !== 'DELETE' || deleting}
+                    onClick={handleDeleteAccount}
+                  >
+                    {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Delete Account
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Settings Page
+// ---------------------------------------------------------------------------
+
+export default function SettingsPage() {
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
+
+  const loadUserInfo = useCallback(async () => {
+    try {
+      const result = await api.client.get('/api/auth/me');
+      setUserInfo(result.data.user);
+    } catch (error) {
+      console.error('Failed to load user info:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadUserInfo();
+  }, [loadUserInfo]);
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
+        <p className="text-muted-foreground">
+          Manage your account settings and preferences.
+        </p>
+      </div>
+
+      <Tabs defaultValue="profile" className="w-full">
+        <TabsList className="grid w-full grid-cols-4">
+          <TabsTrigger value="profile" className="flex items-center gap-1.5">
+            <User className="h-4 w-4" />
+            <span className="hidden sm:inline">Profile</span>
+          </TabsTrigger>
+          <TabsTrigger value="api-keys" className="flex items-center gap-1.5">
+            <Key className="h-4 w-4" />
+            <span className="hidden sm:inline">API Keys</span>
+          </TabsTrigger>
+          <TabsTrigger value="preferences" className="flex items-center gap-1.5">
+            <Settings className="h-4 w-4" />
+            <span className="hidden sm:inline">Preferences</span>
+          </TabsTrigger>
+          <TabsTrigger value="danger" className="flex items-center gap-1.5">
+            <Trash2 className="h-4 w-4" />
+            <span className="hidden sm:inline">Danger Zone</span>
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="profile">
+          <ProfileTab userInfo={userInfo} onUserUpdate={loadUserInfo} />
+        </TabsContent>
+
+        <TabsContent value="api-keys">
+          <ApiKeysTab />
+        </TabsContent>
+
+        <TabsContent value="preferences">
+          <PreferencesTab />
+        </TabsContent>
+
+        <TabsContent value="danger">
+          <DangerZoneTab />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}

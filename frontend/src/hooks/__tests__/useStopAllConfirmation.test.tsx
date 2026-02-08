@@ -1,7 +1,6 @@
 import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react';
-import { describe, expect, vi, beforeEach, afterEach, afterAll, it, Mock } from 'vitest';
-import { Modal, message } from 'antd';
+import { describe, expect, vi, beforeEach, afterEach, it, Mock } from 'vitest';
 import { useStopAllConfirmation } from '../useStopAllConfirmation';
 import { api } from '../../api';
 import { STOP_ALL_LOCK_STORAGE_KEY } from '../useStopAllLock';
@@ -9,6 +8,14 @@ import { STOP_ALL_LOCK_STORAGE_KEY } from '../useStopAllLock';
 vi.mock('../../api', () => ({
   api: {
     stopAllAgents: vi.fn(),
+  },
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast: {
+    success: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
   },
 }));
 
@@ -20,55 +27,46 @@ function TestComponent({ onSuccess = noop }: { onSuccess?: (payload: any) => voi
 }
 
 describe('useStopAllConfirmation', () => {
-  const confirmSpy = vi.spyOn(Modal, 'confirm');
-  const successSpy = vi.spyOn(message, 'success');
-  const warningSpy = vi.spyOn(message, 'warning');
-  const errorSpy = vi.spyOn(message, 'error');
-
   beforeEach(() => {
     (api.stopAllAgents as unknown as Mock).mockResolvedValue({ stopped: 2, results: [] });
-    confirmSpy.mockClear();
-    successSpy.mockClear();
-    warningSpy.mockClear();
-    errorSpy.mockClear();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     localStorage.removeItem(STOP_ALL_LOCK_STORAGE_KEY);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     localStorage.removeItem(STOP_ALL_LOCK_STORAGE_KEY);
   });
 
-  afterAll(() => {
-    confirmSpy.mockRestore();
-    successSpy.mockRestore();
-    warningSpy.mockRestore();
-    errorSpy.mockRestore();
+  it('confirms stop-all and locks creation on success', async () => {
+    const onSuccess = vi.fn();
+    const { getByText } = render(<TestComponent onSuccess={onSuccess} />);
+
+    await act(async () => {
+      fireEvent.click(getByText('stop-all'));
+      // Allow the async IIFE to settle
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    expect(api.stopAllAgents).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(STOP_ALL_LOCK_STORAGE_KEY)).toBe('true');
+    expect(onSuccess).toHaveBeenCalled();
   });
 
-  it('confirms stop-all and locks creation on success', async () => {
-    let capturedConfig: Parameters<typeof Modal.confirm>[0] | undefined;
-    confirmSpy.mockImplementationOnce((config) => {
-      capturedConfig = config;
-      return {} as any;
-    });
+  it('does nothing when user cancels confirmation', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     const onSuccess = vi.fn();
     const { getByText } = render(<TestComponent onSuccess={onSuccess} />);
 
-    fireEvent.click(getByText('stop-all'));
-
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(capturedConfig).toBeTruthy();
-
     await act(async () => {
-      await capturedConfig?.onOk?.();
+      fireEvent.click(getByText('stop-all'));
+      await new Promise((r) => setTimeout(r, 0));
     });
 
-    expect(api.stopAllAgents).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem(STOP_ALL_LOCK_STORAGE_KEY)).toBe('true');
-    expect(successSpy).toHaveBeenCalled();
-    expect(onSuccess).toHaveBeenCalled();
-    expect(warningSpy).not.toHaveBeenCalled();
-    expect(errorSpy).not.toHaveBeenCalled();
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    expect(api.stopAllAgents).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
   });
 });

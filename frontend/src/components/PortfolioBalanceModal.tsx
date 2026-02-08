@@ -1,5 +1,11 @@
 import React from 'react';
-import { Modal, Typography, Statistic, Row, Col, Space, InputNumber, Button, Divider, message, Tag, Tooltip, Table } from 'antd';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 import { api } from '../api';
 
 const formatUsd = (value?: number | null) => {
@@ -43,6 +49,26 @@ type PortfolioBalanceModalProps = {
   onUpdated?: () => void;
 };
 
+function StatCard({ label, value, tooltip }: { label: string; value: string; tooltip?: string }) {
+  const content = (
+    <div className="rounded-lg border border-border bg-muted/40 p-3">
+      <p className="text-xs text-muted-foreground mb-1">{label}</p>
+      <p className="text-lg font-semibold tracking-tight">{value}</p>
+    </div>
+  );
+
+  if (tooltip) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{content}</TooltipTrigger>
+        <TooltipContent>{tooltip}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return content;
+}
+
 export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }: PortfolioBalanceModalProps) {
   const [paperSnapshot, setPaperSnapshot] = React.useState<Snapshot | null>(null);
   const [liveSnapshot, setLiveSnapshot] = React.useState<Snapshot | null>(null);
@@ -61,14 +87,14 @@ export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }
       ]);
       setPaperSnapshot(paper);
       setLiveSnapshot(live);
-      setPaperReservations(reservations.paper.filter(r => r.state === 'reserved'));
-      setLiveReservations(reservations.live.filter(r => r.state === 'reserved'));
+      setPaperReservations(reservations.paper.filter((r: Reservation) => r.state === 'reserved'));
+      setLiveReservations(reservations.live.filter((r: Reservation) => r.state === 'reserved'));
       if (paper?.totalUSD != null) {
         setPaperBalance(Number(paper.totalUSD));
       }
     } catch (error) {
       console.error('Failed to load capital snapshots', error);
-      message.error('Unable to load capital snapshots');
+      toast.error('Unable to load capital snapshots');
     } finally {
       setLoading(false);
     }
@@ -86,19 +112,19 @@ export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }
       return;
     }
     if (!Number.isFinite(paperBalance) || paperBalance == null || paperBalance <= 0) {
-      message.error('Enter a valid initial balance');
+      toast.error('Enter a valid initial balance');
       return;
     }
     try {
       setLoading(true);
       await api.setPaperCapitalBalance(Number(paperBalance));
-      message.success('Paper balance updated');
+      toast.success('Paper balance updated');
       await loadSnapshots();
       onUpdated?.();
       onClose();
     } catch (error) {
       console.error('Failed to update paper balance', error);
-      message.error('Unable to update paper balance');
+      toast.error('Unable to update paper balance');
     } finally {
       setLoading(false);
     }
@@ -106,161 +132,168 @@ export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }
 
   const currentSnapshot = mode === 'paper' ? paperSnapshot : liveSnapshot;
   const currentReservations = mode === 'paper' ? paperReservations : liveReservations;
-  
+
   const renderSnapshot = (snapshot: Snapshot | null, label: string) => (
-    <Row gutter={[16, 16]} style={{ width: '100%' }}>
-      <Col span={12}>
-        <Statistic title={`${label} Total`} value={formatUsd(snapshot?.totalUSD)} />
-      </Col>
-      <Col span={12}>
-        <Statistic title='Free' value={formatUsd(snapshot?.freeUSD)} />
-      </Col>
-      <Col span={12}>
-        <Tooltip title="Margin reserved by agents (with leverage applied)">
-          <Statistic title='Reserved (Margin)' value={formatUsd(snapshot?.reservedUSD)} />
-        </Tooltip>
-      </Col>
-      <Col span={12}>
-        <Tooltip title="Margin locked in open positions (with leverage applied)">
-          <Statistic title='In Positions (Margin)' value={formatUsd(snapshot?.inPositionsUSD)} />
-        </Tooltip>
-      </Col>
-    </Row>
+    <div className="grid grid-cols-2 gap-3 w-full">
+      <StatCard label={`${label} Total`} value={formatUsd(snapshot?.totalUSD)} />
+      <StatCard label="Free" value={formatUsd(snapshot?.freeUSD)} />
+      <StatCard
+        label="Reserved (Margin)"
+        value={formatUsd(snapshot?.reservedUSD)}
+        tooltip="Margin reserved by agents (with leverage applied)"
+      />
+      <StatCard
+        label="In Positions (Margin)"
+        value={formatUsd(snapshot?.inPositionsUSD)}
+        tooltip="Margin locked in open positions (with leverage applied)"
+      />
+    </div>
   );
 
-  const reservationColumns = [
-    {
-      title: 'Symbol',
-      dataIndex: 'symbol',
-      key: 'symbol',
-      width: 100,
-    },
-    {
-      title: 'Agent',
-      dataIndex: 'agentId',
-      key: 'agentId',
-      width: 100,
-      render: (id: string) => id.slice(0, 8) + '...',
-    },
-    {
-      title: 'Notional',
-      dataIndex: 'requestedUSD',
-      key: 'requestedUSD',
-      width: 100,
-      render: (value: number) => formatUsd(value),
-    },
-    {
-      title: 'Leverage',
-      dataIndex: 'leverage',
-      key: 'leverage',
-      width: 80,
-      render: (value?: number) => (
-        <Tag color={!value || value === 1 ? 'default' : value >= 5 ? 'orange' : 'blue'}>
-          {formatLeverage(value)}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Margin',
-      dataIndex: 'grantedUSD',
-      key: 'grantedUSD',
-      width: 100,
-      render: (value: number, record: Reservation) => (
-        <Tooltip title={`${formatUsd(record.requestedUSD)} / ${formatLeverage(record.leverage)} = ${formatUsd(value)}`}>
-          <strong>{formatUsd(value)}</strong>
-        </Tooltip>
-      ),
-    },
-  ];
-
-  const footer = mode === 'paper'
-    ? [
-        <Button key='cancel' onClick={onClose} disabled={loading}>
-          Cancel
-        </Button>,
-        <Button key='save' type='primary' loading={loading} onClick={handleSave}>
-          Save
-        </Button>,
-      ]
-    : [
-        <Button key='close' type='primary' onClick={onClose}>
-          Close
-        </Button>,
-      ];
-
   return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      title={
-        <Space align='center'>
-          <Typography.Text strong style={{ fontSize: 18 }}>
-            Capital Pool Snapshot
-          </Typography.Text>
-          <Tag color={mode === 'live' ? 'cyan' : 'blue'}>{mode.toUpperCase()}</Tag>
-        </Space>
-      }
-      footer={footer}
-      maskClosable={!loading}
-      centered
-      width={currentReservations.length > 0 ? 800 : 600}
-    >
-      <Space direction='vertical' size={24} style={{ width: '100%' }}>
-        <Typography.Paragraph type='secondary'>
-          View the shared capital pool for {mode === 'live' ? 'live trading' : 'paper simulation'}. {mode === 'paper'
-            ? 'You can adjust the initial paper balance below.'
-            : 'Live balances are read-only and sourced from the exchange.'}
-        </Typography.Paragraph>
+    <TooltipProvider>
+      <Dialog
+        open={open}
+        onOpenChange={(isOpen) => {
+          if (!isOpen && !loading) onClose();
+        }}
+      >
+        <DialogContent
+          className={cn(currentReservations.length > 0 ? 'max-w-[800px]' : 'max-w-[600px]')}
+          onPointerDownOutside={(e) => { if (loading) e.preventDefault(); }}
+          onEscapeKeyDown={(e) => { if (loading) e.preventDefault(); }}
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              Capital Pool Snapshot
+              <span
+                className={cn(
+                  'inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium',
+                  mode === 'live'
+                    ? 'bg-cyan-500/10 text-cyan-400 ring-1 ring-inset ring-cyan-500/20'
+                    : 'bg-blue-500/10 text-blue-400 ring-1 ring-inset ring-blue-500/20'
+                )}
+              >
+                {mode.toUpperCase()}
+              </span>
+            </DialogTitle>
+            <DialogDescription>
+              View the shared capital pool for {mode === 'live' ? 'live trading' : 'paper simulation'}.{' '}
+              {mode === 'paper'
+                ? 'You can adjust the initial paper balance below.'
+                : 'Live balances are read-only and sourced from the exchange.'}
+            </DialogDescription>
+          </DialogHeader>
 
-        {renderSnapshot(currentSnapshot, mode === 'paper' ? 'Paper' : 'Live')}
+          <div className="flex flex-col gap-6">
+            {renderSnapshot(currentSnapshot, mode === 'paper' ? 'Paper' : 'Live')}
 
-        {currentReservations.length > 0 && (
-          <>
-            <Divider />
-            <Space direction='vertical' size={8} style={{ width: '100%' }}>
-              <Typography.Text strong>Active Reservations with Leverage</Typography.Text>
-              <Typography.Paragraph type='secondary' style={{ marginBottom: 8 }}>
-                Agents reserve margin (not full notional) when using leverage. The "Margin" column shows the actual capital locked from the pool.
-              </Typography.Paragraph>
-              <Table
-                columns={reservationColumns}
-                dataSource={currentReservations}
-                rowKey='id'
-                size='small'
-                pagination={false}
-                scroll={{ x: 'max-content' }}
-              />
-            </Space>
-          </>
-        )}
+            {currentReservations.length > 0 && (
+              <>
+                <Separator />
+                <div className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold">Active Reservations with Leverage</span>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Agents reserve margin (not full notional) when using leverage. The &quot;Margin&quot; column shows the actual capital locked from the pool.
+                  </p>
+                  <div className="overflow-x-auto rounded-md border border-border">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/50">
+                          <th className="px-3 py-2 text-left font-medium text-muted-foreground">Symbol</th>
+                          <th className="px-3 py-2 text-left font-medium text-muted-foreground">Agent</th>
+                          <th className="px-3 py-2 text-left font-medium text-muted-foreground">Notional</th>
+                          <th className="px-3 py-2 text-left font-medium text-muted-foreground">Leverage</th>
+                          <th className="px-3 py-2 text-left font-medium text-muted-foreground">Margin</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {currentReservations.map((r) => (
+                          <tr key={r.id} className="border-b border-border last:border-0">
+                            <td className="px-3 py-2">{r.symbol}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{r.agentId.slice(0, 8)}...</td>
+                            <td className="px-3 py-2">{formatUsd(r.requestedUSD)}</td>
+                            <td className="px-3 py-2">
+                              <span
+                                className={cn(
+                                  'inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
+                                  !r.leverage || r.leverage === 1
+                                    ? 'bg-muted text-muted-foreground ring-border'
+                                    : r.leverage >= 5
+                                      ? 'bg-orange-500/10 text-orange-400 ring-orange-500/20'
+                                      : 'bg-blue-500/10 text-blue-400 ring-blue-500/20'
+                                )}
+                              >
+                                {formatLeverage(r.leverage)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="font-semibold cursor-help">{formatUsd(r.grantedUSD)}</span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {formatUsd(r.requestedUSD)} / {formatLeverage(r.leverage)} = {formatUsd(r.grantedUSD)}
+                                </TooltipContent>
+                              </Tooltip>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
 
-        {mode === 'paper' && (
-          <>
-            <Divider />
-            <Space direction='vertical' size={8} style={{ width: '100%' }}>
-              <Typography.Text strong>Initial Cash (USD)</Typography.Text>
-              <InputNumber
-                style={{ width: '100%' }}
-                min={0}
-                step={100}
-                value={paperBalance ?? undefined}
-                onChange={(value) => setPaperBalance(typeof value === 'number' ? value : null)}
-              />
-              <Typography.Paragraph type='secondary' style={{ marginBottom: 0 }}>
-                Updating this value resets the paper ledger and applies instantly to all paper agents.
-              </Typography.Paragraph>
-            </Space>
-          </>
-        )}
+            {mode === 'paper' && (
+              <>
+                <Separator />
+                <div className="flex flex-col gap-2">
+                  <label className="text-sm font-semibold" htmlFor="paper-balance-input">
+                    Initial Cash (USD)
+                  </label>
+                  <Input
+                    id="paper-balance-input"
+                    type="number"
+                    min={0}
+                    step={100}
+                    value={paperBalance ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setPaperBalance(val === '' ? null : Number(val));
+                    }}
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    Updating this value resets the paper ledger and applies instantly to all paper agents.
+                  </p>
+                </div>
+              </>
+            )}
 
-        <Divider />
-        <Space direction='vertical' size={12} style={{ width: '100%' }}>
-          <Typography.Text type='secondary'>
-            Live Snapshot
-          </Typography.Text>
-          {renderSnapshot(liveSnapshot, 'Live')}
-        </Space>
-      </Space>
-    </Modal>
+            <Separator />
+            <div className="flex flex-col gap-3">
+              <span className="text-sm text-muted-foreground">Live Snapshot</span>
+              {renderSnapshot(liveSnapshot, 'Live')}
+            </div>
+          </div>
+
+          <DialogFooter>
+            {mode === 'paper' ? (
+              <>
+                <Button variant="outline" onClick={onClose} disabled={loading}>
+                  Cancel
+                </Button>
+                <Button onClick={handleSave} disabled={loading}>
+                  {loading ? 'Saving...' : 'Save'}
+                </Button>
+              </>
+            ) : (
+              <Button onClick={onClose}>Close</Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </TooltipProvider>
   );
 }

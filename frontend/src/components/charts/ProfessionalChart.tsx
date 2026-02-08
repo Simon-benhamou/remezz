@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { createChart, ColorType, IChartApi, ISeriesApi, LineStyle, LineWidth, UTCTimestamp, IPriceLine } from 'lightweight-charts';
 import { api } from '../../api';
-import { Button, Space, Spin } from 'antd';
+import { Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { formatPriceDisplay } from '../../utils/number';
 
 interface PositionInfo {
@@ -537,23 +538,22 @@ export default function ProfessionalChart({
           </div>
         </div>
         
-        <Space>
+        <div className="flex items-center gap-1">
           {timeframeButtons.map(btn => (
-            <Button
+            <button
               key={btn.value}
-              type={timeframe === btn.value ? 'primary' : 'default'}
-              size="small"
               onClick={() => setTimeframe(btn.value)}
-              style={{
-                background: timeframe === btn.value ? 'var(--accent-secondary)' : 'transparent',
-                borderColor: timeframe === btn.value ? 'var(--accent-secondary)' : 'var(--text-secondary)',
-                color: timeframe === btn.value ? '#ffffff' : 'var(--text-secondary)',
-              }}
+              className={cn(
+                'px-2.5 py-1 text-xs font-medium rounded border transition-colors',
+                timeframe === btn.value
+                  ? 'bg-[var(--accent-secondary)] border-[var(--accent-secondary)] text-white'
+                  : 'bg-transparent border-[var(--text-secondary)] text-[var(--text-secondary)] hover:border-[var(--text-primary)] hover:text-[var(--text-primary)]'
+              )}
             >
               {btn.label}
-            </Button>
+            </button>
           ))}
-        </Space>
+        </div>
       </div>
 
       {infoItems.length > 0 && (
@@ -598,7 +598,10 @@ export default function ProfessionalChart({
             transform: 'translate(-50%, -50%)',
             zIndex: 10,
           }}>
-            <Spin size="large" tip="Loading chart data..." />
+            <div className="flex flex-col items-center gap-2">
+              <Loader2 className="h-8 w-8 animate-spin text-[var(--text-secondary)]" />
+              <span className="text-sm text-[var(--text-secondary)]">Loading chart data...</span>
+            </div>
           </div>
         )}
         

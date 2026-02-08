@@ -6,7 +6,6 @@
  */
 
 import React, { useMemo } from 'react';
-import { Tag, Tooltip } from 'antd';
 import {
   TrendingUp,
   TrendingDown,
@@ -18,6 +17,13 @@ import {
   Eye,
   Timer,
 } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 import type { PositionBannerProps, HealthStatus } from '../../types/cockpit';
 
 // ============================================================================
@@ -153,11 +159,14 @@ const HealthGauge: React.FC<HealthGaugeProps> = ({
           {healthInfo.icon}
           <span style={{ color: healthInfo.color }}>{healthInfo.label}</span>
         </div>
-        <Tooltip title={`Distance to stop: ${distanceToStop.toFixed(2)}%`}>
-          <span className="health-gauge__distance">
-            <Shield size={12} />
-            {distanceToStop.toFixed(1)}% to stop
-          </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="health-gauge__distance">
+              <Shield size={12} />
+              {distanceToStop.toFixed(1)}% to stop
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>Distance to stop: {distanceToStop.toFixed(2)}%</TooltipContent>
         </Tooltip>
       </div>
 
@@ -230,40 +239,56 @@ const TrailingInfo: React.FC<TrailingInfoProps> = ({
     <div className="trailing-info">
       <div className="trailing-info__header">
         <Target size={14} color={active ? 'var(--success)' : 'var(--text-secondary)'} />
-        <span className={`trailing-info__label ${active ? 'trailing-info__label--active' : ''}`}>
+        <span className={cn('trailing-info__label', active && 'trailing-info__label--active')}>
           Trailing Stop
         </span>
-        <Tag
-          color={active ? 'green' : 'default'}
-          className="trailing-info__tag"
+        <span
+          className={cn(
+            'inline-flex items-center rounded px-1.5 text-[10px] font-semibold leading-5',
+            active
+              ? 'bg-green-500/20 text-green-400 ring-1 ring-green-500/30'
+              : 'bg-muted text-muted-foreground ring-1 ring-border'
+          )}
         >
           {active ? 'ACTIVE' : 'INACTIVE'}
-        </Tag>
+        </span>
       </div>
 
       {active && (
         <div className="trailing-info__details">
-          <Tooltip title="Current trailing stop price">
-            <span className="trailing-info__metric">
-              Stop: ${formatPrice(currentStopPrice || 0)}
-            </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="trailing-info__metric">
+                Stop: ${formatPrice(currentStopPrice || 0)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Current trailing stop price</TooltipContent>
           </Tooltip>
-          <Tooltip title="Distance from peak price">
-            <span className="trailing-info__metric">
-              From peak: {distanceFromPeak.toFixed(2)}%
-            </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="trailing-info__metric">
+                From peak: {distanceFromPeak.toFixed(2)}%
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Distance from peak price</TooltipContent>
           </Tooltip>
           {activeDuration && (
-            <Tooltip title="Time since trailing activated">
-              <span className="trailing-info__metric">
-                Active: {activeDuration}
-              </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="trailing-info__metric">
+                  Active: {activeDuration}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Time since trailing activated</TooltipContent>
             </Tooltip>
           )}
-          <Tooltip title="Number of stop price updates">
-            <span className="trailing-info__metric">
-              Updates: {updateCount}
-            </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="trailing-info__metric">
+                Updates: {updateCount}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Number of stop price updates</TooltipContent>
           </Tooltip>
         </div>
       )}
@@ -284,91 +309,102 @@ const PositionBanner: React.FC<PositionBannerProps> = ({ position }) => {
   const SideIcon = isLong ? TrendingUp : TrendingDown;
 
   return (
-    <div className="position-banner">
-      {/* Left: Side & Symbol */}
-      <div className="position-banner__side">
-        <div
-          className="position-banner__side-badge"
-          style={{ background: sideColor }}
-        >
-          <SideIcon size={16} color="#fff" />
-          <span>{isLong ? 'LONG' : 'SHORT'}</span>
-        </div>
-        <div className="position-banner__symbol">{position.symbol}</div>
-      </div>
-
-      {/* Center-Left: Entry & Current Price */}
-      <div className="position-banner__prices">
-        <div className="position-banner__price-item">
-          <span className="position-banner__price-label">Entry</span>
-          <span className="position-banner__price-value">
-            ${formatPrice(position.entryPrice)}
-          </span>
-        </div>
-        <div className="position-banner__price-separator">/</div>
-        <div className="position-banner__price-item">
-          <span className="position-banner__price-label">Current</span>
-          <span className="position-banner__price-value position-banner__price-value--current">
-            ${formatPrice(position.currentPrice)}
-          </span>
-        </div>
-      </div>
-
-      {/* Center: P&L */}
-      <div className="position-banner__pnl" style={{ color: pnlColor }}>
-        <span className="position-banner__pnl-value">{formatUsd(position.pnlUsd)}</span>
-        <span className="position-banner__pnl-pct">{formatPercent(position.pnlPct)}</span>
-      </div>
-
-      {/* Center-Right: Health Gauge */}
-      <div className="position-banner__health">
-        <HealthGauge
-          stopPrice={position.stopPrice}
-          currentPrice={position.currentPrice}
-          peakPrice={position.peakPrice}
-          entryPrice={position.entryPrice}
-          side={position.side}
-          healthStatus={position.healthStatus}
-        />
-      </div>
-
-      {/* Right: Trailing Info */}
-      <div className="position-banner__trailing">
-        <TrailingInfo
-          active={position.trailingState.active}
-          activatedAt={position.trailingState.activatedAt}
-          updateCount={position.trailingState.updateCount}
-          currentStopPrice={position.trailingState.currentStopPrice}
-          distanceFromPeak={position.distanceFromPeak}
-        />
-      </div>
-
-      {/* Far Right: Duration & Size */}
-      <div className="position-banner__meta">
-        <Tooltip title="Position hold time">
-          <div className="position-banner__meta-item">
-            <Clock size={12} />
-            <span>{formatDuration(position.duration)}</span>
+    <TooltipProvider>
+      <div className="position-banner">
+        {/* Left: Side & Symbol */}
+        <div className="position-banner__side">
+          <div
+            className="position-banner__side-badge"
+            style={{ background: sideColor }}
+          >
+            <SideIcon size={16} color="#fff" />
+            <span>{isLong ? 'LONG' : 'SHORT'}</span>
           </div>
-        </Tooltip>
-        <Tooltip title="Position notional value">
-          <div className="position-banner__meta-item">
-            <span className="position-banner__meta-label">Size</span>
-            <span>{formatUsd(position.notionalUsd)}</span>
+          <div className="position-banner__symbol">{position.symbol}</div>
+        </div>
+
+        {/* Center-Left: Entry & Current Price */}
+        <div className="position-banner__prices">
+          <div className="position-banner__price-item">
+            <span className="position-banner__price-label">Entry</span>
+            <span className="position-banner__price-value">
+              ${formatPrice(position.entryPrice)}
+            </span>
           </div>
-        </Tooltip>
-        {position.leverage && (
-          <Tooltip title="Leverage">
-            <div className="position-banner__meta-item">
-              <span className="position-banner__meta-label">Lev</span>
-              <span>{position.leverage}x</span>
-            </div>
+          <div className="position-banner__price-separator">/</div>
+          <div className="position-banner__price-item">
+            <span className="position-banner__price-label">Current</span>
+            <span className="position-banner__price-value position-banner__price-value--current">
+              ${formatPrice(position.currentPrice)}
+            </span>
+          </div>
+        </div>
+
+        {/* Center: P&L */}
+        <div className="position-banner__pnl" style={{ color: pnlColor }}>
+          <span className="position-banner__pnl-value">{formatUsd(position.pnlUsd)}</span>
+          <span className="position-banner__pnl-pct">{formatPercent(position.pnlPct)}</span>
+        </div>
+
+        {/* Center-Right: Health Gauge */}
+        <div className="position-banner__health">
+          <HealthGauge
+            stopPrice={position.stopPrice}
+            currentPrice={position.currentPrice}
+            peakPrice={position.peakPrice}
+            entryPrice={position.entryPrice}
+            side={position.side}
+            healthStatus={position.healthStatus}
+          />
+        </div>
+
+        {/* Right: Trailing Info */}
+        <div className="position-banner__trailing">
+          <TrailingInfo
+            active={position.trailingState.active}
+            activatedAt={position.trailingState.activatedAt}
+            updateCount={position.trailingState.updateCount}
+            currentStopPrice={position.trailingState.currentStopPrice}
+            distanceFromPeak={position.distanceFromPeak}
+          />
+        </div>
+
+        {/* Far Right: Duration & Size */}
+        <div className="position-banner__meta">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="position-banner__meta-item">
+                <Clock size={12} />
+                <span>{formatDuration(position.duration)}</span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>Position hold time</TooltipContent>
           </Tooltip>
-        )}
-      </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="position-banner__meta-item">
+                <span className="position-banner__meta-label">Size</span>
+                <span>{formatUsd(position.notionalUsd)}</span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>Position notional value</TooltipContent>
+          </Tooltip>
+          {position.leverage && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="position-banner__meta-item">
+                  <span className="position-banner__meta-label">Lev</span>
+                  <span>{position.leverage}x</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>Leverage</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
 
-      <style>{styles}</style>
-    </div>
+        <style>{styles}</style>
+      </div>
+    </TooltipProvider>
   );
 };
 
@@ -607,12 +643,6 @@ const styles = `
 
   .trailing-info__label--active {
     color: var(--success);
-  }
-
-  .trailing-info__tag {
-    font-size: 10px !important;
-    padding: 0 6px !important;
-    border-radius: 4px !important;
   }
 
   .trailing-info__details {

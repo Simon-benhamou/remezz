@@ -5,7 +5,6 @@
  */
 
 import React, { useMemo } from 'react';
-import { Empty, Skeleton, Tag, Tooltip } from 'antd';
 import {
   ArrowUpCircle,
   ArrowDownCircle,
@@ -19,6 +18,15 @@ import {
   Activity,
   Zap,
 } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from '@/components/ui/tooltip';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/shared/EmptyState';
+import { cn } from '@/lib/utils';
 import type { ActivityFeedProps, ActivityEvent } from '../../types/cockpit';
 
 // ============================================================================
@@ -56,7 +64,7 @@ const getRelativeTime = (ts: string): string => {
 interface EventConfig {
   icon: React.ReactNode;
   color: string;
-  tagColor: string;
+  tagClasses: string;
   label: string;
 }
 
@@ -66,7 +74,7 @@ const getEventConfig = (kind: string, level: string): EventConfig => {
     return {
       icon: <XCircle size={14} />,
       color: 'var(--error)',
-      tagColor: 'red',
+      tagClasses: 'bg-red-500/20 text-red-400 ring-1 ring-red-500/30',
       label: 'ERROR',
     };
   }
@@ -74,7 +82,7 @@ const getEventConfig = (kind: string, level: string): EventConfig => {
     return {
       icon: <AlertTriangle size={14} />,
       color: 'var(--warning)',
-      tagColor: 'orange',
+      tagClasses: 'bg-orange-500/20 text-orange-400 ring-1 ring-orange-500/30',
       label: 'WARN',
     };
   }
@@ -85,63 +93,63 @@ const getEventConfig = (kind: string, level: string): EventConfig => {
       return {
         icon: <ArrowUpCircle size={14} />,
         color: 'var(--success)',
-        tagColor: 'green',
+        tagClasses: 'bg-green-500/20 text-green-400 ring-1 ring-green-500/30',
         label: 'ENTRY',
       };
     case 'exit':
       return {
         icon: <ArrowDownCircle size={14} />,
         color: 'var(--accent-secondary)',
-        tagColor: 'blue',
+        tagClasses: 'bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/30',
         label: 'EXIT',
       };
     case 'trail':
       return {
         icon: <Target size={14} />,
         color: '#8b5cf6',
-        tagColor: 'purple',
+        tagClasses: 'bg-purple-500/20 text-purple-400 ring-1 ring-purple-500/30',
         label: 'TRAIL',
       };
     case 'signal':
       return {
         icon: <Zap size={14} />,
         color: '#eab308',
-        tagColor: 'gold',
+        tagClasses: 'bg-yellow-500/20 text-yellow-400 ring-1 ring-yellow-500/30',
         label: 'SIGNAL',
       };
     case 'symbol_proximity':
       return {
         icon: <Radio size={14} />,
         color: 'var(--accent)',
-        tagColor: 'cyan',
+        tagClasses: 'bg-cyan-500/20 text-cyan-400 ring-1 ring-cyan-500/30',
         label: 'RADAR',
       };
     case 'market_regime':
       return {
         icon: <TrendingUp size={14} />,
         color: 'var(--text-secondary)',
-        tagColor: 'default',
+        tagClasses: 'bg-muted text-muted-foreground ring-1 ring-border',
         label: 'REGIME',
       };
     case 'position_update':
       return {
         icon: <Activity size={14} />,
         color: '#6366f1',
-        tagColor: 'geekblue',
+        tagClasses: 'bg-indigo-500/20 text-indigo-400 ring-1 ring-indigo-500/30',
         label: 'UPDATE',
       };
     case 'opportunity_alert':
       return {
         icon: <Bell size={14} />,
         color: '#f97316',
-        tagColor: 'orange',
+        tagClasses: 'bg-orange-500/20 text-orange-400 ring-1 ring-orange-500/30',
         label: 'ALERT',
       };
     default:
       return {
         icon: <Info size={14} />,
         color: 'var(--text-secondary)',
-        tagColor: 'default',
+        tagClasses: 'bg-muted text-muted-foreground ring-1 ring-border',
         label: kind.toUpperCase(),
       };
   }
@@ -167,31 +175,40 @@ const EventItem: React.FC<EventItemProps> = ({ event }) => {
 
       <div className="activity-item__content">
         <div className="activity-item__header">
-          <Tag color={config.tagColor} className="activity-item__tag">
+          <span
+            className={cn(
+              'inline-flex items-center rounded px-[5px] text-[9px] font-semibold leading-4',
+              config.tagClasses
+            )}
+          >
             {config.label}
-          </Tag>
+          </span>
           {event.symbol && (
             <span className="activity-item__symbol">{event.symbol}</span>
           )}
-          <Tooltip title={formatFullTime(event.timestamp)}>
-            <span className="activity-item__time">
-              {formatTime(event.timestamp)}
-              {relTime && <span className="activity-item__rel-time">{relTime}</span>}
-            </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="activity-item__time">
+                {formatTime(event.timestamp)}
+                {relTime && <span className="activity-item__rel-time">{relTime}</span>}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{formatFullTime(event.timestamp)}</TooltipContent>
           </Tooltip>
         </div>
 
         <div className="activity-item__message">{event.message}</div>
 
         {event.details && Object.keys(event.details).length > 0 && (
-          <Tooltip
-            title={
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="activity-item__details-link">View details</span>
+            </TooltipTrigger>
+            <TooltipContent>
               <pre style={{ margin: 0, fontSize: 10 }}>
                 {JSON.stringify(event.details, null, 2)}
               </pre>
-            }
-          >
-            <span className="activity-item__details-link">View details</span>
+            </TooltipContent>
           </Tooltip>
         )}
       </div>
@@ -228,51 +245,56 @@ const ActivityFeed: React.FC<ActivityFeedProps> = ({ events, loading }) => {
   if (loading) {
     return (
       <div className="activity-feed activity-feed--loading">
-        <Skeleton active paragraph={{ rows: 5 }} />
+        <div className="flex flex-col gap-4">
+          <Skeleton className="h-4 w-3/4" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-5/6" />
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-4 w-4/5" />
+        </div>
         <style>{styles}</style>
       </div>
     );
   }
 
   return (
-    <div className="activity-feed">
-      <div className="activity-feed__header">
-        <Activity size={16} color="var(--text-muted)" />
-        <span className="activity-feed__title">Activity</span>
-        <span className="activity-feed__count">{events.length} events</span>
+    <TooltipProvider>
+      <div className="activity-feed">
+        <div className="activity-feed__header">
+          <Activity size={16} color="var(--text-muted)" />
+          <span className="activity-feed__title">Activity</span>
+          <span className="activity-feed__count">{events.length} events</span>
+        </div>
+
+        {events.length === 0 ? (
+          <div className="activity-feed__empty">
+            <EmptyState description="No activity yet" />
+          </div>
+        ) : (
+          <div className="activity-feed__list">
+            {todayEvents.length > 0 && (
+              <>
+                <div className="activity-feed__section-label">Today</div>
+                {todayEvents.map((event, idx) => (
+                  <EventItem key={`${event.timestamp}-${idx}`} event={event} />
+                ))}
+              </>
+            )}
+
+            {olderEvents.length > 0 && (
+              <>
+                <div className="activity-feed__section-label">Earlier</div>
+                {olderEvents.slice(0, 10).map((event, idx) => (
+                  <EventItem key={`older-${event.timestamp}-${idx}`} event={event} />
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
+        <style>{styles}</style>
       </div>
-
-      {events.length === 0 ? (
-        <div className="activity-feed__empty">
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No activity yet"
-          />
-        </div>
-      ) : (
-        <div className="activity-feed__list">
-          {todayEvents.length > 0 && (
-            <>
-              <div className="activity-feed__section-label">Today</div>
-              {todayEvents.map((event, idx) => (
-                <EventItem key={`${event.timestamp}-${idx}`} event={event} />
-              ))}
-            </>
-          )}
-
-          {olderEvents.length > 0 && (
-            <>
-              <div className="activity-feed__section-label">Earlier</div>
-              {olderEvents.slice(0, 10).map((event, idx) => (
-                <EventItem key={`older-${event.timestamp}-${idx}`} event={event} />
-              ))}
-            </>
-          )}
-        </div>
-      )}
-
-      <style>{styles}</style>
-    </div>
+    </TooltipProvider>
   );
 };
 
@@ -317,10 +339,6 @@ const styles = `
 
   .activity-feed__empty {
     padding: 32px;
-  }
-
-  .activity-feed__empty .ant-empty-description {
-    color: var(--text-muted);
   }
 
   .activity-feed__list {
@@ -384,14 +402,6 @@ const styles = `
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-  }
-
-  .activity-item__tag {
-    font-size: 9px !important;
-    padding: 0 5px !important;
-    border-radius: 3px !important;
-    font-weight: 600;
-    line-height: 16px;
   }
 
   .activity-item__symbol {

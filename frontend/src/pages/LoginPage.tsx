@@ -1,17 +1,42 @@
 import React from 'react';
-import { Card, Form, Input, Button, Typography, message, Divider, Space } from 'antd';
-import { UserOutlined, LockOutlined, GoogleOutlined, GithubOutlined } from '../icons';
 import { Link, useNavigate } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { User, Lock, Github, Globe, Loader2 } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
+import { toast } from '@/lib/toast';
 import { AUTH_FEATURES, HERO_METRICS } from './authContent';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Form,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormControl,
+  FormMessage,
+} from '@/components/ui/form';
 
-const { Title, Text } = Typography;
+const loginSchema = z.object({
+  username: z.string().min(1, 'Please enter your email'),
+  password: z.string().min(1, 'Please enter your password'),
+});
+
+type LoginFormValues = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
-  const [form] = Form.useForm();
   const navigate = useNavigate();
   const { signIn, isLoading, isAuthenticated } = useAuth();
+
+  const form = useForm<LoginFormValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      username: '',
+      password: '',
+    },
+  });
 
   React.useEffect(() => {
     if (isAuthenticated) {
@@ -19,133 +44,164 @@ export default function LoginPage() {
     }
   }, [isAuthenticated, navigate]);
 
-  const onFinish = async (values: any) => {
+  const onSubmit = async (values: LoginFormValues) => {
     try {
       const result = await api.auth.login(values.username, values.password);
       if (result?.token) {
         await signIn(result.token);
-        message.success(`Welcome back, ${result.user.username}!`);
+        toast.success(`Welcome back, ${result.user.username}!`);
         navigate('/operations', { replace: true });
       } else {
         throw new Error('Invalid response from server');
       }
     } catch (error: any) {
-      message.error(error?.response?.data?.error || 'Login failed');
+      toast.error(error?.response?.data?.error || 'Login failed');
     }
   };
 
   return (
-    <div className='auth-layout'>
-      <div className='auth-panel'>
-        <img src="/remezz-logo.svg" alt="Remezz" style={{ height: 36, marginBottom: 16 }} />
-        <h1 className='auth-panel__title'>Remezz</h1>
-        <p className='auth-panel__subtitle'>
+    <div className="auth-layout">
+      <div className="auth-panel">
+        <img src="/remezz-logo.svg" alt="Remezz" className="h-9 mb-4" />
+        <h1 className="auth-panel__title">Remezz</h1>
+        <p className="auth-panel__subtitle">
           Trade smarter with AI agents that monitor markets 24/7, react instantly to volatility, and keep risk under control.
         </p>
-        <div className='auth-panel__metrics'>
+        <div className="auth-panel__metrics">
           {HERO_METRICS.map((metric) => (
-            <div key={metric.label} className='auth-panel__metric'>
-              <span className='auth-panel__metric-label'>{metric.label}</span>
-              <span className='auth-panel__metric-value'>{metric.value}</span>
+            <div key={metric.label} className="auth-panel__metric">
+              <span className="auth-panel__metric-label">{metric.label}</span>
+              <span className="auth-panel__metric-value">{metric.value}</span>
             </div>
           ))}
         </div>
-        <div className='auth-panel__features'>
+        <div className="auth-panel__features">
           {AUTH_FEATURES.map((feature) => (
-            <div key={feature} className='auth-panel__feature'>
-              <span className='auth-panel__feature-icon'>
-                <span role='img' aria-label='check'>
-                  ✓
+            <div key={feature} className="auth-panel__feature">
+              <span className="auth-panel__feature-icon">
+                <span role="img" aria-label="check">
+                  &#10003;
                 </span>
               </span>
-              <span className='auth-panel__feature-label'>{feature}</span>
+              <span className="auth-panel__feature-label">{feature}</span>
             </div>
           ))}
         </div>
-        <div className='auth-panel__footer'>
+        <div className="auth-panel__footer">
           Trusted by professional quant desks and high-frequency trading teams worldwide.
         </div>
       </div>
 
-      <div className='auth-form-wrapper'>
-        <Card className='auth-form-card' bordered={false}>
-          <div style={{ marginBottom: 32 }}>
-            <Title level={2} style={{ color: 'var(--text-primary)', marginBottom: 8 }}>
+      <div className="auth-form-wrapper">
+        <div className="auth-form-card rounded-xl border border-border bg-card p-8">
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">
               Welcome back
-            </Title>
-            <Text type='secondary' style={{ color: 'var(--text-muted)' }}>
+            </h2>
+            <p className="text-sm text-[var(--text-muted)]">
               Sign in to your account to continue
-            </Text>
+            </p>
           </div>
 
-          <Form
-            form={form}
-            name='login'
-            onFinish={onFinish}
-            layout='vertical'
-            size='large'
-            requiredMark={false}
-          >
-            <Form.Item
-              name='username'
-              label='Email'
-              rules={[{ required: true, message: 'Please enter your email' }]}
-            >
-              <Input
-                prefix={<UserOutlined style={{ color: 'var(--accent)' }} />}
-                placeholder='name@example.com'
-                autoComplete='username'
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <FormField
+                control={form.control}
+                name="username"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email</FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--accent)]" />
+                        <Input
+                          placeholder="name@example.com"
+                          autoComplete="username"
+                          className="pl-9 h-10"
+                          {...field}
+                        />
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
-            </Form.Item>
 
-            <Form.Item
-              name='password'
-              label='Password'
-              rules={[{ required: true, message: 'Please enter your password' }]}
-            >
-              <Input.Password
-                prefix={<LockOutlined style={{ color: 'var(--accent)' }} />}
-                placeholder='Enter your password'
-                autoComplete='current-password'
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Password</FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--accent)]" />
+                        <Input
+                          type="password"
+                          placeholder="Enter your password"
+                          autoComplete="current-password"
+                          className="pl-9 h-10"
+                          {...field}
+                        />
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
-            </Form.Item>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-              <Link to='/register'>Need an account?</Link>
-              <Link to='/reset-password'>Forgot password?</Link>
-            </div>
+              <div className="flex justify-between mb-4">
+                <Link to="/register" className="text-sm text-primary hover:underline">
+                  Need an account?
+                </Link>
+                <Link to="/reset-password" className="text-sm text-primary hover:underline">
+                  Forgot password?
+                </Link>
+              </div>
 
-            <Form.Item style={{ marginBottom: 0 }}>
               <Button
-                type='primary'
-                htmlType='submit'
-                loading={isLoading}
-                block
+                type="submit"
+                className="w-full h-10"
+                disabled={isLoading}
               >
+                {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Sign In
               </Button>
-            </Form.Item>
+            </form>
           </Form>
 
-          <Divider plain style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-            Or continue with
-          </Divider>
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-[var(--border-subtle)]" />
+            </div>
+            <div className="relative flex justify-center text-xs">
+              <span className="bg-card px-2 text-[var(--text-muted)]">Or continue with</span>
+            </div>
+          </div>
 
-          <Space direction='vertical' size={12} style={{ width: '100%' }}>
-            <Button icon={<GoogleOutlined />} block disabled>
+          <div className="flex flex-col gap-3">
+            <Button variant="outline" className="w-full" disabled>
+              <Globe className="mr-2 h-4 w-4" />
               Google (coming soon)
             </Button>
-            <Button icon={<GithubOutlined />} block disabled>
+            <Button variant="outline" className="w-full" disabled>
+              <Github className="mr-2 h-4 w-4" />
               GitHub (coming soon)
             </Button>
-          </Space>
-
-          <div style={{ marginTop: 24, fontSize: 12, color: 'var(--text-muted)' }}>
-            By continuing, you agree to the{' '}
-            <a href='https://remezz.io/terms' target='_blank' rel='noreferrer'>Terms of Service</a> and{' '}
-            <a href='https://remezz.io/privacy' target='_blank' rel='noreferrer'>Privacy Policy</a>.
           </div>
-        </Card>
+
+          <p className="mt-6 text-xs text-[var(--text-muted)]">
+            By continuing, you agree to the{' '}
+            <a href="https://remezz.io/terms" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+              Terms of Service
+            </a>{' '}
+            and{' '}
+            <a href="https://remezz.io/privacy" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+              Privacy Policy
+            </a>
+            .
+          </p>
+        </div>
       </div>
     </div>
   );

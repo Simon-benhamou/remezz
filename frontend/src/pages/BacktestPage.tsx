@@ -1,47 +1,49 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useForm, Controller } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
 import {
-  Card,
-  Form,
-  DatePicker,
-  InputNumber,
-  Select,
-  Button,
-  Typography,
-  Spin,
-  Table,
-  Statistic,
-  Row,
-  Col,
-  Tag,
-  Tabs,
-  Space,
-  List,
-  message,
-  Progress,
-  Tooltip,
-  Empty,
-  Alert,
-} from 'antd';
-import {
-  LineChartOutlined,
-  DollarOutlined,
-  PercentageOutlined,
-  ThunderboltOutlined,
-  WarningOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  FilterOutlined,
-  DownloadOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons';
-import { ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown } from 'lucide-react';
+  ArrowUpRight,
+  ArrowDownRight,
+  LineChart,
+  Zap,
+  AlertTriangle,
+  Filter,
+  RefreshCw,
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
+  ArrowUpDown,
+} from 'lucide-react';
 import dayjs from 'dayjs';
-import type { Dayjs } from 'dayjs';
-import type { ColumnsType } from 'antd/es/table';
 import { api } from '../api';
-
-const { Title, Text, Paragraph } = Typography;
-const { RangePicker } = DatePicker;
+import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 // ============================================================================
 // TYPES
@@ -134,6 +136,20 @@ type BacktestRunListItem = {
 };
 
 // ============================================================================
+// FORM SCHEMA
+// ============================================================================
+
+const backtestSchema = z.object({
+  startDate: z.string(),
+  endDate: z.string(),
+  initialCapital: z.number().min(100).max(1000000),
+  leverage: z.number(),
+  symbols: z.array(z.string()).min(1),
+});
+
+type BacktestFormValues = z.infer<typeof backtestSchema>;
+
+// ============================================================================
 // HELPER COMPONENTS
 // ============================================================================
 
@@ -150,30 +166,30 @@ const formatPercent = (value: number | null | undefined) => {
 };
 
 const SideTag: React.FC<{ side: 'long' | 'short' }> = ({ side }) => (
-  <Tag color={side === 'long' ? 'green' : 'red'} style={{ margin: 0 }}>
-    {side === 'long' ? (
-      <><ArrowUpRight size={12} style={{ marginRight: 2 }} />LONG</>
-    ) : (
-      <><ArrowDownRight size={12} style={{ marginRight: 2 }} />SHORT</>
-    )}
-  </Tag>
+  <span className={cn(
+    "inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs font-semibold",
+    side === 'long' ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
+  )}>
+    {side === 'long' ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+    {side.toUpperCase()}
+  </span>
 );
 
 const ExitReasonTag: React.FC<{ reason: string }> = ({ reason }) => {
   const colorMap: Record<string, string> = {
-    'SL': 'red',
-    'TP': 'green',
-    'TRAIL': 'blue',
-    'TIME': 'orange',
-    'END': 'default',
+    'SL': 'bg-destructive/15 text-destructive',
+    'TP': 'bg-success/15 text-success',
+    'TRAIL': 'bg-primary/15 text-primary',
+    'TIME': 'bg-warning/15 text-warning',
+    'END': 'bg-muted text-muted-foreground',
   };
-  return <Tag color={colorMap[reason] || 'default'}>{reason}</Tag>;
+  return <span className={cn("rounded px-1.5 py-0.5 text-xs font-medium", colorMap[reason] || "bg-muted text-muted-foreground")}>{reason}</span>;
 };
 
 const PnlText: React.FC<{ value: number; showCurrency?: boolean }> = ({ value, showCurrency = true }) => (
-  <Text style={{ color: value >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 600 }}>
+  <span className={cn("font-semibold", value >= 0 ? "text-success" : "text-destructive")}>
     {showCurrency ? formatCurrency(value) : formatPercent(value)}
-  </Text>
+  </span>
 );
 
 // ============================================================================
@@ -182,23 +198,23 @@ const PnlText: React.FC<{ value: number; showCurrency?: boolean }> = ({ value, s
 
 const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = ({ data }) => {
   if (!data || data.length < 2) return null;
-  
+
   const width = 600;
   const height = 200;
   const padding = { top: 20, right: 20, bottom: 30, left: 60 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  
+
   const values = data.map(d => d.equity);
   const minVal = Math.min(...values) * 0.95;
   const maxVal = Math.max(...values) * 1.05;
-  
+
   const xScale = (i: number) => padding.left + (i / (data.length - 1)) * chartWidth;
   const yScale = (val: number) => padding.top + (1 - (val - minVal) / (maxVal - minVal)) * chartHeight;
-  
+
   const pathD = data.map((d, i) => `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${yScale(d.equity)}`).join(' ');
   const areaD = pathD + ` L ${xScale(data.length - 1)} ${height - padding.bottom} L ${padding.left} ${height - padding.bottom} Z`;
-  
+
   return (
     <svg width={width} height={height} style={{ background: 'var(--bg-primary)', borderRadius: 8 }}>
       {/* Grid lines */}
@@ -223,7 +239,7 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
           </text>
         </g>
       ))}
-      
+
       {/* Area fill */}
       <defs>
         <linearGradient id="equityGradient" x1="0" x2="0" y1="0" y2="1">
@@ -232,10 +248,10 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
         </linearGradient>
       </defs>
       <path d={areaD} fill="url(#equityGradient)" />
-      
+
       {/* Line */}
       <path d={pathD} fill="none" stroke="var(--success)" strokeWidth={2} />
-      
+
       {/* Final value dot */}
       <circle
         cx={xScale(data.length - 1)}
@@ -249,21 +265,21 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
 
 const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }> = ({ data }) => {
   if (!data || data.length < 2) return null;
-  
+
   const width = 600;
   const height = 150;
   const padding = { top: 10, right: 20, bottom: 30, left: 60 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  
+
   const maxDD = Math.max(...data.map(d => d.drawdown), 5);
-  
+
   const xScale = (i: number) => padding.left + (i / (data.length - 1)) * chartWidth;
   const yScale = (val: number) => padding.top + (val / maxDD) * chartHeight;
-  
+
   const pathD = data.map((d, i) => `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${yScale(d.drawdown)}`).join(' ');
   const areaD = `M ${padding.left} ${padding.top} ` + pathD.substring(2) + ` L ${xScale(data.length - 1)} ${padding.top} Z`;
-  
+
   return (
     <svg width={width} height={height} style={{ background: 'var(--bg-primary)', borderRadius: 8 }}>
       {/* Area fill */}
@@ -274,10 +290,10 @@ const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }
         </linearGradient>
       </defs>
       <path d={areaD} fill="url(#ddGradient)" />
-      
+
       {/* Line */}
       <path d={pathD} fill="none" stroke="var(--error)" strokeWidth={2} />
-      
+
       {/* Max DD line */}
       <line
         x1={padding.left}
@@ -306,7 +322,6 @@ const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }
 // ============================================================================
 
 export default function BacktestPage() {
-  const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [runsLoading, setRunsLoading] = useState(false);
@@ -315,11 +330,17 @@ export default function BacktestPage() {
   const [selectedMonth, setSelectedMonth] = useState<string | 'all'>('all');
   const [selectedSymbol, setSelectedSymbol] = useState<string | 'all'>('all');
   const [selectedSide, setSelectedSide] = useState<'all' | 'long' | 'short'>('all');
+  const [tradePage, setTradePage] = useState(1);
+  const [tradePageSize, setTradePageSize] = useState(50);
+  const [tradeSortField, setTradeSortField] = useState<'netPnlUsd' | null>(null);
+  const [tradeSortDir, setTradeSortDir] = useState<'asc' | 'desc'>('desc');
+  const [monthlySortField, setMonthlySortField] = useState<'pnlUsd' | null>(null);
+  const [monthlySortDir, setMonthlySortDir] = useState<'asc' | 'desc'>('desc');
 
-  // V5.93: Combined backtest winners (Jan-Dec 2025, $2000, 4.5x) → +1308% ROI
+  // V5.93: Combined backtest winners (Jan-Dec 2025, $2000, 4.5x) -> +1308% ROI
   const defaultSymbols = ['AVAX/USDT:USDT', 'FET/USDT:USDT', 'WIF/USDT:USDT', 'DOT/USDT:USDT', 'TIA/USDT:USDT', 'IMX/USDT:USDT', 'STX/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'BTC/USDT:USDT'];
   const symbolOptions = [
-    // TOP 10 — combined backtest winners
+    // TOP 10 -- combined backtest winners
     { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT (+$4,850)' },
     { value: 'FET/USDT:USDT', label: 'FET/USDT (+$4,558)' },
     { value: 'WIF/USDT:USDT', label: 'WIF/USDT (+$3,686)' },
@@ -330,7 +351,7 @@ export default function BacktestPage() {
     { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT (+$1,617)' },
     { value: 'ADA/USDT:USDT', label: 'ADA/USDT (+$1,241)' },
     { value: 'BTC/USDT:USDT', label: 'BTC/USDT (+$339)' },
-    // OK — available but not defaults
+    // OK -- available but not defaults
     { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT (+15%)' },
     { value: 'SOL/USDT:USDT', label: 'SOL/USDT (+25%)' },
     { value: 'XRP/USDT:USDT', label: 'XRP/USDT (+12%)' },
@@ -338,13 +359,37 @@ export default function BacktestPage() {
     { value: 'LINK/USDT:USDT', label: 'LINK/USDT (+7%)' },
   ];
 
+  const form = useForm<BacktestFormValues>({
+    resolver: zodResolver(backtestSchema),
+    defaultValues: {
+      startDate: '2024-01-01',
+      endDate: '2025-12-26',
+      initialCapital: 2000,
+      leverage: 4.5,
+      symbols: defaultSymbols,
+    },
+  });
+
+  const watchSymbols = form.watch('symbols');
+
+  const toggleSymbol = (value: string) => {
+    const current = form.getValues('symbols');
+    if (current.includes(value)) {
+      if (current.length > 1) {
+        form.setValue('symbols', current.filter(s => s !== value));
+      }
+    } else {
+      form.setValue('symbols', [...current, value]);
+    }
+  };
+
   const refreshRuns = async () => {
     setRunsLoading(true);
     try {
       const data = await api.backtest.listRuns(20);
       setRuns(data.runs);
     } catch (error: any) {
-      message.error(error?.response?.data?.error || 'Failed to load backtest history');
+      toast.error(error?.response?.data?.error || 'Failed to load backtest history');
     } finally {
       setRunsLoading(false);
     }
@@ -360,9 +405,9 @@ export default function BacktestPage() {
       const data = await api.backtest.getRun(id);
       setResult(data);
       setSelectedRunId(id);
-      message.success('Loaded cached backtest');
+      toast.success('Loaded cached backtest');
     } catch (error: any) {
-      message.error(error?.response?.data?.error || 'Failed to load cached backtest');
+      toast.error(error?.response?.data?.error || 'Failed to load cached backtest');
     } finally {
       setLoading(false);
     }
@@ -373,39 +418,37 @@ export default function BacktestPage() {
     try {
       await api.backtest.clearRuns();
       setRuns([]);
-      message.success('Backtest history cleared');
+      toast.success('Backtest history cleared');
     } catch (error: any) {
-      message.error(error?.response?.data?.error || 'Failed to clear history');
+      toast.error(error?.response?.data?.error || 'Failed to clear history');
     } finally {
       setRunsLoading(false);
     }
   };
 
-  const handleRunBacktest = async (values: any) => {
+  const handleRunBacktest = (values: BacktestFormValues) => {
     setLoading(true);
     setResult(null);
     setSelectedRunId(null);
-    
-    try {
-      const [startDate, endDate] = values.dateRange;
-      const params = {
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
-        initialCapital: values.initialCapital,
-        symbols: values.symbols,
-        leverage: values.leverage,
-      };
-      
-      message.info('Starting backtest... This may take a few minutes.');
-      const data = await api.backtest.run(params);
+
+    const params = {
+      startDate: new Date(values.startDate).toISOString(),
+      endDate: new Date(values.endDate).toISOString(),
+      initialCapital: values.initialCapital,
+      symbols: values.symbols,
+      leverage: values.leverage,
+    };
+
+    toast.info('Starting backtest... This may take a few minutes.');
+    api.backtest.run(params).then((data) => {
       setResult(data);
-      message.success(`Backtest completed! ${data.trades.length} trades analyzed.`);
+      toast.success(`Backtest completed! ${data.trades.length} trades analyzed.`);
       void refreshRuns();
-    } catch (error: any) {
-      message.error(error?.response?.data?.error || 'Backtest failed');
-    } finally {
+    }).catch((error: any) => {
+      toast.error(error?.response?.data?.error || 'Backtest failed');
+    }).finally(() => {
       setLoading(false);
-    }
+    });
   };
 
   // Filter trades
@@ -439,608 +482,581 @@ export default function BacktestPage() {
     return [...new Set(result.trades.map(t => t.month))].sort();
   }, [result]);
 
-  // Table columns
-  const tradeColumns: ColumnsType<BacktestTrade> = [
-    {
-      title: 'Date',
-      dataIndex: 'entryTime',
-      key: 'entryTime',
-      width: 140,
-      render: (v: string) => dayjs(v).format('DD/MM/YY HH:mm'),
-    },
-    {
-      title: 'Symbol',
-      dataIndex: 'symbol',
-      key: 'symbol',
-      width: 120,
-      render: (v: string) => v.replace('/USDT:USDT', ''),
-    },
-    {
-      title: 'Side',
-      dataIndex: 'side',
-      key: 'side',
-      width: 80,
-      render: (v: 'long' | 'short') => <SideTag side={v} />,
-    },
-    {
-      title: 'Entry',
-      dataIndex: 'entryPrice',
-      key: 'entryPrice',
-      width: 100,
-      align: 'right',
-      render: (v: number) => `$${(v ?? 0).toFixed(4)}`,
-    },
-    {
-      title: 'Exit',
-      dataIndex: 'exitPrice',
-      key: 'exitPrice',
-      width: 100,
-      align: 'right',
-      render: (v: number) => `$${(v ?? 0).toFixed(4)}`,
-    },
-    {
-      title: 'Notional',
-      dataIndex: 'notionalUsd',
-      key: 'notionalUsd',
-      width: 100,
-      align: 'right',
-      render: (v: number) => `$${(v ?? 0).toFixed(0)}`,
-    },
-    {
-      title: 'Hold',
-      dataIndex: 'holdMinutes',
-      key: 'holdMinutes',
-      width: 80,
-      align: 'right',
-      render: (v: number) => v >= 60 ? `${(v / 60).toFixed(1)}h` : `${v}m`,
-    },
-    {
-      title: 'PnL $',
-      dataIndex: 'netPnlUsd',
-      key: 'netPnlUsd',
-      width: 100,
-      align: 'right',
-      render: (v: number) => <PnlText value={v} />,
-      sorter: (a, b) => a.netPnlUsd - b.netPnlUsd,
-    },
-    {
-      title: 'PnL %',
-      dataIndex: 'netPnlPct',
-      key: 'netPnlPct',
-      width: 80,
-      align: 'right',
-      render: (v: number) => <PnlText value={v} showCurrency={false} />,
-    },
-    {
-      title: 'Exit',
-      dataIndex: 'exitReason',
-      key: 'exitReason',
-      width: 70,
-      render: (v: string) => <ExitReasonTag reason={v} />,
-    },
-    {
-      title: 'Capital',
-      key: 'capital',
-      width: 100,
-      align: 'right',
-      render: (_, r: BacktestTrade) => (
-        <Tooltip title={`Before: $${(r.capitalBefore ?? 0).toFixed(0)} → After: $${(r.capitalAfter ?? 0).toFixed(0)}`}>
-          <span style={{ color: 'var(--text-secondary)' }}>${(r.capitalAfter ?? 0).toFixed(0)}</span>
-        </Tooltip>
-      ),
-    },
-  ];
+  // Sorted + paginated trades
+  const sortedTrades = useMemo(() => {
+    const arr = [...filteredTrades];
+    if (tradeSortField === 'netPnlUsd') {
+      arr.sort((a, b) => tradeSortDir === 'asc' ? a.netPnlUsd - b.netPnlUsd : b.netPnlUsd - a.netPnlUsd);
+    }
+    return arr;
+  }, [filteredTrades, tradeSortField, tradeSortDir]);
 
-  const monthlyColumns: ColumnsType<MonthlyStats> = [
-    {
-      title: 'Month',
-      dataIndex: 'month',
-      key: 'month',
-      width: 100,
-      render: (v: string) => dayjs(v).format('MMM YYYY'),
-    },
-    {
-      title: 'Trades',
-      dataIndex: 'trades',
-      key: 'trades',
-      width: 80,
-      align: 'right',
-    },
-    {
-      title: 'W/L',
-      key: 'wl',
-      width: 80,
-      render: (_, r) => (
-        <span>
-          <Text style={{ color: 'var(--success)' }}>{r.wins}</Text>
-          {' / '}
-          <Text style={{ color: 'var(--error)' }}>{r.losses}</Text>
-        </span>
-      ),
-    },
-    {
-      title: 'Win Rate',
-      dataIndex: 'winRate',
-      key: 'winRate',
-      width: 90,
-      align: 'right',
-      render: (v: number) => (
-        <Text style={{ color: (v ?? 0) >= 50 ? 'var(--success)' : 'var(--error)' }}>
-          {(v ?? 0).toFixed(1)}%
-        </Text>
-      ),
-    },
-    {
-      title: 'PnL',
-      dataIndex: 'pnlUsd',
-      key: 'pnlUsd',
-      width: 100,
-      align: 'right',
-      render: (v: number) => <PnlText value={v} />,
-      sorter: (a, b) => a.pnlUsd - b.pnlUsd,
-    },
-    {
-      title: 'ROI',
-      dataIndex: 'pnlPct',
-      key: 'pnlPct',
-      width: 80,
-      align: 'right',
-      render: (v: number) => <PnlText value={v} showCurrency={false} />,
-    },
-    {
-      title: 'Long/Short',
-      key: 'ls',
-      width: 100,
-      render: (_, r) => `${r.longTrades}L / ${r.shortTrades}S`,
-    },
-    {
-      title: 'Best',
-      dataIndex: 'maxWinUsd',
-      key: 'maxWinUsd',
-      width: 90,
-      align: 'right',
-      render: (v: number) => <Text style={{ color: 'var(--success)' }}>${(v ?? 0).toFixed(0)}</Text>,
-    },
-    {
-      title: 'Worst',
-      dataIndex: 'maxLossUsd',
-      key: 'maxLossUsd',
-      width: 90,
-      align: 'right',
-      render: (v: number) => <Text style={{ color: 'var(--error)' }}>${Math.abs(v ?? 0).toFixed(0)}</Text>,
-    },
-    {
-      title: 'Capital End',
-      dataIndex: 'capitalEnd',
-      key: 'capitalEnd',
-      width: 110,
-      align: 'right',
-      render: (v: number) => `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-    },
-  ];
+  const paginatedTrades = useMemo(() => {
+    const start = (tradePage - 1) * tradePageSize;
+    return sortedTrades.slice(start, start + tradePageSize);
+  }, [sortedTrades, tradePage, tradePageSize]);
+
+  const totalTradePages = Math.ceil(sortedTrades.length / tradePageSize);
+
+  // Sorted monthly stats
+  const sortedMonthly = useMemo(() => {
+    if (!result) return [];
+    const arr = [...result.monthlyStats];
+    if (monthlySortField === 'pnlUsd') {
+      arr.sort((a, b) => monthlySortDir === 'asc' ? a.pnlUsd - b.pnlUsd : b.pnlUsd - a.pnlUsd);
+    }
+    return arr;
+  }, [result, monthlySortField, monthlySortDir]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setTradePage(1);
+  }, [selectedMonth, selectedSymbol, selectedSide]);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1600, margin: '0 auto' }}>
-      <Title level={2} style={{ color: 'var(--text-primary)', marginBottom: 24 }}>
-        <LineChartOutlined style={{ marginRight: 12 }} />
-        Strategy Backtester
-      </Title>
+    <TooltipProvider>
+      <div className="mx-auto max-w-[1600px] p-6">
+        <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-foreground">
+          <LineChart className="h-7 w-7" />
+          Strategy Backtester
+        </h2>
 
-      {/* History */}
-      <Card
-        style={{ marginBottom: 24, background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}
-        bodyStyle={{ padding: 16 }}
-        title={<Text style={{ color: 'var(--text-primary)' }}>Recent Backtests (cached)</Text>}
-        extra={
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => void refreshRuns()} loading={runsLoading}>
-              Refresh
-            </Button>
-            <Button danger onClick={() => void handleClearRuns()} loading={runsLoading}>
-              Clear
-            </Button>
-          </Space>
-        }
-      >
-        {runs.length === 0 ? (
-          <Empty description={<Text style={{ color: 'var(--text-secondary)' }}>No cached runs yet</Text>} />
-        ) : (
-          <List
-            loading={runsLoading}
-            dataSource={runs}
-            renderItem={(r) => {
-              const isSelected = selectedRunId === r.id;
-              return (
-                <List.Item
-                  style={{
-                    border: '1px solid var(--border-color)',
-                    borderRadius: 8,
-                    marginBottom: 8,
-                    padding: 12,
-                    background: isSelected ? 'var(--bg-primary)' : 'transparent',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => void handleLoadRun(r.id)}
-                >
-                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                    <Space direction="vertical" size={0}>
-                      <Text style={{ color: 'var(--text-primary)' }}>
-                        {dayjs(r.createdAt).format('DD/MM/YY HH:mm')} · ${r.params.initialCapital.toLocaleString()} · {r.params.leverage}x
-                      </Text>
-                      <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-                        {dayjs(r.params.startDate).format('YYYY-MM-DD')} → {dayjs(r.params.endDate).format('YYYY-MM-DD')} · {r.params.symbols.length} symbols
-                      </Text>
-                    </Space>
-                    <Space direction="vertical" size={0} style={{ textAlign: 'right' }}>
-                      <Text style={{ color: r.summary.totalPnlUsd >= 0 ? 'var(--success)' : 'var(--error)' }}>
-                        {formatCurrency(r.summary.totalPnlUsd)} ({formatPercent(r.summary.totalPnlPct)})
-                      </Text>
-                      <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-                        {r.summary.totalTrades} trades · WR {(r.summary.winRate ?? 0).toFixed(1)}% · DD {(r.summary.maxDrawdownPct ?? 0).toFixed(1)}%
-                      </Text>
-                    </Space>
-                  </Space>
-                </List.Item>
-              );
-            }}
-          />
-        )}
-      </Card>
-      
-      {/* Form */}
-      <Card 
-        style={{ marginBottom: 24, background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}
-        bodyStyle={{ padding: 24 }}
-      >
-        <Form
-          form={form}
-          layout="inline"
-          onFinish={handleRunBacktest}
-          initialValues={{
-            initialCapital: 2000,
-            leverage: 4.5,
-            symbols: defaultSymbols,
-            // Data files cover 2024-01-01 to 2025-12-26
-            dateRange: [dayjs('2024-01-01'), dayjs('2025-12-26')],
-          }}
-          style={{ gap: 16, flexWrap: 'wrap' }}
-        >
-          <Form.Item
-            name="dateRange"
-            label={<Text style={{ color: 'var(--text-secondary)' }}>Period</Text>}
-            rules={[{ required: true }]}
-          >
-            <RangePicker 
-              style={{ width: 280 }}
-              disabledDate={(d) => d.isAfter(dayjs())}
-            />
-          </Form.Item>
-          
-          <Form.Item
-            name="initialCapital"
-            label={<Text style={{ color: 'var(--text-secondary)' }}>Capital ($)</Text>}
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={100}
-              max={1000000}
-              step={1000}
-              style={{ width: 120 }}
-              formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-            />
-          </Form.Item>
-          
-          <Form.Item
-            name="leverage"
-            label={<Text style={{ color: 'var(--text-secondary)' }}>Leverage</Text>}
-            rules={[{ required: true }]}
-          >
-            <Select style={{ width: 80 }}>
-              <Select.Option value={3}>3x</Select.Option>
-              <Select.Option value={4}>4x</Select.Option>
-              <Select.Option value={4.5}>4.5x</Select.Option>
-              <Select.Option value={5}>5x</Select.Option>
-            </Select>
-          </Form.Item>
-          
-          <Form.Item
-            name="symbols"
-            label={<Text style={{ color: 'var(--text-secondary)' }}>Symbols</Text>}
-            rules={[{ required: true }]}
-          >
-            <Select
-              mode="multiple"
-              style={{ minWidth: 300 }}
-              options={symbolOptions}
-              maxTagCount={2}
-            />
-          </Form.Item>
-          
-          <Form.Item>
+        {/* History */}
+        <div className="mb-6 rounded-xl border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <span className="text-sm font-medium text-foreground">Recent Backtests (cached)</span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void refreshRuns()}
+                disabled={runsLoading}
+              >
+                {runsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Refresh
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => void handleClearRuns()}
+                disabled={runsLoading}
+              >
+                Clear
+              </Button>
+            </div>
+          </div>
+          <div className="p-4">
+            {runsLoading && runs.length === 0 ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : runs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+                <LineChart className="mb-2 h-10 w-10 opacity-30" />
+                <span className="text-sm">No cached runs yet</span>
+              </div>
+            ) : (
+              <div className="max-h-[400px] space-y-2 overflow-y-auto">
+                {runs.map(r => {
+                  const isSelected = selectedRunId === r.id;
+                  return (
+                    <button
+                      key={r.id}
+                      onClick={() => void handleLoadRun(r.id)}
+                      className={cn(
+                        "w-full text-left rounded-lg border border-border p-3 transition-colors hover:bg-muted",
+                        isSelected && "bg-muted border-primary/40"
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="text-sm text-foreground">
+                            {dayjs(r.createdAt).format('DD/MM/YY HH:mm')} · ${r.params.initialCapital.toLocaleString()} · {r.params.leverage}x
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {dayjs(r.params.startDate).format('YYYY-MM-DD')} &rarr; {dayjs(r.params.endDate).format('YYYY-MM-DD')} · {r.params.symbols.length} symbols
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className={cn("text-sm font-medium", r.summary.totalPnlUsd >= 0 ? "text-success" : "text-destructive")}>
+                            {formatCurrency(r.summary.totalPnlUsd)} ({formatPercent(r.summary.totalPnlPct)})
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {r.summary.totalTrades} trades · WR {(r.summary.winRate ?? 0).toFixed(1)}% · DD {(r.summary.maxDrawdownPct ?? 0).toFixed(1)}%
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Form */}
+        <div className="mb-6 rounded-xl border border-border bg-card p-6">
+          <form onSubmit={form.handleSubmit(handleRunBacktest)} className="flex flex-wrap items-end gap-4">
+            <div className="space-y-1.5">
+              <label className="text-sm text-muted-foreground">Start Date</label>
+              <Controller
+                control={form.control}
+                name="startDate"
+                render={({ field }) => (
+                  <input
+                    type="date"
+                    value={field.value}
+                    onChange={field.onChange}
+                    className="h-9 rounded-md border border-border bg-card px-3 text-sm text-foreground"
+                  />
+                )}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm text-muted-foreground">End Date</label>
+              <Controller
+                control={form.control}
+                name="endDate"
+                render={({ field }) => (
+                  <input
+                    type="date"
+                    value={field.value}
+                    onChange={field.onChange}
+                    max={dayjs().format('YYYY-MM-DD')}
+                    className="h-9 rounded-md border border-border bg-card px-3 text-sm text-foreground"
+                  />
+                )}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm text-muted-foreground">Capital ($)</label>
+              <Controller
+                control={form.control}
+                name="initialCapital"
+                render={({ field }) => (
+                  <input
+                    type="number"
+                    min={100}
+                    max={1000000}
+                    step={1000}
+                    value={field.value}
+                    onChange={(e) => field.onChange(Number(e.target.value))}
+                    className="h-9 w-[120px] rounded-md border border-border bg-card px-3 text-sm text-foreground"
+                  />
+                )}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm text-muted-foreground">Leverage</label>
+              <Controller
+                control={form.control}
+                name="leverage"
+                render={({ field }) => (
+                  <Select value={String(field.value)} onValueChange={(v) => field.onChange(Number(v))}>
+                    <SelectTrigger className="w-[80px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="3">3x</SelectItem>
+                      <SelectItem value="4">4x</SelectItem>
+                      <SelectItem value="4.5">4.5x</SelectItem>
+                      <SelectItem value="5">5x</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
+
+            <div className="w-full space-y-1.5">
+              <label className="text-sm text-muted-foreground">Symbols ({watchSymbols.length} selected)</label>
+              <div className="flex flex-wrap gap-1.5">
+                {symbolOptions.map(opt => {
+                  const selected = watchSymbols.includes(opt.value);
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => toggleSymbol(opt.value)}
+                      className={cn(
+                        "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                        selected ? "bg-primary/20 text-primary border border-primary/40" : "bg-muted text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <Button
-              type="primary"
-              htmlType="submit"
-              loading={loading}
-              icon={<ThunderboltOutlined />}
-              size="large"
+              type="submit"
+              size="lg"
+              disabled={loading}
             >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
               Run Backtest
             </Button>
-          </Form.Item>
-        </Form>
-      </Card>
-      
-      {/* Loading */}
-      {loading && (
-        <Card style={{ marginBottom: 24, background: 'var(--bg-elevated)', border: '1px solid var(--border-color)', textAlign: 'center', padding: 48 }}>
-          <Spin size="large" />
-          <Paragraph style={{ color: 'var(--text-secondary)', marginTop: 16 }}>
-            Fetching market data and running simulation...
-          </Paragraph>
-          <Progress percent={30} status="active" style={{ maxWidth: 400, margin: '0 auto' }} />
-        </Card>
-      )}
-      
-      {/* Results */}
-      {result && !loading && (
-        <>
-          {/* Summary Stats */}
-          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-            <Col xs={24} sm={12} md={6}>
-              <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)' }}>Total PnL</Text>}
-                  value={result.summary.totalPnlUsd}
-                  precision={2}
-                  prefix="$"
-                  valueStyle={{ color: result.summary.totalPnlUsd >= 0 ? 'var(--success)' : 'var(--error)' }}
-                />
-                <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+          </form>
+        </div>
+
+        {/* Loading */}
+        {loading && (
+          <div className="mb-6 rounded-xl border border-border bg-card p-12 text-center">
+            <Loader2 className="mx-auto h-10 w-10 animate-spin text-primary" />
+            <p className="mt-4 text-sm text-muted-foreground">
+              Fetching market data and running simulation...
+            </p>
+            <div className="mx-auto mt-4 max-w-[400px]">
+              <Progress value={30} />
+            </div>
+          </div>
+        )}
+
+        {/* Results */}
+        {result && !loading && (
+          <>
+            {/* Summary Stats */}
+            <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
+              <div className="rounded-xl border border-border bg-card p-6">
+                <p className="text-sm text-muted-foreground">Total PnL</p>
+                <p className={cn("mt-1 text-2xl font-bold", result.summary.totalPnlUsd >= 0 ? "text-success" : "text-destructive")}>
+                  ${Math.abs(result.summary.totalPnlUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
                   {formatPercent(result.summary.totalPnlPct)} ROI
-                </Text>
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)' }}>Win Rate</Text>}
-                  value={result.summary.winRate}
-                  precision={1}
-                  suffix="%"
-                  valueStyle={{ color: result.summary.winRate >= 50 ? 'var(--success)' : 'var(--error)' }}
-                />
-                <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-6">
+                <p className="text-sm text-muted-foreground">Win Rate</p>
+                <p className={cn("mt-1 text-2xl font-bold", result.summary.winRate >= 50 ? "text-success" : "text-destructive")}>
+                  {result.summary.winRate.toFixed(1)}%
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
                   {result.summary.wins}W / {result.summary.losses}L ({result.summary.totalTrades} total)
-                </Text>
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)' }}>Max Drawdown</Text>}
-                  value={result.summary.maxDrawdownPct}
-                  precision={1}
-                  suffix="%"
-                  valueStyle={{ color: 'var(--error)' }}
-                  prefix={<WarningOutlined />}
-                />
-                <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-6">
+                <p className="text-sm text-muted-foreground">Max Drawdown</p>
+                <p className="mt-1 flex items-center gap-1.5 text-2xl font-bold text-destructive">
+                  <AlertTriangle className="h-5 w-5" />
+                  {result.summary.maxDrawdownPct.toFixed(1)}%
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
                   Profit Factor: {(result.summary.profitFactor ?? 0).toFixed(2)}
-                </Text>
-              </Card>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)' }}>Final Capital</Text>}
-                  value={result.summary.finalCapital}
-                  precision={0}
-                  prefix="$"
-                  valueStyle={{ color: 'var(--accent)' }}
-                />
-                <Text style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-6">
+                <p className="text-sm text-muted-foreground">Final Capital</p>
+                <p className="mt-1 text-2xl font-bold text-primary">
+                  ${result.summary.finalCapital.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
                   Started with ${result.params.initialCapital.toLocaleString()}
-                </Text>
-              </Card>
-            </Col>
-          </Row>
-          
-          {/* Additional Stats Row */}
-          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-            <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Avg Win</Text>}
-                  value={result.summary.avgWinUsd}
-                  precision={2}
-                  prefix="$"
-                  valueStyle={{ color: 'var(--success)', fontSize: 18 }}
-                />
-              </Card>
-            </Col>
-            <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Avg Loss</Text>}
-                  value={result.summary.avgLossUsd}
-                  precision={2}
-                  prefix="$"
-                  valueStyle={{ color: 'var(--error)', fontSize: 18 }}
-                />
-              </Card>
-            </Col>
-            <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Long Trades</Text>}
-                  value={result.summary.longTrades}
-                  valueStyle={{ color: 'var(--accent)', fontSize: 18 }}
-                />
-              </Card>
-            </Col>
-            <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Short Trades</Text>}
-                  value={result.summary.shortTrades}
-                  valueStyle={{ color: '#f472b6', fontSize: 18 }}
-                />
-              </Card>
-            </Col>
-            <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Avg Hold</Text>}
-                  value={((result.summary.avgHoldMinutes ?? 0) / 60).toFixed(1)}
-                  suffix="h"
-                  valueStyle={{ color: '#a78bfa', fontSize: 18 }}
-                />
-              </Card>
-            </Col>
-            <Col xs={12} sm={6} md={4}>
-              <Card size="small" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-                <Statistic
-                  title={<Text style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Total Fees</Text>}
-                  value={result.summary.totalFeesUsd}
-                  precision={0}
-                  prefix="$"
-                  valueStyle={{ color: '#fb923c', fontSize: 18 }}
-                />
-              </Card>
-            </Col>
-          </Row>
-          
-          {/* Charts */}
-          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-            <Col xs={24} lg={12}>
-              <Card 
-                title={<Text style={{ color: 'var(--text-primary)' }}>Equity Curve</Text>}
-                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}
-              >
-                <MiniEquityChart data={result.equityCurve} />
-              </Card>
-            </Col>
-            <Col xs={24} lg={12}>
-              <Card 
-                title={<Text style={{ color: 'var(--text-primary)' }}>Drawdown</Text>}
-                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}
-              >
-                <MiniDrawdownChart data={result.drawdownCurve} />
-              </Card>
-            </Col>
-          </Row>
-          
-          {/* Tabs for Monthly/Trades */}
-          <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)' }}>
-            <Tabs
-              defaultActiveKey="monthly"
-              items={[
-                {
-                  key: 'monthly',
-                  label: 'Monthly Breakdown',
-                  children: (
-                    <Table
-                      dataSource={result.monthlyStats}
-                      columns={monthlyColumns}
-                      rowKey="month"
-                      pagination={false}
-                      size="small"
-                      scroll={{ x: 900 }}
-                      onRow={(record) => ({
-                        onClick: () => setSelectedMonth(record.month),
-                        style: { cursor: 'pointer' },
-                      })}
-                    />
-                  ),
-                },
-                {
-                  key: 'trades',
-                  label: `Individual Trades (${filteredTrades.length})`,
-                  children: (
-                    <>
-                      {/* Filters */}
-                      <Space style={{ marginBottom: 16 }} wrap>
-                        <Text style={{ color: 'var(--text-secondary)' }}><FilterOutlined /> Filters:</Text>
-                        <Select
-                          value={selectedMonth}
-                          onChange={setSelectedMonth}
-                          style={{ width: 140 }}
-                          options={[
-                            { value: 'all', label: 'All Months' },
-                            ...months.map(m => ({ value: m, label: dayjs(m).format('MMM YYYY') })),
-                          ]}
-                        />
-                        <Select
-                          value={selectedSymbol}
-                          onChange={setSelectedSymbol}
-                          style={{ width: 140 }}
-                          options={[
-                            { value: 'all', label: 'All Symbols' },
-                            ...result.params.symbols.map(s => ({ value: s, label: s.replace('/USDT:USDT', '') })),
-                          ]}
-                        />
-                        <Select
-                          value={selectedSide}
-                          onChange={setSelectedSide}
-                          style={{ width: 100 }}
-                          options={[
-                            { value: 'all', label: 'All Sides' },
-                            { value: 'long', label: 'Long' },
-                            { value: 'short', label: 'Short' },
-                          ]}
-                        />
-                        {filteredStats && (
-                          <Alert
-                            message={
-                              <span>
-                                Filtered: {filteredStats.trades} trades | {filteredStats.wins}W/{filteredStats.losses}L | 
-                                {' '}<PnlText value={filteredStats.pnlUsd} /> | WR: {filteredStats.winRate.toFixed(1)}%
-                              </span>
-                            }
-                            type="info"
-                            style={{ padding: '4px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--accent-secondary)' }}
-                          />
-                        )}
-                      </Space>
-                      
-                      <Table
-                        dataSource={filteredTrades}
-                        columns={tradeColumns}
-                        rowKey="id"
-                        pagination={{ pageSize: 50, showSizeChanger: true, showTotal: (t) => `${t} trades` }}
-                        size="small"
-                        scroll={{ x: 1200 }}
-                        rowClassName={(r) => r.netPnlUsd >= 0 ? 'trade-row-win' : 'trade-row-loss'}
-                      />
-                    </>
-                  ),
-                },
-              ]}
-            />
-          </Card>
-        </>
-      )}
-      
-      {/* Empty state */}
-      {!result && !loading && (
-        <Card style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-color)', textAlign: 'center', padding: 48 }}>
-          <Empty
-            description={
-              <Text style={{ color: 'var(--text-secondary)' }}>
-                Configure backtest parameters and click "Run Backtest" to analyze historical performance
-              </Text>
-            }
-          />
-        </Card>
-      )}
-      
-      {/* CSS */}
-      <style>{`
-        .trade-row-win { background: rgba(16, 185, 129, 0.05) !important; }
-        .trade-row-loss { background: rgba(239, 68, 68, 0.05) !important; }
-        .trade-row-win:hover { background: rgba(16, 185, 129, 0.1) !important; }
-        .trade-row-loss:hover { background: rgba(239, 68, 68, 0.1) !important; }
-      `}</style>
-    </div>
+                </p>
+              </div>
+            </div>
+
+            {/* Additional Stats Row */}
+            <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-6">
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-[11px] text-muted-foreground">Avg Win</p>
+                <p className="mt-1 text-lg font-bold text-success">
+                  ${(result.summary.avgWinUsd ?? 0).toFixed(2)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-[11px] text-muted-foreground">Avg Loss</p>
+                <p className="mt-1 text-lg font-bold text-destructive">
+                  ${(result.summary.avgLossUsd ?? 0).toFixed(2)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-[11px] text-muted-foreground">Long Trades</p>
+                <p className="mt-1 text-lg font-bold text-primary">
+                  {result.summary.longTrades}
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-[11px] text-muted-foreground">Short Trades</p>
+                <p className="mt-1 text-lg font-bold" style={{ color: '#f472b6' }}>
+                  {result.summary.shortTrades}
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-[11px] text-muted-foreground">Avg Hold</p>
+                <p className="mt-1 text-lg font-bold" style={{ color: '#a78bfa' }}>
+                  {((result.summary.avgHoldMinutes ?? 0) / 60).toFixed(1)}h
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <p className="text-[11px] text-muted-foreground">Total Fees</p>
+                <p className="mt-1 text-lg font-bold" style={{ color: '#fb923c' }}>
+                  ${(result.summary.totalFeesUsd ?? 0).toFixed(0)}
+                </p>
+              </div>
+            </div>
+
+            {/* Charts */}
+            <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-border bg-card">
+                <div className="border-b border-border px-6 py-4">
+                  <span className="text-sm font-medium text-foreground">Equity Curve</span>
+                </div>
+                <div className="p-6">
+                  <MiniEquityChart data={result.equityCurve} />
+                </div>
+              </div>
+              <div className="rounded-xl border border-border bg-card">
+                <div className="border-b border-border px-6 py-4">
+                  <span className="text-sm font-medium text-foreground">Drawdown</span>
+                </div>
+                <div className="p-6">
+                  <MiniDrawdownChart data={result.drawdownCurve} />
+                </div>
+              </div>
+            </div>
+
+            {/* Tabs for Monthly/Trades */}
+            <div className="rounded-xl border border-border bg-card p-6">
+              <Tabs defaultValue="monthly">
+                <TabsList>
+                  <TabsTrigger value="monthly">Monthly Breakdown</TabsTrigger>
+                  <TabsTrigger value="trades">Individual Trades ({filteredTrades.length})</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="monthly">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[100px]">Month</TableHead>
+                          <TableHead className="w-[80px] text-right">Trades</TableHead>
+                          <TableHead className="w-[80px]">W/L</TableHead>
+                          <TableHead className="w-[90px] text-right">Win Rate</TableHead>
+                          <TableHead className="w-[100px] text-right">
+                            <button
+                              className="inline-flex items-center gap-1 hover:text-foreground"
+                              onClick={() => {
+                                if (monthlySortField === 'pnlUsd') {
+                                  setMonthlySortDir(d => d === 'asc' ? 'desc' : 'asc');
+                                } else {
+                                  setMonthlySortField('pnlUsd');
+                                  setMonthlySortDir('desc');
+                                }
+                              }}
+                            >
+                              PnL <ArrowUpDown className="h-3 w-3" />
+                            </button>
+                          </TableHead>
+                          <TableHead className="w-[80px] text-right">ROI</TableHead>
+                          <TableHead className="w-[100px]">Long/Short</TableHead>
+                          <TableHead className="w-[90px] text-right">Best</TableHead>
+                          <TableHead className="w-[90px] text-right">Worst</TableHead>
+                          <TableHead className="w-[110px] text-right">Capital End</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {sortedMonthly.map((r) => (
+                          <TableRow
+                            key={r.month}
+                            className="cursor-pointer"
+                            onClick={() => setSelectedMonth(r.month)}
+                          >
+                            <TableCell>{dayjs(r.month).format('MMM YYYY')}</TableCell>
+                            <TableCell className="text-right">{r.trades}</TableCell>
+                            <TableCell>
+                              <span className="text-success">{r.wins}</span>
+                              {' / '}
+                              <span className="text-destructive">{r.losses}</span>
+                            </TableCell>
+                            <TableCell className={cn("text-right", (r.winRate ?? 0) >= 50 ? "text-success" : "text-destructive")}>
+                              {(r.winRate ?? 0).toFixed(1)}%
+                            </TableCell>
+                            <TableCell className="text-right"><PnlText value={r.pnlUsd} /></TableCell>
+                            <TableCell className="text-right"><PnlText value={r.pnlPct} showCurrency={false} /></TableCell>
+                            <TableCell>{r.longTrades}L / {r.shortTrades}S</TableCell>
+                            <TableCell className="text-right text-success">${(r.maxWinUsd ?? 0).toFixed(0)}</TableCell>
+                            <TableCell className="text-right text-destructive">${Math.abs(r.maxLossUsd ?? 0).toFixed(0)}</TableCell>
+                            <TableCell className="text-right">${r.capitalEnd.toLocaleString(undefined, { maximumFractionDigits: 0 })}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="trades">
+                  {/* Filters */}
+                  <div className="mb-4 flex flex-wrap items-center gap-3">
+                    <span className="flex items-center gap-1 text-sm text-muted-foreground">
+                      <Filter className="h-4 w-4" /> Filters:
+                    </span>
+                    <Select value={selectedMonth} onValueChange={(v) => setSelectedMonth(v)}>
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Months</SelectItem>
+                        {months.map(m => (
+                          <SelectItem key={m} value={m}>{dayjs(m).format('MMM YYYY')}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select value={selectedSymbol} onValueChange={(v) => setSelectedSymbol(v)}>
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Symbols</SelectItem>
+                        {result.params.symbols.map(s => (
+                          <SelectItem key={s} value={s}>{s.replace('/USDT:USDT', '')}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select value={selectedSide} onValueChange={(v) => setSelectedSide(v as 'all' | 'long' | 'short')}>
+                      <SelectTrigger className="w-[100px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Sides</SelectItem>
+                        <SelectItem value="long">Long</SelectItem>
+                        <SelectItem value="short">Short</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {filteredStats && (
+                      <Alert className="border-primary/30 bg-card px-3 py-1.5">
+                        <AlertDescription className="text-xs">
+                          Filtered: {filteredStats.trades} trades | {filteredStats.wins}W/{filteredStats.losses}L |{' '}
+                          <PnlText value={filteredStats.pnlUsd} /> | WR: {filteredStats.winRate.toFixed(1)}%
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[140px]">Date</TableHead>
+                          <TableHead className="w-[120px]">Symbol</TableHead>
+                          <TableHead className="w-[80px]">Side</TableHead>
+                          <TableHead className="w-[100px] text-right">Entry</TableHead>
+                          <TableHead className="w-[100px] text-right">Exit</TableHead>
+                          <TableHead className="w-[100px] text-right">Notional</TableHead>
+                          <TableHead className="w-[80px] text-right">Hold</TableHead>
+                          <TableHead className="w-[100px] text-right">
+                            <button
+                              className="inline-flex items-center gap-1 hover:text-foreground"
+                              onClick={() => {
+                                if (tradeSortField === 'netPnlUsd') {
+                                  setTradeSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                                } else {
+                                  setTradeSortField('netPnlUsd');
+                                  setTradeSortDir('desc');
+                                }
+                              }}
+                            >
+                              PnL $ <ArrowUpDown className="h-3 w-3" />
+                            </button>
+                          </TableHead>
+                          <TableHead className="w-[80px] text-right">PnL %</TableHead>
+                          <TableHead className="w-[70px]">Exit</TableHead>
+                          <TableHead className="w-[100px] text-right">Capital</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {paginatedTrades.map((t) => (
+                          <TableRow key={t.id} className={t.netPnlUsd >= 0 ? 'trade-row-win' : 'trade-row-loss'}>
+                            <TableCell>{dayjs(t.entryTime).format('DD/MM/YY HH:mm')}</TableCell>
+                            <TableCell>{t.symbol.replace('/USDT:USDT', '')}</TableCell>
+                            <TableCell><SideTag side={t.side} /></TableCell>
+                            <TableCell className="text-right">${(t.entryPrice ?? 0).toFixed(4)}</TableCell>
+                            <TableCell className="text-right">${(t.exitPrice ?? 0).toFixed(4)}</TableCell>
+                            <TableCell className="text-right">${(t.notionalUsd ?? 0).toFixed(0)}</TableCell>
+                            <TableCell className="text-right">
+                              {t.holdMinutes >= 60 ? `${(t.holdMinutes / 60).toFixed(1)}h` : `${t.holdMinutes}m`}
+                            </TableCell>
+                            <TableCell className="text-right"><PnlText value={t.netPnlUsd} /></TableCell>
+                            <TableCell className="text-right"><PnlText value={t.netPnlPct} showCurrency={false} /></TableCell>
+                            <TableCell><ExitReasonTag reason={t.exitReason} /></TableCell>
+                            <TableCell className="text-right">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-muted-foreground">${(t.capitalAfter ?? 0).toFixed(0)}</span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Before: ${(t.capitalBefore ?? 0).toFixed(0)} &rarr; After: ${(t.capitalAfter ?? 0).toFixed(0)}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  {/* Pagination */}
+                  <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
+                    <span>{sortedTrades.length} trades</span>
+                    <div className="flex items-center gap-2">
+                      <Select value={String(tradePageSize)} onValueChange={(v) => { setTradePageSize(Number(v)); setTradePage(1); }}>
+                        <SelectTrigger className="h-8 w-[70px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="25">25</SelectItem>
+                          <SelectItem value="50">50</SelectItem>
+                          <SelectItem value="100">100</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <span>/ page</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={tradePage <= 1}
+                        onClick={() => setTradePage(p => p - 1)}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      <span>{tradePage} / {totalTradePages || 1}</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={tradePage >= totalTradePages}
+                        onClick={() => setTradePage(p => p + 1)}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </div>
+          </>
+        )}
+
+        {/* Empty state */}
+        {!result && !loading && (
+          <div className="rounded-xl border border-border bg-card p-12 text-center">
+            <LineChart className="mx-auto mb-4 h-12 w-12 text-muted-foreground/30" />
+            <p className="text-sm text-muted-foreground">
+              Configure backtest parameters and click &quot;Run Backtest&quot; to analyze historical performance
+            </p>
+          </div>
+        )}
+
+        {/* CSS */}
+        <style>{`
+          .trade-row-win { background: hsl(var(--success) / 0.05) !important; }
+          .trade-row-loss { background: hsl(var(--destructive) / 0.05) !important; }
+          .trade-row-win:hover { background: hsl(var(--success) / 0.1) !important; }
+          .trade-row-loss:hover { background: hsl(var(--destructive) / 0.1) !important; }
+        `}</style>
+      </div>
+    </TooltipProvider>
   );
 }
