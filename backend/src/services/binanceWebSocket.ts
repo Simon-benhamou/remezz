@@ -2578,6 +2578,17 @@ class BinanceWebSocketManager {
     if (update.orderId) {
       const orderKey = `${update.userId}_${update.orderId}`;
       this.orderTradeUpdateByOrderId.set(orderKey, update);
+
+      // Prune order-by-ID cache: keep max 2000 entries, evict oldest on overflow
+      if (this.orderTradeUpdateByOrderId.size > 2000) {
+        const keysIter = this.orderTradeUpdateByOrderId.keys();
+        // Delete oldest 500 entries (Maps iterate in insertion order)
+        for (let i = 0; i < 500; i++) {
+          const oldest = keysIter.next();
+          if (oldest.done) break;
+          this.orderTradeUpdateByOrderId.delete(oldest.value);
+        }
+      }
     }
   }
 
@@ -2625,11 +2636,20 @@ class BinanceWebSocketManager {
   }
 
   /**
+   * 📋 Get order update by orderId from WS cache (0 weight)
+   * Replaces exchange.fetchOrder() polling (2w per call).
+   */
+  getOrderTradeUpdateById(userId: string, orderId: string): BinanceOrderTradeUpdate | null {
+    const key = `${userId}_${orderId}`;
+    return this.orderTradeUpdateByOrderId.get(key) || null;
+  }
+
+  /**
    * 💰 Get Balance from Cache (0 weight)
-   * 
+   *
    * Returns cached balance from user data stream.
    * Requires subscribeToUserData to be called first.
-   * 
+   *
    * @param userId - User ID
    * @param asset - Asset symbol (default: 'USDT')
    * @returns Balance data or null if not available
@@ -3829,6 +3849,14 @@ export function getLastFilledOrderTradeUpdateFromWebSocket(
 ): BinanceOrderTradeUpdate | null {
   const ws = getBinanceWebSocket();
   return ws.getLastFilledOrderTradeUpdate(userId, symbol, options);
+}
+
+export function getOrderTradeUpdateByIdFromWebSocket(
+  userId: string,
+  orderId: string,
+): BinanceOrderTradeUpdate | null {
+  const ws = getBinanceWebSocket();
+  return ws.getOrderTradeUpdateById(userId, orderId);
 }
 
 export function getUserDataStreamStatus(userId: string): { 

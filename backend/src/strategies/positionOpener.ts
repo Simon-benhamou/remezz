@@ -33,6 +33,7 @@ import {
   getTickerFromWebSocket,
 } from '../services/binanceWebSocket.js';
 import { isIpBanned } from '../exchange/ccxtClient.js';
+import { ipWeightTracker } from '../services/ipWeightTracker.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { Exchange } from '../types/exchange.js';
 import type { CapitalPool } from './simpleAgent.js';
@@ -198,8 +199,8 @@ export class PositionOpener {
     const availableSlots = maxPositions - openPositionCount;
 
     // V5.58: Log ranking state for paper/live parity debugging
-    const allPendingSignals = globalSignalRanker.getPendingSignals(this.ctx.mode);
-    const slotsConsumed = globalSignalRanker.getSlotsConsumedInBatch(this.ctx.mode);
+    const allPendingSignals = globalSignalRanker.getPendingSignals(this.ctx.mode, this.ctx.userId);
+    const slotsConsumed = globalSignalRanker.getSlotsConsumedInBatch(this.ctx.mode, this.ctx.userId);
     if (allPendingSignals.length > 0) {
       const sortedByScore = [...allPendingSignals].sort((a, b) => b.score - a.score);
       const rankingLog = sortedByScore.map((s, i) => `${i + 1}.${s.symbol.replace('/USDT:USDT', '')}(${s.score.toFixed(1)})`).join(' ');
@@ -207,17 +208,17 @@ export class PositionOpener {
       logger.info(`📊 [${symbol.replace('/USDT:USDT', '')}] RANKING CHECK | mode=${this.ctx.mode} | slots=${effectiveSlots}/${maxPositions} (${slotsConsumed} consumed) | signals: ${rankingLog}`);
     }
 
-    const shouldExecute = globalSignalRanker.shouldExecuteSignal(symbol, availableSlots, this.ctx.mode);
+    const shouldExecute = globalSignalRanker.shouldExecuteSignal(symbol, availableSlots, this.ctx.mode, this.ctx.userId);
 
     if (!shouldExecute) {
       // V5.58 FIX: Remove deferred signal from pool to prevent stale signals
       // polluting future batches and causing paper/live mismatch
-      globalSignalRanker.removeSignal(symbol, this.ctx.mode);
+      globalSignalRanker.removeSignal(symbol, this.ctx.mode, this.ctx.userId);
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
     // Signal approved for execution - remove from pending
-    globalSignalRanker.removeSignal(symbol, this.ctx.mode);
+    globalSignalRanker.removeSignal(symbol, this.ctx.mode, this.ctx.userId);
 
     // Get available capital from pool
     const availableCapital = this.ctx.capitalPool.getAvailableCapital();
@@ -253,6 +254,7 @@ export class PositionOpener {
         originalLeverage: baseLeverage,
         reducedLeverage: leverageCalc.leverage,
         mode: this.ctx.mode,
+        userId: this.ctx.userId,
       });
     }
 
@@ -489,6 +491,7 @@ export class PositionOpener {
       leverage: sizing.suggestedLeverage,
       stopLoss: position.stopLoss,
       mode: 'paper',
+      userId: this.ctx.userId,
     });
 
     // V5.89: Start RT exit monitor for paper too (parity with live mode)
@@ -552,12 +555,14 @@ export class PositionOpener {
         const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
         try {
           await this.ctx.exchange.setLeverage(intLeverage, symbol);
+          ipWeightTracker.record(1, `setLeverage:${symbol}`);
           globalCacheManager.cacheLeverage(userId, symbol, intLeverage);
         } catch (levErr: any) {
           if (levErr?.message?.includes('leverage') || levErr?.code === -1102) {
             logger.warn(`⚠️ [${symbol}] setLeverage failed with CCXT symbol, trying Binance format: ${binanceSymbol}`);
             try {
               await this.ctx.exchange.setLeverage(intLeverage, binanceSymbol);
+              ipWeightTracker.record(1, `setLeverage:${binanceSymbol}`);
               logger.info(`✅ [${symbol}] Leverage set successfully with Binance format`);
               globalCacheManager.cacheLeverage(userId, symbol, intLeverage);
             } catch (retryErr: any) {
@@ -713,6 +718,7 @@ export class PositionOpener {
             orderType: 'entry',
             error: result.error || 'Unknown error',
             mode: this.ctx.mode,
+            userId: this.ctx.userId,
           });
           return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
         }
@@ -932,6 +938,7 @@ export class PositionOpener {
         leverage: sizing.suggestedLeverage,
         stopLoss: position.stopLoss,
         mode: 'live',
+        userId: this.ctx.userId,
       });
 
       this.ctx.onTrade?.({
@@ -966,6 +973,7 @@ export class PositionOpener {
         orderType: 'entry',
         error: errMsg(error),
         mode: 'live',
+        userId: this.ctx.userId,
       });
 
       // Cancel reservation on failure

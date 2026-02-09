@@ -10,22 +10,23 @@ export const router = Router();
 // Get server IP address (for whitelist setup)
 router.get('/server-ip', async (req, res) => {
   try {
-    // Your server's fixed IP
-    const fixedIP = '208.77.244.15';
-    
+    const serverIP = process.env.SERVER_IP || 'unknown';
+
     res.json({
       success: true,
-      serverIP: fixedIP,
-      method: 'fixed_configuration',
-      message: `Your fixed server IP is ${fixedIP}. This should already be whitelisted in your Crypto.com API.`,
-      status: 'configured',
-      note: 'IP should be already configured in Crypto.com API whitelist'
+      serverIP,
+      method: serverIP !== 'unknown' ? 'env_configuration' : 'not_configured',
+      message: serverIP !== 'unknown'
+        ? `Your server IP is ${serverIP}. Add this to your exchange API whitelist.`
+        : 'SERVER_IP not configured. Set the SERVER_IP environment variable.',
+      status: serverIP !== 'unknown' ? 'configured' : 'missing',
+      note: 'Set SERVER_IP env var to your server\'s public IP address'
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
     res.status(500).json({
       success: false,
-      error: error.message || String(error),
-      fallback: '208.77.244.15'
+      error: msg
     });
   }
 });
@@ -97,8 +98,11 @@ router.get('/test-exchange', async (req, res) => {
   }
 });
 
+// Apply authentication middleware to all routes below
+router.use(authenticateUser);
+
 // Test specific API credentials (POST with credentials in body)
-router.post('/test-credentials', async (req, res) => {
+router.post('/test-credentials', async (req: AuthenticatedRequest, res) => {
   try {
     const { apiKey, apiSecret, passphrase } = req.body;
     
@@ -110,9 +114,6 @@ router.post('/test-credentials', async (req, res) => {
     }
 
     console.log('🔍 Starting API credential test...');
-    console.log('API Key (first 8 chars):', apiKey.substring(0, 8) + '...');
-    console.log('API Secret (first 8 chars):', apiSecret.substring(0, 8) + '...');
-    console.log('Server IP: 208.77.244.15');
 
     const { getConfig } = await import('../utils/env.js');
     const ccxt = await import('ccxt');
@@ -202,8 +203,9 @@ router.post('/test-credentials', async (req, res) => {
     const troubleshooting: string[] = [];
     
     if (error.message?.includes('IP') || error.message?.includes('whitelist') || error.status === 403) {
-      troubleshooting.push('❌ IP not whitelisted: Your IP 208.77.244.15 might not be in Crypto.com whitelist');
-      troubleshooting.push('🔧 Double-check that 208.77.244.15 is added to your API key whitelist');
+      const ip = process.env.SERVER_IP || 'your server IP';
+      troubleshooting.push(`IP not whitelisted: ${ip} might not be in your exchange API whitelist`);
+      troubleshooting.push(`Double-check that ${ip} is added to your API key whitelist`);
     }
     
     if (error.message?.includes('Invalid API key') || error.message?.includes('authentication') || error.status === 401) {
@@ -231,7 +233,7 @@ router.post('/test-credentials', async (req, res) => {
       error: 'Credential test failed',
       errorDetails,
       troubleshooting,
-      serverIP: '208.77.244.15',
+      serverIP: process.env.SERVER_IP || 'not_configured',
       timestamp: new Date().toISOString(),
       note: 'Check the backend logs for detailed error information'
     });
@@ -326,19 +328,9 @@ router.get('/test-dynamic-zone/:symbol/:price/:bias', async (req, res) => {
   }
 });
 
-// Apply authentication middleware to protected routes
-router.use(authenticateUser);
-
 // Test API keys and fetch balance
 router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ 
-        error: 'legacy_users_no_api_keys',
-        message: 'Legacy users cannot test API keys'
-      });
-    }
-
     const credentials = await getUserCredentials(req.user!.id);
     
     if (!credentials) {
@@ -350,10 +342,6 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
     }
 
     console.log('Testing API keys for user:', req.user!.id);
-    console.log('API Key (first 8 chars):', credentials.apiKey.substring(0, 8) + '...');
-    console.log('API Secret (first 8 chars):', credentials.apiSecret.substring(0, 8) + '...');
-    console.log('Has passphrase:', !!credentials.passphrase);
-    console.log('Testnet mode:', credentials.testnet);
 
     // Clear any cached exchange instances for fresh test
     clearUserExchangeCache(req.user!.id);
@@ -502,10 +490,6 @@ router.get('/exchange-info', async (req: AuthenticatedRequest, res) => {
 // Check raw API keys in database
 router.get('/raw-keys', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.json({ hasKeys: false, message: 'Legacy user' });
-    }
-
     // Query database directly
     const rawKeys = await prisma.userApiKey.findMany({
       where: { userId: req.user!.id },
@@ -568,13 +552,6 @@ router.get('/raw-keys', async (req: AuthenticatedRequest, res) => {
 // Clear exchange cache for user (useful when API keys are updated)
 router.post('/clear-cache', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ 
-        error: 'legacy_users_no_cache',
-        message: 'Legacy users have no exchange cache'
-      });
-    }
-
     clearUserExchangeCache(req.user!.id);
 
     res.json({
@@ -594,10 +571,6 @@ router.post('/clear-cache', async (req: AuthenticatedRequest, res) => {
 // Fix API keys for current user (endpoint for manual key update)
 router.post('/fix-my-keys', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ error: 'legacy_users_no_migration' });
-    }
-
     const { newApiKey, newApiSecret } = req.body;
 
     if (!newApiKey || !newApiSecret) {
@@ -677,10 +650,6 @@ router.post('/fix-my-keys', async (req: AuthenticatedRequest, res) => {
 // Migration route to fix encrypted keys
 router.post('/migrate-keys', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ error: 'legacy_users_no_migration' });
-    }
-
     const { keyId, newApiKey, newApiSecret } = req.body;
 
     if (!keyId || !newApiKey || !newApiSecret) {
@@ -716,15 +685,6 @@ router.post('/migrate-keys', async (req: AuthenticatedRequest, res) => {
 // Diagnose API key issues step by step
 router.get('/diagnose-apikeys', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.json({ 
-        step: 'user_check',
-        success: false,
-        message: 'Legacy users cannot use API keys',
-        isLegacy: true
-      });
-    }
-
     const userId = req.user!.id;
     const results: any[] = [];
 

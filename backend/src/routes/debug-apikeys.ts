@@ -27,7 +27,6 @@ router.get('/check-apikeys', authenticateUser, async (req: AuthenticatedRequest,
     return res.json({
       userId: req.user.id,
       username: req.user.username,
-      isLegacy: req.user.isLegacy,
       apiKeysCount: apiKeys.length,
       apiKeys: apiKeys
     });

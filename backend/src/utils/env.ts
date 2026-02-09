@@ -6,8 +6,6 @@ export type Cfg = {
   PORT: number;
   POLL_MS: number;
   CORS_ORIGIN: string;
-  REQUIRE_API_KEY: boolean;
-  APP_API_KEY: string;
   API_RATE_LIMIT_AGENT_WINDOW_MS: number;
   API_RATE_LIMIT_AGENT_PER_IP: number;
   API_RATE_LIMIT_AGENT_PER_KEY: number;
@@ -50,10 +48,9 @@ export type Cfg = {
   GROK_COST_IN_PER_1K: number;
   GROK_COST_OUT_PER_1K: number;
   // Auth
-  AUTH_USER: string;        // single user (for demo/testing)
-  AUTH_PASS: string;        // password
-  ACCESS_CODE?: string;     // optional single access code alternative
-  JWT_SECRET: string;       // JWT secret for user authentication
+  JWT_SECRET: string;       // JWT secret for user authentication (REQUIRED - server will not start without it)
+  REGISTRATION_CODE: string; // Registration code for new users (REQUIRED)
+  ENCRYPTION_SALT: string;   // Salt for API key encryption (REQUIRED - use 'apikey-salt' for migration)
   WS_JWT_SECRET: string;
   WS_JWT_TTL_SEC: number;
   // LLM governance
@@ -426,9 +423,6 @@ export function getConfig(): Cfg {
     // Polling every 2s by default for better real-time response (reduced from 5s)
     POLL_MS: Number(e.POLL_MS || "2000"),
     CORS_ORIGIN: e.CORS_ORIGIN || "http://localhost:5173",
-    // Respect env flag; default off for dev
-    REQUIRE_API_KEY: (e.REQUIRE_API_KEY || "false") === "true",
-    APP_API_KEY: e.APP_API_KEY || "change-me",
     API_RATE_LIMIT_AGENT_WINDOW_MS: Number(e.API_RATE_LIMIT_AGENT_WINDOW_MS || "60000"),
     API_RATE_LIMIT_AGENT_PER_IP: Number(e.API_RATE_LIMIT_AGENT_PER_IP || "60"),
     API_RATE_LIMIT_AGENT_PER_KEY: Number(e.API_RATE_LIMIT_AGENT_PER_KEY || "120"),
@@ -469,11 +463,10 @@ export function getConfig(): Cfg {
     OPENAI_COST_OUT_PER_1K: Number(e.OPENAI_COST_OUT_PER_1K || "0"),
     GROK_COST_IN_PER_1K: Number(e.GROK_COST_IN_PER_1K || "0"),
     GROK_COST_OUT_PER_1K: Number(e.GROK_COST_OUT_PER_1K || "0"),
-    AUTH_USER: e.AUTH_USER || "",
-    AUTH_PASS: e.AUTH_PASS || "",
-    ACCESS_CODE: e.ACCESS_CODE || "",
-    JWT_SECRET: e.JWT_SECRET || e.APP_API_KEY || "change-me-jwt-secret",
-    WS_JWT_SECRET: e.WS_JWT_SECRET || e.JWT_SECRET || e.APP_API_KEY || "change-me-ws-secret",
+    JWT_SECRET: e.JWT_SECRET || "change-me-jwt-secret",
+    REGISTRATION_CODE: e.REGISTRATION_CODE || "",
+    ENCRYPTION_SALT: e.ENCRYPTION_SALT || "apikey-salt",
+    WS_JWT_SECRET: e.WS_JWT_SECRET || e.JWT_SECRET || "change-me-ws-secret",
     WS_JWT_TTL_SEC: Number(e.WS_JWT_TTL_SEC || "60"),
     LLM_DISABLE: (e.LLM_DISABLE || "false") === "true",
     LLM_MIN_INTERVAL_MS: Number(e.LLM_MIN_INTERVAL_MS || "1000"), // réduit à 1s pour plus de réactivité

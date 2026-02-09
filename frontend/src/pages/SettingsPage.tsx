@@ -411,9 +411,9 @@ function ApiKeysTab() {
         <AlertDescription>
           <span className="font-medium">Server IP Whitelist Required</span>
           <br />
-          Add this IP to your Crypto.com API whitelist:{' '}
+          Add your server IP to your exchange API whitelist. Current host:{' '}
           <code className="rounded bg-muted px-1.5 py-0.5 font-semibold text-cyan-400">
-            208.77.244.15
+            {window.location.hostname}
           </code>
         </AlertDescription>
       </Alert>
@@ -504,11 +504,12 @@ function ApiKeysTab() {
                 <AlertDescription className="text-xs">
                   <span className="font-medium">Whitelist Configuration</span>
                   <br />
-                  Before using your API key, add our server IP to your Crypto.com whitelist:{' '}
-                  <code className="font-semibold text-cyan-400">208.77.244.15</code>
+                  Before using your API key, add your server IP to your exchange whitelist.
+                  Current host:{' '}
+                  <code className="font-semibold text-cyan-400">{window.location.hostname}</code>
                   <br />
                   <span className="text-muted-foreground">
-                    Go to Crypto.com &rarr; API Management &rarr; Edit your API &rarr; IP Whitelist
+                    Go to your exchange &rarr; API Management &rarr; Edit your API &rarr; IP Whitelist
                   </span>
                 </AlertDescription>
               </Alert>

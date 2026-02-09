@@ -108,57 +108,62 @@ export class PositionPersistence {
       const entryNotionalUsd = position.qty * position.entryPrice;
       const calculatedFee = entryFeeUsd ?? (entryNotionalUsd * 0.0004);
 
-      const order = await (prisma as any).order.create({
-        data: {
-          clientOrderId,
-          sessionId,
-          symbol: position.symbol,
-          side: entrySide,
-          type: 'market',
-          qty: position.qty,
-          price: position.entryPrice,
-          status: 'filled',
-          source: 'simple_agent',
-          strategyUsed: 'momentum_simple',
-          leverage: position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4,
-        },
+      await (prisma as any).$transaction(async (tx: any) => {
+        const order = await tx.order.create({
+          data: {
+            clientOrderId,
+            sessionId,
+            symbol: position.symbol,
+            side: entrySide,
+            type: 'market',
+            qty: position.qty,
+            price: position.entryPrice,
+            status: 'filled',
+            source: 'simple_agent',
+            strategyUsed: 'momentum_simple',
+            leverage: position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4,
+          },
+        });
+
+        await tx.fill.create({
+          data: {
+            orderId: order.id,
+            sessionId,
+            symbol: position.symbol,
+            price: position.entryPrice,
+            qty: position.qty,
+            side: entrySide,
+            realizedPnl: 0,
+            fee: calculatedFee,
+            strategyUsed: 'momentum_simple',
+            strategyFamily: 'momentum',
+            ts: new Date(position.entryTime),
+          },
+        });
+
+        await tx.position.create({
+          data: {
+            sessionId,
+            symbol: position.symbol,
+            side: position.side,
+            entryPrice: position.entryPrice,
+            qty: position.qty,
+            leverage: MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] || 3,
+            stopPrice: position.stopLoss,
+            openedAt: new Date(position.entryTime),
+            highWaterMark: position.side === 'long' ? position.entryPrice : null,
+            lowWaterMark: position.side === 'short' ? position.entryPrice : null,
+            maxPnlPct: 0,
+            trailingActive: false,
+            stagnantState: null,
+          },
+        });
+      }, {
+        maxWait: 5000,
+        timeout: 10000,
       });
 
-      await (prisma as any).fill.create({
-        data: {
-          orderId: order.id,
-          sessionId,
-          symbol: position.symbol,
-          price: position.entryPrice,
-          qty: position.qty,
-          side: entrySide,
-          realizedPnl: 0,
-          fee: calculatedFee,
-          strategyUsed: 'momentum_simple',
-          strategyFamily: 'momentum',
-          ts: new Date(position.entryTime),
-        },
-      });
-
-      logger.info(`💾 [${symbol}] Entry order logged: ${entrySide.toUpperCase()} @ $${position.entryPrice.toFixed(4)}, fee: $${calculatedFee.toFixed(2)}`);
-
-      await (prisma as any).position.create({
-        data: {
-          sessionId,
-          symbol: position.symbol,
-          side: position.side,
-          entryPrice: position.entryPrice,
-          qty: position.qty,
-          leverage: MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] || 3,
-          stopPrice: position.stopLoss,
-          openedAt: new Date(position.entryTime),
-          highWaterMark: position.side === 'long' ? position.entryPrice : null,
-          lowWaterMark: position.side === 'short' ? position.entryPrice : null,
-          maxPnlPct: 0,
-          trailingActive: false,
-          stagnantState: null,
-        },
-      });
+      logger.info(`💾 [${symbol}] Entry order logged (atomic): ${entrySide.toUpperCase()} @ $${position.entryPrice.toFixed(4)}, fee: $${calculatedFee.toFixed(2)}`);
     } catch (error) {
       logger.error(`❌ [${symbol}] Failed to save position to DB:`, error);
       throw error;
@@ -343,87 +348,92 @@ export class PositionPersistence {
   ): Promise<void> {
     const { prisma, sessionId, symbol } = this.ctx;
     try {
-      const fills = await (prisma as any).fill.findMany({
-        where: { sessionId, realizedPnl: { not: null } },
-        orderBy: { ts: 'asc' },
-      });
+      await (prisma as any).$transaction(async (tx: any) => {
+        const fills = await tx.fill.findMany({
+          where: { sessionId, realizedPnl: { not: null } },
+          orderBy: { ts: 'asc' },
+        });
 
-      const exitFills = fills.filter((f: any) => f.realizedPnl !== null && f.realizedPnl !== 0);
-      const tradeCount = exitFills.length;
-      const wins = exitFills.filter((f: any) => (f.realizedPnl || 0) > 0).length;
-      const losses = exitFills.filter((f: any) => (f.realizedPnl || 0) < 0).length;
+        const exitFills = fills.filter((f: any) => f.realizedPnl !== null && f.realizedPnl !== 0);
+        const tradeCount = exitFills.length;
+        const wins = exitFills.filter((f: any) => (f.realizedPnl || 0) > 0).length;
+        const losses = exitFills.filter((f: any) => (f.realizedPnl || 0) < 0).length;
 
-      const totalRealizedPnl = exitFills.reduce((sum: number, f: any) => sum + (f.realizedPnl || 0), 0);
-      const totalFees = fills.reduce((sum: number, f: any) => sum + (f.fee || 0), 0);
-      const netRealizedPnl = totalRealizedPnl - totalFees;
+        const totalRealizedPnl = exitFills.reduce((sum: number, f: any) => sum + (f.realizedPnl || 0), 0);
+        const totalFees = fills.reduce((sum: number, f: any) => sum + (f.fee || 0), 0);
+        const netRealizedPnl = totalRealizedPnl - totalFees;
 
-      const winRate = tradeCount > 0 ? (wins / tradeCount) * 100 : 0;
-      const expectancy = tradeCount > 0 ? netRealizedPnl / tradeCount : 0;
+        const winRate = tradeCount > 0 ? (wins / tradeCount) * 100 : 0;
+        const expectancy = tradeCount > 0 ? netRealizedPnl / tradeCount : 0;
 
-      // Max drawdown
-      let peak = 0;
-      let cumulative = 0;
-      let maxDrawdown = 0;
-      for (const fill of exitFills) {
-        cumulative += (fill.realizedPnl || 0);
-        if (cumulative > peak) peak = cumulative;
-        const drawdown = peak > 0 ? (cumulative - peak) / peak * 100 : 0;
-        if (drawdown < maxDrawdown) maxDrawdown = drawdown;
-      }
-
-      const session = await (prisma as any).agentSession.findUnique({
-        where: { id: sessionId },
-        select: { startBalanceUsd: true },
-      });
-      const startBalance = session?.startBalanceUsd || 1000;
-      const roiPct = startBalance > 0 ? (netRealizedPnl / startBalance) * 100 : 0;
-
-      // Unrealized PnL
-      let unrealizedPnlUsd = 0;
-      if (currentPosition && lastPrice) {
-        if (currentPosition.side === 'long') {
-          unrealizedPnlUsd = currentPosition.qty * (lastPrice - currentPosition.entryPrice);
-        } else {
-          unrealizedPnlUsd = currentPosition.qty * (currentPosition.entryPrice - lastPrice);
+        // Max drawdown
+        let peak = 0;
+        let cumulative = 0;
+        let maxDrawdown = 0;
+        for (const fill of exitFills) {
+          cumulative += (fill.realizedPnl || 0);
+          if (cumulative > peak) peak = cumulative;
+          const drawdown = peak > 0 ? (cumulative - peak) / peak * 100 : 0;
+          if (drawdown < maxDrawdown) maxDrawdown = drawdown;
         }
-      }
 
-      const stats = {
-        trades: tradeCount,
-        wins,
-        losses,
-        totalFees,
-        netRealizedPnl,
-        lastTradeAt: new Date().toISOString(),
-        avgWinUsd: wins > 0 ? exitFills.filter((f: any) => (f.realizedPnl || 0) > 0).reduce((s: number, f: any) => s + (f.realizedPnl || 0), 0) / wins : 0,
-        avgLossUsd: losses > 0 ? exitFills.filter((f: any) => (f.realizedPnl || 0) < 0).reduce((s: number, f: any) => s + (f.realizedPnl || 0), 0) / losses : 0,
-      };
+        const session = await tx.agentSession.findUnique({
+          where: { id: sessionId },
+          select: { startBalanceUsd: true },
+        });
+        const startBalance = session?.startBalanceUsd || 1000;
+        const roiPct = startBalance > 0 ? (netRealizedPnl / startBalance) * 100 : 0;
 
-      await (prisma as any).sessionKpi.upsert({
-        where: { sessionId },
-        update: {
-          realizedPnlUsd: netRealizedPnl,
-          unrealizedPnlUsd,
-          roiPct,
-          winRate,
-          expectancy,
-          maxDrawdownPct: Math.abs(maxDrawdown),
-          stats,
-          lastUpdated: new Date(),
-        },
-        create: {
-          sessionId,
-          realizedPnlUsd: netRealizedPnl,
-          unrealizedPnlUsd,
-          roiPct,
-          winRate,
-          expectancy,
-          maxDrawdownPct: Math.abs(maxDrawdown),
-          stats,
-        },
+        // Unrealized PnL
+        let unrealizedPnlUsd = 0;
+        if (currentPosition && lastPrice) {
+          if (currentPosition.side === 'long') {
+            unrealizedPnlUsd = currentPosition.qty * (lastPrice - currentPosition.entryPrice);
+          } else {
+            unrealizedPnlUsd = currentPosition.qty * (currentPosition.entryPrice - lastPrice);
+          }
+        }
+
+        const stats = {
+          trades: tradeCount,
+          wins,
+          losses,
+          totalFees,
+          netRealizedPnl,
+          lastTradeAt: new Date().toISOString(),
+          avgWinUsd: wins > 0 ? exitFills.filter((f: any) => (f.realizedPnl || 0) > 0).reduce((s: number, f: any) => s + (f.realizedPnl || 0), 0) / wins : 0,
+          avgLossUsd: losses > 0 ? exitFills.filter((f: any) => (f.realizedPnl || 0) < 0).reduce((s: number, f: any) => s + (f.realizedPnl || 0), 0) / losses : 0,
+        };
+
+        await tx.sessionKpi.upsert({
+          where: { sessionId },
+          update: {
+            realizedPnlUsd: netRealizedPnl,
+            unrealizedPnlUsd,
+            roiPct,
+            winRate,
+            expectancy,
+            maxDrawdownPct: Math.abs(maxDrawdown),
+            stats,
+            lastUpdated: new Date(),
+          },
+          create: {
+            sessionId,
+            realizedPnlUsd: netRealizedPnl,
+            unrealizedPnlUsd,
+            roiPct,
+            winRate,
+            expectancy,
+            maxDrawdownPct: Math.abs(maxDrawdown),
+            stats,
+          },
+        });
+      }, {
+        maxWait: 5000,
+        timeout: 10000,
       });
 
-      logger.info(`📊 [${symbol}] KPI updated: ${tradeCount} trades, ${winRate.toFixed(1)}% WR, $${netRealizedPnl.toFixed(2)} PnL, ${roiPct.toFixed(2)}% ROI`);
+      logger.info(`📊 [${symbol}] KPI updated (atomic)`);
     } catch (error) {
       logger.error(`❌ [${symbol}] Failed to update SessionKpi:`, error);
     }

@@ -76,10 +76,6 @@ export async function getUserCredentials(userId: string, exchange?: string): Pro
 }
 
 export async function requireUserCredentials(req: AuthenticatedRequest, exchange: string = 'crypto.com'): Promise<UserCredentials> {
-  if (req.user?.isLegacy) {
-    throw new Error('LEGACY_USER_NO_API_KEYS');
-  }
-
   if (!req.user?.id) {
     throw new Error('USER_NOT_AUTHENTICATED');
   }
@@ -96,7 +92,7 @@ export async function requireUserCredentials(req: AuthenticatedRequest, exchange
 export function createApiKeyRequiredError() {
   return {
     error: 'api_keys_required',
-    message: 'You must configure your Crypto.com API keys before using live trading features',
+    message: 'You must configure your Binance API keys before using live trading features',
     action: 'configure_api_keys'
   };
 }

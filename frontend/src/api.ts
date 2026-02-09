@@ -29,11 +29,6 @@ export function clearApiKey(){
 
 export const client = axios.create({ baseURL: API_BASE });
 
-// Initialize default x-api-key from env if present
-if (import.meta.env.VITE_APP_API_KEY) {
-  client.defaults.headers.common['x-api-key'] = import.meta.env.VITE_APP_API_KEY;
-}
-
 // Request interceptor to ensure auth headers are always set
 client.interceptors.request.use((cfg)=>{
   const k = getApiKey();

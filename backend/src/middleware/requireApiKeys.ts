@@ -11,14 +11,6 @@ export const requireLiveApiKeys = async (req: AuthenticatedRequest, res: Respons
       return next(); // Paper trading doesn't need API keys
     }
 
-    if (req.user?.isLegacy) {
-      return res.status(403).json({
-        error: 'legacy_users_no_live_trading',
-        message: 'Legacy users cannot use live trading. Please register a new account with API keys.',
-        action: 'register_new_account'
-      });
-    }
-
     if (!req.user?.id) {
       return res.status(401).json({
         error: 'authentication_required',

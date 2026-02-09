@@ -21,7 +21,7 @@ import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { useMultiDataCache } from '../hooks/useMultiDataCache';
 import { AppMode } from '../store';
-import { openWS } from '../ws';
+import { wsManager } from '../ws';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -145,7 +145,6 @@ export default function FeedPage() {
   const [radarEvents, setRadarEvents] = React.useState<RadarEvent[]>([]);
   const [filterType, setFilterType] = React.useState<FilterType>('all');
   const { mode } = useMode();
-  const wsRef = React.useRef<ReturnType<typeof openWS> | null>(null);
 
   // Fetch agent logs via cache
   const { data, isInitialLoad, isRefreshing, refresh } = useMultiDataCache<{
@@ -157,7 +156,7 @@ export default function FeedPage() {
       logs: {
         key: 'logs',
         fetcher: async () => {
-          const res = await api.getAgentLogs?.(mode as 'paper' | 'live', 100, 'memory').catch(() => ({ logs: [] }));
+          const res = await api.getAgentLogs?.(mode as 'paper' | 'live', 100, 'all').catch(() => ({ logs: [] }));
           return Array.isArray(res) ? res : res?.logs || [];
         },
         ttlMs: 10000,
@@ -178,23 +177,18 @@ export default function FeedPage() {
     const apiKey = localStorage.getItem('apiKey') || '';
     if (!apiKey) return;
 
-    wsRef.current = openWS(
-      API_BASE,
-      apiKey,
-      undefined,
-      (msg: any) => {
-        if (msg?.type === 'radar_event' && msg?.data) {
-          setRadarEvents((prev) => [msg.data as RadarEvent, ...prev].slice(0, 50));
-        }
-      },
-      undefined,
-      undefined,
-      undefined,
-    );
+    // Ensure the shared connection is open
+    wsManager.connect(API_BASE);
+
+    // Subscribe only to radar_event messages
+    const unsub = wsManager.subscribe('radar_event', (msg: any) => {
+      if (msg?.data) {
+        setRadarEvents((prev) => [msg.data as RadarEvent, ...prev].slice(0, 50));
+      }
+    });
 
     return () => {
-      try { wsRef.current?.close(); } catch {}
-      wsRef.current = null;
+      unsub();
     };
   }, []);
 

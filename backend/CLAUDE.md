@@ -55,12 +55,14 @@ npm run migrate             # Run migrations
 - `cacheManager.ts` - Mutex-protected BTC 15m/1h candle caches and leverage cache (`globalCacheManager` singleton)
 
 **Config & Types** (`src/config/`, `src/types/`)
-- `config/constants.ts` - Centralized magic numbers: `CACHE_TTLS`, `SYNC_INTERVALS`, `ORDER_QUEUE`, `WS_THROTTLE`
+- `config/constants.ts` - Centralized magic numbers: `CACHE_TTLS`, `SYNC_INTERVALS`, `ORDER_QUEUE`, `WS_THROTTLE`, `USER_LIMITS`, `IP_WEIGHT`
 - `types/exchange.ts` - Typed CCXT interfaces: `CcxtOrder`, `CcxtPosition`, `CcxtTrade`, `CcxtBalance`, `CcxtMarket`, `Exchange`
 
 **Services** (`src/services/`)
-- `orderQueue.ts` - Rate-limited order execution (3 concurrent, 350ms delays) to prevent IP bans
-- `binanceWebSocket.ts` - Real-time market data with REST fallback
+- `orderQueue.ts` - Rate-limited order execution (3 concurrent, 350ms delays), per-user queues for multi-user isolation
+- `binanceWebSocket.ts` - Real-time market data with REST fallback. Per-user data streams (ORDER_TRADE_UPDATE, balance, positions). Order cache with 2000-entry cap
+- `ipWeightTracker.ts` - Global singleton tracking all Binance REST API weight per minute (2400w/min limit). Exposes stats to `/api/health`
+- `userCredentials.ts` - Per-user API key management with encryption/decryption
 - `backtestService.ts` - Historical simulation with parity verification. `SignalOverrides` supports EXIT params via index signature
 - `walkForwardService.ts` - Walk-forward testing: sliding train+test windows, in-sample vs out-of-sample comparison
 - `optimizationService.ts` - Grid search over parameter combinations, ranked by out-of-sample Sharpe ratio
@@ -72,9 +74,15 @@ npm run migrate             # Run migrations
 - `ccxtClient.ts` - CCXT wrapper with market preloading and IP ban tracking
 
 **API Routes** (`src/routes/`)
-- `auth.ts` - JWT/API key authentication
+- `auth.ts` - JWT/API key authentication (JWT + API key dual auth)
 - `backtest.ts` - Backtest execution, parity verification, walk-forward testing (`POST /walk-forward`), grid optimization (`POST /optimize`)
+- `user.ts` - User management, API key CRUD
+- `orders.ts`, `portfolio.ts`, `perf.ts` - Trading data endpoints
 - `debug.ts` - Internal diagnostics
+
+**Middleware** (`src/middleware/`)
+- `auth.ts` - JWT token verification, user extraction from request
+- `requireApiKeys.ts` - Guards live endpoints requiring Binance API keys
 
 ### Data Flow
 
@@ -94,6 +102,9 @@ npm run migrate             # Run migrations
 - **Error Handling**: Use `errMsg(error: unknown): string` helper for safe error extraction in `catch (error: unknown)` blocks (no `catch (error: any)`)
 - **MomentumConfig Mutability**: `MomentumConfig` is a mutable `const` object (not `as const`) so tests can toggle fields like `CASH_MODE.ENABLED`
 - **Cash Mode**: Market regime detection (ADX + ATR + SMA200 slope) skips entries in CHOPPY/LOW_VOL regimes. Integrated at top of `checkMomentumSignal()`
+- **IP Weight Tracking**: All REST API calls tracked via `ipWeightTracker` singleton. Soft limit at 1800w/min (75%), hard limit 2400w/min. Stats exposed at `/api/health`
+- **Paper Mode Without API Keys**: Users without Binance keys can use paper trading. `createPaperExchangeStub()` in server.ts provides a minimal exchange interface. All exchange method calls in paper mode are guarded by truthiness checks
+- **Live Mode API Key Guard**: `requireApiKeysForLive()` blocks live session creation without valid API keys (checked on all 4 session endpoints + restore)
 
 ## Database Schema (Prisma)
 
@@ -200,6 +211,35 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **fundingRateService.ts fix**: Replaced broken `import { errMsg }` with local function definition.
   - **Optimization script**: `scripts/optimize-strategy.ts` — 3-phase parameter sweep (entry, exit, symbols). `scripts/test-all-symbols.ts` — individual symbol profitability testing.
   - **Findings document**: `docs/optimization-findings-v5.92.md` — full analysis of 28+ backtest runs.
+
+## Multi-User Scaling
+
+System designed for 40+ users × 20 agents (800+ concurrent agents) with single Binance IP.
+
+### API Weight Budget (2400w/min Binance limit)
+- **Position sync**: 0w/min (WebSocket user data stream)
+- **Balance sync**: 0w/min (WebSocket ACCOUNT_UPDATE)
+- **Proactive limit check**: 0w/min (WS ORDER_TRADE_UPDATE cache, REST fallback after 10s)
+- **Order execution**: ~100w/min (via orderQueue rate limiting)
+- **SL/trailing placement**: ~50w/min (tracked via ipWeightTracker)
+- **Dashboard fallbacks**: ~30w/min (deduped via exchangeAPIDeduplicator, 10s TTL)
+- **Estimated total**: ~180w/min = 7.5% of budget
+
+### Key Safeguards
+- `ipWeightTracker.ts`: Tracks all REST weight per minute, warns at 75% (1800w)
+- `orderTradeUpdateByOrderId` cache: Capped at 2000 entries with LRU eviction
+- `checkProactiveLimitFill()`: WS-first with REST fallback after 10s (prevents hang if WS event lost)
+- Staggered session restore: 500ms between users at startup (avoids burst)
+- Per-user order queues: Isolated so one user's burst doesn't block others
+- `requireApiKeysForLive()`: Blocks live sessions without valid API keys
+- Live sessions halted at restore if user's API keys were deleted
+
+### Per-User Isolation
+- Each user gets own exchange instance (CCXT), WS data stream, order queue
+- `SignalRanker`: Per-user model instances
+- `CapitalPool`: Per-user balance tracking
+- Agent sessions scoped by userId in DB
+- WS multiplexing: Shared market data streams, per-user data streams
 
 ## Refactoring (completed)
 

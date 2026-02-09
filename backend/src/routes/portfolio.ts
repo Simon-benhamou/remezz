@@ -21,7 +21,7 @@ router.get('/correlation', authenticateUser, async (req: AuthenticatedRequest, r
       stoppedAt: null,
       mode,
     };
-    if (req.user.role !== 'admin' && !req.user.isLegacy) {
+    if (req.user.role !== 'admin') {
       sessionWhere.userId = req.user.id;
     }
 
@@ -200,7 +200,7 @@ router.get('/risk-distribution', authenticateUser, async (req: AuthenticatedRequ
       stoppedAt: null,
       mode,
     };
-    if (req.user.role !== 'admin' && !req.user.isLegacy) {
+    if (req.user.role !== 'admin') {
       sessionWhere.userId = req.user.id;
     }
 

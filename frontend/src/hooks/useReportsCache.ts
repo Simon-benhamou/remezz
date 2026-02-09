@@ -25,7 +25,7 @@ interface ReportsCache {
 }
 
 const REPORTS_CACHE_TTL = 30000; // 30 seconds TTL (reports change less frequently)
-const AUTO_REFRESH_INTERVAL = 60000; // Auto refresh every 60s
+const AUTO_REFRESH_INTERVAL = 120000; // Auto refresh every 120s
 
 export function useReportsCache() {
   const [isRefreshing, setIsRefreshing] = useState(false); // Background refresh indicator
@@ -205,6 +205,8 @@ export function useReportsCache() {
     }
 
     intervalRef.current = setInterval(() => {
+      // Skip polling when tab is not visible
+      if (document.hidden) return;
       if (!isCacheValid(mode)) {
         console.log(`⏰ Auto-refresh triggered for reports ${mode}`);
         loadReports(mode, true).catch(console.error);

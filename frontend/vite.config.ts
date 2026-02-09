@@ -5,6 +5,9 @@ import path from "path";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  esbuild: {
+    drop: process.env.NODE_ENV === "production" ? ["console", "debugger"] : [],
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

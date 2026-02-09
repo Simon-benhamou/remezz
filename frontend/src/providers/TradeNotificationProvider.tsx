@@ -5,10 +5,10 @@
  * and displays them using browser notifications and Sonner toasts.
  */
 
-import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { toast } from 'sonner';
 import { Bell, Volume2 } from 'lucide-react';
-import { openWS } from '@/ws';
+import { wsManager } from '@/ws';
 
 export interface TradeNotification {
   type: 'trade_entry' | 'trade_exit' | 'stop_loss_hit' | 'take_profit_hit' |
@@ -132,7 +132,6 @@ export function TradeNotificationProvider({ children }: { children: React.ReactN
   });
 
   const [recentNotifications, setRecentNotifications] = useState<TradeNotification[]>([]);
-  const wsRef = useRef<ReturnType<typeof openWS> | null>(null);
 
   const setEnabled = useCallback((value: boolean) => {
     setEnabledState(value);
@@ -245,25 +244,18 @@ export function TradeNotificationProvider({ children }: { children: React.ReactN
 
     if (!apiKey) return;
 
-    wsRef.current = openWS(
-      API_BASE,
-      apiKey,
-      undefined, // No specific symbol - listen to all
-      (msg: any) => {
-        if (msg?.type === 'trade_notification' && msg?.data) {
-          handleTradeNotification(msg.data as TradeNotification);
-        }
-      },
-      undefined,
-      undefined,
-      undefined
-    );
+    // Ensure the shared connection is open
+    wsManager.connect(API_BASE);
+
+    // Subscribe only to trade_notification messages
+    const unsub = wsManager.subscribe('trade_notification', (msg: any) => {
+      if (msg?.data) {
+        handleTradeNotification(msg.data as TradeNotification);
+      }
+    });
 
     return () => {
-      try {
-        wsRef.current?.close();
-      } catch {}
-      wsRef.current = null;
+      unsub();
     };
   }, [handleTradeNotification]);
 

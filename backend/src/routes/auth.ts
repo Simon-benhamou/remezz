@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { createHash } from 'crypto';
 import { getConfig } from '../utils/env.js';
 import { prisma } from '../db/client.js';
 import bcrypt from 'bcryptjs';
@@ -9,7 +8,14 @@ import { recordOpsEvent } from '../monitor/ops.js';
 
 export const router = Router();
 
-const REGISTRATION_CODE = 'Shira1704';
+// Registration code loaded from environment
+function getRegistrationCode(): string {
+  const cfg = getConfig();
+  if (!cfg.REGISTRATION_CODE) {
+    throw new Error('REGISTRATION_CODE environment variable is required');
+  }
+  return cfg.REGISTRATION_CODE;
+}
 
 function collectHeaderValues(...values: (string | string[] | undefined)[]): string[] {
   const out: string[] = [];
@@ -34,21 +40,9 @@ function normalizeToken(raw: string): string {
 // Login endpoint
 router.post('/login', async (req, res) => {
   try {
-    const { username, password, code } = req.body || {};
+    const { username, password } = req.body || {};
     const cfg = getConfig();
-    
-    // Legacy authentication (backwards compatibility)
-    const okByUser = (typeof username === 'string' && typeof password === 'string' && username === cfg.AUTH_USER && password === cfg.AUTH_PASS);
-    const okByCode = (typeof code === 'string' && code && (code === (cfg.ACCESS_CODE || cfg.AUTH_PASS)));
-    
-    if (okByUser || okByCode) {
-      return res.json({ 
-        token: cfg.APP_API_KEY, 
-        user: { id: 'legacy', username: username || 'admin', email: '', role: 'admin' } 
-      });
-    }
 
-    // New user authentication
     if (username && password) {
       const user = await prisma.user.findUnique({
         where: { username: username.toLowerCase() }
@@ -57,7 +51,7 @@ router.post('/login', async (req, res) => {
       if (user && (await bcrypt.compare(password, user.passwordHash))) {
         const token = jwt.sign(
           { userId: user.id, username: user.username, role: user.role },
-          cfg.JWT_SECRET || cfg.APP_API_KEY,
+          cfg.JWT_SECRET,
           { expiresIn: '7d' }
         );
         
@@ -89,19 +83,12 @@ router.post('/ws-token', async (req, res) => {
       .filter(Boolean);
 
     let identity:
-      | { kind: 'apiKey'; id: string; fingerprint: string }
       | { kind: 'user'; id: string; username: string; role: string }
       | null = null;
 
     for (const candidate of tokens) {
-      if (candidate === cfg.APP_API_KEY) {
-        const fingerprint = createHash('sha256').update(candidate).digest('hex').slice(0, 16);
-        identity = { kind: 'apiKey', id: 'app-key', fingerprint };
-        break;
-      }
-
       try {
-        const decoded = jwt.verify(candidate, cfg.JWT_SECRET || cfg.APP_API_KEY) as any;
+        const decoded = jwt.verify(candidate, cfg.JWT_SECRET) as any;
         if (decoded?.userId) {
           const user = await prisma.user
             .findUnique({ where: { id: decoded.userId } })
@@ -148,17 +135,13 @@ router.post('/ws-token', async (req, res) => {
       sessionId,
     };
 
-    if (identity.kind === 'apiKey') {
-      payload.fingerprint = identity.fingerprint;
-    } else {
-      payload.user = {
-        id: identity.id,
-        username: identity.username,
-        role: identity.role,
-      };
-    }
+    payload.user = {
+      id: identity.id,
+      username: identity.username,
+      role: identity.role,
+    };
 
-    const token = jwt.sign(payload, cfg.WS_JWT_SECRET || cfg.JWT_SECRET || cfg.APP_API_KEY, {
+    const token = jwt.sign(payload, cfg.WS_JWT_SECRET || cfg.JWT_SECRET, {
       expiresIn: ttlSec,
     });
 
@@ -202,7 +185,7 @@ router.post('/register', async (req, res) => {
     }
 
     // Validate registration code
-    if (registrationCode !== REGISTRATION_CODE) {
+    if (registrationCode !== getRegistrationCode()) {
       return res.status(400).json({ error: 'invalid_registration_code' });
     }
 
@@ -211,8 +194,8 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'username_must_be_3_20_chars' });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'password_must_be_at_least_6_chars' });
+    if (password.length < 10) {
+      return res.status(400).json({ error: 'password_must_be_at_least_10_chars' });
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -254,7 +237,7 @@ router.post('/register', async (req, res) => {
     const cfg = getConfig();
     const token = jwt.sign(
       { userId: user.id, username: user.username, role: user.role },
-      cfg.JWT_SECRET || cfg.APP_API_KEY,
+      cfg.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
@@ -287,16 +270,8 @@ router.get('/me', async (req, res) => {
     const tokenStr = token.replace('Bearer ', '');
     const cfg = getConfig();
 
-    // Legacy token check
-    if (tokenStr === cfg.APP_API_KEY) {
-      return res.json({
-        user: { id: 'legacy', username: 'admin', email: '', role: 'admin' }
-      });
-    }
-
-    // JWT token check
     try {
-      const decoded = jwt.verify(tokenStr, cfg.JWT_SECRET || cfg.APP_API_KEY) as any;
+      const decoded = jwt.verify(tokenStr, cfg.JWT_SECRET) as any;
       const user = await prisma.user.findUnique({
         where: { id: decoded.userId }
       });
@@ -326,10 +301,6 @@ router.get('/me', async (req, res) => {
 // Update user profile
 router.put('/profile', authenticateUser, async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ error: 'legacy_users_cannot_update_profile' });
-    }
-
     const { email } = req.body;
 
     if (!email) {
@@ -376,18 +347,14 @@ router.put('/profile', authenticateUser, async (req: AuthenticatedRequest, res) 
 // Change password
 router.put('/password', authenticateUser, async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ error: 'legacy_users_cannot_change_password' });
-    }
-
     const { currentPassword, newPassword } = req.body;
 
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ error: 'missing_required_fields' });
     }
 
-    if (newPassword.length < 6) {
-      return res.status(400).json({ error: 'password_must_be_at_least_6_chars' });
+    if (newPassword.length < 10) {
+      return res.status(400).json({ error: 'password_must_be_at_least_10_chars' });
     }
 
     const user = await prisma.user.findUnique({

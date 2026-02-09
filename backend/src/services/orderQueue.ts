@@ -1,38 +1,38 @@
 /**
- * Global Order Queue System
+ * Per-User Order Queue System
  *
- * CRITICAL COMPONENT for 1000+ concurrent agents
+ * CRITICAL COMPONENT for multi-user scaling
  *
- * Problem: Without queue, 100 agents receiving simultaneous exit signal
- * = 100 API calls in <1 second = INSTANT IP BAN (418 error)
+ * Architecture:
+ *   OrderQueueManager (singleton)
+ *   ├── UserOrderQueue (userId: "abc") → 3 slots, 200ms delay
+ *   ├── UserOrderQueue (userId: "def") → 3 slots, 200ms delay
+ *   └── GlobalRateLimiter → 1100 weight/min across ALL users (Binance limit)
  *
- * Solution: Priority queue with rate limiting
- * - Orders queued and executed sequentially
- * - 350ms delay between orders (safe for Binance: 40 orders/sec limit)
- * - Priority-based execution (stop losses before entries)
- * - Max 3 concurrent orders (prevents bursts)
- * - Retry logic with exponential backoff
- * - Circuit breaker integration
- * - Comprehensive monitoring
- *
- * Performance: 100 simultaneous exits = 35 seconds total (vs instant ban)
+ * Key insight: Each user has their own API credentials and their own
+ * Binance rate limits. By separating queues per user, User A's orders
+ * don't block User B's orders. The GlobalRateLimiter prevents aggregate
+ * IP-level bans if all users share the same server IP.
  *
  * Production features:
+ * - Per-user priority queues (stop losses before entries)
+ * - Per-user concurrency (3 concurrent orders per user)
+ * - Global rate limiting (1100 orders/min across all users)
  * - Idempotency (duplicate order detection)
  * - Order timeout (30s max wait in queue)
- * - Graceful degradation (queue overflow protection)
- * - Memory leak prevention (result cache cleanup)
- * - Observability (detailed stats and logging)
+ * - Retry logic with exponential backoff
+ * - Circuit breaker integration
+ * - Inactive queue cleanup (30 min TTL)
+ * - Comprehensive monitoring
  */
 
-import { v4 as uuidv4 } from 'uuid';
 import { ORDER_QUEUE } from '../config/constants.js';
 import { createLogger } from '../utils/logger.js';
 import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
-import { calculateOrderPriority, getPriorityTier } from './orderPriority.js';
+import { getPriorityTier } from './orderPriority.js';
 import type { OrderPriorityContext } from './orderPriority.js';
 import { notifyOrderFailed } from '../utils/notifications.js';
-import { validateOrderComplete, adjustQtyToStepSize, getSymbolLimits, logValidationError } from './orderValidation.js';
+import { validateOrderComplete, logValidationError } from './orderValidation.js';
 import type { Exchange } from '../types/exchange.js';
 
 const logger = createLogger('order-queue');
@@ -87,10 +87,71 @@ type QueuedOrder = {
 };
 
 // ============================================================================
-// Order Queue Class
+// Global Rate Limiter
 // ============================================================================
 
-export class OrderQueue {
+/**
+ * Tracks total order execution across ALL users to respect
+ * Binance's IP-level rate limits.
+ *
+ * Binance futures order weight is 1 per order.
+ * Limit: ~2400 weight/min per IP. We use 1100 as safe threshold.
+ */
+class GlobalRateLimiter {
+  private readonly MAX_WEIGHT_PER_MINUTE: number;
+  private readonly timestamps: number[] = []; // Ring buffer of execution timestamps
+
+  constructor(maxWeightPerMinute = 1100) {
+    this.MAX_WEIGHT_PER_MINUTE = maxWeightPerMinute;
+  }
+
+  /**
+   * Check if we can execute another order globally.
+   * Each order = weight 1.
+   */
+  canExecute(): boolean {
+    this.cleanup();
+    return this.timestamps.length < this.MAX_WEIGHT_PER_MINUTE;
+  }
+
+  /**
+   * Record an order execution (call AFTER executing).
+   */
+  recordExecution(): void {
+    this.timestamps.push(Date.now());
+  }
+
+  /**
+   * Get current weight usage in the sliding window.
+   */
+  getCurrentWeight(): number {
+    this.cleanup();
+    return this.timestamps.length;
+  }
+
+  /**
+   * Remove timestamps older than 1 minute.
+   */
+  private cleanup(): void {
+    const cutoff = Date.now() - 60_000;
+    // Remove from front (oldest first)
+    while (this.timestamps.length > 0 && this.timestamps[0] < cutoff) {
+      this.timestamps.shift();
+    }
+  }
+}
+
+// ============================================================================
+// User Order Queue (per-user)
+// ============================================================================
+
+/**
+ * Isolated queue for a single user's orders.
+ * Each user gets their own concurrency slots, delay timers, and stats.
+ */
+class UserOrderQueue {
+  readonly userId: string;
+
   // Priority queue (sorted by priority, then FIFO)
   private queue: QueuedOrder[] = [];
 
@@ -100,20 +161,19 @@ export class OrderQueue {
   // Order results cache (for idempotency and monitoring)
   private results = new Map<string, OrderResult>();
 
-  // Configuration (tuned for Binance Futures limits)
-  private readonly MAX_CONCURRENT_ORDERS: number;      // Max parallel orders
-  private readonly ORDER_DELAY_MS: number;             // Min delay between orders
-  private readonly MAX_RETRIES: number;                // Max retry attempts
-  private readonly RESULT_CACHE_TTL_MS: number;        // Result cache lifetime
-  private readonly MAX_QUEUE_SIZE: number;             // Max orders in queue
-  private readonly DEFAULT_TIMEOUT_MS: number;         // Max wait time per order
+  // Configuration (tuned for Binance Futures limits per user)
+  private readonly MAX_CONCURRENT_ORDERS: number;
+  private readonly ORDER_DELAY_MS: number;
+  private readonly MAX_RETRIES: number;
+  private readonly RESULT_CACHE_TTL_MS: number;
+  private readonly MAX_QUEUE_SIZE: number;
+  private readonly DEFAULT_TIMEOUT_MS: number;
   private readonly EXECUTION_TIMEOUT_MS = ORDER_QUEUE.EXECUTION_TIMEOUT_MS;
 
   // V5.65: Enhanced idempotency tracking to prevent double orders
-  // Tracks order IDs for 24 hours to handle any edge cases
-  private readonly IDEMPOTENCY_CACHE_TTL_MS: number;   // 24 hours
-  private readonly orderIdHistory = new Set<string>(); // Long-term order ID tracking
-  private orderIdHistoryCleanupAt = Date.now();        // Last cleanup timestamp
+  private readonly IDEMPOTENCY_CACHE_TTL_MS: number;
+  private readonly orderIdHistory = new Set<string>();
+  private orderIdHistoryCleanupAt = Date.now();
 
   // Stats
   private stats = {
@@ -121,8 +181,8 @@ export class OrderQueue {
     totalExecuted: 0,
     totalFailed: 0,
     totalRetried: 0,
-    totalRejected: 0,            // Rejected due to queue full
-    totalTimedOut: 0,            // Timed out waiting in queue
+    totalRejected: 0,
+    totalTimedOut: 0,
     avgWaitTimeMs: 0,
     avgExecutionTimeMs: 0,
     maxQueueSize: 0,
@@ -137,71 +197,79 @@ export class OrderQueue {
   private lastHealthCheckAt = 0;
   private readonly HEALTH_CHECK_INTERVAL_MS = ORDER_QUEUE.HEALTH_CHECK_INTERVAL_MS;
 
-  constructor(config?: {
-    maxConcurrentOrders?: number;
-    orderDelayMs?: number;
-    maxRetries?: number;
-    resultCacheTTL?: number;
-    maxQueueSize?: number;
-    defaultTimeoutMs?: number;
-  }) {
-    // Configuration (with safe defaults for 1000+ agents)
+  // Activity tracking for cleanup by manager
+  private _lastActivityAt = Date.now();
+
+  // Reference to global rate limiter
+  private globalRateLimiter: GlobalRateLimiter;
+
+  constructor(
+    userId: string,
+    globalRateLimiter: GlobalRateLimiter,
+    config?: {
+      maxConcurrentOrders?: number;
+      orderDelayMs?: number;
+      maxRetries?: number;
+      resultCacheTTL?: number;
+      maxQueueSize?: number;
+      defaultTimeoutMs?: number;
+    }
+  ) {
+    this.userId = userId;
+    this.globalRateLimiter = globalRateLimiter;
+
+    // Per-user config: 3 concurrent, 200ms delay (users don't share rate limits)
     this.MAX_CONCURRENT_ORDERS = config?.maxConcurrentOrders ?? ORDER_QUEUE.MAX_CONCURRENT;
     this.ORDER_DELAY_MS = config?.orderDelayMs ?? ORDER_QUEUE.DELAY_MS;
     this.MAX_RETRIES = config?.maxRetries ?? ORDER_QUEUE.MAX_RETRIES;
     this.RESULT_CACHE_TTL_MS = config?.resultCacheTTL ?? ORDER_QUEUE.RESULT_CACHE_TTL_MS;
     this.MAX_QUEUE_SIZE = config?.maxQueueSize ?? ORDER_QUEUE.MAX_QUEUE_SIZE;
     this.DEFAULT_TIMEOUT_MS = config?.defaultTimeoutMs ?? ORDER_QUEUE.DEFAULT_TIMEOUT_MS;
-    this.IDEMPOTENCY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;              // V5.65: 24 hours for order ID history
+    this.IDEMPOTENCY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-    logger.info('[OrderQueue] Initialized with config:', {
-      maxConcurrent: this.MAX_CONCURRENT_ORDERS,
-      orderDelayMs: this.ORDER_DELAY_MS,
-      maxRetries: this.MAX_RETRIES,
-      maxQueueSize: this.MAX_QUEUE_SIZE,
-    });
+    logger.info(`[UserQueue:${userId}] Initialized | concurrent=${this.MAX_CONCURRENT_ORDERS} delay=${this.ORDER_DELAY_MS}ms`);
+  }
+
+  get lastActivityAt(): number {
+    return this._lastActivityAt;
+  }
+
+  /**
+   * Returns true if this user queue is idle (no pending or executing orders).
+   */
+  isIdle(): boolean {
+    return this.queue.length === 0 && this.executing.size === 0;
   }
 
   // ==========================================================================
-  // Public API
+  // Lifecycle
   // ==========================================================================
 
-  /**
-   * Start processing the order queue
-   */
   start(): void {
-    if (this.processingIntervalId) {
-      logger.warn('[OrderQueue] Already started');
-      return;
-    }
+    if (this.processingIntervalId) return;
 
-    // Process queue every 100ms (fast polling)
     this.processingIntervalId = setInterval(() => {
       void this.processQueue();
     }, 100);
 
-    logger.info('[OrderQueue] Started processing (poll interval: 100ms)');
+    logger.debug(`[UserQueue:${this.userId}] Started processing`);
   }
 
-  /**
-   * Stop processing the order queue
-   */
   stop(): void {
     if (this.processingIntervalId) {
       clearInterval(this.processingIntervalId);
       this.processingIntervalId = null;
     }
 
-    logger.info('[OrderQueue] Stopped processing');
+    logger.debug(`[UserQueue:${this.userId}] Stopped processing`);
   }
 
-  /**
-   * Submit an order to the queue
-   * Returns a promise that resolves when the order is executed
-   *
-   * @throws Error if queue is full
-   */
+  // ==========================================================================
+  // Public API
+  // ==========================================================================
+
   async submitOrder(request: OrderRequest): Promise<OrderResult> {
+    this._lastActivityAt = Date.now();
     this.stats.totalSubmitted++;
 
     // 1. Check for duplicate order (idempotency) - V5.65: Enhanced with long-term tracking
@@ -212,7 +280,6 @@ export class OrderQueue {
     }
 
     // V5.65: Also check long-term order ID history (24h)
-    // This prevents double orders even if result cache was cleaned up
     if (this.orderIdHistory.has(request.id)) {
       logger.warn(`[${request.id}] DUPLICATE ORDER BLOCKED - ID already processed (from history)`);
       return {
@@ -229,9 +296,9 @@ export class OrderQueue {
     if (this.queue.length >= this.MAX_QUEUE_SIZE) {
       this.stats.totalRejected++;
 
-      logger.error(`[${request.id}] Queue FULL (${this.queue.length}/${this.MAX_QUEUE_SIZE}) - REJECTING order`);
+      logger.error(`[${request.id}] Queue FULL for user ${this.userId} (${this.queue.length}/${this.MAX_QUEUE_SIZE}) - REJECTING order`);
 
-      throw new Error(`Order queue full (${this.queue.length}/${this.MAX_QUEUE_SIZE}). System overloaded.`);
+      throw new Error(`Order queue full for user ${this.userId} (${this.queue.length}/${this.MAX_QUEUE_SIZE}). System overloaded.`);
     }
 
     // 3. Create promise wrapper
@@ -246,7 +313,6 @@ export class OrderQueue {
       // 4. Insert into queue (sorted by priority)
       this.insertInQueue(queuedOrder);
 
-      // Track max queue size
       if (this.queue.length > this.stats.maxQueueSize) {
         this.stats.maxQueueSize = this.queue.length;
       }
@@ -255,19 +321,15 @@ export class OrderQueue {
 
       logger.info(
         `[${request.id}] QUEUED | ` +
+        `user=${this.userId} | ` +
         `${request.symbol} ${request.side} ${request.quantity} | ` +
         `priority=${request.priority} (${priorityTier}) | ` +
         `reason=${request.reason} | ` +
         `queueSize=${this.queue.length}/${this.MAX_QUEUE_SIZE}`
       );
-
-      // V5.79: Order submitted notification removed from Telegram (noise reduction)
     });
   }
 
-  /**
-   * Get queue stats
-   */
   getStats() {
     return {
       queue: {
@@ -300,25 +362,19 @@ export class OrderQueue {
     };
   }
 
-  /**
-   * Get pending orders for a specific agent (for debugging)
-   */
   getAgentOrders(agentId: string): OrderRequest[] {
     return this.queue
       .map(q => q.request)
       .filter(r => r.agentId === agentId);
   }
 
-  /**
-   * Get priority distribution (for monitoring)
-   */
   getPriorityDistribution(): Record<string, number> {
     const dist = {
-      CRITICAL: 0,  // 90-100
-      HIGH: 0,      // 70-89
-      MEDIUM: 0,    // 50-69
-      NORMAL: 0,    // 20-49
-      LOW: 0,       // 0-19
+      CRITICAL: 0,
+      HIGH: 0,
+      MEDIUM: 0,
+      NORMAL: 0,
+      LOW: 0,
     };
 
     for (const { request } of this.queue) {
@@ -333,11 +389,7 @@ export class OrderQueue {
   // Private Methods - Queue Processing
   // ==========================================================================
 
-  /**
-   * Insert order into queue (sorted by priority DESC, then FIFO)
-   */
   private insertInQueue(order: QueuedOrder): void {
-    // Find insertion point (higher priority first)
     let insertIndex = this.queue.length;
 
     for (let i = 0; i < this.queue.length; i++) {
@@ -350,77 +402,71 @@ export class OrderQueue {
     this.queue.splice(insertIndex, 0, order);
   }
 
-  /**
-   * Process the queue (called every 100ms)
-   */
   private async processQueue(): Promise<void> {
-    // Prevent concurrent processing
     if (this.isProcessing) return;
     this.isProcessing = true;
 
     try {
-      // 1. Health check (cleanup timeouts, stale results)
+      // 1. Health check
       await this.healthCheck();
 
-      // 2. Check circuit breaker status
-      // V5.65: Allow critical orders (exits) even when circuit is open
+      // 2. Circuit breaker
       const isCircuitOpen = !globalRestCircuitBreaker.canMakeRequest();
 
       if (isCircuitOpen && this.queue.length > 0) {
-        // Check if we have any exit orders (critical)
         const hasExitOrders = this.queue.some(q => !q.request.isEntry);
 
         if (hasExitOrders) {
-          // Check if we can make a critical request
           if (!globalRestCircuitBreaker.canMakeCriticalRequest()) {
-            logger.warn(`[OrderQueue] Circuit breaker OPEN - ${this.queue.length} orders waiting (exit orders blocked by rate limit)`);
+            logger.warn(`[UserQueue:${this.userId}] Circuit breaker OPEN - ${this.queue.length} orders waiting (exit orders blocked)`);
             return;
           }
-          // Critical request allowed - continue processing but only process exits
-          logger.info(`[OrderQueue] Circuit breaker OPEN but processing CRITICAL exit order`);
+          logger.info(`[UserQueue:${this.userId}] Circuit breaker OPEN but processing CRITICAL exit order`);
         } else {
-          // No exit orders - skip entirely
-          logger.warn(`[OrderQueue] Circuit breaker OPEN - ${this.queue.length} entry orders waiting`);
+          logger.warn(`[UserQueue:${this.userId}] Circuit breaker OPEN - ${this.queue.length} entry orders waiting`);
           return;
         }
       } else if (isCircuitOpen) {
-        return; // Empty queue + circuit open = nothing to do
+        return;
       }
 
       // 3. Skip if queue is empty
       if (this.queue.length === 0) return;
 
-      // 4. Skip if max concurrent orders reached
+      // 4. Skip if max concurrent orders reached (per-user limit)
       if (this.executing.size >= this.MAX_CONCURRENT_ORDERS) {
         return;
       }
 
-      // 5. Enforce delay between orders (rate limiting)
+      // 5. Enforce delay between orders (per-user rate limiting)
       const now = Date.now();
       const timeSinceLastOrder = now - this.lastOrderExecutedAt;
 
       if (timeSinceLastOrder < this.ORDER_DELAY_MS && this.lastOrderExecutedAt > 0) {
-        return; // Too soon, wait longer
+        return;
       }
 
-      // 6. Dequeue next order
-      // V5.65: When circuit is open, only dequeue exit orders
+      // 6. Check global rate limiter (cross-user IP protection)
+      if (!this.globalRateLimiter.canExecute()) {
+        logger.warn(`[UserQueue:${this.userId}] Global rate limit reached (${this.globalRateLimiter.getCurrentWeight()}/min) - throttling`);
+        return;
+      }
+
+      // 7. Dequeue next order
       let queuedOrder: QueuedOrder | undefined;
 
       if (isCircuitOpen) {
-        // Find the first exit order (critical)
         const exitIndex = this.queue.findIndex(q => !q.request.isEntry);
         if (exitIndex >= 0) {
           queuedOrder = this.queue.splice(exitIndex, 1)[0];
         }
       } else {
-        // Normal operation - dequeue by priority (first item)
         queuedOrder = this.queue.shift();
       }
 
       if (!queuedOrder) return;
 
-      // 7. Check if order timed out while in queue
+      // 8. Check if order timed out while in queue
       const queueWaitTime = Date.now() - queuedOrder.queuedAt;
       const timeout = queuedOrder.request.timeoutMs || this.DEFAULT_TIMEOUT_MS;
 
@@ -429,6 +475,7 @@ export class OrderQueue {
 
         logger.error(
           `[${queuedOrder.request.id}] TIMEOUT in queue | ` +
+          `user=${this.userId} | ` +
           `waited ${queueWaitTime}ms > ${timeout}ms timeout | ` +
           `reason=${queuedOrder.request.reason}`
         );
@@ -447,7 +494,10 @@ export class OrderQueue {
         return;
       }
 
-      // 8. Execute order (async, non-blocking)
+      // 9. Record in global rate limiter BEFORE executing
+      this.globalRateLimiter.recordExecution();
+
+      // 10. Execute order (async, non-blocking)
       void this.executeOrder(queuedOrder);
 
     } finally {
@@ -455,12 +505,11 @@ export class OrderQueue {
     }
   }
 
-  /**
-   * Execute an order
-   */
   private async executeOrder(queuedOrder: QueuedOrder): Promise<void> {
     const { request, resolve } = queuedOrder;
     const { id, symbol, side, quantity, userId } = request;
+
+    this._lastActivityAt = Date.now();
 
     // Mark as executing
     this.executing.set(id, {
@@ -471,12 +520,13 @@ export class OrderQueue {
     this.lastOrderExecutedAt = Date.now();
 
     const waitTimeMs = this.lastOrderExecutedAt - request.submittedAt;
-    this.stats.avgWaitTimeMs = (this.stats.avgWaitTimeMs + waitTimeMs) / 2; // Moving average
+    this.stats.avgWaitTimeMs = (this.stats.avgWaitTimeMs + waitTimeMs) / 2;
 
     const priorityTier = getPriorityTier(request.priority);
 
     logger.info(
       `[${id}] EXECUTING | ` +
+      `user=${userId} | ` +
       `${symbol} ${side} ${quantity} | ` +
       `priority=${request.priority} (${priorityTier}) | ` +
       `waitTime=${waitTimeMs}ms | ` +
@@ -490,7 +540,6 @@ export class OrderQueue {
       const exchange = await this.getExchangeForUser(userId);
 
       // V5.65: Validate order before submission to exchange
-      // This prevents LOT_SIZE, MIN_NOTIONAL, and INVALID_SYMBOL errors
       const validation = validateOrderComplete(
         {
           symbol,
@@ -500,7 +549,7 @@ export class OrderQueue {
           price: request.price,
         },
         exchange.markets,
-        undefined // currentPrice not available here, price validated at higher level
+        undefined
       );
 
       if (!validation.valid) {
@@ -520,7 +569,6 @@ export class OrderQueue {
         this.orderIdHistory.add(id);
         this.executing.delete(id);
 
-        // Notify about the validation failure
         void notifyOrderFailed({
           id,
           symbol,
@@ -540,8 +588,7 @@ export class OrderQueue {
         logger.info(`[${id}] Quantity adjusted for step size: ${quantity} → ${validatedQty}`);
       }
 
-      // V5.38: Execute order with timeout to prevent hanging
-      // If Binance doesn't respond within EXECUTION_TIMEOUT_MS, we fail gracefully
+      // Execute order with timeout to prevent hanging
       let order: import('../types/exchange.js').CcxtOrder | undefined;
 
       const executeWithTimeout = async <T>(operation: Promise<T>): Promise<T> => {
@@ -549,7 +596,7 @@ export class OrderQueue {
           const timeoutId = setTimeout(() => {
             rejectOp(new Error(`Exchange API timeout after ${this.EXECUTION_TIMEOUT_MS}ms`));
           }, this.EXECUTION_TIMEOUT_MS);
-          
+
           operation
             .then((result) => {
               clearTimeout(timeoutId);
@@ -569,7 +616,6 @@ export class OrderQueue {
           order = await executeWithTimeout(exchange.createMarketSellOrder(symbol, validatedQty, request.params));
         }
       } else {
-        // Limit order
         order = await executeWithTimeout(exchange.createOrder(
           symbol,
           request.type,
@@ -583,7 +629,6 @@ export class OrderQueue {
       const executionTimeMs = Date.now() - executionStartAt;
       this.stats.avgExecutionTimeMs = (this.stats.avgExecutionTimeMs + executionTimeMs) / 2;
 
-      // Success
       const result: OrderResult = {
         success: true,
         order,
@@ -594,19 +639,16 @@ export class OrderQueue {
 
       this.stats.totalExecuted++;
       this.results.set(id, result);
-
-      // V5.65: Add to long-term order ID history
       this.orderIdHistory.add(id);
 
       logger.info(
-        `[${id}] ✅ SUCCESS | ` +
+        `[${id}] SUCCESS | ` +
+        `user=${userId} | ` +
         `orderId=${order!.id} | ` +
         `filled=${order!.filled} | ` +
         `price=${order!.average || order!.price} | ` +
         `executionTime=${executionTimeMs}ms`
       );
-
-      // V5.79: Order filled notification removed from Telegram (redundant with position notifications)
 
       resolve(result);
 
@@ -615,40 +657,35 @@ export class OrderQueue {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       logger.error(
-        `[${id}] ❌ FAILED | ` +
+        `[${id}] FAILED | ` +
+        `user=${userId} | ` +
         `error=${errorMessage} | ` +
         `executionTime=${executionTimeMs}ms`
       );
 
-      // Classify error
       const errorCode = this.classifyError(error);
 
-      // Check if we should retry
       if (request.retries < this.MAX_RETRIES && this.isRetryableError(error)) {
         this.stats.totalRetried++;
 
-        // Increment retry count and re-queue with boosted priority
         request.retries++;
-        request.priority = Math.min(100, request.priority + 10); // Boost priority on retry
+        request.priority = Math.min(100, request.priority + 10);
 
         logger.warn(
           `[${id}] RETRYING (${request.retries}/${this.MAX_RETRIES}) | ` +
-          `newPriority=${request.priority}`
+          `user=${userId} | newPriority=${request.priority}`
         );
 
-        // Re-insert with boosted priority
         const newQueuedOrder: QueuedOrder = {
           ...queuedOrder,
-          queuedAt: Date.now(), // Reset queue time
+          queuedAt: Date.now(),
         };
 
         this.insertInQueue(newQueuedOrder);
 
       } else {
-        // Max retries exceeded or non-retryable error
         this.stats.totalFailed++;
 
-        // Record failure in circuit breaker
         globalRestCircuitBreaker.recordFailure(request.agentId, symbol, errorMessage);
 
         const result: OrderResult = {
@@ -660,7 +697,6 @@ export class OrderQueue {
           retriesUsed: request.retries,
         };
 
-        // Notify Telegram about failure
         void notifyOrderFailed({
           id,
           symbol,
@@ -671,12 +707,9 @@ export class OrderQueue {
         });
 
         this.results.set(id, result);
-
-        // V5.65: Add to long-term order ID history even on failure
-        // This prevents resubmitting the same order ID
         this.orderIdHistory.add(id);
 
-        resolve(result); // Don't reject, return error result
+        resolve(result);
       }
 
     } finally {
@@ -684,91 +717,47 @@ export class OrderQueue {
     }
   }
 
-  /**
-   * Classify error for better handling
-   */
+  // ==========================================================================
+  // Private Helpers
+  // ==========================================================================
+
   private classifyError(error: unknown): string {
     const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
 
-    if (message.includes('418') || message.includes('429')) {
-      return 'RATE_LIMIT';
-    }
-
-    if (message.includes('insufficient') || message.includes('balance')) {
-      return 'INSUFFICIENT_BALANCE';
-    }
-
-    if (message.includes('invalid') || message.includes('symbol')) {
-      return 'INVALID_SYMBOL';
-    }
-
-    if (message.includes('timeout') || message.includes('network')) {
-      return 'NETWORK_ERROR';
-    }
-
-    if (message.includes('margin') || message.includes('leverage')) {
-      return 'MARGIN_ERROR';
-    }
-
+    if (message.includes('418') || message.includes('429')) return 'RATE_LIMIT';
+    if (message.includes('insufficient') || message.includes('balance')) return 'INSUFFICIENT_BALANCE';
+    if (message.includes('invalid') || message.includes('symbol')) return 'INVALID_SYMBOL';
+    if (message.includes('timeout') || message.includes('network')) return 'NETWORK_ERROR';
+    if (message.includes('margin') || message.includes('leverage')) return 'MARGIN_ERROR';
     return 'UNKNOWN_ERROR';
   }
 
-  /**
-   * Check if error is retryable
-   */
   private isRetryableError(error: unknown): boolean {
     const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
 
-    // Retryable: Network errors, timeouts
-    if (message.includes('timeout') || message.includes('network') || message.includes('econnreset')) {
-      return true;
-    }
-
-    // Retryable: Temporary Binance errors
-    if (message.includes('-1001') || message.includes('disconnected') || message.includes('temporary')) {
-      return true;
-    }
-
-    // NOT retryable: Rate limit (let circuit breaker handle it)
-    if (message.includes('418') || message.includes('429')) {
-      return false;
-    }
-
-    // NOT retryable: Insufficient balance, invalid symbol, margin errors
-    if (message.includes('insufficient') || message.includes('invalid') || message.includes('margin')) {
-      return false;
-    }
-
-    // Default: don't retry unknown errors
+    if (message.includes('timeout') || message.includes('network') || message.includes('econnreset')) return true;
+    if (message.includes('-1001') || message.includes('disconnected') || message.includes('temporary')) return true;
+    if (message.includes('418') || message.includes('429')) return false;
+    if (message.includes('insufficient') || message.includes('invalid') || message.includes('margin')) return false;
     return false;
   }
 
-  /**
-   * Get exchange instance for a user (with their API credentials)
-   */
   private async getExchangeForUser(userId: string): Promise<Exchange> {
-    // Import dynamically to avoid circular dependencies
     const { getUserExchange } = await import('../exchange/ccxtClient.js');
     const { getUserCredentials } = await import('./userCredentials.js');
-    
-    // Get user's API credentials
+
     const credentials = await getUserCredentials(userId);
-    
+
     if (!credentials || !credentials.apiKey || !credentials.apiSecret) {
       throw new Error(`No API credentials found for user ${userId}. Please configure your Binance API keys.`);
     }
-    
-    // Return authenticated exchange instance for this user
+
     return getUserExchange(userId, credentials);
   }
 
-  /**
-   * Health check - cleanup timeouts and stale results
-   */
   private async healthCheck(): Promise<void> {
     const now = Date.now();
 
-    // Run health check max once per minute
     if (now - this.lastHealthCheckAt < this.HEALTH_CHECK_INTERVAL_MS) {
       return;
     }
@@ -785,67 +774,354 @@ export class OrderQueue {
     }
 
     if (cleanedResults > 0) {
-      logger.debug(`[HealthCheck] Cleaned ${cleanedResults} stale results from cache`);
+      logger.debug(`[UserQueue:${this.userId}:HealthCheck] Cleaned ${cleanedResults} stale results`);
     }
 
-    // 2. Detect stuck executing orders (should never happen, but safety check)
+    // 2. Detect stuck executing orders
     let stuckOrders = 0;
     for (const [id, exec] of this.executing) {
       const executingTime = now - exec.startedAt;
-
-      // If order has been executing for >2 minutes, something is wrong
       if (executingTime > 120_000) {
-        logger.error(`[HealthCheck] STUCK ORDER detected: ${id} (executing for ${executingTime}ms)`);
+        logger.error(`[UserQueue:${this.userId}:HealthCheck] STUCK ORDER: ${id} (${executingTime}ms)`);
         this.executing.delete(id);
         stuckOrders++;
       }
     }
 
     if (stuckOrders > 0) {
-      logger.error(`[HealthCheck] Removed ${stuckOrders} stuck orders from executing map`);
+      logger.error(`[UserQueue:${this.userId}:HealthCheck] Removed ${stuckOrders} stuck orders`);
     }
 
-    // 3. V5.65: Clean up order ID history (once per 24 hours)
-    // The history grows over time, but we only need to prevent duplicates for 24h
+    // 3. Clean up order ID history (24h)
     if (now - this.orderIdHistoryCleanupAt > this.IDEMPOTENCY_CACHE_TTL_MS) {
       const historySize = this.orderIdHistory.size;
       if (historySize > 0) {
         this.orderIdHistory.clear();
         this.orderIdHistoryCleanupAt = now;
-        logger.info(`[HealthCheck] Cleared ${historySize} order IDs from history (24h cleanup)`);
+        logger.info(`[UserQueue:${this.userId}:HealthCheck] Cleared ${historySize} order IDs (24h cleanup)`);
       }
     }
 
-    // 4. Log queue health
+    // 4. Log queue health (only when there's activity)
     if (this.queue.length > 0 || this.executing.size > 0) {
       logger.info(
-        `[HealthCheck] Queue: ${this.queue.length}/${this.MAX_QUEUE_SIZE} | ` +
+        `[UserQueue:${this.userId}:HealthCheck] Queue: ${this.queue.length}/${this.MAX_QUEUE_SIZE} | ` +
         `Executing: ${this.executing.size}/${this.MAX_CONCURRENT_ORDERS} | ` +
-        `Results cache: ${this.results.size} | ` +
-        `OrderIdHistory: ${this.orderIdHistory.size}`
+        `Results: ${this.results.size} | History: ${this.orderIdHistory.size}`
       );
     }
   }
 }
 
 // ============================================================================
+// Order Queue Manager (facade that manages per-user queues)
+// ============================================================================
+
+/**
+ * OrderQueueManager manages per-user order queues.
+ *
+ * It exposes the same public API as the old OrderQueue class so that
+ * callers (simpleAgent, positionOpener, server) can use it as a drop-in
+ * replacement via the `orderQueue` export.
+ */
+export class OrderQueueManager {
+  private userQueues = new Map<string, UserOrderQueue>();
+  private globalRateLimiter = new GlobalRateLimiter(1100);
+  private cleanupIntervalId: NodeJS.Timeout | null = null;
+  private started = false;
+
+  // Inactive queue TTL: 30 minutes
+  private readonly INACTIVE_QUEUE_TTL_MS = 30 * 60 * 1000;
+  // Cleanup check interval: every 5 minutes
+  private readonly CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+
+  constructor() {
+    logger.info('[OrderQueueManager] Initialized (per-user queue architecture)');
+  }
+
+  // ==========================================================================
+  // Lifecycle
+  // ==========================================================================
+
+  /**
+   * Start the manager and all existing user queues.
+   */
+  start(): void {
+    if (this.started) {
+      logger.warn('[OrderQueueManager] Already started');
+      return;
+    }
+
+    this.started = true;
+
+    // Start all existing user queues
+    for (const uq of this.userQueues.values()) {
+      uq.start();
+    }
+
+    // Start inactive queue cleanup timer
+    this.cleanupIntervalId = setInterval(() => {
+      this.cleanupInactiveQueues();
+    }, this.CLEANUP_INTERVAL_MS);
+
+    logger.info('[OrderQueueManager] Started (cleanup interval: 5min)');
+  }
+
+  /**
+   * Stop the manager and all user queues.
+   */
+  stop(): void {
+    this.started = false;
+
+    // Stop all user queues
+    for (const uq of this.userQueues.values()) {
+      uq.stop();
+    }
+
+    // Stop cleanup timer
+    if (this.cleanupIntervalId) {
+      clearInterval(this.cleanupIntervalId);
+      this.cleanupIntervalId = null;
+    }
+
+    logger.info('[OrderQueueManager] Stopped all user queues');
+  }
+
+  // ==========================================================================
+  // Public API (backward-compatible with old OrderQueue)
+  // ==========================================================================
+
+  /**
+   * Submit an order to the appropriate user's queue.
+   * This is the main entry point - same signature as the old OrderQueue.submitOrder().
+   */
+  async submitOrder(request: OrderRequest): Promise<OrderResult> {
+    const userQueue = this.getOrCreateUserQueue(request.userId);
+    return userQueue.submitOrder(request);
+  }
+
+  /**
+   * Get aggregated stats across all user queues.
+   * Matches the old OrderQueue.getStats() return shape.
+   */
+  getStats() {
+    let totalQueueSize = 0;
+    let totalExecuting = 0;
+    let totalSubmitted = 0;
+    let totalExecuted = 0;
+    let totalFailed = 0;
+    let totalRetried = 0;
+    let totalRejected = 0;
+    let totalTimedOut = 0;
+    let avgWaitTimeMs = 0;
+    let avgExecutionTimeMs = 0;
+    let maxQueueSize = 0;
+    let queueCount = 0;
+
+    for (const uq of this.userQueues.values()) {
+      const s = uq.getStats();
+      totalQueueSize += s.queue.size;
+      totalExecuting += s.queue.executing;
+      totalSubmitted += s.counters.totalSubmitted;
+      totalExecuted += s.counters.totalExecuted;
+      totalFailed += s.counters.totalFailed;
+      totalRetried += s.counters.totalRetried;
+      totalRejected += s.counters.totalRejected;
+      totalTimedOut += s.counters.totalTimedOut;
+      avgWaitTimeMs += s.performance.avgWaitTimeMs;
+      avgExecutionTimeMs += s.performance.avgExecutionTimeMs;
+      if (s.queue.size > maxQueueSize) maxQueueSize = s.queue.size;
+      queueCount++;
+    }
+
+    // Average the averages (approximate)
+    if (queueCount > 0) {
+      avgWaitTimeMs = Math.round(avgWaitTimeMs / queueCount);
+      avgExecutionTimeMs = Math.round(avgExecutionTimeMs / queueCount);
+    }
+
+    return {
+      queue: {
+        size: totalQueueSize,
+        maxSize: ORDER_QUEUE.MAX_QUEUE_SIZE,
+        executing: totalExecuting,
+        maxConcurrent: ORDER_QUEUE.MAX_CONCURRENT,
+      },
+      performance: {
+        avgWaitTimeMs,
+        avgExecutionTimeMs,
+        orderDelayMs: ORDER_QUEUE.DELAY_MS,
+      },
+      counters: {
+        totalSubmitted,
+        totalExecuted,
+        totalFailed,
+        totalRetried,
+        totalRejected,
+        totalTimedOut,
+      },
+      rates: {
+        successRate: totalSubmitted > 0
+          ? Math.round((totalExecuted / totalSubmitted) * 100)
+          : 0,
+        failureRate: totalSubmitted > 0
+          ? Math.round((totalFailed / totalSubmitted) * 100)
+          : 0,
+      },
+      // NEW: multi-user specific stats
+      users: {
+        activeQueues: this.userQueues.size,
+        globalRateLimit: {
+          currentWeight: this.globalRateLimiter.getCurrentWeight(),
+          maxWeightPerMinute: 1100,
+        },
+      },
+    };
+  }
+
+  /**
+   * Get pending orders for a specific agent (searches all user queues).
+   */
+  getAgentOrders(agentId: string): OrderRequest[] {
+    const orders: OrderRequest[] = [];
+    for (const uq of this.userQueues.values()) {
+      orders.push(...uq.getAgentOrders(agentId));
+    }
+    return orders;
+  }
+
+  /**
+   * Get priority distribution across all user queues.
+   */
+  getPriorityDistribution(): Record<string, number> {
+    const dist = {
+      CRITICAL: 0,
+      HIGH: 0,
+      MEDIUM: 0,
+      NORMAL: 0,
+      LOW: 0,
+    };
+
+    for (const uq of this.userQueues.values()) {
+      const userDist = uq.getPriorityDistribution();
+      for (const key of Object.keys(dist) as Array<keyof typeof dist>) {
+        dist[key] += userDist[key] ?? 0;
+      }
+    }
+
+    return dist;
+  }
+
+  /**
+   * Get stats for a specific user's queue.
+   */
+  getUserStats(userId: string) {
+    const uq = this.userQueues.get(userId);
+    if (!uq) return null;
+    return {
+      userId,
+      ...uq.getStats(),
+    };
+  }
+
+  /**
+   * Get per-user breakdown (for monitoring dashboard).
+   */
+  getPerUserStats() {
+    const result: Array<{ userId: string; stats: ReturnType<UserOrderQueue['getStats']> }> = [];
+    for (const [userId, uq] of this.userQueues) {
+      result.push({ userId, stats: uq.getStats() });
+    }
+    return result;
+  }
+
+  // ==========================================================================
+  // Private Methods
+  // ==========================================================================
+
+  /**
+   * Get or create a UserOrderQueue for the given userId.
+   * Lazily creates queues on first order submission.
+   */
+  private getOrCreateUserQueue(userId: string): UserOrderQueue {
+    let uq = this.userQueues.get(userId);
+
+    if (!uq) {
+      uq = new UserOrderQueue(userId, this.globalRateLimiter, {
+        maxConcurrentOrders: ORDER_QUEUE.MAX_CONCURRENT,
+        orderDelayMs: ORDER_QUEUE.DELAY_MS,
+        maxRetries: ORDER_QUEUE.MAX_RETRIES,
+        resultCacheTTL: ORDER_QUEUE.RESULT_CACHE_TTL_MS,
+        maxQueueSize: ORDER_QUEUE.MAX_QUEUE_SIZE,
+        defaultTimeoutMs: ORDER_QUEUE.DEFAULT_TIMEOUT_MS,
+      });
+
+      this.userQueues.set(userId, uq);
+
+      // Auto-start if manager is running
+      if (this.started) {
+        uq.start();
+      }
+
+      logger.info(`[OrderQueueManager] Created queue for user ${userId} | total queues: ${this.userQueues.size}`);
+    }
+
+    return uq;
+  }
+
+  /**
+   * Clean up user queues that have been idle for > 30 minutes.
+   * Prevents memory leak from users who logged out or stopped trading.
+   */
+  private cleanupInactiveQueues(): void {
+    const now = Date.now();
+    let cleaned = 0;
+
+    for (const [userId, uq] of this.userQueues) {
+      const idleTime = now - uq.lastActivityAt;
+
+      if (idleTime > this.INACTIVE_QUEUE_TTL_MS && uq.isIdle()) {
+        uq.stop();
+        this.userQueues.delete(userId);
+        cleaned++;
+        logger.info(`[OrderQueueManager] Cleaned up inactive queue for user ${userId} (idle ${Math.round(idleTime / 60_000)}min)`);
+      }
+    }
+
+    if (cleaned > 0) {
+      logger.info(`[OrderQueueManager] Cleaned ${cleaned} inactive queues | remaining: ${this.userQueues.size}`);
+    }
+  }
+}
+
+// ============================================================================
+// Backward-compatible OrderQueue class (delegates to OrderQueueManager)
+// ============================================================================
+
+/**
+ * DEPRECATED: Use OrderQueueManager directly for new code.
+ *
+ * This class wraps OrderQueueManager to maintain backward compatibility.
+ * The original OrderQueue class is no longer used directly, but callers
+ * that import `orderQueue` (the singleton) continue to work seamlessly
+ * because OrderQueueManager exposes the same public API.
+ */
+export class OrderQueue extends OrderQueueManager {}
+
+// ============================================================================
 // Global Singleton Instance
 // ============================================================================
 
 /**
- * Global order queue instance
- * Used by all agents to submit orders
+ * Global order queue manager instance.
+ * Used by all agents to submit orders.
+ *
+ * Backward compatible: same API surface as the old single OrderQueue.
+ * Internally routes orders to per-user queues for parallel processing.
  */
-export const orderQueue = new OrderQueue({
-  maxConcurrentOrders: ORDER_QUEUE.MAX_CONCURRENT,
-  orderDelayMs: ORDER_QUEUE.DELAY_MS,
-  maxRetries: ORDER_QUEUE.MAX_RETRIES,
-  resultCacheTTL: ORDER_QUEUE.RESULT_CACHE_TTL_MS,
-  maxQueueSize: ORDER_QUEUE.MAX_QUEUE_SIZE,
-  defaultTimeoutMs: ORDER_QUEUE.DEFAULT_TIMEOUT_MS,
-});
+export const orderQueue = new OrderQueueManager();
 
 // Auto-start on import
 orderQueue.start();
 
-logger.info('[OrderQueue] Global instance created and started');
+logger.info('[OrderQueue] Global per-user order queue manager created and started');

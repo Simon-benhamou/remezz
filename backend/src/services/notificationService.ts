@@ -62,7 +62,7 @@ export interface TradeNotification {
 }
 
 // Broadcast function will be injected from server.ts
-let broadcastFn: ((type: string, data: any, symbol?: string) => void) | null = null;
+let broadcastFn: ((type: string, data: any, symbol?: string, userId?: string) => void) | null = null;
 
 // Track last regime to detect changes
 let lastBtcRegime: 'bull' | 'bear' | null = null;
@@ -73,7 +73,7 @@ const longHoldNotified = new Map<string, number>();
 /**
  * Initialize the notification service with the broadcast function from server.ts
  */
-export function initNotificationService(broadcast: (type: string, data: any, symbol?: string) => void) {
+export function initNotificationService(broadcast: (type: string, data: any, symbol?: string, userId?: string) => void) {
   broadcastFn = broadcast;
   logger.info('📢 Notification service initialized');
 }
@@ -91,6 +91,7 @@ export function notifyTradeEntry(params: {
   leverage: number;
   stopLoss?: number;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'trade_entry',
@@ -109,7 +110,7 @@ export function notifyTradeEntry(params: {
   logger.info(`📢 [NOTIFICATION] Trade Entry: ${params.symbol} ${params.side.toUpperCase()} @ $${params.price.toFixed(4)}`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -127,6 +128,7 @@ export function notifyTradeExit(params: {
   pnlPct: number;
   reason: string;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: params.reason.includes('stop_loss') ? 'stop_loss_hit' 
@@ -148,7 +150,7 @@ export function notifyTradeExit(params: {
   logger.info(`📢 [NOTIFICATION] Trade Exit: ${params.symbol} ${params.side.toUpperCase()} ${pnlEmoji} $${params.pnlUsd.toFixed(2)} (${params.pnlPct >= 0 ? '+' : ''}${params.pnlPct.toFixed(2)}%)`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -160,6 +162,7 @@ export function notifyAlert(params: {
   message: string;
   severity: 'info' | 'warning' | 'error' | 'success';
   symbol?: string;
+  userId?: string;
 }): void {
   logger.info(`📢 [ALERT] ${params.severity.toUpperCase()}: ${params.title} - ${params.message}`);
   
@@ -170,7 +173,7 @@ export function notifyAlert(params: {
       severity: params.severity,
       symbol: params.symbol,
       timestamp: Date.now(),
-    }, params.symbol);
+    }, params.symbol, params.userId);
   }
 }
 
@@ -187,6 +190,7 @@ export function notifyOrderError(params: {
   orderType: 'entry' | 'exit' | 'stop_loss';
   error: string;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'order_error',
@@ -202,7 +206,7 @@ export function notifyOrderError(params: {
   logger.error(`🚨 [ORDER ERROR] ${params.symbol} ${params.side} ${params.orderType}: ${params.error}`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -218,6 +222,7 @@ export function notifyDailyLossLimit(params: {
   dailyLossUsd: number;
   limitUsd: number;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'daily_loss_limit',
@@ -233,7 +238,7 @@ export function notifyDailyLossLimit(params: {
   logger.warn(`⛔ [DAILY LOSS LIMIT] ${params.symbol}: $${params.dailyLossUsd.toFixed(2)} / $${params.limitUsd.toFixed(2)}`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -252,6 +257,7 @@ export function notifyTrailingActivated(params: {
   trailPrice: number;
   pnlPct: number;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'trailing_activated',
@@ -270,7 +276,7 @@ export function notifyTrailingActivated(params: {
   logger.info(`🎯 [TRAILING] ${params.symbol} ${params.side} activated @ +${params.pnlPct.toFixed(1)}%`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -285,6 +291,7 @@ export function notifyRegimeChange(params: {
   newRegime: 'bull' | 'bear';
   btcPrice: number;
   sma200: number;
+  userId?: string;
 }): void {
   // Skip if same regime
   if (lastBtcRegime === params.newRegime) return;
@@ -310,7 +317,7 @@ export function notifyRegimeChange(params: {
   logger.info(`📢 [REGIME CHANGE] ${wasBull ? 'BULL' : 'BEAR'} → ${isBull ? 'BULL' : 'BEAR'} | BTC=$${params.btcPrice.toFixed(0)} vs SMA200=$${params.sma200.toFixed(0)}`);
 
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification);
+    broadcastFn('trade_notification', notification, undefined, params.userId);
   }
 
   // V5.79: Regime change removed from Telegram (noise reduction) - kept in WebSocket only
@@ -329,6 +336,7 @@ export function notifyHighVolatility(params: {
   originalLeverage: number;
   reducedLeverage: number;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'high_volatility',
@@ -344,7 +352,7 @@ export function notifyHighVolatility(params: {
   logger.warn(`⚡ [HIGH VOL] ${params.symbol} ATR=${params.atrPct.toFixed(1)}% | Leverage: ${params.originalLeverage}x → ${params.reducedLeverage}x`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -360,6 +368,7 @@ export function notifyAgentStarted(params: {
   sessionId: string;
   mode: 'paper' | 'live';
   capitalUsd: number;
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'agent_started',
@@ -375,7 +384,7 @@ export function notifyAgentStarted(params: {
   logger.info(`🤖 [AGENT STARTED] ${params.symbol} | ${params.mode} | $${params.capitalUsd.toFixed(0)}`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -388,6 +397,7 @@ export function notifyAgentStopped(params: {
   mode: 'paper' | 'live';
   reason?: string;
   totalPnlUsd?: number;
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'agent_stopped',
@@ -403,7 +413,7 @@ export function notifyAgentStopped(params: {
   logger.info(`⏹️ [AGENT STOPPED] ${params.symbol} | ${params.mode} | ${params.reason || 'manual'}`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -423,6 +433,7 @@ export function notifyLongHold(params: {
   pnlPct: number;
   sessionId: string;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   // Avoid spam - only notify once per 6 hours
   const lastNotified = longHoldNotified.get(params.sessionId) || 0;
@@ -447,7 +458,7 @@ export function notifyLongHold(params: {
   logger.warn(`⏰ [LONG HOLD] ${params.symbol} ${params.side} | ${params.holdDurationHours.toFixed(0)}h | ${params.pnlPct >= 0 ? '+' : ''}${params.pnlPct.toFixed(1)}%`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -466,6 +477,7 @@ export function notifyLiquidationWarning(params: {
   distancePct: number;
   leverage: number;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'liquidation_warning',
@@ -483,7 +495,7 @@ export function notifyLiquidationWarning(params: {
   logger.error(`🚨 [LIQUIDATION WARNING] ${params.symbol} ${params.side} | ${params.distancePct.toFixed(1)}% to liq @ $${params.liquidationPrice.toFixed(2)}`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }
 
@@ -497,6 +509,7 @@ export function notifyLiquidationWarning(params: {
 export function notifySyncFailure(params: {
   reason: string;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'sync_failure',
@@ -511,7 +524,7 @@ export function notifySyncFailure(params: {
   logger.error(`🔴 [SYNC FAILURE] ${params.mode}: ${params.reason}`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification);
+    broadcastFn('trade_notification', notification, undefined, params.userId);
   }
 }
 
@@ -528,6 +541,7 @@ export function notifySignalDetected(params: {
   price: number;
   reason: string;
   mode: 'paper' | 'live';
+  userId?: string;
 }): void {
   const notification: TradeNotification = {
     type: 'signal_detected',
@@ -545,6 +559,6 @@ export function notifySignalDetected(params: {
   logger.info(`📊 [SIGNAL] ${params.symbol} ${params.side.toUpperCase()} @ $${params.price.toFixed(2)} | ${params.reason}`);
   
   if (broadcastFn) {
-    broadcastFn('trade_notification', notification, params.symbol);
+    broadcastFn('trade_notification', notification, params.symbol, params.userId);
   }
 }

@@ -8,8 +8,9 @@ import type { Exchange } from '../types/exchange.js';
 import { MomentumConfig, type Position } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
 import { notifyOrderError } from '../services/notificationService.js';
-import { getTickerFromWebSocket } from '../services/binanceWebSocket.js';
+import { getTickerFromWebSocket, getOrderTradeUpdateByIdFromWebSocket } from '../services/binanceWebSocket.js';
 import { EXIT_EMERGENCY } from '../types/exitReasons.js';
+import { ipWeightTracker } from '../services/ipWeightTracker.js';
 
 const logger = createLogger('exchange-orders');
 
@@ -21,11 +22,13 @@ export class ExchangeOrderManager {
   // Proactive LIMIT order tracking
   proactiveLimitOrderId: string | null = null;
   proactiveLimitPrice: number | null = null;
+  private proactiveLimitPlacedAt: number = 0;
 
   constructor(
     private exchange: Exchange,
     private symbol: string,
     private mode: 'paper' | 'live',
+    private userId: string = '',
   ) {}
 
   // ── Quantity Formatting ────────────────────────────────────────────────
@@ -88,11 +91,13 @@ export class ExchangeOrderManager {
     if (this.exchange.cancelAllOrders) {
       try {
         await this.exchange.cancelAllOrders(this.symbol);
+        ipWeightTracker.record(1, `cancelAllOrders:${this.symbol}`);
       } catch (err) {
         // Ignore "no orders" errors
       }
       try {
         await this.exchange.cancelAllOrders(this.symbol, { conditional: true });
+        ipWeightTracker.record(1, `cancelAllOrders_cond:${this.symbol}`);
       } catch (err) {
         // Ignore
       }
@@ -140,6 +145,7 @@ export class ExchangeOrderManager {
         this.symbol, 'market', side, formattedQty, undefined,
         { stopLossPrice: position.stopLoss, reduceOnly: true, workingType: 'MARK_PRICE' },
       );
+      ipWeightTracker.record(1, `SL:${this.symbol}`);
 
       position.stopLossOrderId = slOrder.id;
 
@@ -178,6 +184,7 @@ export class ExchangeOrderManager {
         this.symbol, 'market', side, formattedQty, undefined,
         { trailingPercent: trailingDistancePct, trailingTriggerPrice: activationPrice, reduceOnly: true, workingType: 'MARK_PRICE' },
       );
+      ipWeightTracker.record(1, `trailing:${this.symbol}`);
 
       position.trailingOrderId = trailingOrder.id;
 
@@ -311,6 +318,8 @@ export class ExchangeOrderManager {
     }
     try {
       const order = await this.exchange.createOrder(symbol, 'limit', orderSide, qty, price, { timeInForce: 'GTC' });
+      ipWeightTracker.record(1, `proactiveLimit:${symbol}`);
+      this.proactiveLimitPlacedAt = Date.now();
       return order.id || null;
     } catch (e: unknown) {
       logger.warn(`[${symbol}] Failed to place proactive LIMIT: ${errMsg(e)}`);
@@ -327,6 +336,7 @@ export class ExchangeOrderManager {
 
     this.proactiveLimitOrderId = null;
     this.proactiveLimitPrice = null;
+    this.proactiveLimitPlacedAt = 0;
 
     if (nfsStateMachine) {
       nfsStateMachine.onLimitOrderCancelled();
@@ -340,6 +350,7 @@ export class ExchangeOrderManager {
     try {
       if (this.exchange.cancelOrder) {
         await this.exchange.cancelOrder(orderId, symbol);
+        ipWeightTracker.record(1, `cancelProactive:${symbol}`);
       }
       logger.info(`[${symbol}] Proactive LIMIT cancelled on exchange: ${orderId}`);
     } catch (e: unknown) {
@@ -366,10 +377,55 @@ export class ExchangeOrderManager {
       return null;
     }
 
-    // Live mode
+    // Live mode: Use WebSocket ORDER_TRADE_UPDATE cache (0 weight) instead of fetchOrder (2w)
+    if (this.userId) {
+      const wsUpdate = getOrderTradeUpdateByIdFromWebSocket(this.userId, orderId);
+      if (wsUpdate) {
+        const status = wsUpdate.orderStatus?.toUpperCase();
+        if (status === 'FILLED' || status === 'CANCELED' || status === 'EXPIRED') {
+          const avgPrice = wsUpdate.averagePrice || wsUpdate.lastFilledPrice || this.proactiveLimitPrice || 0;
+          if (status === 'FILLED') {
+            return { filled: true, avgPrice };
+          }
+          // Canceled/expired - clear tracking
+          this.proactiveLimitOrderId = null;
+          this.proactiveLimitPrice = null;
+          return null;
+        }
+      }
+
+      // REST fallback: If WS hasn't reported after 10s, verify via REST (2w)
+      // Protects against missed WS events during reconnects
+      const elapsed = Date.now() - this.proactiveLimitPlacedAt;
+      if (elapsed > 10_000 && this.exchange.fetchOrder) {
+        try {
+          const order = await this.exchange.fetchOrder(orderId, symbol);
+          ipWeightTracker.record(2, `fetchOrder_fallback:${symbol}`);
+          const status = order.status?.toLowerCase();
+          if (status === 'closed' || status === 'filled') {
+            const avgPrice = order.average || order.price || this.proactiveLimitPrice || 0;
+            return { filled: true, avgPrice };
+          }
+          if (status === 'canceled' || status === 'expired') {
+            this.proactiveLimitOrderId = null;
+            this.proactiveLimitPrice = null;
+            return null;
+          }
+          // Still open - reset timer so we don't spam REST every 2s
+          this.proactiveLimitPlacedAt = Date.now();
+        } catch (e: unknown) {
+          logger.debug(`[${symbol}] REST fallback fetchOrder failed: ${errMsg(e)}`);
+        }
+      }
+
+      return null;
+    }
+
+    // Fallback: fetchOrder REST call (only if userId not available - legacy path)
     try {
       if (this.exchange.fetchOrder) {
         const order = await this.exchange.fetchOrder(orderId, symbol);
+        ipWeightTracker.record(2, `fetchOrder:${symbol}`);
         const status = order.status?.toLowerCase();
         if (status === 'closed' || status === 'filled') {
           const avgPrice = order.average || order.price || this.proactiveLimitPrice || 0;

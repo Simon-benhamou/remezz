@@ -6,6 +6,7 @@ import "dotenv/config";
 import http from "http";
 import express from "express";
 import cors from "cors";
+import rateLimit from 'express-rate-limit';
 import jwt from "jsonwebtoken";
 import { WebSocketServer, WebSocket } from "ws";
 import { configureLogging, createLogger, getRecentLogs } from "./utils/logger.js";
@@ -30,7 +31,9 @@ import { router as backtestRouter } from "./routes/backtest.js";
 import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket, seedKlinesFromWebSocket, toBinanceSymbolId } from "./services/binanceWebSocket.js";
 import { initNotificationService } from "./services/notificationService.js";
 import { setRadarBroadcast, getRecentRadarEvents } from "./services/signalRadarService.js";
-import { exchangeAPIDeduplicator, makeFetchPositionsKey } from "./services/apiDeduplicator.js";
+import { exchangeAPIDeduplicator, makeFetchPositionsKey, makeFetchBalanceKey } from "./services/apiDeduplicator.js";
+import { ipWeightTracker } from "./services/ipWeightTracker.js";
+import { IP_WEIGHT } from "./config/constants.js";
 import { orderQueue } from "./services/orderQueue.js";
 import { binanceRestQueue, BINANCE_WEIGHTS } from "./services/binanceRestQueue.js";
 import { seedFreshCandles, startCandleRefreshJob, stopCandleRefreshJob, backfillBtcCandles } from "./services/candleCache.js";
@@ -45,6 +48,7 @@ import {
   type CapitalPool
 } from "./strategies/simpleAgent.js";
 import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, LIQUIDATION_CONFIG, getLiquidityTier, getMaxSafePositionSize } from "./strategies/momentumSimple.js";
+import { USER_LIMITS } from "./config/constants.js";
 
 const logLevel = configureLogging();
 const logger = createLogger("server");
@@ -75,11 +79,11 @@ function validateEnvVars(): { valid: boolean; errors: string[]; warnings: string
   }
 
   if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'change-me-jwt-secret') {
-    warnings.push('JWT_SECRET is using default value - should be changed in production');
+    errors.push('JWT_SECRET is required and must be set to a secure value');
   }
 
-  if (!process.env.APP_API_KEY || process.env.APP_API_KEY === 'change-me') {
-    warnings.push('APP_API_KEY is using default value - should be changed in production');
+  if (!process.env.REGISTRATION_CODE) {
+    warnings.push('REGISTRATION_CODE is not set - user registration will fail');
   }
 
   // Trading-specific validations
@@ -98,10 +102,6 @@ function validateEnvVars(): { valid: boolean; errors: string[]; warnings: string
   // Check for production mode security
   const isProduction = process.env.NODE_ENV === 'production';
   if (isProduction) {
-    if (cfg.REQUIRE_API_KEY === false) {
-      warnings.push('REQUIRE_API_KEY is false in production - consider enabling for security');
-    }
-
     if (process.env.CORS_ORIGIN?.includes('localhost')) {
       warnings.push('CORS_ORIGIN includes localhost in production');
     }
@@ -186,7 +186,8 @@ const allowedOrigins = new Set<string>([
 ]);
 
 const app = express();
-app.use(express.json());
+
+const privateIpRegex = /^(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|127\.\d+\.\d+\.\d+|localhost)$/;
 
 const corsOptions: cors.CorsOptions = {
   origin(origin, cb) {
@@ -195,6 +196,10 @@ const corsOptions: cors.CorsOptions = {
       const u = new URL(origin);
       const normalized = `${u.protocol}//${u.host}`;
       if (allowedOrigins.has(normalized)) return cb(null, true);
+      // Allow any private network IP on dev ports (5173, 4173)
+      if (privateIpRegex.test(u.hostname) && ['5173', '4173'].includes(u.port)) {
+        return cb(null, true);
+      }
     } catch { /* ignore */ }
     return cb(new Error("Not allowed by CORS: " + origin));
   },
@@ -205,6 +210,8 @@ const corsOptions: cors.CorsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
+app.use(express.json({ limit: '1mb' }));
+
 // Disable caching for all API responses
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -213,13 +220,52 @@ app.use((req, res, next) => {
   next();
 });
 
+// Auth rate limiter — 5 attempts per minute per IP
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { ip: false },
+  message: { error: 'too_many_requests', message: 'Too many authentication attempts, please try again later' }
+});
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+
 // Public routes
 app.use("/api/auth", authRouter);
+
+// Health check (before auth - must be publicly accessible)
+app.get("/api/health", (_req, res) => {
+  const wsCount = wsClients?.size || 0;
+  let agentCount = 0;
+  for (const [, data] of userAgents) {
+    agentCount += data.agents.length;
+  }
+  res.json({
+    ok: true,
+    uptime: process.uptime(),
+    agents: agentCount,
+    wsConnections: wsCount,
+    time: new Date().toISOString(),
+    apiWeight: ipWeightTracker.getStats(),
+  });
+});
 
 // Protected routes
 app.use(authMiddleware);
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+// Global per-user rate limiter — 300 requests per minute
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { ip: false },
+  keyGenerator: (req) => (req as any)?.user?.id || req.ip || 'unknown',
+  message: { error: 'too_many_requests', message: 'Rate limit exceeded' }
+});
+app.use('/api/', globalLimiter);
 app.use("/api/user", userRouter);
 app.use("/api/debug", debugRouter);
 app.use("/api/orders", ordersRouter);
@@ -279,13 +325,59 @@ function getAllRunningAgents(userId: string): SimpleAgent[] {
   return agents;
 }
 
-// Helper to get exchange for user
+// Helper to get exchange for user (requires API keys)
 async function getExchangeForUser(userId: string): Promise<any> {
   const credentials = await getUserCredentials(userId);
   if (!credentials) {
     throw new Error("No exchange credentials found");
   }
   return getUserExchange(userId, credentials);
+}
+
+// Paper exchange stub - satisfies Exchange interface without API keys
+// Required methods throw if called; optional methods are undefined so guards like
+// `if (exchange.fetchBalance)` skip them cleanly.
+function createPaperExchangeStub(): any {
+  const notAvailable = () => { throw new Error('Exchange not available in paper mode without API keys'); };
+  return {
+    // Required by Exchange interface - will throw if somehow called in paper mode
+    fetchOHLCV: notAvailable,
+    setLeverage: notAvailable,
+    createMarketBuyOrder: notAvailable,
+    createMarketSellOrder: notAvailable,
+    createOrder: notAvailable,
+    // Optional methods left undefined so truthiness guards skip them
+    markets: {},
+  };
+}
+
+// Helper to get exchange - returns stub for paper mode without API keys
+async function getExchangeForUserOrStub(userId: string, mode: 'paper' | 'live'): Promise<any> {
+  try {
+    return await getExchangeForUser(userId);
+  } catch {
+    if (mode === 'paper') {
+      logger.info(`[Paper] No API keys for user ${userId.slice(0, 8)} - using paper exchange stub`);
+      return createPaperExchangeStub();
+    }
+    throw new Error('No exchange credentials found. API keys are required for live trading.');
+  }
+}
+
+// Guard: reject live mode if user has no valid API keys
+async function requireApiKeysForLive(userId: string, mode: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (mode !== 'live') return { ok: true };
+  const credentials = await getUserCredentials(userId);
+  if (!credentials || !credentials.apiKey || !credentials.apiSecret) {
+    return { ok: false, error: 'API keys are required for live trading. Please add your Binance API keys in Settings.' };
+  }
+  return { ok: true };
+}
+
+// Helper to verify session belongs to user (multi-user isolation)
+async function verifySessionOwnership(sessionId: string, userId: string): Promise<boolean> {
+  const session = await prisma.agentSession.findUnique({ where: { id: sessionId }, select: { userId: true } });
+  return session !== null && session.userId === userId;
 }
 
 // Get status route
@@ -321,10 +413,10 @@ app.get("/api/status", async (req, res) => {
       }
       
       // If not running, try to load from database
-      const dbSession = await prisma.agentSession.findUnique({
-        where: { id: sessionId },
+      const dbSession = await prisma.agentSession.findFirst({
+        where: { id: sessionId, ...(userId ? { userId } : {}) },
       });
-      
+
       if (dbSession) {
         return res.json({
           server: "ok",
@@ -611,21 +703,40 @@ app.post("/api/agent/start", async (req, res) => {
     }
     
     const { mode = "paper", capitalUsd = 10000 } = req.body;
+
+    // Reject live mode without valid API keys
+    const keyCheck = await requireApiKeysForLive(userId, mode);
+    if (!keyCheck.ok) {
+      return res.status(400).json({ error: keyCheck.error });
+    }
+
     const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
-    
+
     // Check for existing agents FOR THIS MODE ONLY - allows Paper + Live simultaneously
     const existingAgents = userAgents.get(agentKey);
     if (existingAgents && existingAgents.agents.length > 0) {
       const runningSymbols = existingAgents.agents.map(a => a.getStatus().symbol);
-      return res.status(409).json({ 
+      return res.status(409).json({
         error: `${mode.toUpperCase()} agents already running. Stop them first.`,
         mode,
         symbols: runningSymbols,
       });
     }
-    
-    // Get exchange first (needed for balance fetch in live mode)
-    const exchange = await getExchangeForUser(userId);
+
+    // Per-user agent limit check (across all modes)
+    const allUserAgentData = getAllUserAgents(userId);
+    const totalAgents = (allUserAgentData.paper?.agents.length || 0) + (allUserAgentData.live?.agents.length || 0);
+    const newAgentCount = MomentumConfig.SYMBOLS.length;
+    if (totalAgents + newAgentCount > USER_LIMITS.MAX_AGENTS_PER_USER) {
+      return res.status(429).json({
+        error: `Agent limit exceeded. Max ${USER_LIMITS.MAX_AGENTS_PER_USER} agents per user.`,
+        current: totalAgents,
+        requested: newAgentCount,
+      });
+    }
+
+    // Get exchange (paper mode works without API keys via stub)
+    const exchange = await getExchangeForUserOrStub(userId, mode as 'paper' | 'live');
     
     // 🔧 FIX: Calculate actual starting capital based on mode
     let actualCapital = capitalUsd;
@@ -661,11 +772,17 @@ app.post("/api/agent/start", async (req, res) => {
               logger.warn('[Live] Markets not loaded - this should have been done at startup!');
             }
             
-            const balance = await exchange.fetchBalance({ type: 'future' });
+            const balance = await exchangeAPIDeduplicator.execute(
+              makeFetchBalanceKey(userId),
+              () => exchange.fetchBalance({ type: 'future' }),
+              IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
+              `api_balance_${userId}`
+            );
+            ipWeightTracker.record(5, `fetchBalance:startLive:${userId}`);
             const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
             const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
             const lockedUsdt = totalUsdt - freeUsdt;
-            
+
             if (totalUsdt > 0) {
               actualCapital = totalUsdt;
               // Seed the WebSocket balance cache for future use
@@ -829,10 +946,10 @@ app.post("/api/agent/start", async (req, res) => {
           resistance: tick.resistance,
           tickCount: tick.tickCount,
           timestamp: tick.timestamp.toISOString(),
-        }, tick.symbol);
+        }, tick.symbol, userId);
       });
     }
-    
+
     // V5.39: Start ALL agents in PARALLEL for synchronized signal detection
     // This ensures Paper and Live agents receive signals at the same time
     // Safe because: 1) WebSocket-only for candles (0 REST), 2) API deduplicator coalesces REST calls
@@ -988,7 +1105,7 @@ app.get("/api/agent/logs", async (req, res) => {
     if (sessionId) sessionsWhere.id = sessionId;
 
     const activeSessions = await prisma.agentSession.findMany({
-      where: sessionId ? { id: sessionId } : {
+      where: sessionId ? { id: sessionId, userId } : {
         ...sessionsWhere,
         stoppedAt: null,
       },
@@ -1000,14 +1117,22 @@ app.get("/api/agent/logs", async (req, res) => {
     
     // =========================================================================
     // IN-MEMORY LOGS (from logger buffer) - Real-time agent activity
+    // Filtered to only show logs matching this user's active session symbols
     // =========================================================================
+    const userSymbols = new Set(activeSessions.map(s => s.symbol.toUpperCase().replace(/[/:]/g, '')));
     const memoryLogs = getRecentLogs({
       limit: limit,
       scope: 'agent',
       symbol: symbol,
+    }).filter(log => {
+      // Only include logs matching the user's active session symbols
+      if (userSymbols.size === 0) return false;
+      if (!log.symbol) return false;
+      const normSymbol = log.symbol.toUpperCase().replace(/[/:]/g, '');
+      return userSymbols.has(normSymbol);
     }).map(log => ({
       timestamp: log.timestamp,
-      sessionId: '', // Memory logs don't have session ID, will be matched by symbol
+      sessionId: '',
       symbol: log.symbol || '',
       kind: log.kind || 'info',
       message: log.message,
@@ -1058,7 +1183,7 @@ app.get("/api/agent/logs", async (req, res) => {
     // At this point, source is 'db', 'all', or undefined (not 'memory' due to early return above)
     // Get recent trigger logs from active sessions
     const triggerLogs = await prisma.triggerLog.findMany({
-      where: sessionIds.length > 0 ? { sessionId: { in: sessionIds } } : {},
+      where: sessionIds.length > 0 ? { sessionId: { in: sessionIds } } : { session: { userId } },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
@@ -1570,10 +1695,10 @@ app.get("/api/agent/state", async (req, res) => {
       }
       
       // Agent not running, check database for session and position
-      const dbSession = await prisma.agentSession.findUnique({
-        where: { id: sessionId },
+      const dbSession = await prisma.agentSession.findFirst({
+        where: { id: sessionId, ...(userId ? { userId } : {}) },
       });
-      
+
       if (dbSession) {
         // Also fetch any open position from DB
         const dbPosition = await prisma.position.findFirst({
@@ -1711,18 +1836,24 @@ app.get("/api/agent/portfolio", async (req, res) => {
         if (globalRestCircuitBreaker.canMakeRequest()) {
           const exchange = await getExchangeForUser(userId);
           if (exchange && exchange.fetchBalance) {
-            const balance = await exchange.fetchBalance({ type: 'future' });
+            const balance = await exchangeAPIDeduplicator.execute(
+              makeFetchBalanceKey(userId),
+              () => exchange.fetchBalance({ type: 'future' }),
+              IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
+              `api_balance_portfolio_${userId}`
+            );
+            ipWeightTracker.record(5, `fetchBalance:portfolio:${userId}`);
             const usdtTotal = balance?.USDT || balance?.total?.USDT || 0;
             const usdtFree = balance?.free?.USDT || 0;
             const usdtUsed = balance?.used?.USDT || 0;
-            
+
             // Seed cache for future use
-            seedBalanceCache(userId, 'USDT', { 
-              total: parseFloat(usdtTotal) || 0, 
-              free: parseFloat(usdtFree) || 0, 
-              locked: parseFloat(usdtUsed) || 0 
+            seedBalanceCache(userId, 'USDT', {
+              total: parseFloat(usdtTotal) || 0,
+              free: parseFloat(usdtFree) || 0,
+              locked: parseFloat(usdtUsed) || 0
             });
-            
+
             return res.json({
               balance: typeof usdtTotal === 'number' ? usdtTotal : parseFloat(usdtTotal) || 0,
               freeBalance: typeof usdtFree === 'number' ? usdtFree : parseFloat(usdtFree) || 0,
@@ -1826,15 +1957,21 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
         if (globalRestCircuitBreaker.canMakeRequest()) {
           const exchange = await getExchangeForUser(userId);
           if (exchange && exchange.fetchBalance) {
-            const balance = await exchange.fetchBalance({ type: 'future' });
-            
+            const balance = await exchangeAPIDeduplicator.execute(
+              makeFetchBalanceKey(userId),
+              () => exchange.fetchBalance({ type: 'future' }),
+              IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
+              `api_balance_capital_${userId}`
+            );
+            ipWeightTracker.record(5, `fetchBalance:capital:${userId}`);
+
             const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
             const usedUsdt = parseFloat(balance?.used?.USDT || balance?.USDT?.used || '0') || 0;
             const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || (freeUsdt + usedUsdt);
-            
+
             // Seed cache for future use
             seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: usedUsdt });
-            
+
             logger.debug('[Capital] Using REST balance (circuit open)');
             return res.json({
               totalUSD: totalUsdt,
@@ -2123,7 +2260,13 @@ app.post("/api/agent/creation/activate", async (req, res) => {
     
     // Get the SINGLE symbol selected by user
     const { mode, capitalUsd, symbol: rawSymbol } = creation;
-    
+
+    // Reject live mode without valid API keys
+    const keyCheck = await requireApiKeysForLive(userId, mode);
+    if (!keyCheck.ok) {
+      return res.status(400).json({ error: keyCheck.error });
+    }
+
     if (!rawSymbol) {
       return res.status(400).json({ error: "No symbol selected" });
     }
@@ -2144,12 +2287,12 @@ app.post("/api/agent/creation/activate", async (req, res) => {
       }
     }
     
-    // Get exchange
-    const exchange = await getExchangeForUser(userId);
-    
+    // Get exchange (paper mode works without API keys via stub)
+    const exchange = await getExchangeForUserOrStub(userId, mode as 'paper' | 'live');
+
     // 🔧 FIX: Calculate actual starting balance based on mode
     let actualStartBalance = capitalUsd;
-    
+
     if (mode === 'live') {
       // In LIVE mode: Try WebSocket first (0 weight), then REST if allowed
       try {
@@ -2180,20 +2323,26 @@ app.post("/api/agent/creation/activate", async (req, res) => {
             });
           }
           
-          const balance = await exchange.fetchBalance({ type: 'future' });
+          const balance = await exchangeAPIDeduplicator.execute(
+            makeFetchBalanceKey(userId),
+            () => exchange.fetchBalance({ type: 'future' }),
+            IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
+            `api_balance_bulkStart_${userId}`
+          );
+          ipWeightTracker.record(5, `fetchBalance:bulkStart:${userId}`);
           const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
           const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
-          
+
           if (totalUsdt > 0) {
             actualStartBalance = totalUsdt;
             logger.info(`[Live] ✅ Using REST balance: $${actualStartBalance.toFixed(2)}`);
-            
+
             // Seed WebSocket cache for future use
             seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt });
           } else {
             // Balance is 0 or fetch failed - REFUSE to start
             logger.error(`[Live] ❌ Binance balance is $0 - cannot start live trading`);
-            return res.status(400).json({ 
+            return res.status(400).json({
               error: 'Binance balance is $0. Please deposit funds before starting live trading.',
             });
           }
@@ -2337,6 +2486,12 @@ app.post("/api/agent/creation/bulk", async (req, res) => {
 
     const modeTyped = mode as 'paper' | 'live';
 
+    // Reject live mode without valid API keys
+    const keyCheck = await requireApiKeysForLive(userId, mode);
+    if (!keyCheck.ok) {
+      return res.status(400).json({ error: keyCheck.error });
+    }
+
     // Read user's saved paper balance (default 10000)
     let defaultCapital = 10000;
     try {
@@ -2356,8 +2511,8 @@ app.post("/api/agent/creation/bulk", async (req, res) => {
     const existingAgents = userAgents.get(agentKey);
     const runningSymbols = existingAgents?.agents.map(a => a.getStatus().symbol) || [];
 
-    // Get exchange
-    const exchange = await getExchangeForUser(userId);
+    // Get exchange (paper mode works without API keys via stub)
+    const exchange = await getExchangeForUserOrStub(userId, modeTyped);
 
     // Calculate actual starting balance based on mode
     let actualStartBalance = defaultCapital;
@@ -2382,7 +2537,13 @@ app.post("/api/agent/creation/bulk", async (req, res) => {
           if (!globalRestCircuitBreaker.canMakeRequest()) {
             return res.status(429).json({ error: 'Rate limited by Binance. Please wait and try again.' });
           }
-          const balance = await exchange.fetchBalance({ type: 'future' });
+          const balance = await exchangeAPIDeduplicator.execute(
+            makeFetchBalanceKey(userId),
+            () => exchange.fetchBalance({ type: 'future' }),
+            IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
+            `api_balance_bulk_${userId}`
+          );
+          ipWeightTracker.record(5, `fetchBalance:bulk:${userId}`);
           const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
           const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
           if (totalUsdt > 0) {
@@ -2516,8 +2677,15 @@ app.post("/api/agent/restart", async (req, res) => {
     }
     
     const modeTyped = mode as 'paper' | 'live';
+
+    // Reject live mode without valid API keys
+    const keyCheck = await requireApiKeysForLive(userId, mode);
+    if (!keyCheck.ok) {
+      return res.status(400).json({ error: keyCheck.error });
+    }
+
     const agentKey = getAgentKey(userId, modeTyped);
-    
+
     // 1. Stop existing agents for this mode
     const existingAgents = userAgents.get(agentKey);
     if (existingAgents) {
@@ -2528,9 +2696,9 @@ app.post("/api/agent/restart", async (req, res) => {
       userAgents.delete(agentKey);
     }
     
-    // 2. Get exchange
-    const exchange = await getExchangeForUser(userId);
-    
+    // 2. Get exchange (paper mode works without API keys via stub)
+    const exchange = await getExchangeForUserOrStub(userId, modeTyped);
+
     // 3. Calculate actual capital based on mode
     let actualCapital = capitalUsd;
     
@@ -2570,18 +2738,24 @@ app.post("/api/agent/restart", async (req, res) => {
             logger.warn('[Restart Live] Markets not loaded - this should have been done at startup!');
           }
           
-          const balance = await exchange.fetchBalance({ type: 'future' });
+          const balance = await exchangeAPIDeduplicator.execute(
+            makeFetchBalanceKey(userId),
+            () => exchange.fetchBalance({ type: 'future' }),
+            IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
+            `api_balance_restart_${userId}`
+          );
+          ipWeightTracker.record(5, `fetchBalance:restart:${userId}`);
           const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
           const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
           const lockedUsdt = totalUsdt - freeUsdt;
-          
+
           if (totalUsdt > 0) {
             actualCapital = totalUsdt;
             // Seed WebSocket cache for future use
             seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: lockedUsdt });
             logger.info(`✅ [Restart Live] Using REST balance: $${actualCapital.toFixed(2)}`);
           } else {
-            return res.status(400).json({ 
+            return res.status(400).json({
               error: 'Binance balance is $0. Cannot restart live trading.',
             });
           }
@@ -2703,10 +2877,10 @@ app.post("/api/agent/restart", async (req, res) => {
           resistance: tick.resistance,
           tickCount: tick.tickCount,
           timestamp: tick.timestamp.toISOString(),
-        }, tick.symbol);
+        }, tick.symbol, userId);
       });
     }
-    
+
     // V5.39: Start ALL agents in PARALLEL for synchronized signal detection
     await Promise.all(agents.map(agent => agent.start()));
     
@@ -3250,14 +3424,20 @@ app.post("/api/monitor/incoherences/export", async (req, res) => {
 // Get daily report for a specific session and date
 app.get("/api/monitor/reports/daily", async (req, res) => {
   try {
+    const userId = (req as any)?.user?.id;
     const sessionId = String(req.query.sessionId || "").trim();
     const dateStr = String(req.query.date || "").trim();
     const refresh = req.query.refresh === 'true';
-    
+
     if (!sessionId) {
       return res.status(400).json({ error: "sessionId required" });
     }
-    
+
+    // Verify session belongs to user
+    if (userId && !(await verifySessionOwnership(sessionId, userId))) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+
     // Default to today if no date provided
     const day = dateStr || new Date().toISOString().split('T')[0];
     
@@ -3296,10 +3476,10 @@ app.get("/api/monitor/reports/daily", async (req, res) => {
       const expectancy = trades > 0 ? (pnlUsd - fees) / trades : 0;
       
       // Get session start balance for ROI calculation
-      const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+      const session = await prisma.agentSession.findFirst({ where: { id: sessionId, ...(userId ? { userId } : {}) } });
       const startBalance = session?.startBalanceUsd || 1000;
       const roiPct = startBalance > 0 ? ((pnlUsd - fees) / startBalance) * 100 : 0;
-      
+
       const stats = {
         trades,
         wins,
@@ -3313,7 +3493,7 @@ app.get("/api/monitor/reports/daily", async (req, res) => {
         expectancy,
         roiPct,
       };
-      
+
       // Upsert report
       report = await prisma.dailyReport.upsert({
         where: { sessionId_day: { sessionId, day } },
@@ -3332,12 +3512,18 @@ app.get("/api/monitor/reports/daily", async (req, res) => {
 // List daily reports for a session - auto-generates from fills if no reports exist
 app.get("/api/monitor/reports/daily/list", async (req, res) => {
   try {
+    const userId = (req as any)?.user?.id;
     const sessionId = String(req.query.sessionId || "").trim();
     const limitRaw = Number(req.query.limit ?? 30);
     const limit = Math.max(1, Math.min(365, Math.floor(limitRaw)));
-    
+
     if (!sessionId) {
       return res.status(400).json({ error: "sessionId required" });
+    }
+
+    // Verify session belongs to user
+    if (userId && !(await verifySessionOwnership(sessionId, userId))) {
+      return res.status(403).json({ error: "forbidden" });
     }
     
     // First try to get existing reports
@@ -3370,7 +3556,7 @@ app.get("/api/monitor/reports/daily/list", async (req, res) => {
         }
         
         // Get session info
-        const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+        const session = await prisma.agentSession.findFirst({ where: { id: sessionId, ...(userId ? { userId } : {}) } });
         const startBalance = session?.startBalanceUsd || 1000;
         
         // Generate reports for each day with trades
@@ -3437,11 +3623,16 @@ app.post("/api/monitor/reports/daily", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
     const { sessionId, date, stats, llm } = req.body;
-    
+
     if (!sessionId) {
       return res.status(400).json({ error: "sessionId required" });
     }
-    
+
+    // Verify session belongs to user
+    if (userId && !(await verifySessionOwnership(sessionId, userId))) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+
     const day = date || new Date().toISOString().split('T')[0];
     
     const report = await prisma.dailyReport.upsert({
@@ -3576,8 +3767,18 @@ wss.on("connection", (ws) => {
       // Handle authentication
       if (msg.type === 'hello' && msg.token) {
         try {
-          const decoded = jwt.verify(msg.token, cfg.JWT_SECRET || cfg.APP_API_KEY || 'default-secret') as any;
+          const decoded = jwt.verify(msg.token, cfg.JWT_SECRET) as any;
           if (decoded.userId) {
+            // Per-user WS connection limit
+            let userWsCount = 0;
+            for (const [, cd] of wsClients) {
+              if (cd.userId === decoded.userId && cd.authenticated) userWsCount++;
+            }
+            if (userWsCount >= USER_LIMITS.MAX_WS_CONNECTIONS_PER_USER) {
+              ws.send(JSON.stringify({ type: 'error', code: 'ws.limit.exceeded', message: `Max ${USER_LIMITS.MAX_WS_CONNECTIONS_PER_USER} WS connections per user` }));
+              ws.close();
+              return;
+            }
             clientData.userId = decoded.userId;
             clientData.authenticated = true;
             ws.send(JSON.stringify({ type: 'hello_ok', expiresAt: new Date(Date.now() + 3600000).toISOString() }));
@@ -3588,7 +3789,7 @@ wss.on("connection", (ws) => {
         }
         return;
       }
-      
+
       // Handle subscription
       if (msg.type === 'sub') {
         if (msg.symbol) clientData.subscribedSymbol = msg.symbol;
@@ -3597,11 +3798,11 @@ wss.on("connection", (ws) => {
         logger.debug(`WS subscribed to ${msg.symbol || 'all'} for session ${msg.sessionId || 'none'}`);
         return;
       }
-      
+
       // Handle token refresh
       if (msg.type === 'refresh' && msg.token) {
         try {
-          const decoded = jwt.verify(msg.token, cfg.JWT_SECRET || cfg.APP_API_KEY || 'default-secret') as any;
+          const decoded = jwt.verify(msg.token, cfg.JWT_SECRET) as any;
           if (decoded.userId) {
             clientData.userId = decoded.userId;
             clientData.authenticated = true;
@@ -3621,12 +3822,15 @@ wss.on("connection", (ws) => {
   ws.on("error", () => wsClients.delete(ws));
 });
 
-// ✅ Broadcast with optional symbol filtering - only sends to clients subscribed to that symbol
-function broadcast(type: string, data: any, symbol?: string) {
+// ✅ Broadcast with user isolation + optional symbol filtering
+function broadcast(type: string, data: any, symbol?: string, userId?: string) {
   const message = JSON.stringify({ type, data, timestamp: Date.now() });
   for (const [ws, clientData] of wsClients) {
     if (ws.readyState !== WebSocket.OPEN) continue;
-    
+
+    // User isolation: only send to this user's clients (skip if userId not set on client)
+    if (userId && clientData.userId && clientData.userId !== userId) continue;
+
     // If symbol provided, only send to clients subscribed to that symbol
     if (symbol && clientData.subscribedSymbol) {
       // Normalize symbols for comparison (remove slashes and colons)
@@ -3634,7 +3838,7 @@ function broadcast(type: string, data: any, symbol?: string) {
       const normalizedData = symbol.toUpperCase().replace(/[/:]/g, '');
       if (normalizedSub !== normalizedData) continue;
     }
-    
+
     ws.send(message);
   }
 }
@@ -3812,24 +4016,62 @@ async function restoreActiveSessions() {
       logger.info('📋 No active sessions to restore');
       return;
     }
-    
-    // 🔧 FIX: Group by user AND mode (userId_paper, userId_live)
+
+    // Group by user AND mode (userId_paper, userId_live)
     const sessionsByUserMode = new Map<string, any[]>();
+    const userNames = new Map<string, string>();
     for (const session of activeSessions) {
       if (!session.userId) continue;
       const key = `${session.userId}_${session.mode}`;
       const existing = sessionsByUserMode.get(key) || [];
       existing.push(session);
       sessionsByUserMode.set(key, existing);
+      if (!userNames.has(session.userId)) {
+        userNames.set(session.userId, (session as any).user?.email || session.userId.slice(0, 8));
+      }
     }
-    
-    // Restore each user's agents by mode
+
+    // Log summary per user
+    const uniqueUsers = new Set([...sessionsByUserMode.keys()].map(k => k.split('_')[0]));
+    logger.info(`♻️ Restoring sessions for ${uniqueUsers.size} user(s): ${[...uniqueUsers].map(uid => {
+      const name = userNames.get(uid) || uid.slice(0, 8);
+      const paperCount = sessionsByUserMode.get(`${uid}_paper`)?.length || 0;
+      const liveCount = sessionsByUserMode.get(`${uid}_live`)?.length || 0;
+      const parts: string[] = [];
+      if (paperCount > 0) parts.push(`${paperCount} paper`);
+      if (liveCount > 0) parts.push(`${liveCount} live`);
+      return `${name} (${parts.join(', ')})`;
+    }).join(' | ')}`);
+
+    // Restore each user's agents by mode (staggered to avoid API weight burst)
+    let restoreIndex = 0;
     for (const [userModeKey, sessions] of sessionsByUserMode) {
       const [userId, mode] = userModeKey.split('_') as [string, 'paper' | 'live'];
-      
+      const userName = userNames.get(userId) || userId.slice(0, 8);
+
+      // Stagger: wait between users to spread API weight (500ms default)
+      if (restoreIndex > 0) {
+        await new Promise(resolve => setTimeout(resolve, IP_WEIGHT.RESTORE_STAGGER_MS));
+      }
+      restoreIndex++;
+
+      logger.info(`  → Restoring ${sessions.length} ${mode.toUpperCase()} session(s) for ${userName} (${restoreIndex}/${sessionsByUserMode.size})...`);
+
       try {
-        const exchange = await getExchangeForUser(userId);
-        
+        // Skip live sessions for users without API keys (halt them instead)
+        if (mode === 'live') {
+          const credentials = await getUserCredentials(userId);
+          if (!credentials || !credentials.apiKey || !credentials.apiSecret) {
+            logger.warn(`⚠️ [Restore] Skipping ${sessions.length} LIVE session(s) for ${userName} - no API keys. Halting sessions.`);
+            for (const session of sessions) {
+              await prisma.agentSession.update({ where: { id: session.id }, data: { haltedAt: new Date() } });
+            }
+            continue;
+          }
+        }
+
+        const exchange = await getExchangeForUserOrStub(userId, mode);
+
         // Get capital from first session profile or user settings
         const firstProfile = sessions[0]?.profileJson as any;
         let initialCapitalUsd = firstProfile?.capitalUsd || 10000;
@@ -3971,6 +4213,7 @@ async function restoreActiveSessions() {
                   () => exchange.fetchBalance({ type: 'future' }),
                   { weight: BINANCE_WEIGHTS.FETCH_BALANCE, priority: 'high', tag: `fetchBalance_${userId}` }
                 );
+                ipWeightTracker.record(BINANCE_WEIGHTS.FETCH_BALANCE, `fetchBalance:restore:${userId}`);
                 const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
                 const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
 
@@ -4050,17 +4293,17 @@ async function restoreActiveSessions() {
               resistance: tick.resistance,
               tickCount: tick.tickCount,
               timestamp: tick.timestamp.toISOString(),
-            }, tick.symbol);
+            }, tick.symbol, userId);
           });
         }
-        
+
         // V5.39: Start ALL agents in PARALLEL for synchronized signal detection
         await Promise.all(agents.map(agent => agent.start()));
-        
+
         const symbols = sessions.map((s: any) => s.symbol).join(', ');
-        logger.info(`♻️ Restored ${agents.length} ${mode.toUpperCase()} agent(s) for ${userId}: ${symbols}`);
+        logger.info(`  ✅ Restored ${agents.length} ${mode.toUpperCase()} agent(s) for ${userName}: ${symbols}`);
       } catch (error) {
-        logger.warn(`Failed to restore sessions for ${userId}:`, error);
+        logger.warn(`  ❌ Failed to restore ${mode.toUpperCase()} sessions for ${userName}:`, error);
       }
     }
   } catch (error) {
@@ -4199,11 +4442,13 @@ app.get('/api/monitor/order-queue', authMiddleware, (req, res) => {
   try {
     const stats = orderQueue.getStats();
     const priorityDist = orderQueue.getPriorityDistribution();
+    const perUser = orderQueue.getPerUserStats();
 
     res.json({
       success: true,
       stats,
       priorityDistribution: priorityDist,
+      perUser,
       timestamp: Date.now(),
     });
   } catch (error: any) {

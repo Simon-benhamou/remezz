@@ -6,8 +6,8 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { api, getApiKey } from '../api';
-import { openWS, wsSend } from '../ws';
+import { api } from '../api';
+import { wsManager } from '../ws';
 import type {
   Session,
   SessionState,
@@ -311,7 +311,6 @@ export function useSessionState(
   const [sparklineData, setSparklineData] = useState<number[]>([]);
 
   // Refs
-  const wsRef = useRef<ReturnType<typeof openWS> | null>(null);
   const lastTickerUpdateRef = useRef<number>(0);
   const mountedRef = useRef(true);
 
@@ -586,133 +585,144 @@ export function useSessionState(
   useEffect(() => {
     if (!sessionId || !symbol) return;
 
-    const ws = openWS(
-      API_BASE,
-      getApiKey(),
-      symbol,
-      (msg) => {
-        if (msg?.sessionId && msg.sessionId !== sessionId) return;
+    // Ensure the shared connection is open
+    wsManager.connect(API_BASE);
 
-        switch (msg.type) {
-          case 'hello_ok':
-          case 'sub_ok':
-            if (msg.type === 'sub_ok') {
-              try {
-                wsSend(ws, { type: 'fetch_now' });
-              } catch {}
-            }
-            break;
+    // Register a backend subscription for this symbol + session
+    const unsubSub = wsManager.subscribeSub({ symbol, sessionId });
 
-          case 'tick': {
-            const msgSymbol = normalizeSymbol(msg.data?.symbol || '');
-            const curSymbol = normalizeSymbol(symbol);
-            if (msgSymbol === curSymbol) {
-              setCurrentPrice(Number(msg.data.price));
-              setLastUpdate(Date.now());
-            }
-            break;
-          }
+    // Connection status listener
+    const unsubConn = wsManager.onConnection((connected) => setWsConnected(connected));
 
-          case 'price_update': {
-            const { symbol: msgSymbol, last } = msg.data;
-            const curSymbol = normalizeSymbol(symbol);
-            const receivedSymbol = normalizeSymbol(msgSymbol || '');
-            if (curSymbol === receivedSymbol && last) {
-              setCurrentPrice(Number(last));
-              setTicker((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      price: Number(last),
-                      bid: msg.data.bid ?? prev.bid,
-                      ask: msg.data.ask ?? prev.ask,
-                      timestamp: msg.data.timestamp || Date.now(),
-                    }
-                  : prev
-              );
-              setTickerStatus('live');
-              lastTickerUpdateRef.current = Date.now();
-            }
-            break;
-          }
+    // Helper: filter messages by session
+    const forThisSession = (msg: any): boolean => {
+      if (msg?.sessionId && msg.sessionId !== sessionId) return false;
+      return true;
+    };
 
-          case 'analysis': {
-            const tech = msg.data?.technical;
-            if (tech?.last) {
-              setCurrentPrice(Number(tech.last));
-              setTicker((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      price: Number(tech.last),
-                      high24h: tech.high24h ?? prev.high24h,
-                      low24h: tech.low24h ?? prev.low24h,
-                      volume24h: tech.quoteVolume24h ?? prev.volume24h,
-                      change24h: tech.change24h ?? prev.change24h,
-                      changePct24h: tech.percentage24h ?? prev.changePct24h,
-                      timestamp: Date.now(),
-                    }
-                  : prev
-              );
-              setTickerStatus('live');
-              lastTickerUpdateRef.current = Date.now();
-            }
-            break;
-          }
+    // Subscribe to sub_ok to send fetch_now
+    const unsubSubOk = wsManager.subscribe('sub_ok', () => {
+      try { wsManager.send({ type: 'fetch_now' }); } catch {}
+    });
 
-          case 'agent_state': {
-            fetchAgentState();
-            if (msg.data?.exit) {
-              fetchPerformance();
-              fetchTrades();
-            }
-            break;
-          }
+    // Subscribe to tick messages
+    const unsubTick = wsManager.subscribe('tick', (msg: any) => {
+      if (!forThisSession(msg)) return;
+      const msgSymbol = normalizeSymbol(msg.data?.symbol || '');
+      const curSymbol = normalizeSymbol(symbol);
+      if (msgSymbol === curSymbol) {
+        setCurrentPrice(Number(msg.data.price));
+        setLastUpdate(Date.now());
+      }
+    });
 
-          case 'session': {
-            if (msg.data?.state) setState(msg.data.state);
-            if (msg.data?.symbol) setSymbol(msg.data.symbol);
-            fetchOrders();
-            fetchTrades();
-            break;
-          }
+    // Subscribe to price_update messages
+    const unsubPrice = wsManager.subscribe('price_update', (msg: any) => {
+      if (!forThisSession(msg)) return;
+      const { symbol: msgSymbol, last } = msg.data;
+      const curSymbol = normalizeSymbol(symbol);
+      const receivedSymbol = normalizeSymbol(msgSymbol || '');
+      if (curSymbol === receivedSymbol && last) {
+        setCurrentPrice(Number(last));
+        setTicker((prev) =>
+          prev
+            ? {
+                ...prev,
+                price: Number(last),
+                bid: msg.data.bid ?? prev.bid,
+                ask: msg.data.ask ?? prev.ask,
+                timestamp: msg.data.timestamp || Date.now(),
+              }
+            : prev
+        );
+        setTickerStatus('live');
+        lastTickerUpdateRef.current = Date.now();
+      }
+    });
 
-          case 'orders': {
-            const ordersData = msg.data;
-            const arr = Array.isArray(ordersData) ? ordersData : (ordersData?.orders || []);
-            setOrders(arr.map(mapApiOrder));
-            fetchAgentState();
-            break;
-          }
+    // Subscribe to analysis messages
+    const unsubAnalysis = wsManager.subscribe('analysis', (msg: any) => {
+      if (!forThisSession(msg)) return;
+      const tech = msg.data?.technical;
+      if (tech?.last) {
+        setCurrentPrice(Number(tech.last));
+        setTicker((prev) =>
+          prev
+            ? {
+                ...prev,
+                price: Number(tech.last),
+                high24h: tech.high24h ?? prev.high24h,
+                low24h: tech.low24h ?? prev.low24h,
+                volume24h: tech.quoteVolume24h ?? prev.volume24h,
+                change24h: tech.change24h ?? prev.change24h,
+                changePct24h: tech.percentage24h ?? prev.changePct24h,
+                timestamp: Date.now(),
+              }
+            : prev
+        );
+        setTickerStatus('live');
+        lastTickerUpdateRef.current = Date.now();
+      }
+    });
 
-          case 'alert': {
-            setActivityEvents((prev) => [
-              mapApiActivityEvent({ ...msg.data, kind: 'warn' }, symbol),
-              ...prev,
-            ].slice(0, 50));
-            break;
-          }
+    // Subscribe to agent_state messages
+    const unsubAgentState = wsManager.subscribe('agent_state', (msg: any) => {
+      if (!forThisSession(msg)) return;
+      fetchAgentState();
+      if (msg.data?.exit) {
+        fetchPerformance();
+        fetchTrades();
+      }
+    });
 
-          case 'radar_event': {
-            setActivityEvents((prev) => [
-              mapApiActivityEvent(msg.data, symbol),
-              ...prev,
-            ].slice(0, 50));
-            break;
-          }
-        }
-      },
-      (connected) => setWsConnected(connected),
-      undefined,
-      sessionId
-    );
+    // Subscribe to session messages
+    const unsubSession = wsManager.subscribe('session', (msg: any) => {
+      if (!forThisSession(msg)) return;
+      if (msg.data?.state) setState(msg.data.state);
+      if (msg.data?.symbol) setSymbol(msg.data.symbol);
+      fetchOrders();
+      fetchTrades();
+    });
 
-    wsRef.current = ws;
+    // Subscribe to orders messages
+    const unsubOrders = wsManager.subscribe('orders', (msg: any) => {
+      if (!forThisSession(msg)) return;
+      const ordersData = msg.data;
+      const arr = Array.isArray(ordersData) ? ordersData : (ordersData?.orders || []);
+      setOrders(arr.map(mapApiOrder));
+      fetchAgentState();
+    });
+
+    // Subscribe to alert messages
+    const unsubAlert = wsManager.subscribe('alert', (msg: any) => {
+      if (!forThisSession(msg)) return;
+      setActivityEvents((prev) => [
+        mapApiActivityEvent({ ...msg.data, kind: 'warn' }, symbol),
+        ...prev,
+      ].slice(0, 50));
+    });
+
+    // Subscribe to radar_event messages
+    const unsubRadar = wsManager.subscribe('radar_event', (msg: any) => {
+      if (!forThisSession(msg)) return;
+      setActivityEvents((prev) => [
+        mapApiActivityEvent(msg.data, symbol),
+        ...prev,
+      ].slice(0, 50));
+    });
 
     return () => {
-      try {
-        wsRef.current?.close?.();
-      } catch {}
+      unsubSub();
+      unsubConn();
+      unsubSubOk();
+      unsubTick();
+      unsubPrice();
+      unsubAnalysis();
+      unsubAgentState();
+      unsubSession();
+      unsubOrders();
+      unsubAlert();
+      unsubRadar();
     };
   }, [sessionId, symbol, fetchAgentState, fetchPerformance, fetchTrades, fetchOrders]);
 
@@ -743,6 +753,8 @@ export function useSessionState(
     if (!autoRefresh || !sessionId) return;
 
     const interval = setInterval(() => {
+      // Skip polling when tab is not visible
+      if (document.hidden) return;
       fetchAgentState();
       fetchActivity();
     }, refreshInterval);
@@ -753,6 +765,8 @@ export function useSessionState(
   // Stale ticker detection
   useEffect(() => {
     const interval = setInterval(() => {
+      // Skip stale detection when tab is not visible
+      if (document.hidden) return;
       if (tickerStatus === 'live' && lastTickerUpdateRef.current) {
         const age = Date.now() - lastTickerUpdateRef.current;
         if (age > STALE_THRESHOLD_MS) {

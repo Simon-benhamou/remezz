@@ -87,6 +87,14 @@ const globalMultiCache: Map<string, Map<string, CacheEntry<any>>> = new Map();
  * });
  * ```
  */
+/**
+ * Clear all multi-data cached data (useful for logout)
+ */
+export function clearAllMultiCache(): void {
+  globalMultiCache.clear();
+  console.log('All multi-cache cleared');
+}
+
 export function useMultiDataCache<T extends Record<string, any>>(
   options: UseMultiDataCacheOptions<T>
 ): UseMultiDataCacheReturn<T> {

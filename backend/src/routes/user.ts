@@ -7,31 +7,43 @@ import { getUserCredentials } from '../services/userCredentials.js';
 
 export const router = Router();
 
+function maskKey(key: string): string {
+  if (key.length <= 8) return '****';
+  return key.slice(0, 4) + '...' + key.slice(-4);
+}
+
 // Apply authentication middleware to all routes
 router.use(authenticateUser);
 
 // Get user's API keys
 router.get('/api-keys', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.json({ apiKeys: [] });
-    }
-
     const apiKeys = await prisma.userApiKey.findMany({
       where: { userId: req.user!.id },
       orderBy: { createdAt: 'desc' }
     });
 
-    // Return API keys with decrypted values (for display)
-    const decryptedKeys = apiKeys.map(key => ({
-      id: key.id,
-      exchange: key.exchange,
-      keyName: key.keyName,
-      apiKey: decryptApiKey(key.apiKey),
-      testnet: key.testnet,
-      isActive: key.isActive,
-      createdAt: key.createdAt
-    }));
+    // Return API keys with masked values (for display)
+    const decryptedKeys = apiKeys.map(key => {
+      let maskedApiKey = '****';
+      let decryptError = false;
+      try {
+        maskedApiKey = maskKey(decryptApiKey(key.apiKey));
+      } catch {
+        decryptError = true;
+        maskedApiKey = '⚠️ re-enter key';
+      }
+      return {
+        id: key.id,
+        exchange: key.exchange,
+        keyName: key.keyName,
+        apiKey: maskedApiKey,
+        testnet: key.testnet,
+        isActive: key.isActive,
+        createdAt: key.createdAt,
+        decryptError,
+      };
+    });
 
     res.json({ apiKeys: decryptedKeys });
   } catch (error) {
@@ -43,10 +55,6 @@ router.get('/api-keys', async (req: AuthenticatedRequest, res) => {
 // Add new API key
 router.post('/api-keys', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ error: 'legacy_users_cannot_add_api_keys' });
-    }
-
     const { exchange, keyName, apiKey, apiSecret } = req.body;
 
     if (!exchange || !apiKey || !apiSecret) {
@@ -73,26 +81,36 @@ router.post('/api-keys', async (req: AuthenticatedRequest, res) => {
       }
     });
 
-    if (existingKey) {
-      return res.status(400).json({ error: 'api_key_already_exists_for_exchange' });
-    }
-
     // Encrypt the sensitive data
     const encryptedApiKey = encryptApiKey(apiKey);
     const encryptedApiSecret = encryptApiKey(apiSecret);
 
-    const newApiKey = await prisma.userApiKey.create({
-      data: {
-        userId: req.user!.id,
-        exchange,
-        keyName: keyName || null,
-        apiKey: encryptedApiKey,
-        apiSecret: encryptedApiSecret,
-        passphrase: null,
-        testnet: false,
-        isActive: true
-      }
-    });
+    let newApiKey;
+    if (existingKey) {
+      // Update existing key (re-enter scenario)
+      newApiKey = await prisma.userApiKey.update({
+        where: { id: existingKey.id },
+        data: {
+          keyName: keyName || existingKey.keyName,
+          apiKey: encryptedApiKey,
+          apiSecret: encryptedApiSecret,
+          isActive: true,
+        }
+      });
+    } else {
+      newApiKey = await prisma.userApiKey.create({
+        data: {
+          userId: req.user!.id,
+          exchange,
+          keyName: keyName || null,
+          apiKey: encryptedApiKey,
+          apiSecret: encryptedApiSecret,
+          passphrase: null,
+          testnet: false,
+          isActive: true
+        }
+      });
+    }
 
     res.status(201).json({
       apiKey: {
@@ -113,10 +131,6 @@ router.post('/api-keys', async (req: AuthenticatedRequest, res) => {
 // Toggle API key active status
 router.patch('/api-keys/:keyId/toggle', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ error: 'legacy_users_cannot_toggle_api_keys' });
-    }
-
     const { keyId } = req.params;
 
     const apiKey = await prisma.userApiKey.findFirst({
@@ -166,10 +180,6 @@ router.patch('/api-keys/:keyId/toggle', async (req: AuthenticatedRequest, res) =
 // Delete API key
 router.delete('/api-keys/:keyId', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ error: 'legacy_users_cannot_delete_api_keys' });
-    }
-
     const { keyId } = req.params;
 
     const apiKey = await prisma.userApiKey.findFirst({
@@ -197,10 +207,6 @@ router.delete('/api-keys/:keyId', async (req: AuthenticatedRequest, res) => {
 // Get user settings
 router.get('/settings', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.json({ settings: [] });
-    }
-
     const settings = await prisma.userSetting.findMany({
       where: { userId: req.user!.id },
       orderBy: { category: 'asc' }
@@ -216,10 +222,6 @@ router.get('/settings', async (req: AuthenticatedRequest, res) => {
 // Update user setting
 router.put('/settings/:key', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(403).json({ error: 'legacy_users_cannot_update_settings' });
-    }
-
     const { key } = req.params;
     const { value, category } = req.body;
 
@@ -255,15 +257,6 @@ router.put('/settings/:key', async (req: AuthenticatedRequest, res) => {
 // Check overall API key health status
 router.get('/api-keys/health', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.json({ 
-        hasKeys: false, 
-        needsDiagnostics: true, 
-        needsMigration: true,
-        status: 'legacy_user' 
-      });
-    }
-
     const apiKeys = await prisma.userApiKey.findMany({
       where: {
         userId: req.user!.id
@@ -336,10 +329,6 @@ router.get('/api-keys/health', async (req: AuthenticatedRequest, res) => {
 // Get decrypted API key for trading (internal use)
 router.get('/api-keys/:exchange/credentials', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.status(404).json({ error: 'no_api_keys_for_legacy_users' });
-    }
-
     const { exchange } = req.params;
 
     const apiKey = await prisma.userApiKey.findFirst({
@@ -355,15 +344,16 @@ router.get('/api-keys/:exchange/credentials', async (req: AuthenticatedRequest, 
       return res.status(404).json({ error: 'api_key_not_found' });
     }
 
-    // Decrypt for internal use
-    const credentials = {
-      apiKey: decryptApiKey(apiKey.apiKey),
-      apiSecret: decryptApiKey(apiKey.apiSecret),
-      passphrase: null,
-      testnet: false
-    };
+    // Return masked credentials (never expose full keys via API)
+    let maskedKey = '****', maskedSecret = '****';
+    try {
+      maskedKey = maskKey(decryptApiKey(apiKey.apiKey));
+      maskedSecret = maskKey(decryptApiKey(apiKey.apiSecret));
+    } catch {
+      return res.json({ credentials: { apiKey: '⚠️ re-enter key', apiSecret: '⚠️ re-enter key', passphrase: null, testnet: false, decryptError: true } });
+    }
 
-    res.json({ credentials });
+    res.json({ credentials: { apiKey: maskedKey, apiSecret: maskedSecret, passphrase: null, testnet: false } });
   } catch (error) {
     console.error('Get credentials error:', error);
     res.status(500).json({ error: 'server_error' });
@@ -373,15 +363,6 @@ router.get('/api-keys/:exchange/credentials', async (req: AuthenticatedRequest, 
 // Check API keys status and validate them
 router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.user?.isLegacy) {
-      return res.json({ 
-        hasApiKeys: false, 
-        isValid: false, 
-        canUseLive: false,
-        message: 'Legacy users cannot configure API keys. Please register a new account.' 
-      });
-    }
-
     // Get active API key (any exchange)
     const credentials = await getUserCredentials(req.user!.id);
     
@@ -437,7 +418,7 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
       exchange: credentials.exchange, // Include active exchange
       message: isValid 
         ? `API keys are configured and valid (${credentials.exchange.toUpperCase()})` 
-        : `API keys are configured but invalid (${credentials.exchange.toUpperCase()}). ${errorDetails ? `Error: ${errorDetails}` : 'Please check your keys and IP whitelist (208.77.244.15)'}`
+        : `API keys are configured but invalid (${credentials.exchange.toUpperCase()}). ${errorDetails ? `Error: ${errorDetails}` : 'Please check your keys and ensure your server IP is whitelisted'}`
     });
   } catch (error) {
     console.error('API keys status check error:', error);

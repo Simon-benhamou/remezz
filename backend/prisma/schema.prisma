@@ -81,7 +81,7 @@ model AgentSession {
   nextRescanAt       DateTime?
   smartHistory       Json?
   actionIntents      AgentActionIntent[]
-  user               User?               @relation(fields: [userId], references: [id])
+  user               User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
   reports            DailyReport[]
   fills              Fill[]
   orders             Order[]
@@ -170,7 +170,7 @@ model Order {
   strategyConfidence Float?
   strategyId         String?
   fills              Fill[]
-  session            AgentSession? @relation(fields: [sessionId], references: [id])
+  session            AgentSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, createdAt])
   @@index([sessionId, status])
@@ -196,7 +196,7 @@ model Fill {
   exitReason     String?
   maxPnlPct      Float?
   order          Order         @relation(fields: [orderId], references: [id])
-  session        AgentSession? @relation(fields: [sessionId], references: [id])
+  session        AgentSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   trade          Trade?        @relation(fields: [tradeId], references: [id])
 
   @@index([sessionId])
@@ -264,7 +264,7 @@ model Position {
   stagnantState         Json?
   trailingActive        Boolean       @default(false)
   trailingBreachCandles Int           @default(0)
-  session               AgentSession? @relation(fields: [sessionId], references: [id])
+  session               AgentSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId])
   @@index([stagnantState])
@@ -286,7 +286,7 @@ model SessionKpi {
   aiOutputTokens   Int          @default(0)
   aiCostUsd        Float        @default(0)
   aiByModel        Json?
-  session          AgentSession @relation("AgentSessionToSessionKpi", fields: [sessionId], references: [id])
+  session          AgentSession @relation("AgentSessionToSessionKpi", fields: [sessionId], references: [id], onDelete: Cascade)
 }
 
 model TriggerLog {
@@ -296,7 +296,7 @@ model TriggerLog {
   kind      String
   payload   Json
   createdAt DateTime      @default(now())
-  session   AgentSession? @relation(fields: [sessionId], references: [id])
+  session   AgentSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, createdAt])
   @@index([createdAt])
@@ -310,7 +310,7 @@ model DailyReport {
   stats     Json?
   llm       Json?
   createdAt DateTime      @default(now())
-  session   AgentSession? @relation(fields: [sessionId], references: [id])
+  session   AgentSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   user      User?         @relation(fields: [userId], references: [id])
 
   @@unique([sessionId, day])

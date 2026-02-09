@@ -8,7 +8,6 @@ export interface AuthenticatedRequest extends Request {
     id: string;
     username: string;
     role: string;
-    isLegacy?: boolean;
   };
 }
 
@@ -23,20 +22,9 @@ export const authenticateUser = async (req: AuthenticatedRequest, res: Response,
     const tokenStr = token.replace('Bearer ', '');
     const cfg = getConfig();
 
-    // Legacy token check
-    if (tokenStr === cfg.APP_API_KEY) {
-      req.user = { 
-        id: 'legacy', 
-        username: 'admin', 
-        role: 'admin',
-        isLegacy: true
-      };
-      return next();
-    }
-
     // JWT token check
     try {
-      const decoded = jwt.verify(tokenStr, cfg.JWT_SECRET || cfg.APP_API_KEY) as any;
+      const decoded = jwt.verify(tokenStr, cfg.JWT_SECRET) as any;
       const user = await prisma.user.findUnique({
         where: { id: decoded.userId }
       });

@@ -94,15 +94,17 @@ export function useDashboard() {
     }
   }, [mode]); // Suppression des dépendances functions pour éviter boucles
 
-  // Auto-refresh overview every 15 seconds (pour le mode actuel seulement)
+  // Auto-refresh overview every 30 seconds (pour le mode actuel seulement)
   useEffect(() => {
     const interval = setInterval(() => {
+      // Skip polling when tab is not visible
+      if (document.hidden) return;
       // Refresh seulement si nécessaire (cache expiré)
       if (!isCacheValid(mode)) {
         console.log(`⏰ Auto-refresh triggered for ${mode} mode`);
         loadOverview(true);
       }
-    }, 15000);
+    }, 30000);
 
     return () => clearInterval(interval);
   }, [mode]); // Suppression des dépendances functions pour éviter boucles
@@ -113,12 +115,14 @@ export function useDashboard() {
     loadOpsEvents();
   }, [mode, loadOpsMetrics, loadOpsEvents]);
 
-  // Auto-refresh ops metrics/events every 15 seconds
+  // Auto-refresh ops metrics/events every 30 seconds
   useEffect(() => {
     const interval = setInterval(() => {
+      // Skip polling when tab is not visible
+      if (document.hidden) return;
       void loadOpsMetrics();
       void loadOpsEvents();
-    }, 15000);
+    }, 30000);
     return () => clearInterval(interval);
   }, [loadOpsMetrics, loadOpsEvents]);
 

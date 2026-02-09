@@ -34,3 +34,18 @@ export const ORDER_QUEUE = {
 export const WS_THROTTLE = {
   UNHEALTHY_WARN_MS: 30_000,  // Max once per 30s per agent
 } as const;
+
+// Per-user limits (multi-user scaling)
+export const USER_LIMITS = {
+  MAX_AGENTS_PER_USER: 20,           // Max concurrent agents per user
+  MAX_WS_CONNECTIONS_PER_USER: 5,    // Max WebSocket connections per user
+} as const;
+
+// IP weight tracking (Binance Futures rate limits)
+export const IP_WEIGHT = {
+  MAX_PER_MINUTE: 2400,              // Binance hard limit
+  SOFT_LIMIT: 1800,                  // 75% - start throttling
+  CLEANUP_INTERVAL_MS: 10_000,       // Prune old entries every 10s
+  RESTORE_STAGGER_MS: 500,           // Delay between user restores at startup
+  FETCH_BALANCE_DEDUP_MS: 10_000,    // Dedup fetchBalance REST calls (10s)
+} as const;

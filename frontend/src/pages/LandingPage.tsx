@@ -285,7 +285,6 @@ export default function LandingPage() {
       <nav className="landing-nav">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <img src="/remezz-logo.svg" alt="Remezz" style={{ height: 32 }} />
-          <span style={{ fontSize: 22, fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.02em' }}>remezz</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button

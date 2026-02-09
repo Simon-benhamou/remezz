@@ -72,6 +72,7 @@ import {
 import { ExchangeOrderManager } from './exchangeOrderManager.js';
 import { PositionOpener } from './positionOpener.js';
 import { RealtimeExitHandler } from './realtimeExitHandler.js';
+import { ipWeightTracker } from '../services/ipWeightTracker.js';
 import {
   type Candle as NfsCandle,
 } from '../services/nfsRealtimeExit.js';
@@ -209,9 +210,10 @@ export class CapitalPool {
         console.log(`[CapitalPool] WebSocket cache empty on ${force ? 'forced' : 'initial'} sync, falling back to REST fetchBalance...`);
         try {
           const restBalance = await this.exchange.fetchBalance({ type: 'future' });
+          ipWeightTracker.record(5, `fetchBalance:pool:${this.userId}`);
           const totalUsdt = parseFloat(String(restBalance?.total?.USDT ?? restBalance?.USDT?.total ?? '0')) || 0;
           const freeUsdt = parseFloat(String(restBalance?.free?.USDT ?? restBalance?.USDT?.free ?? '0')) || 0;
-          
+
           if (totalUsdt > 0) {
             balance = { asset: 'USDT', total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt, timestamp: Date.now() };
             // Seed the cache for next time
@@ -257,6 +259,7 @@ export class CapitalPool {
             notifySyncFailure({
               reason: 'Balance fetch returned empty or zero. Check API credentials and WebSocket connection.',
               mode: this.mode,
+              userId: this.userId || undefined,
             });
           }
         }
@@ -272,6 +275,7 @@ export class CapitalPool {
         notifySyncFailure({
           reason: `Failed to sync: ${(err as Error)?.message || 'Unknown error'}`,
           mode: this.mode,
+          userId: this.userId || undefined,
         });
       }
       
@@ -763,7 +767,7 @@ export class SimpleAgent {
       symbol: config.symbol,
       mode: config.mode,
     });
-    this.orderManager = new ExchangeOrderManager(config.exchange, config.symbol, config.mode);
+    this.orderManager = new ExchangeOrderManager(config.exchange, config.symbol, config.mode, config.userId);
 
     // Initialize RealtimeExitHandler (owns NFS system + proactive limit state)
     this.rtExitHandler = new RealtimeExitHandler({
@@ -832,6 +836,7 @@ export class SimpleAgent {
       sessionId: this.config.sessionId,
       mode: this.config.mode,
       capitalUsd: poolStatus.availableUsd,
+      userId: this.userId || undefined,
     });
     
     // Charger les positions existantes depuis la DB
@@ -917,7 +922,7 @@ export class SimpleAgent {
     this.stopRealtimeExitMonitor();
     
     // V5.22: Remove any pending signal for this agent from ranker
-    globalSignalRanker.removeSignal(this.config.symbol, this.config.mode);
+    globalSignalRanker.removeSignal(this.config.symbol, this.config.mode, this.config.userId);
     
     // 📢 NOTIFICATION: Agent stopped
     notifyAgentStopped({
@@ -925,6 +930,7 @@ export class SimpleAgent {
       sessionId: this.config.sessionId,
       mode: this.config.mode,
       reason: 'Manual stop',
+      userId: this.userId || undefined,
     });
     
     logger.info(`⏹️ [${this.config.symbol}] STOPPED`);
@@ -1326,6 +1332,7 @@ export class SimpleAgent {
             newRegime: f.btcInBullRegime ? 'bull' : 'bear',
             btcPrice,
             sma200: estimatedSma200,
+            userId: this.userId || undefined,
           });
         }
         
@@ -1441,6 +1448,7 @@ export class SimpleAgent {
           volumeRatio,
           reason: signal.reason || 'momentum_signal',
           mode: this.config.mode,  // CRITICAL: Separate batches for paper vs live
+          userId: this.config.userId,  // V-MULTI: Isolate signals per user
         });
         
         // 📢 NOTIFICATION: Signal detected
@@ -1450,6 +1458,7 @@ export class SimpleAgent {
           price: currentPrice,
           reason: signal.reason || 'momentum_signal',
           mode: this.config.mode,
+          userId: this.userId || undefined,
         });
         
         // Store signal info for frontend display
@@ -1481,7 +1490,7 @@ export class SimpleAgent {
         // have submitted their signals before we check ranking. This ensures the same
         // ranking behavior as backtest which collects all signals synchronously.
         logger.info(`⏳ [${shortSymbol}] Waiting for signal ranking batch...`);
-        await globalSignalRanker.waitForBatch(this.config.mode);
+        await globalSignalRanker.waitForBatch(this.config.mode, this.config.userId);
         
         this.lastRejectReason = ''; // Clear reject reason on signal
         await this.openPosition(signal.side, candles);
@@ -1697,6 +1706,7 @@ export class SimpleAgent {
           distancePct: distanceToLiqPct,
           leverage,
           mode: 'live',
+          userId: this.userId || undefined,
         });
       }
       
@@ -1960,6 +1970,7 @@ export class SimpleAgent {
             trailPrice: exitSignal.newStopLoss,
             pnlPct: exitSignal.pnlPct,
             mode: this.config.mode,
+            userId: this.userId || undefined,
           });
         }
         
@@ -2000,6 +2011,7 @@ export class SimpleAgent {
           pnlPct: pnlPct,
           sessionId: this.config.sessionId,
           mode: this.config.mode,
+          userId: this.userId || undefined,
         });
       }
       
@@ -2167,6 +2179,7 @@ export class SimpleAgent {
         pnlPct,
         reason,
         mode: 'paper',
+        userId: this.userId || undefined,
       });
 
       // V5.63: Record trade result for consecutive loser tracking
@@ -2535,6 +2548,7 @@ export class SimpleAgent {
           pnlPct: actualPnlPct,
           reason,
           mode: 'live',
+          userId: this.userId || undefined,
         });
 
         // V5.63: Record trade result for consecutive loser tracking
@@ -2564,6 +2578,7 @@ export class SimpleAgent {
           orderType: 'exit',
           error: errMsg(error),
           mode: 'live',
+          userId: this.userId || undefined,
         });
       }
     }
@@ -3055,6 +3070,7 @@ export class SimpleAgent {
             pnlPct,
             reason,
             mode: 'live',
+            userId: this.userId || undefined,
           });
 
           // Record trade for consecutive loser tracking + daily report

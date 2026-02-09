@@ -16,13 +16,13 @@ router.get("/", authenticateUser, async (req: AuthenticatedRequest, res) => {
     where.sessionId = sessionId;
     sess = await prisma.agentSession.findUnique({ where: { id: sessionId } });
     // Security: verify session belongs to user
-    if (sess && sess.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+    if (sess && sess.userId !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'session_forbidden' });
     }
   } else {
     // Return orders from user's active sessions only
     const sessionWhere: any = { stoppedAt: null };
-    if (req.user.role !== 'admin' && !req.user.isLegacy) {
+    if (req.user.role !== 'admin') {
       sessionWhere.userId = req.user.id;
     }
     const activeSessions = await prisma.agentSession.findMany({ 
@@ -98,7 +98,7 @@ router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) =
   // Security: verify session belongs to user if sessionId is provided
   if (sessionId) {
     const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
-    if (session && session.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+    if (session && session.userId !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'session_forbidden' });
     }
   }
@@ -108,11 +108,11 @@ router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) =
   
   if (sessionId) {
     where.sessionId = sessionId;
-  } else if (req.user.role !== 'admin' && !req.user.isLegacy) {
+  } else if (req.user.role !== 'admin') {
     // Non-admin users: only show their trades (optionally filtered by mode)
     where.session = { userId: req.user.id, ...(mode ? { mode } : {}) };
   } else if (mode) {
-    // Admin/legacy: allow optional mode filter when no sessionId is provided
+    // Admin: allow optional mode filter when no sessionId is provided
     where.session = { ...(mode ? { mode } : {}) };
   }
 

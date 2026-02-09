@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, LogOut } from 'lucide-react';
-import { clearApiKey, api } from '../api';
+import { api } from '../api';
+import { fullLogout } from '../lib/logout';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -36,22 +37,7 @@ export default function UserDropdown() {
   };
 
   const handleLogout = () => {
-    try {
-      clearApiKey();
-
-      const keysToKeep = ['appMode'];
-      const allKeys = Object.keys(localStorage);
-      allKeys.forEach((key) => {
-        if (!keysToKeep.includes(key)) {
-          localStorage.removeItem(key);
-        }
-      });
-
-      window.location.href = '/login';
-    } catch (error) {
-      console.error('Logout error:', error);
-      window.location.href = '/login';
-    }
+    fullLogout();
   };
 
   return (

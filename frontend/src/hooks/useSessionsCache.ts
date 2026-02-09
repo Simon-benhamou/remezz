@@ -12,7 +12,7 @@ interface SessionsCache {
 }
 
 const SESSIONS_CACHE_TTL = 8000; // 8 seconds TTL
-const AUTO_REFRESH_INTERVAL = 20000; // Auto refresh every 20s
+const AUTO_REFRESH_INTERVAL = 60000; // Auto refresh every 60s
 
 export function useSessionsCache() {
   const [loading, setLoading] = useState(false);
@@ -114,6 +114,8 @@ export function useSessionsCache() {
     }
 
     intervalRef.current = setInterval(() => {
+      // Skip polling when tab is not visible
+      if (document.hidden) return;
       const key = generateCacheKey(mode, includeStats);
       if (!isCacheValid(key)) {
         console.log(`⏰ Auto-refresh triggered for sessions ${key}`);

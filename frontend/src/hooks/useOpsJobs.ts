@@ -1,13 +1,13 @@
 import { useCallback, useEffect } from 'react';
-import { api, getApiKey } from '../api';
+import { api } from '../api';
 import { useOpsJobsStore } from '../store';
 import type { OpsJobStatus, OpsJobsResponse } from '../types/ops';
-import { openWS } from '../ws';
+import { wsManager } from '../ws';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
-let jobsWsRef: ReturnType<typeof openWS> | null = null;
 let jobsWsSubscribers = 0;
+let jobsWsUnsubs: (() => void)[] = [];
 
 const JOB_UPDATE_TYPES = new Set([
   'job.updated',
@@ -43,17 +43,39 @@ function handleJobsMessage(msg: any) {
 }
 
 function ensureJobsWs() {
-  if (jobsWsRef) return;
-  const token = getApiKey();
-  jobsWsRef = openWS(API_BASE, token, undefined, handleJobsMessage);
+  if (jobsWsUnsubs.length > 0) return;
+
+  // Ensure the shared connection is open
+  wsManager.connect(API_BASE);
+
+  // Subscribe to all job-related message types
+  jobsWsUnsubs.push(wsManager.subscribe('jobs.snapshot', handleJobsMessage));
+  jobsWsUnsubs.push(wsManager.subscribe('jobs.refresh', handleJobsMessage));
+  jobsWsUnsubs.push(wsManager.subscribe('job.updated', handleJobsMessage));
+  jobsWsUnsubs.push(wsManager.subscribe('jobs.updated', handleJobsMessage));
+  jobsWsUnsubs.push(wsManager.subscribe('jobs.upserted', handleJobsMessage));
+  jobsWsUnsubs.push(wsManager.subscribe('ops.job.updated', handleJobsMessage));
 }
 
 function releaseJobsWs() {
   if (jobsWsSubscribers > 0) return;
-  if (jobsWsRef) {
-    try { jobsWsRef.close(); } catch {}
-    jobsWsRef = null;
+  for (const unsub of jobsWsUnsubs) {
+    try { unsub(); } catch {}
   }
+  jobsWsUnsubs = [];
+}
+
+/**
+ * Force-close the shared jobs WebSocket (used during logout cleanup).
+ * Now just unsubscribes from the shared WsManager — actual disconnect
+ * is handled by wsManager.disconnect() in the logout flow.
+ */
+export function closeJobsWs(): void {
+  for (const unsub of jobsWsUnsubs) {
+    try { unsub(); } catch {}
+  }
+  jobsWsUnsubs = [];
+  jobsWsSubscribers = 0;
 }
 
 export function useOpsJobs(options?: { autoRefreshMs?: number; enableLive?: boolean }) {

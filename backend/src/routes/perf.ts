@@ -13,13 +13,12 @@ router.get("/", authenticateUser, async (req: AuthenticatedRequest, res) => {
   if (!sessionId) return res.status(400).json({ error: "sessionId required" });
   
   // Security: verify session belongs to user
-  if (req.user?.id) {
-    const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
-    if (session && session.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
-      return res.status(403).json({ error: 'session_forbidden' });
-    }
+  const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+  if (!session) return res.status(404).json({ error: "session_not_found" });
+  if (session.userId !== req.user!.id && req.user!.role !== 'admin') {
+    return res.status(403).json({ error: 'session_forbidden' });
   }
-  
+
   res.json(await prisma.sessionKpi.findUnique({ where: { sessionId } }));
 });
 
@@ -31,7 +30,7 @@ router.get("/breakdown", authenticateUser, async (req: AuthenticatedRequest, res
   // Security: verify session belongs to user
   const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
   if (!session) return res.status(404).json({ error: "session not found" });
-  if (req.user?.id && session.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+  if (req.user?.id && session.userId !== req.user.id && req.user.role !== 'admin') {
     return res.status(403).json({ error: 'session_forbidden' });
   }
   const profileJson: any = session?.profileJson && typeof session.profileJson === 'object' ? session.profileJson : {};
@@ -131,7 +130,7 @@ router.get("/parity", authenticateUser, async (req: AuthenticatedRequest, res) =
   // Security: verify session belongs to user
   const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
   if (!session) return res.status(404).json({ error: "session not found" });
-  if (req.user?.id && session.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+  if (req.user?.id && session.userId !== req.user.id && req.user.role !== 'admin') {
     return res.status(403).json({ error: 'session_forbidden' });
   }
 
@@ -243,7 +242,7 @@ router.get("/session-metrics", authenticateUser, async (req: AuthenticatedReques
   }
 
   // Security: filter to only user's sessions
-  if (req.user?.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+  if (req.user?.id && req.user.role !== 'admin') {
     const userSessions = await prisma.agentSession.findMany({
       where: { userId: req.user.id, id: { in: requested } },
       select: { id: true },
@@ -257,7 +256,7 @@ router.get("/session-metrics", authenticateUser, async (req: AuthenticatedReques
     return res.json({ metrics });
   }
 
-  // Admin/legacy users: return all requested sessions
+  // Admin users: return all requested sessions
   try {
     const metrics = await getSessionPerformanceMetrics(requested);
     res.json({ metrics });
