@@ -187,6 +187,9 @@ const allowedOrigins = new Set<string>([
 
 const app = express();
 
+// Trust Railway/proxy X-Forwarded-For headers for correct client IP in rate limiting
+app.set('trust proxy', 1);
+
 const privateIpRegex = /^(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|127\.\d+\.\d+\.\d+|localhost)$/;
 
 const corsOptions: cors.CorsOptions = {
