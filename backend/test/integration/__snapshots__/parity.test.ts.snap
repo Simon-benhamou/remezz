@@ -1,0 +1,33 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Parity Integration Tests should have negative PnL for stop loss exits 1`] = `
+{
+  "avgHoldMinutes": 131,
+  "avgLossUsd": Any<Number>,
+  "avgTradeUsd": Any<Number>,
+  "avgWinUsd": Any<Number>,
+  "finalCapital": Any<Number>,
+  "longTrades": 0,
+  "losses": 1,
+  "maxDrawdownPct": 1.7242200000000139,
+  "profitFactor": 3.054973006242444,
+  "sharpeRatio": Any<Number>,
+  "shortTrades": 4,
+  "totalFeesUsd": Any<Number>,
+  "totalPnlPct": 3.543225556823378,
+  "totalPnlUsd": Any<Number>,
+  "totalTrades": 4,
+  "winRate": 75,
+  "wins": 3,
+}
+`;
+
+exports[`Parity Integration Tests should have negative PnL for stop loss exits 2`] = `4`;
+
+exports[`Parity Integration Tests should have negative PnL for stop loss exits 3`] = `3`;
+
+exports[`Parity Integration Tests should have negative PnL for stop loss exits 4`] = `1`;
+
+exports[`Parity Integration Tests should have negative PnL for stop loss exits 5`] = `0`;
+
+exports[`Parity Integration Tests should have negative PnL for stop loss exits 6`] = `4`;

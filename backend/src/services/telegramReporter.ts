@@ -12,9 +12,9 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('telegram-reporter');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-const isEnabled = Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID);
+// Chat IDs are now per-user (stored in UserSetting table), no global TELEGRAM_CHAT_ID needed
+const isEnabled = Boolean(TELEGRAM_BOT_TOKEN);
 
 // ============================================================================
 // TYPES
@@ -224,7 +224,7 @@ async function schedulerTick(): Promise<void> {
  */
 export function startTelegramReporter(): void {
   if (!isEnabled) {
-    logger.warn(`[TelegramReporter] Disabled - missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID`);
+    logger.warn(`[TelegramReporter] Disabled - missing TELEGRAM_BOT_TOKEN`);
     return;
   }
 

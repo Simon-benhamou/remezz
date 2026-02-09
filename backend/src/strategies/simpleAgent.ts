@@ -73,6 +73,8 @@ import { ExchangeOrderManager } from './exchangeOrderManager.js';
 import { PositionOpener } from './positionOpener.js';
 import { RealtimeExitHandler } from './realtimeExitHandler.js';
 import { ipWeightTracker } from '../services/ipWeightTracker.js';
+import { symbolEngineManager } from './symbolEngineManager.js';
+import type { SymbolSignalResult } from './symbolEngine.js';
 import {
   type Candle as NfsCandle,
 } from '../services/nfsRealtimeExit.js';
@@ -1009,12 +1011,13 @@ export class SimpleAgent {
         await this.syncWithExchange();
       }
       
-      // Fetch BTC candles for market conditions
-      const btcCandles = await this.fetchBtcCandles();
-      const btcCandles1hForConditions = (await this.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
-
-      // Update and broadcast market conditions (preserve marketQuality from previous update)
-      const newConditions = getMarketConditions(btcCandles, btcCandles1hForConditions);
+      // Update market conditions: prefer SymbolEngine cache, fallback to self-computation
+      const engineForConditions = symbolEngineManager.getEngine(this.config.symbol);
+      const engineConditions = engineForConditions?.getMarketConditions();
+      const newConditions = engineConditions || getMarketConditions(
+        (await this.fetchBtcCandles()),
+        (await this.fetchBtcCandles1h()).filter(c => c.isFinal !== false)
+      );
       this.lastMarketConditions = {
         ...newConditions,
         // Preserve marketQuality from checkEntry() if already set
@@ -1181,74 +1184,115 @@ export class SimpleAgent {
   private async checkEntry(): Promise<void> {
     const symbol = this.config.symbol;
     const shortSymbol = symbol.replace('/USDT:USDT', '');
-    
+
     try {
-      // Fetch candles pour le symbol
-      const allCandles = await this.fetchCandles();
-      if (allCandles.length < 61) {
-        // Only log this warning once every 10 ticks to reduce spam
-        if (this.tickCount % 10 === 1) {
-          logger.info(`⚠️ [${shortSymbol}] Not enough candles (${allCandles.length}/61)`);
-        }
-        // Set reject reason to suppress repeated "15m CHECK" logs in tick()
-        this.lastRejectReason = 'waiting_new_candle';
-        return;
-      }
-      
       // ═══════════════════════════════════════════════════════════════════════════
-      // V5.13: FIX - Wait for candle to be CLOSED before checking signal
-      // The issue was that slice(0, -1) would exclude the in-progress candle,
-      // but if the WebSocket hasn't received the new candle yet, we'd check
-      // the same old candle again. Now we check the timestamp to ensure we're
-      // looking at a NEW closed candle (timestamp must be >= lastProcessedCandleTs + 15min)
+      // SymbolEngine Phase 2: Get signal from shared engine instead of computing
+      // independently. Falls back to self-computation if engine has no result.
       // ═══════════════════════════════════════════════════════════════════════════
-      
-      // Store last price for frontend (use latest candle for display)
-      const currentPrice = allCandles[allCandles.length - 1].close;
-      this.lastPrice = currentPrice;
-      
-      // V5.50 FIX: Use isFinal flag from WebSocket instead of time-based heuristic
-      // This ensures live trading detects candle close at the EXACT same moment as backtest
-      // Previously: used (now - timestamp < 15min) which caused 15-min delay
-      // Now: use isFinal flag directly from Binance WebSocket
+
+      const engine = symbolEngineManager.getEngine(symbol);
+      const engineResult = engine?.getLastSignal() ?? null;
+
+      // Resolve signal data: engine-first, fallback to self-computation
+      let signal: ReturnType<typeof checkMomentumSignal>;
+      let candles: Candle[];
+      let btcCandles: Candle[];
+      let currentPrice: number;
+      let lastClosedCandleTs: number;
       const now = Date.now();
-      const CANDLE_INTERVAL_MS = 15 * 60 * 1000; // Still needed for delay calculations
-      
-      let lastClosedIdx = allCandles.length - 1;
-      const lastCandle = allCandles[lastClosedIdx];
-      
-      // If the last candle is not final (still in progress), use the previous one
-      if (lastCandle.isFinal === false) {
-        lastClosedIdx = allCandles.length - 2;
+      const CANDLE_INTERVAL_MS = 15 * 60 * 1000;
+
+      if (engineResult && engineResult.closedCandles.length >= 61) {
+        // ── Engine path: reuse shared signal computation ──
+        signal = engineResult.signal;
+        candles = engineResult.closedCandles;
+        btcCandles = engineResult.btcCandles;
+        currentPrice = engineResult.currentPrice;
+        lastClosedCandleTs = engineResult.candleCloseTs;
+        this.lastPrice = currentPrice;
+      } else {
+        // ── Fallback path: compute signal ourselves (startup / no engine) ──
+        const allCandles = await this.fetchCandles();
+        if (allCandles.length < 61) {
+          if (this.tickCount % 10 === 1) {
+            logger.info(`⚠️ [${shortSymbol}] Not enough candles (${allCandles.length}/61)`);
+          }
+          this.lastRejectReason = 'waiting_new_candle';
+          return;
+        }
+
+        currentPrice = allCandles[allCandles.length - 1].close;
+        this.lastPrice = currentPrice;
+
+        let lastClosedIdx = allCandles.length - 1;
+        if (allCandles[lastClosedIdx].isFinal === false) {
+          lastClosedIdx = allCandles.length - 2;
+        }
+        if (lastClosedIdx < 0) {
+          this.lastRejectReason = 'waiting_new_candle';
+          return;
+        }
+
+        candles = allCandles.slice(0, lastClosedIdx + 1);
+        lastClosedCandleTs = candles[candles.length - 1].timestamp;
+
+        // Check same-candle early (before expensive BTC fetch)
+        if (lastClosedCandleTs === this.lastProcessedCandleTs) {
+          this.lastRejectReason = 'waiting_new_candle';
+          return;
+        }
+
+        // Fetch BTC data (only needed in fallback path)
+        const allBtcCandles = await this.fetchBtcCandles();
+        const MIN_BTC_CANDLES = 201;
+        if (allBtcCandles.length < MIN_BTC_CANDLES) {
+          if (this.tickCount % 10 === 1) {
+            logger.info(`⚠️ [${shortSymbol}] Waiting for BTC data (${allBtcCandles.length}/${MIN_BTC_CANDLES})`);
+          }
+          this.lastRejectReason = 'waiting_new_candle';
+          return;
+        }
+
+        let btcLastClosedIdx = allBtcCandles.length - 1;
+        if (allBtcCandles.length > 0 && allBtcCandles[btcLastClosedIdx].isFinal === false) {
+          btcLastClosedIdx = allBtcCandles.length - 2;
+        }
+        btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
+
+        const allBtcCandles1h = await this.fetchBtcCandles1h();
+        const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
+        const MIN_BTC_1H_CANDLES = 11;
+        if (btcCandles1h.length < MIN_BTC_1H_CANDLES) {
+          if (this.tickCount % 10 === 1) {
+            logger.info(`⚠️ [${shortSymbol}] Waiting for BTC 1h data (${btcCandles1h.length}/${MIN_BTC_1H_CANDLES})`);
+          }
+          this.lastRejectReason = 'waiting_new_candle';
+          return;
+        }
+
+        signal = checkMomentumSignal(symbol, candles, btcCandles, {
+          nowMs: now,
+          btcCandles1h,
+        });
       }
-      
-      if (lastClosedIdx < 0) {
-        logger.warn(`⚠️ [${shortSymbol}] No closed candles available yet`);
-        this.lastRejectReason = 'waiting_new_candle';
-        return;
-      }
-      
-      const candles = allCandles.slice(0, lastClosedIdx + 1);
-      const lastClosedCandleTs = candles[candles.length - 1].timestamp;
-      
+
+      // ── Common path: new candle detection + per-user logic ──
+
       // Check if this is the same closed candle we already processed
       if (lastClosedCandleTs === this.lastProcessedCandleTs) {
-        // Same candle, skip signal check (but still update features for display)
         this.lastRejectReason = 'waiting_new_candle';
         return;
       }
-      
+
       // New closed candle! Mark it as processed
       const isFirstCheck = this.lastProcessedCandleTs === 0;
       const candleStartTime = new Date(lastClosedCandleTs).toISOString().slice(11, 19);
       const candleEndTime = new Date(lastClosedCandleTs + CANDLE_INTERVAL_MS).toISOString().slice(11, 19);
-      // Detection delay = time since candle closed (candleEnd = candleStart + 15min)
       const detectionDelayMs = now - (lastClosedCandleTs + CANDLE_INTERVAL_MS);
       const detectionDelaySec = Math.round(detectionDelayMs / 1000);
 
-      // V5.80: Skip stale candles on restart to avoid re-processing old data
-      // After redeployment, the first candle detected may be old (detected +600s etc.)
-      // Skip entry signals for stale candles (>10s) to prevent false entries/exits
+      // V5.80: Skip stale candles on restart
       const STALE_CANDLE_THRESHOLD_SEC = 120;
       if (isFirstCheck && detectionDelaySec > STALE_CANDLE_THRESHOLD_SEC) {
         logger.info(`⏭️ [${shortSymbol}] Skipping stale candle on startup [${candleStartTime}-${candleEndTime} UTC] | Detected +${detectionDelaySec}s (>${STALE_CANDLE_THRESHOLD_SEC}s threshold)`);
@@ -1261,7 +1305,6 @@ export class SimpleAgent {
         const candleColor = closedCandle.close > closedCandle.open ? '🟢' : '🔴';
         const candleChange = ((closedCandle.close - closedCandle.open) / closedCandle.open * 100).toFixed(2);
         const changeNum = parseFloat(candleChange);
-        // Show candle period (start-end UTC) and detection delay for clarity
         logger.info(`🕯️ [${shortSymbol}] New 15m candle CLOSED [${candleStartTime}-${candleEndTime} UTC] ${candleColor} | $${closedCandle.close.toFixed(2)} (${changeNum > 0 ? '+' : ''}${candleChange}%) | Detected +${detectionDelaySec}s`);
       }
 
@@ -1271,69 +1314,17 @@ export class SimpleAgent {
       if (this.entryCooldownBarsRemaining > 0) {
         this.entryCooldownBarsRemaining--;
       }
-
-      // If we're still cooling down after an exit, skip entry checks.
       if (this.entryCooldownBarsRemaining > 0) {
         this.lastRejectReason = `cooldown_${this.entryCooldownBarsRemaining}bars`;
         return;
       }
-      
-      // Fetch BTC candles pour corrélation (also use only closed candles)
-      const allBtcCandles = await this.fetchBtcCandles();
-      
-      // V5.38: Validate minimum BTC data for proper SMA200 and ATR calculations
-      // Without this, filters may silently bypass during startup
-      const MIN_BTC_CANDLES = 201; // Need 200 for SMA200 + 1 current
-      if (allBtcCandles.length < MIN_BTC_CANDLES) {
-        if (this.tickCount % 10 === 1) {
-          logger.info(`⚠️ [${shortSymbol}] Waiting for BTC data (${allBtcCandles.length}/${MIN_BTC_CANDLES})`);
-        }
-        this.lastRejectReason = 'waiting_new_candle';
-        return;
-      }
 
-      // V5.50: Use isFinal for BTC candles too (aligned with backtest)
-      let btcLastClosedIdx = allBtcCandles.length - 1;
-      if (allBtcCandles.length > 0) {
-        const btcLastCandle = allBtcCandles[btcLastClosedIdx];
-        if (btcLastCandle.isFinal === false) {
-          btcLastClosedIdx = allBtcCandles.length - 2;
-        }
-      }
-
-      const btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
-
-      // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
-      const allBtcCandles1h = await this.fetchBtcCandles1h();
-      
-      // V5.50: Use isFinal for 1h candles (aligned with backtest)
-      // Filter to only include closed 1h candles
-      const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
-      
-      // V5.38: Validate minimum BTC 1h data for MTF filter (need at least 11 for 10-candle lookback)
-      const MIN_BTC_1H_CANDLES = 11;
-      if (btcCandles1h.length < MIN_BTC_1H_CANDLES) {
-        if (this.tickCount % 10 === 1) {
-          logger.info(`⚠️ [${shortSymbol}] Waiting for BTC 1h data (${btcCandles1h.length}/${MIN_BTC_1H_CANDLES})`);
-        }
-        this.lastRejectReason = 'waiting_new_candle';
-        return;
-      }
-
-      // V5.36: Check signal with MTF + BTC Volatility filters
-      const signal = checkMomentumSignal(symbol, candles, btcCandles, {
-        nowMs: now,
-        btcCandles1h,  // V5.36: Pass 1h candles for MTF filter
-      });
-      
-      // Process signal features silently (no log)
+      // Process signal features (regime, radar, market quality)
       const f = signal.features;
       if (f) {
         // 📢 NOTIFICATION: Regime change (detect BTC crossing SMA200)
-        // Only notify from one agent (first ticker alphabetically or BTC itself)
         if (shortSymbol === 'BTC' || shortSymbol === 'ADA') {
           const btcPrice = btcCandles[btcCandles.length - 1]?.close || 0;
-          // Estimate SMA200 from regime
           const estimatedSma200 = f.btcInBullRegime ? btcPrice * 0.99 : btcPrice * 1.01;
           notifyRegimeChange({
             newRegime: f.btcInBullRegime ? 'bull' : 'bear',
@@ -1342,34 +1333,32 @@ export class SimpleAgent {
             userId: this.config.userId || undefined,
           });
         }
-        
+
         // V5.5: Store features for market quality assessment
-        const bbDistance = f.btcInBullRegime 
+        const bbDistance = f.btcInBullRegime
           ? ((currentPrice - (f.bbUpper || currentPrice)) / currentPrice) * 100
           : (((f.bbLower || currentPrice) - currentPrice) / currentPrice) * 100;
-        
+
         this.lastSignalFeatures = {
           volRatio: f.volRatio,
           roc: f.roc || 0,
           bbDistance,
           reason: signal.reason || '',
         };
-        
+
         // Update market quality in conditions
         if (this.lastMarketConditions) {
           const isLowVolume = f.volRatio < 1.5;
-          const isNearBB = Math.abs(bbDistance) < 0.5; // Within 0.5% of BB
+          const isNearBB = Math.abs(bbDistance) < 0.5;
           const isConsolidating = isLowVolume && isNearBB;
-          
+
           this.lastMarketConditions = {
             ...this.lastMarketConditions,
             marketQuality: isConsolidating ? 'consolidation' : 'momentum',
-            qualityReason: isConsolidating 
+            qualityReason: isConsolidating
               ? `Low vol (${f.volRatio.toFixed(1)}x) + price near BB (${bbDistance.toFixed(2)}%)`
               : `Vol ${f.volRatio.toFixed(1)}x, BB dist ${bbDistance.toFixed(2)}%`,
           };
-          
-          // 📢 Broadcast updated market conditions to dashboard
           this.config.onMarketConditions?.(this.lastMarketConditions);
         }
 
@@ -1378,14 +1367,13 @@ export class SimpleAgent {
           roc: f.roc || 0,
           volRatio: f.volRatio,
           bbDistance,
-          atrPct: 0, // Will be calculated if signal is valid
+          atrPct: 0,
           trendStrength: 0,
         };
         const currentRegime = f.btcInBullRegime ? 'BULL' : (f.btcInBearRegime ? 'BEAR' : 'NEUTRAL');
-        this.lastKnownRegime = currentRegime; // Cache for real-time radar
+        this.lastKnownRegime = currentRegime;
         const proximityScore = calculateProximityScore(radarFeatures, currentRegime, !!this.position);
 
-        // Calculate PnL if in position
         let positionPnlPct: number | undefined;
         if (this.position) {
           positionPnlPct = this.position.side === 'long'
@@ -1393,7 +1381,6 @@ export class SimpleAgent {
             : ((this.position.entryPrice - currentPrice) / this.position.entryPrice) * 100;
         }
 
-        // V5.80: Only one agent per symbol updates the radar to prevent paper/live flip-flop
         const isRadarOwnerEntry = this.config.mode === 'live' || !getCapitalPool(this.config.userId, undefined, 'live');
         if (isRadarOwnerEntry) {
           updateSymbolState({
@@ -1411,39 +1398,42 @@ export class SimpleAgent {
       }
 
       if (signal.valid && signal.side) {
-        // V5.56 DEBUG: Log BTC regime state for parity debugging
-        // This helps identify cases where live enters but backtest wouldn't
         const btcPrice = btcCandles[btcCandles.length - 1]?.close || 0;
         const btcRegime = signal.features?.btcInBullRegime ? 'BULL' : (signal.features?.btcInBearRegime ? 'BEAR' : 'NEUTRAL');
         logger.info(`✅ [${shortSymbol}] SIGNAL ${signal.side.toUpperCase()} | $${currentPrice.toFixed(2)} | ${signal.reason} | BTC=${btcPrice.toFixed(0)} regime=${btcRegime} btcCandles=${btcCandles.length}`);
-        
-        // V5.23: Calculate enhanced signal quality score
-        const closes = candles.map(c => c.close);
-        const volumes = candles.map(c => c.volume);
-        
-        // Core indicators
-        const roc5 = calcROC(closes, 5);
-        const currentVol = volumes[volumes.length - 1];
-        const avgVol19 = volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19;
-        const volumeRatio = avgVol19 > 0 ? currentVol / avgVol19 : 1;
-        
-        // V5.23: New indicators for enhanced scoring
-        const bbPosition = calcBBPosition(candles, 20, 2);
-        const atrPct = calcATR(candles, 14) ?? 0;
-        const trendStrength = calcTrendStrength(closes, 50);
 
-        // V5.23: Use enhanced multi-factor scoring
-        const qualityScore = globalSignalRanker.calculateScore({
-          roc5,
-          volumeRatio,
-          bbPosition,
-          atrPct,
-          trendStrength,
-          side: signal.side,
-        });
+        // Use engine-computed score if available, otherwise calculate
+        let qualityScore: number;
+        let roc5: number;
+        let volumeRatio: number;
 
-        logger.info(`📊 [${shortSymbol}] Signal Quality Score: ${qualityScore.toFixed(2)} | ROC=${(roc5 * 100).toFixed(2)}% Vol=${volumeRatio.toFixed(1)}x BB=${(bbPosition * 100).toFixed(0)}% ATR=${atrPct.toFixed(1)}% Trend=${(trendStrength * 100).toFixed(1)}%`);
-        
+        if (engineResult && engineResult.score > 0) {
+          qualityScore = engineResult.score;
+          roc5 = signal.features?.roc5 ?? 0;
+          volumeRatio = signal.features?.volRatio ?? 1;
+        } else {
+          const closes = candles.map(c => c.close);
+          const volumes = candles.map(c => c.volume);
+          roc5 = calcROC(closes, 5);
+          const currentVol = volumes[volumes.length - 1];
+          const avgVol19 = volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19;
+          volumeRatio = avgVol19 > 0 ? currentVol / avgVol19 : 1;
+          const bbPosition = calcBBPosition(candles, 20, 2);
+          const atrPct = calcATR(candles, 14) ?? 0;
+          const trendStrength = calcTrendStrength(closes, 50);
+
+          qualityScore = globalSignalRanker.calculateScore({
+            roc5,
+            volumeRatio,
+            bbPosition,
+            atrPct,
+            trendStrength,
+            side: signal.side,
+          });
+        }
+
+        logger.info(`📊 [${shortSymbol}] Signal Quality Score: ${qualityScore.toFixed(2)} | ${engineResult ? 'via SymbolEngine' : 'self-computed'}`);
+
         // V5.22: Add signal to global ranker for prioritization
         globalSignalRanker.addSignal({
           symbol,
@@ -1454,11 +1444,10 @@ export class SimpleAgent {
           roc5,
           volumeRatio,
           reason: signal.reason || 'momentum_signal',
-          mode: this.config.mode,  // CRITICAL: Separate batches for paper vs live
-          userId: this.config.userId,  // V-MULTI: Isolate signals per user
+          mode: this.config.mode,
+          userId: this.config.userId,
         });
-        
-        // 📢 NOTIFICATION: Signal detected
+
         notifySignalDetected({
           symbol,
           side: signal.side,
@@ -1467,8 +1456,7 @@ export class SimpleAgent {
           mode: this.config.mode,
           userId: this.config.userId || undefined,
         });
-        
-        // Store signal info for frontend display
+
         this.currentBias = signal.side;
         this.lastSignal = {
           entryZone: [
@@ -1483,34 +1471,24 @@ export class SimpleAgent {
           ],
           targetPcts: [1, 2, 3],
         };
-        
-        // Notify
+
         this.config.onSignal?.({
           symbol,
           side: signal.side,
           reason: signal.reason || 'momentum_signal',
           timestamp: new Date(),
         });
-        
-        // V5.22: Execute trade with ranking check
-        // CRITICAL for backtest parity: Wait for batch window to close so all agents
-        // have submitted their signals before we check ranking. This ensures the same
-        // ranking behavior as backtest which collects all signals synchronously.
+
         logger.info(`⏳ [${shortSymbol}] Waiting for signal ranking batch...`);
         await globalSignalRanker.waitForBatch(this.config.mode, this.config.userId);
-        
-        this.lastRejectReason = ''; // Clear reject reason on signal
+
+        this.lastRejectReason = '';
         await this.openPosition(signal.side, candles);
       } else {
-        // Store reject reason for tick log
         this.lastRejectReason = signal.reason || 'no_signal';
 
-        // Track rejected signal for periodic Telegram report
-        // Use proximityScore as approximation of signal quality (0-100)
         const rejectReason = signal.reason || 'no_signal';
-        // Only track meaningful rejections (not waiting_new_candle or cooldown)
         if (f && !rejectReason.startsWith('waiting_') && !rejectReason.startsWith('cooldown')) {
-          // Calculate regime and proximity from features (same logic as radar update block)
           const regime = f.btcInBullRegime ? 'BULL' : (f.btcInBearRegime ? 'BEAR' : 'NEUTRAL');
           const bbDistance = f.btcInBullRegime
             ? ((currentPrice - (f.bbUpper || currentPrice)) / currentPrice) * 100
@@ -1523,7 +1501,6 @@ export class SimpleAgent {
             trendStrength: 0,
           };
           const score = calculateProximityScore(radarFeatures, regime, !!this.position);
-          // Estimate side from regime
           const estimatedSide: 'long' | 'short' = regime === 'BULL' ? 'long' : 'short';
           trackRejectedSignal({
             timestamp: Date.now(),
@@ -1535,7 +1512,7 @@ export class SimpleAgent {
           });
         }
       }
-      
+
     } catch (error) {
       logger.error(`❌ [${symbol}] Error checking entry:`, error);
     }

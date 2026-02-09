@@ -49,6 +49,7 @@ import {
   type CapitalPool
 } from "./strategies/simpleAgent.js";
 import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, LIQUIDATION_CONFIG, getLiquidityTier, getMaxSafePositionSize } from "./strategies/momentumSimple.js";
+import { symbolEngineManager } from "./strategies/symbolEngineManager.js";
 import { USER_LIMITS } from "./config/constants.js";
 
 const logLevel = configureLogging();
@@ -108,9 +109,9 @@ function validateEnvVars(): { valid: boolean; errors: string[]; warnings: string
     }
   }
 
-  // Telegram notification check
-  if (process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_CHAT_ID) {
-    warnings.push('TELEGRAM_BOT_TOKEN is set but TELEGRAM_CHAT_ID is missing');
+  // Telegram: only bot token is needed (chat IDs are per-user in UserSetting)
+  if (!process.env.TELEGRAM_BOT_TOKEN) {
+    warnings.push('TELEGRAM_BOT_TOKEN is not set - Telegram notifications will be disabled');
   }
 
   return {
@@ -253,6 +254,7 @@ app.get("/api/health", (_req, res) => {
     wsConnections: wsCount,
     time: new Date().toISOString(),
     apiWeight: ipWeightTracker.getStats(),
+    symbolEngines: symbolEngineManager.getStats(),
   });
 });
 
@@ -964,10 +966,15 @@ app.post("/api/agent/start", async (req, res) => {
     // Safe because: 1) WebSocket-only for candles (0 REST), 2) API deduplicator coalesces REST calls
     // 3) Global circuit breaker protects against cascades
     await Promise.all(agents.map(agent => agent.start()));
-    
+
+    // SymbolEngine Phase 1: Subscribe to engines for each symbol (ref-counted)
+    for (const symbol of MomentumConfig.SYMBOLS) {
+      symbolEngineManager.subscribe(symbol);
+    }
+
     logger.info(`✅ Started ${agents.length} agents for ${userId} with $${actualCapital.toFixed(2)} capital (${mode})`);
-    res.status(201).json({ 
-      success: true, 
+    res.status(201).json({
+      success: true,
       agentsCount: agents.length,
       symbols: MomentumConfig.SYMBOLS,
       capitalUsd: actualCapital,
@@ -1005,35 +1012,41 @@ app.post("/api/agent/stop", async (req, res) => {
       
       const agentIndex = agentData.agents.findIndex(a => a.getStatus().sessionId === sessionId);
       const agent = agentData.agents[agentIndex];
+      const stoppedSymbol = agent.getStatus().symbol;
       await agent.stop();
-      
+
+      // SymbolEngine Phase 1: Unsubscribe this symbol
+      symbolEngineManager.unsubscribe(stoppedSymbol);
+
       // Update session to mark as halted
       await prisma.agentSession.update({
         where: { id: sessionId },
         data: { haltedAt: new Date() }
       });
-      
+
       // Remove agent from array
       agentData.agents.splice(agentIndex, 1);
-      
+
       // If no more agents for this mode, delete entry
       if (agentData.agents.length === 0) {
         userAgents.delete(agentKey);
       }
-      
+
       logger.info(`⏸️ Agent for session ${sessionId} paused (${found.mode})`);
       return res.json({ success: true, message: "Agent paused", mode: found.mode });
     }
-    
+
     // No sessionId: stop all agents for specified mode (or all if no mode)
     const modesToStop: ('paper' | 'live')[] = mode ? [mode as 'paper' | 'live'] : ['paper', 'live'];
     let stoppedCount = 0;
-    
+
     for (const m of modesToStop) {
       const agentKey = getAgentKey(userId, m);
       const agentData = userAgents.get(agentKey);
       if (agentData) {
         for (const agent of agentData.agents) {
+          // SymbolEngine Phase 1: Unsubscribe each symbol
+          symbolEngineManager.unsubscribe(agent.getStatus().symbol);
           await agent.stop();
           stoppedCount++;
         }
@@ -2706,6 +2719,8 @@ app.post("/api/agent/restart", async (req, res) => {
     if (existingAgents) {
       logger.info(`[Restart] Stopping ${existingAgents.agents.length} existing ${mode} agents...`);
       for (const agent of existingAgents.agents) {
+        // SymbolEngine Phase 1: Unsubscribe each symbol
+        symbolEngineManager.unsubscribe(agent.getStatus().symbol);
         await agent.stop();
       }
       userAgents.delete(agentKey);
@@ -2898,7 +2913,12 @@ app.post("/api/agent/restart", async (req, res) => {
 
     // V5.39: Start ALL agents in PARALLEL for synchronized signal detection
     await Promise.all(agents.map(agent => agent.start()));
-    
+
+    // SymbolEngine Phase 1: Subscribe to engines for each symbol
+    for (const symbol of MomentumConfig.SYMBOLS) {
+      symbolEngineManager.subscribe(symbol);
+    }
+
     logger.info(`✅ [Restart] ${modeTyped.toUpperCase()} agents restarted with $${actualCapital.toFixed(2)}`);
     
     res.json({
@@ -2932,6 +2952,8 @@ app.post("/api/agent/stop-all", async (req, res) => {
       const agentData = userAgents.get(agentKey);
       if (agentData) {
         for (const agent of agentData.agents) {
+          // SymbolEngine Phase 1: Unsubscribe each symbol
+          symbolEngineManager.unsubscribe(agent.getStatus().symbol);
           await agent.stop();
           stoppedCount++;
         }
@@ -2974,7 +2996,8 @@ app.post("/api/ops/kill-switch", async (req, res) => {
     orderQueue.stop();
     logger.info('   ✅ Order queue STOPPED');
 
-    // Step 3: Stop all agents across ALL users
+    // Step 3: Stop all SymbolEngines + agents across ALL users
+    symbolEngineManager.stopAll();
     let stoppedAgents = 0;
     for (const [userId, agentData] of userAgents) {
       for (const agent of agentData.agents) {
@@ -3941,6 +3964,9 @@ const shutdown = async (signal: string = 'UNKNOWN') => {
     wsClients.clear();
     logger.info(`   ✅ WebSocket clients disconnected`);
 
+    // Step 2.5: Stop SymbolEngines
+    symbolEngineManager.stopAll();
+
     // Step 3: Stop all trading agents
     logger.info('🛑 [3/5] Stopping trading agents...');
     const stopPromises: Promise<void>[] = [];
@@ -4145,10 +4171,17 @@ async function restoreActiveSessions() {
                   // Check if this is an IP ban error
                   if (errMsg.includes('-1003') || errMsg.includes('banned') || errMsg.includes('Too many')) {
                     const banMatch = errMsg.match(/banned until (\d+)/);
-                    const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
-                    const banDurationMs = Math.max(banUntil - Date.now(), 60 * 60 * 1000);
-                    logger.warn(`🚫 [Restore] IP ban detected during user data subscription - setting ban for ${Math.round(banDurationMs / 60000)} minutes`);
-                    setIpBan(banDurationMs);
+                    let banUntilAbsolute: number;
+                    if (banMatch) {
+                      const parsed = parseInt(banMatch[1]);
+                      banUntilAbsolute = (parsed > Date.now() && parsed < Date.now() + 24 * 60 * 60 * 1000)
+                        ? parsed : Date.now() + 5 * 60 * 1000;
+                    } else {
+                      banUntilAbsolute = Date.now() + 5 * 60 * 1000;
+                    }
+                    const durationMin = Math.ceil((banUntilAbsolute - Date.now()) / 60000);
+                    logger.warn(`🚫 [Restore] IP ban detected during user data subscription - setting ban for ${durationMin} minutes`);
+                    setIpBan(banUntilAbsolute);
                   } else {
                     logger.warn(`⚠️ [Restore] Failed to subscribe to user data:`, errMsg);
                   }
@@ -4331,6 +4364,11 @@ async function restoreActiveSessions() {
 
         // V5.39: Start ALL agents in PARALLEL for synchronized signal detection
         await Promise.all(agents.map(agent => agent.start()));
+
+        // SymbolEngine Phase 1: Subscribe to engines for restored symbols
+        for (const session of sessions) {
+          symbolEngineManager.subscribe(session.symbol);
+        }
 
         const symbols = sessions.map((s: any) => s.symbol).join(', ');
         logger.info(`  ✅ Restored ${agents.length} ${mode.toUpperCase()} agent(s) for ${userName}: ${symbols}`);
