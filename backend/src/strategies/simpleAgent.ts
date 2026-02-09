@@ -28,7 +28,7 @@ import {
   type Position,
   type MarketConditions,
 } from './momentumSimple.js';
-import { createLogger } from '../utils/logger.js';
+import { createLogger, runWithUserId } from '../utils/logger.js';
 import { globalSignalRanker } from './signalRanker.js';
 import {
   getBinanceWebSocket,
@@ -773,6 +773,7 @@ export class SimpleAgent {
     this.rtExitHandler = new RealtimeExitHandler({
       symbol: config.symbol,
       mode: config.mode,
+      userId: config.userId,
       getPosition: () => this.position,
       isRunning: () => this.running,
       isClosingPosition: () => this.closingPosition,
@@ -813,13 +814,14 @@ export class SimpleAgent {
   // ==========================================================================
   
   async start(): Promise<void> {
+    return runWithUserId(this.config.userId, async () => {
     if (this.running) {
       logger.info(`⚠️ [${this.config.symbol}] Already running`);
       return;
     }
-    
+
     this.running = true;
-    
+
     // 🔄 LIVE MODE: Sync balance FIRST before logging (to show correct capital)
     if (this.config.mode === 'live') {
       logger.info(`🔄 [${this.config.symbol}] Syncing with exchange...`);
@@ -897,33 +899,35 @@ export class SimpleAgent {
     } catch (error) {
       logger.warn(`⚠️ [${this.config.symbol}] Failed to subscribe to instant candle events, using polling`);
     }
+    }); // end runWithUserId
   }
-  
+
   async stop(): Promise<void> {
+    return runWithUserId(this.config.userId, async () => {
     this.running = false;
-    
+
     // V5.50: Unsubscribe from final kline events
     if (this.finalKlineUnsubscribe) {
       this.finalKlineUnsubscribe();
       this.finalKlineUnsubscribe = null;
     }
-    
+
     // V5.39: Clear alignment timeout if still pending
     if (this.tickAlignTimeoutId) {
       clearTimeout(this.tickAlignTimeoutId);
       this.tickAlignTimeoutId = null;
     }
-    
+
     if (this.tickIntervalId) {
       clearInterval(this.tickIntervalId);
       this.tickIntervalId = null;
     }
 
     this.stopRealtimeExitMonitor();
-    
+
     // V5.22: Remove any pending signal for this agent from ranker
     globalSignalRanker.removeSignal(this.config.symbol, this.config.mode, this.config.userId);
-    
+
     // 📢 NOTIFICATION: Agent stopped
     notifyAgentStopped({
       symbol: this.config.symbol,
@@ -932,8 +936,9 @@ export class SimpleAgent {
       reason: 'Manual stop',
       userId: this.config.userId || undefined,
     });
-    
+
     logger.info(`⏹️ [${this.config.symbol}] STOPPED`);
+    }); // end runWithUserId
   }
 
   // ==========================================================================
@@ -981,17 +986,18 @@ export class SimpleAgent {
   // ==========================================================================
   
   private async tick(): Promise<void> {
+    return runWithUserId(this.config.userId, async () => {
     if (!this.running) return;
-    
+
     // Prevent re-entrancy: skip if a tick is already in progress
     // This prevents stack overflow when tick() takes longer than the interval
     if (this.tickInProgress) {
       logger.warn(`⚠️ [${this.config.symbol}] Tick skipped - previous tick still in progress`);
       return;
     }
-    
+
     this.tickInProgress = true;
-    
+
     try {
       const now = new Date();
       const symbol = this.config.symbol;
@@ -1165,8 +1171,9 @@ export class SimpleAgent {
       // Always release the lock, even if an error occurred
       this.tickInProgress = false;
     }
+    }); // end runWithUserId
   }
-  
+
   // ==========================================================================
   // ENTRY LOGIC
   // ==========================================================================

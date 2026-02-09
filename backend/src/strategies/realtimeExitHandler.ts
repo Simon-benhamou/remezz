@@ -11,7 +11,7 @@ import {
   type Candle,
   type Position,
 } from './momentumSimple.js';
-import { createLogger } from '../utils/logger.js';
+import { createLogger, runWithUserId } from '../utils/logger.js';
 import {
   getBinanceWebSocket,
 } from '../services/binanceWebSocket.js';
@@ -44,6 +44,7 @@ function errMsg(error: unknown): string {
 export interface RealtimeExitContext {
   symbol: string;
   mode: 'paper' | 'live';
+  userId: string;
 
   // Read-only accessors
   getPosition: () => Position | null;
@@ -196,7 +197,7 @@ export class RealtimeExitHandler {
     }
 
     this.intervalId = setInterval(() => {
-      void this.check().catch(err => {
+      void runWithUserId(this.ctx.userId, () => this.check()).catch(err => {
         logger.debug(`⚠️ [${this.ctx.symbol}] Realtime exit check error: ${errMsg(err)}`);
       });
     }, pollMs);

@@ -1120,19 +1120,12 @@ app.get("/api/agent/logs", async (req, res) => {
     
     // =========================================================================
     // IN-MEMORY LOGS (from logger buffer) - Real-time agent activity
-    // Filtered to only show logs matching this user's active session symbols
+    // Filtered by userId (via AsyncLocalStorage tagging) for per-user isolation
     // =========================================================================
-    const userSymbols = new Set(activeSessions.map(s => s.symbol.toUpperCase().replace(/[/:]/g, '')));
     const memoryLogs = getRecentLogs({
       limit: limit,
-      scope: 'agent',
       symbol: symbol,
-    }).filter(log => {
-      // Only include logs matching the user's active session symbols
-      if (userSymbols.size === 0) return false;
-      if (!log.symbol) return false;
-      const normSymbol = log.symbol.toUpperCase().replace(/[/:]/g, '');
-      return userSymbols.has(normSymbol);
+      userId: userId,
     }).map(log => ({
       timestamp: log.timestamp,
       sessionId: '',

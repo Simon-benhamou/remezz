@@ -1,9 +1,25 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 const LEVEL_MAP = {
   error: 0,
   warn: 1,
   info: 2,
   debug: 3,
 } as const;
+
+// ============================================================================
+// ASYNC LOCAL STORAGE - Auto-tag logs with userId
+// ============================================================================
+
+const userContext = new AsyncLocalStorage<{ userId: string }>();
+
+/**
+ * Run a function with userId context. All logs emitted inside (including async
+ * sub-calls) will automatically be tagged with this userId.
+ */
+export function runWithUserId<T>(userId: string, fn: () => T): T {
+  return userContext.run({ userId }, fn);
+}
 
 type LogLevel = keyof typeof LEVEL_MAP;
 
@@ -28,9 +44,10 @@ export interface LogEntry {
   message: string;
   symbol?: string;
   kind?: 'tick' | 'signal' | 'entry' | 'exit' | 'market' | 'error' | 'info';
+  userId?: string;
 }
 
-const LOG_BUFFER_SIZE = 100;
+const LOG_BUFFER_SIZE = 2000;
 const logBuffer: LogEntry[] = [];
 let logIdCounter = 0;
 
@@ -62,6 +79,7 @@ function addToBuffer(level: LogLevel, scope: string, args: unknown[]) {
     typeof arg === 'string' ? arg : JSON.stringify(arg)
   ).join(' ');
   
+  const ctx = userContext.getStore();
   const entry: LogEntry = {
     id: `log_${Date.now()}_${++logIdCounter}`,
     timestamp: new Date().toISOString(),
@@ -70,6 +88,7 @@ function addToBuffer(level: LogLevel, scope: string, args: unknown[]) {
     message,
     symbol: extractSymbol(message),
     kind: extractKind(message),
+    userId: ctx?.userId,
   };
   
   logBuffer.push(entry);
@@ -92,9 +111,13 @@ export function getRecentLogs(options?: {
   symbol?: string;
   level?: LogLevel;
   kind?: LogEntry['kind'];
+  userId?: string;
 }): LogEntry[] {
   let logs = [...logBuffer];
-  
+
+  if (options?.userId) {
+    logs = logs.filter(l => l.userId === options.userId);
+  }
   if (options?.scope) {
     logs = logs.filter(l => l.scope === options.scope);
   }
