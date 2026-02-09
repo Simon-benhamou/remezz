@@ -1376,16 +1376,22 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   const btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
   console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles`);
 
-  // V5.25: Add delay between symbols to avoid rate limiting
+  // Fetch symbol data — parallel batches of 3 to speed up production (no local files)
   const allData: Record<string, Candle[]> = {};
-  for (let i = 0; i < symbols.length; i++) {
-    const symbol = symbols[i];
-    // Wait 1 second between each symbol to spread API calls
-    if (i > 0) {
-      await new Promise(r => setTimeout(r, 1000));
+  const BATCH_SIZE = 3;
+  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+    const batch = symbols.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(symbol => fetchCandles(exchange, symbol, dataLoadStart, endDate))
+    );
+    for (let j = 0; j < batch.length; j++) {
+      allData[batch[j]] = results[j];
+      console.log(`[Backtest] ${batch[j]}: ${results[j].length} candles`);
     }
-    allData[symbol] = await fetchCandles(exchange, symbol, dataLoadStart, endDate);
-    console.log(`[Backtest] ${symbol}: ${allData[symbol].length} candles`);
+    // Small delay between batches to avoid rate-limit bursts
+    if (i + BATCH_SIZE < symbols.length) {
+      await new Promise(r => setTimeout(r, 500));
+    }
   }
 
   // Track per-symbol candle cursor (avoid O(n²) findIndex)
