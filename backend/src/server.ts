@@ -223,13 +223,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Auth rate limiter — 5 attempts per minute per IP
+// Auth rate limiter — 10 attempts per minute per IP
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 5,
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  validate: { ip: false },
+  validate: { ip: false, trustProxy: false },
   message: { error: 'too_many_requests', message: 'Too many authentication attempts, please try again later' }
 });
 app.use('/api/auth/login', authLimiter);
@@ -264,8 +264,8 @@ const globalLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  validate: { ip: false },
-  keyGenerator: (req) => (req as any)?.user?.id || req.ip || 'unknown',
+  validate: { ip: false, trustProxy: false },
+  keyGenerator: (req) => (req as any)?.user?.id || 'unknown',
   message: { error: 'too_many_requests', message: 'Rate limit exceeded' }
 });
 app.use('/api/', globalLimiter);
