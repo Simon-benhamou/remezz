@@ -11,24 +11,18 @@ import ccxt, { Exchange } from 'ccxt';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 
-// Symbols to update
+// Default 10 symbols (backtest defaults)
 const SYMBOLS = [
-  'BTC/USDT:USDT',
-  'ETH/USDT:USDT',
-  'SOL/USDT:USDT',
-  'XRP/USDT:USDT',
-  'ADA/USDT:USDT',
-  'DOGE/USDT:USDT',
   'AVAX/USDT:USDT',
+  'FET/USDT:USDT',
+  'WIF/USDT:USDT',
   'DOT/USDT:USDT',
-  'LINK/USDT:USDT',
-  'UNI/USDT:USDT',
-  'ATOM/USDT:USDT',
-  'BCH/USDT:USDT',
-  'APT/USDT:USDT',
-  'SUI/USDT:USDT',
-  'SEI/USDT:USDT',
-  'SONIC/USDT:USDT',
+  'TIA/USDT:USDT',
+  'IMX/USDT:USDT',
+  'STX/USDT:USDT',
+  'DOGE/USDT:USDT',
+  'ADA/USDT:USDT',
+  'BTC/USDT:USDT',
 ];
 
 interface Candle {
