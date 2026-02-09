@@ -19,9 +19,9 @@ import path from 'node:path';
 
 const logger = createLogger('CandleSeeder');
 
-// V5.93: Symbols to seed - active trading universe + extras for agent creation
+// Default 10 symbols — only seed what we actively trade
+// Extra symbols (SOL, XRP, etc.) are seeded on-demand when an agent is created for them
 const SEED_SYMBOLS = [
-  // Top 10 combined winners
   'AVAX/USDT:USDT',
   'FET/USDT:USDT',
   'WIF/USDT:USDT',
@@ -32,14 +32,6 @@ const SEED_SYMBOLS = [
   'DOGE/USDT:USDT',
   'ADA/USDT:USDT',
   'BTC/USDT:USDT',
-  // Available in agent creation modal
-  'RENDER/USDT:USDT',
-  'SOL/USDT:USDT',
-  'XRP/USDT:USDT',
-  'NEAR/USDT:USDT',
-  'LINK/USDT:USDT',
-  'ETH/USDT:USDT',
-  'SEI/USDT:USDT',
 ];
 
 // How many candles to fetch
