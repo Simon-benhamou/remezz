@@ -211,12 +211,16 @@ class BinanceRestQueue {
           if (this.paused) break;
           logger.info('IP ban expired - resuming queue');
         }
+
+        // rejectNonCritical may have emptied the queue
+        if (this.queue.length === 0) break;
       }
 
       // Reset weight counter if minute has passed
       this.resetWeightIfNeeded();
 
       const request = this.queue[0];
+      if (!request) break;
 
       // Check if we have weight budget
       if (this.weightUsedThisMinute + request.weight > this.config.maxWeightPerMinute) {
