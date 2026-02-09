@@ -189,23 +189,23 @@ export class CapitalPool {
   async syncWithExchange(force: boolean = false): Promise<boolean> {
     // Paper mode uses provided capital, no exchange sync needed - always considered "synced"
     if (this.mode !== 'live' || !this.userId) return true;
-    
+
     const now = Date.now();
     if (!force && now - this.lastBalanceSync < this.BALANCE_SYNC_INTERVAL_MS) {
       return this.hasEverSynced; // Return whether we've ever synced successfully
     }
-    
+
     try {
       // 1. Try WebSocket cache first (0 weight, instant)
       let balance = await getBalanceFromWebSocket(this.userId, 'USDT');
-      
+
       // 2. 🔧 FIX: Only fall back to REST if:
       //    - WebSocket cache is completely empty (balance is null)
       //    - AND we have NEVER synced before (hasEverSynced = false)
       //    - AND force flag is set
       // This prevents excessive REST calls during temporary WS disconnections
       const shouldFallbackToRest = !balance && (!this.hasEverSynced || force) && this.exchange && this.exchange.fetchBalance;
-      
+
       if (shouldFallbackToRest && this.exchange?.fetchBalance) {
         console.log(`[CapitalPool] WebSocket cache empty on ${force ? 'forced' : 'initial'} sync, falling back to REST fetchBalance...`);
         try {
@@ -264,12 +264,12 @@ export class CapitalPool {
           }
         }
         // If we have existing balance, just silently use it (common at startup)
-        
+
         return this.hasEverSynced || this.totalCapitalUsd > 0;
       }
     } catch (err) {
       console.warn(`[CapitalPool] Failed to sync balance:`, err);
-      
+
       // 📢 NOTIFICATION: Sync failure (only if we've never synced)
       if (!this.hasEverSynced) {
         notifySyncFailure({
@@ -836,7 +836,7 @@ export class SimpleAgent {
       sessionId: this.config.sessionId,
       mode: this.config.mode,
       capitalUsd: poolStatus.availableUsd,
-      userId: this.userId || undefined,
+      userId: this.config.userId || undefined,
     });
     
     // Charger les positions existantes depuis la DB
@@ -930,7 +930,7 @@ export class SimpleAgent {
       sessionId: this.config.sessionId,
       mode: this.config.mode,
       reason: 'Manual stop',
-      userId: this.userId || undefined,
+      userId: this.config.userId || undefined,
     });
     
     logger.info(`⏹️ [${this.config.symbol}] STOPPED`);
@@ -1332,7 +1332,7 @@ export class SimpleAgent {
             newRegime: f.btcInBullRegime ? 'bull' : 'bear',
             btcPrice,
             sma200: estimatedSma200,
-            userId: this.userId || undefined,
+            userId: this.config.userId || undefined,
           });
         }
         
@@ -1458,7 +1458,7 @@ export class SimpleAgent {
           price: currentPrice,
           reason: signal.reason || 'momentum_signal',
           mode: this.config.mode,
-          userId: this.userId || undefined,
+          userId: this.config.userId || undefined,
         });
         
         // Store signal info for frontend display
@@ -1706,7 +1706,7 @@ export class SimpleAgent {
           distancePct: distanceToLiqPct,
           leverage,
           mode: 'live',
-          userId: this.userId || undefined,
+          userId: this.config.userId || undefined,
         });
       }
       
@@ -1970,7 +1970,7 @@ export class SimpleAgent {
             trailPrice: exitSignal.newStopLoss,
             pnlPct: exitSignal.pnlPct,
             mode: this.config.mode,
-            userId: this.userId || undefined,
+            userId: this.config.userId || undefined,
           });
         }
         
@@ -2011,7 +2011,7 @@ export class SimpleAgent {
           pnlPct: pnlPct,
           sessionId: this.config.sessionId,
           mode: this.config.mode,
-          userId: this.userId || undefined,
+          userId: this.config.userId || undefined,
         });
       }
       
@@ -2179,7 +2179,7 @@ export class SimpleAgent {
         pnlPct,
         reason,
         mode: 'paper',
-        userId: this.userId || undefined,
+        userId: this.config.userId || undefined,
       });
 
       // V5.63: Record trade result for consecutive loser tracking
@@ -2548,7 +2548,7 @@ export class SimpleAgent {
           pnlPct: actualPnlPct,
           reason,
           mode: 'live',
-          userId: this.userId || undefined,
+          userId: this.config.userId || undefined,
         });
 
         // V5.63: Record trade result for consecutive loser tracking
@@ -2578,7 +2578,7 @@ export class SimpleAgent {
           orderType: 'exit',
           error: errMsg(error),
           mode: 'live',
-          userId: this.userId || undefined,
+          userId: this.config.userId || undefined,
         });
       }
     }
@@ -3070,7 +3070,7 @@ export class SimpleAgent {
             pnlPct,
             reason,
             mode: 'live',
-            userId: this.userId || undefined,
+            userId: this.config.userId || undefined,
           });
 
           // Record trade for consecutive loser tracking + daily report

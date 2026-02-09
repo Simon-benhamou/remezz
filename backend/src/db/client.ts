@@ -42,7 +42,7 @@ function buildPooledUrl(): string | undefined {
 const pooledUrl = USE_IN_MEMORY ? undefined : buildPooledUrl();
 const prismaInstance = (USE_IN_MEMORY
   ? createInMemoryPrismaClient()
-  : new PrismaClient({
+  : new (PrismaClient as any)({
       datasources: pooledUrl ? { db: { url: pooledUrl } } : undefined,
     })) as unknown as GeneratedPrismaClient;
 

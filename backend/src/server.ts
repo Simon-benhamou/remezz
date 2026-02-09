@@ -772,7 +772,7 @@ app.post("/api/agent/start", async (req, res) => {
               logger.warn('[Live] Markets not loaded - this should have been done at startup!');
             }
             
-            const balance = await exchangeAPIDeduplicator.execute(
+            const balance: any = await exchangeAPIDeduplicator.execute(
               makeFetchBalanceKey(userId),
               () => exchange.fetchBalance({ type: 'future' }),
               IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
@@ -1836,7 +1836,7 @@ app.get("/api/agent/portfolio", async (req, res) => {
         if (globalRestCircuitBreaker.canMakeRequest()) {
           const exchange = await getExchangeForUser(userId);
           if (exchange && exchange.fetchBalance) {
-            const balance = await exchangeAPIDeduplicator.execute(
+            const balance: any = await exchangeAPIDeduplicator.execute(
               makeFetchBalanceKey(userId),
               () => exchange.fetchBalance({ type: 'future' }),
               IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
@@ -1957,7 +1957,7 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
         if (globalRestCircuitBreaker.canMakeRequest()) {
           const exchange = await getExchangeForUser(userId);
           if (exchange && exchange.fetchBalance) {
-            const balance = await exchangeAPIDeduplicator.execute(
+            const balance: any = await exchangeAPIDeduplicator.execute(
               makeFetchBalanceKey(userId),
               () => exchange.fetchBalance({ type: 'future' }),
               IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
@@ -2323,7 +2323,7 @@ app.post("/api/agent/creation/activate", async (req, res) => {
             });
           }
           
-          const balance = await exchangeAPIDeduplicator.execute(
+          const balance: any = await exchangeAPIDeduplicator.execute(
             makeFetchBalanceKey(userId),
             () => exchange.fetchBalance({ type: 'future' }),
             IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
@@ -2537,7 +2537,7 @@ app.post("/api/agent/creation/bulk", async (req, res) => {
           if (!globalRestCircuitBreaker.canMakeRequest()) {
             return res.status(429).json({ error: 'Rate limited by Binance. Please wait and try again.' });
           }
-          const balance = await exchangeAPIDeduplicator.execute(
+          const balance: any = await exchangeAPIDeduplicator.execute(
             makeFetchBalanceKey(userId),
             () => exchange.fetchBalance({ type: 'future' }),
             IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
@@ -2738,7 +2738,7 @@ app.post("/api/agent/restart", async (req, res) => {
             logger.warn('[Restart Live] Markets not loaded - this should have been done at startup!');
           }
           
-          const balance = await exchangeAPIDeduplicator.execute(
+          const balance: any = await exchangeAPIDeduplicator.execute(
             makeFetchBalanceKey(userId),
             () => exchange.fetchBalance({ type: 'future' }),
             IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,

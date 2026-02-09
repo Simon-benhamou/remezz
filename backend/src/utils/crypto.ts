@@ -43,8 +43,7 @@ function tryDecryptLegacy(ciphertext: string, secret: string, salt: string): str
     const parts = ciphertext.split(':');
     if (parts.length !== 2) return null;
     // Legacy: IV was stored but never used — createDecipher derives its own
-    // @ts-expect-error createDecipher is deprecated but needed for migration
-    const decipher = crypto.createDecipher('aes-256-cbc', key);
+    const decipher = (crypto as any).createDecipher('aes-256-cbc', key);
     let decrypted = decipher.update(parts[1], 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;

@@ -123,10 +123,7 @@ async function testC4_DoubleOrderIdempotency() {
   const { OrderQueue } = await import('../src/services/orderQueue.js');
 
   // Create test queue
-  const queue = new OrderQueue({
-    maxConcurrentOrders: 1,
-    orderDelayMs: 100,
-  });
+  const queue = new OrderQueue();
 
   // Check idempotency cache TTL is extended
   // We can't directly access private members, but we can check behavior
