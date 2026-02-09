@@ -427,6 +427,58 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
 });
 
 // ============================================
+// TELEGRAM NOTIFICATIONS
+// ============================================
+
+// Get bot info (username) so frontend can show "Message @botname"
+router.get('/telegram-bot', async (_req: AuthenticatedRequest, res) => {
+  try {
+    const { getTelegramBotInfo } = await import('../utils/notifications.js');
+    const info = await getTelegramBotInfo();
+    if (info) {
+      res.json({ enabled: true, botUsername: info.username });
+    } else {
+      res.json({ enabled: false, botUsername: null });
+    }
+  } catch (error) {
+    console.error('Telegram bot info error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Detect chat IDs from recent messages sent to our bot
+router.get('/telegram-detect', async (_req: AuthenticatedRequest, res) => {
+  try {
+    const { detectTelegramChatIds } = await import('../utils/notifications.js');
+    const chatIds = await detectTelegramChatIds();
+    res.json({ chatIds });
+  } catch (error) {
+    console.error('Telegram detect error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Test Telegram notification for the authenticated user
+router.post('/telegram-test', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { sendTestNotification } = await import('../utils/notifications.js');
+    const success = await sendTestNotification(req.user!.id);
+
+    if (success) {
+      res.json({ success: true, message: 'Test notification sent!' });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: 'Failed to send. Check your Telegram Chat ID and that the bot token is configured.',
+      });
+    }
+  } catch (error) {
+    console.error('Telegram test error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// ============================================
 // SYSTEM SETTINGS (Global, read-only for users, admin can modify)
 // ============================================
 

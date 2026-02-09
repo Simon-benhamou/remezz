@@ -371,15 +371,23 @@ describe('shouldExitPosition - TRAILING_STOP', () => {
       trailingActive: true,
       highWaterMark: 105, // Reached 5% profit
     });
-    
-    // Price fell back significantly
-    const trailDist = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
+
+    // V5.88+: Progressive trailing uses tier 2 distance (1.5%) for 5% hwm
+    const progressiveEnabled = (MomentumConfig.EXIT as any).TRAILING_PROGRESSIVE_ENABLED ?? false;
+    const hwmPct = 5; // (105 - 100) / 100 * 100
+    const tier2At = (MomentumConfig.EXIT as any).TRAILING_TIER2_AT_PCT ?? 4.0;
+    let trailDist: number;
+    if (progressiveEnabled && hwmPct >= tier2At) {
+      trailDist = (MomentumConfig.EXIT as any).TRAILING_TIER2_DISTANCE_PCT ?? 1.5;
+    } else {
+      trailDist = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
+    }
     const trailStop = 105 * (1 - trailDist / 100);
-    
+
     const result = shouldExitPosition(position, trailStop - 0.1, undefined, {
       priceLow: trailStop - 0.1,
     });
-    
+
     // Should signal trailing breach
     expect(result.trailingBreached).toBe(true);
   });

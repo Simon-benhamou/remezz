@@ -5,6 +5,7 @@
  */
 
 import { runBacktest, type BacktestParams, type BacktestResult } from '../../src/services/backtestService.js';
+import { preloadMarkets } from '../../src/exchange/ccxtClient.js';
 
 const REGRESSION_PARAMS: BacktestParams = {
   startDate: new Date('2024-06-01'),
@@ -18,6 +19,7 @@ describe('Refactoring Regression', () => {
   let baseline: BacktestResult;
 
   beforeAll(async () => {
+    await preloadMarkets();
     baseline = await runBacktest(REGRESSION_PARAMS);
   }, 180_000);
 

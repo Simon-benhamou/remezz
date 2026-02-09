@@ -2172,6 +2172,7 @@ export class SimpleAgent {
         mode: 'paper',
         balanceAfter: balanceAfterPaper,
         feesUsd: paperFeeUsd,
+        userId: this.config.userId,
       });
 
       // Old notification system (kept for compatibility)
@@ -2211,6 +2212,8 @@ export class SimpleAgent {
           // Don't clear position or release capital - the position is still open on exchange!
           // Reset closingPosition flag so we can retry on next exit check cycle
           this.closingPosition = false;
+          // Restart RT monitor — close failed, position still needs real-time SL protection
+          this.startRealtimeExitMonitorIfNeeded();
           return;
         }
         
@@ -2271,6 +2274,8 @@ export class SimpleAgent {
         if (!result.success) {
           logger.error(`[${symbol}] Exit order FAILED: ${result.error} (${result.errorCode})`);
           this.closingPosition = false;
+          // Restart RT monitor — close failed, position still needs real-time SL protection
+          this.startRealtimeExitMonitorIfNeeded();
           return;
         }
 
@@ -2541,6 +2546,7 @@ export class SimpleAgent {
           mode: 'live',
           balanceAfter: balanceAfterLive,
           feesUsd: liveFeeUsd,
+          userId: this.config.userId,
         });
 
         // Old notification system (kept for compatibility)
@@ -3064,6 +3070,7 @@ export class SimpleAgent {
             mode: 'live',
             balanceAfter: balanceAfterSync,
             feesUsd: syncFeeUsd,
+            userId: this.config.userId,
           });
 
           notifyTradeExit({

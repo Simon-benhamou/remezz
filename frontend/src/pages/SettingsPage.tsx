@@ -21,6 +21,9 @@ import {
   Zap,
   BarChart3,
   Clock,
+  Send,
+  MessageCircle,
+  CheckCircle2,
 } from 'lucide-react';
 
 import { api } from '@/api';
@@ -641,8 +644,234 @@ function PreferencesTab() {
   const [dailyReports, setDailyReports] = useState(true);
   const [emailNotifications, setEmailNotifications] = useState(false);
 
+  // Telegram Chat ID
+  const [telegramChatId, setTelegramChatId] = useState('');
+  const [telegramSaved, setTelegramSaved] = useState('');
+  const [telegramSaving, setTelegramSaving] = useState(false);
+  const [telegramTesting, setTelegramTesting] = useState(false);
+  const [telegramTestOk, setTelegramTestOk] = useState(false);
+  const [botUsername, setBotUsername] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [detectedChats, setDetectedChats] = useState<{ chatId: string; firstName: string; username?: string }[]>([]);
+
+  // Load saved Telegram Chat ID + bot info on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const [settingsRes, botRes] = await Promise.all([
+          api.client.get('/api/user/settings'),
+          api.client.get('/api/user/telegram-bot'),
+        ]);
+        const settings: { key: string; value: string }[] = settingsRes.data.settings || [];
+        const tg = settings.find((s) => s.key === 'telegramChatId');
+        if (tg?.value) {
+          setTelegramChatId(tg.value);
+          setTelegramSaved(tg.value);
+        }
+        if (botRes.data.botUsername) {
+          setBotUsername(botRes.data.botUsername);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
+
+  const handleSaveTelegramChatId = async () => {
+    setTelegramSaving(true);
+    setTelegramTestOk(false);
+    try {
+      await api.client.put('/api/user/settings/telegramChatId', {
+        value: telegramChatId.trim(),
+        category: 'notifications',
+      });
+      setTelegramSaved(telegramChatId.trim());
+      toast.success('Telegram Chat ID saved');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to save');
+    } finally {
+      setTelegramSaving(false);
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    setTelegramTesting(true);
+    setTelegramTestOk(false);
+    try {
+      const res = await api.client.post('/api/user/telegram-test');
+      if (res.data.success) {
+        setTelegramTestOk(true);
+        toast.success('Test notification sent! Check your Telegram.');
+      } else {
+        toast.error(res.data.error || 'Test failed');
+      }
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Test failed');
+    } finally {
+      setTelegramTesting(false);
+    }
+  };
+
+  const handleDetectChatId = async () => {
+    setDetecting(true);
+    setDetectedChats([]);
+    try {
+      const res = await api.client.get('/api/user/telegram-detect');
+      const chats = res.data.chatIds || [];
+      if (chats.length === 0) {
+        toast.error(
+          botUsername
+            ? `No messages found. Send /start to @${botUsername} on Telegram first.`
+            : 'No messages found. Send /start to the bot on Telegram first.'
+        );
+      } else {
+        setDetectedChats(chats);
+        // Auto-fill if only one result
+        if (chats.length === 1) {
+          setTelegramChatId(chats[0].chatId);
+          setDetectedChats([]);
+          toast.success(`Chat ID detected: ${chats[0].firstName}`);
+        }
+      }
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Detection failed');
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const telegramDirty = telegramChatId.trim() !== telegramSaved;
+
   return (
     <div className="space-y-6">
+      {/* Telegram Notifications */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MessageCircle className="h-5 w-5" />
+            Telegram Notifications
+          </CardTitle>
+          <CardDescription>
+            Receive real-time alerts on your phone when positions are opened or closed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Step 1: Instructions */}
+          <Alert className="border-blue-500/30 bg-blue-500/5">
+            <MessageCircle className="h-4 w-4 text-blue-500" />
+            <AlertDescription className="text-xs">
+              <span className="font-medium">Setup in 3 steps:</span>
+              <ol className="mt-1 list-inside list-decimal space-y-0.5">
+                <li>
+                  Open Telegram and send <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">/start</code> to{' '}
+                  {botUsername ? (
+                    <a
+                      href={`https://t.me/${botUsername}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-semibold text-blue-400 hover:underline"
+                    >
+                      @{botUsername}
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground">the bot</span>
+                  )}
+                </li>
+                <li>Click <span className="font-semibold">Detect my Chat ID</span> below</li>
+                <li>Save and test</li>
+              </ol>
+            </AlertDescription>
+          </Alert>
+
+          {/* Step 2: Detect + Input */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Telegram Chat ID</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                placeholder="e.g. 123456789"
+                value={telegramChatId}
+                onChange={(e) => {
+                  setTelegramChatId(e.target.value);
+                  setTelegramTestOk(false);
+                }}
+                className="max-w-[200px] font-mono"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={detecting}
+                onClick={handleDetectChatId}
+              >
+                {detecting ? (
+                  <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                ) : (
+                  <MessageCircle className="mr-2 h-3 w-3" />
+                )}
+                Detect
+              </Button>
+              <Button
+                size="sm"
+                disabled={telegramSaving || !telegramChatId.trim() || !telegramDirty}
+                onClick={handleSaveTelegramChatId}
+              >
+                {telegramSaving && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
+                Save
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={telegramTesting || !telegramSaved}
+                onClick={handleTestTelegram}
+              >
+                {telegramTesting ? (
+                  <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                ) : telegramTestOk ? (
+                  <CheckCircle2 className="mr-2 h-3 w-3 text-emerald-500" />
+                ) : (
+                  <Send className="mr-2 h-3 w-3" />
+                )}
+                Test
+              </Button>
+            </div>
+
+            {/* Detected chat IDs (if multiple) */}
+            {detectedChats.length > 1 && (
+              <div className="space-y-1 pt-1">
+                <p className="text-xs font-medium text-muted-foreground">Select your account:</p>
+                <div className="flex flex-wrap gap-2">
+                  {detectedChats.map((chat) => (
+                    <Button
+                      key={chat.chatId}
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => {
+                        setTelegramChatId(chat.chatId);
+                        setDetectedChats([]);
+                      }}
+                    >
+                      {chat.firstName}
+                      {chat.username && (
+                        <span className="ml-1 text-muted-foreground">@{chat.username}</span>
+                      )}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {telegramSaved && (
+              <div className="flex items-center gap-1.5">
+                <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                <span className="text-xs text-emerald-500">
+                  Connected — Chat ID: <code className="font-mono">{telegramSaved}</code>
+                </span>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

@@ -139,9 +139,13 @@ describe('detectMarketRegime', () => {
   });
 
   it('should return LOW_VOL when ADX < 20 and ATR is declining', () => {
-    // Build candles: first half volatile, second half very low vol (ATR declining)
-    const volCandles = makeCandles(30, { volatilityPct: 0.015, trendPctPerBar: 0 });
-    const flatEnd = makeCandles(30, {
+    // Build candles: volatile zone must extend into atrOlder's 14-period window
+    // but NOT into atrCurrent's window. With lookback=5 and period=14:
+    //   atrCurrent uses last 14 candles = [46-59]
+    //   atrOlder uses candles [41-54] of first 55
+    // So volatile must end around candle 46 for the ratio to differ.
+    const volCandles = makeCandles(48, { volatilityPct: 0.015, trendPctPerBar: 0 });
+    const flatEnd = makeCandles(12, {
       startPrice: volCandles[volCandles.length - 1].close,
       volatilityPct: 0.001,
       trendPctPerBar: 0,

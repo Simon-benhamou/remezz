@@ -31,6 +31,9 @@ router.get("/", authenticateUser, async (req: AuthenticatedRequest, res) => {
     });
     if (activeSessions.length > 0) {
       where.sessionId = { in: activeSessions.map(s => s.id) };
+    } else {
+      // No active sessions — return empty rather than querying with no filter
+      return res.json([]);
     }
   }
   

@@ -478,6 +478,7 @@ export class PositionOpener {
       mode: 'paper',
       notionalUsd: sizing.notionalUsd,
       marginUsd: sizing.marginUsd,
+      userId: this.ctx.userId,
     });
 
     // Old notification system (kept for compatibility)
@@ -925,6 +926,7 @@ export class PositionOpener {
         mode: 'live',
         notionalUsd: sizing.notionalUsd,
         marginUsd: sizing.marginUsd,
+        userId: this.ctx.userId,
       });
 
       // Old notification system (kept for compatibility)

@@ -11,30 +11,71 @@
  */
 
 import { createLogger } from './logger.js';
+import { PrismaClient } from '@prisma/client';
 
 const logger = createLogger('telegram');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-const isEnabled = Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID);
+const isEnabled = Boolean(TELEGRAM_BOT_TOKEN);
 
 if (!isEnabled) {
-  logger.warn('[Telegram] Notifications disabled - missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in .env');
+  logger.warn('[Telegram] Notifications disabled - missing TELEGRAM_BOT_TOKEN in .env');
+}
+
+// Lazy prisma reference (set via init)
+let prisma: PrismaClient | null = null;
+
+// Cache per-user chat IDs (userId -> chatId) with 5min TTL
+const chatIdCache = new Map<string, { chatId: string; ts: number }>();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+export function initTelegramNotifications(p: PrismaClient): void {
+  prisma = p;
 }
 
 /**
- * Send a message to Telegram
+ * Get Telegram chat ID for a user (from DB setting, cached 5min)
  */
-async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' | 'HTML' | null = null): Promise<void> {
-  if (!isEnabled) return;
+async function getUserChatId(userId?: string): Promise<string | null> {
+  if (!userId) return TELEGRAM_CHAT_ID || null;
+
+  const cached = chatIdCache.get(userId);
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+    return cached.chatId;
+  }
+
+  if (!prisma) return TELEGRAM_CHAT_ID || null;
+
+  try {
+    const setting = await prisma.userSetting.findUnique({
+      where: { userId_key: { userId, key: 'telegramChatId' } },
+    });
+    if (setting?.value) {
+      chatIdCache.set(userId, { chatId: setting.value, ts: Date.now() });
+      return setting.value;
+    }
+  } catch {
+    // Fall through to global
+  }
+
+  return TELEGRAM_CHAT_ID || null;
+}
+
+/**
+ * Send a message to Telegram (to a specific chat ID)
+ */
+async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' | 'HTML' | null = null, chatId?: string): Promise<void> {
+  const targetChatId = chatId || TELEGRAM_CHAT_ID;
+  if (!isEnabled || !targetChatId) return;
 
   try {
     const body: Record<string, unknown> = {
-      chat_id: TELEGRAM_CHAT_ID,
+      chat_id: targetChatId,
       text,
     };
-    
+
     // Only add parse_mode if specified (plain text is safest)
     if (parseMode) {
       body.parse_mode = parseMode;
@@ -53,6 +94,15 @@ async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' | 'HTML
   } catch (error: any) {
     logger.error(`[Telegram] Error sending message:`, error.message);
   }
+}
+
+/**
+ * Send Telegram to user's chat ID (resolves from DB)
+ */
+async function sendToUser(text: string, userId?: string): Promise<void> {
+  const chatId = await getUserChatId(userId);
+  if (!chatId) return;
+  await sendTelegramMessage(text, null, chatId);
 }
 
 /**
@@ -123,6 +173,7 @@ export async function notifyPositionOpened(position: {
   mode: 'paper' | 'live';
   notionalUsd?: number;
   marginUsd?: number;
+  userId?: string;
 }): Promise<void> {
   if (!isEnabled) return;
 
@@ -143,7 +194,7 @@ Qty: ${position.quantity.toFixed(4)}${notionalInfo}${marginInfo}${slInfo}${tpInf
 ⏰ ${new Date().toLocaleTimeString()}
   `.trim();
 
-  await sendTelegramMessage(message);
+  await sendToUser(message, position.userId);
 }
 
 /**
@@ -162,6 +213,7 @@ export async function notifyPositionClosed(position: {
   mode: 'paper' | 'live';
   balanceAfter?: number;
   feesUsd?: number;
+  userId?: string;
 }): Promise<void> {
   if (!isEnabled) return;
 
@@ -184,7 +236,7 @@ Reason: ${position.reason}${balanceInfo}
 ⏰ ${new Date().toLocaleTimeString()}
   `.trim();
 
-  await sendTelegramMessage(message);
+  await sendToUser(message, position.userId);
 }
 
 /**
@@ -218,31 +270,102 @@ export async function notifySlippageAlert(_data: {
 /**
  * Send a test notification to verify setup
  */
-export async function sendTestNotification(): Promise<boolean> {
+export async function sendTestNotification(userId?: string): Promise<boolean> {
   if (!isEnabled) {
-    console.log('❌ Telegram not configured - add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env');
+    console.log('❌ Telegram not configured - add TELEGRAM_BOT_TOKEN to .env');
+    return false;
+  }
+
+  const chatId = await getUserChatId(userId);
+  if (!chatId) {
+    console.log('❌ No Telegram chat ID configured for this user');
     return false;
   }
 
   try {
     await sendTelegramMessage(`
-✅ *Telegram Notifications Enabled*
+✅ Telegram Notifications Enabled
 
 Your trading bot is now connected!
 You'll receive notifications for:
-- New orders
-- Filled orders
 - Positions opened/closed
-- System alerts
+- PnL updates
 
 Time: ${new Date().toLocaleString()}
-    `.trim());
+    `.trim(), null, chatId);
 
     console.log('✅ Test notification sent successfully!');
     return true;
   } catch (error) {
     console.error('❌ Failed to send test notification:', error);
     return false;
+  }
+}
+
+/**
+ * Detect chat IDs from recent messages sent to our bot via getUpdates.
+ * User sends /start to the bot, then we fetch recent updates to find their chat ID.
+ */
+export async function detectTelegramChatIds(): Promise<{ chatId: string; firstName: string; username?: string; date: number }[]> {
+  if (!isEnabled) return [];
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?limit=20&allowed_updates=["message"]`);
+    if (!response.ok) return [];
+
+    const data = await response.json() as {
+      ok: boolean;
+      result: {
+        update_id: number;
+        message?: {
+          chat: { id: number; first_name?: string; username?: string };
+          date: number;
+          text?: string;
+        };
+      }[];
+    };
+
+    if (!data.ok || !data.result) return [];
+
+    // Deduplicate by chat ID, keep latest
+    const byChatId = new Map<string, { chatId: string; firstName: string; username?: string; date: number }>();
+    for (const update of data.result) {
+      if (!update.message?.chat) continue;
+      const chat = update.message.chat;
+      const key = String(chat.id);
+      const existing = byChatId.get(key);
+      if (!existing || update.message.date > existing.date) {
+        byChatId.set(key, {
+          chatId: key,
+          firstName: chat.first_name || 'Unknown',
+          username: chat.username,
+          date: update.message.date,
+        });
+      }
+    }
+
+    // Return sorted by most recent first
+    return [...byChatId.values()].sort((a, b) => b.date - a.date);
+  } catch (error) {
+    logger.error('[Telegram] Failed to getUpdates:', error);
+    return [];
+  }
+}
+
+/**
+ * Get the bot's username for display (so users know which bot to message)
+ */
+export async function getTelegramBotInfo(): Promise<{ username: string } | null> {
+  if (!isEnabled) return null;
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
+    if (!response.ok) return null;
+    const data = await response.json() as { ok: boolean; result: { username: string } };
+    if (!data.ok) return null;
+    return { username: data.result.username };
+  } catch {
+    return null;
   }
 }
 

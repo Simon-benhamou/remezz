@@ -38,6 +38,7 @@ import { orderQueue } from "./services/orderQueue.js";
 import { binanceRestQueue, BINANCE_WEIGHTS } from "./services/binanceRestQueue.js";
 import { seedFreshCandles, startCandleRefreshJob, stopCandleRefreshJob, backfillBtcCandles } from "./services/candleCache.js";
 import { startTelegramReporter, stopTelegramReporter } from "./services/telegramReporter.js";
+import { initTelegramNotifications } from "./utils/notifications.js";
 
 // Strategy
 import {
@@ -707,6 +708,11 @@ app.post("/api/agent/start", async (req, res) => {
     
     const { mode = "paper", capitalUsd = 10000 } = req.body;
 
+    // Validate mode parameter
+    if (mode !== 'paper' && mode !== 'live') {
+      return res.status(400).json({ error: `Invalid mode: ${mode}. Must be 'paper' or 'live'` });
+    }
+
     // Reject live mode without valid API keys
     const keyCheck = await requireApiKeysForLive(userId, mode);
     if (!keyCheck.ok) {
@@ -833,9 +839,9 @@ app.post("/api/agent/start", async (req, res) => {
               
               if (Math.abs(positionAmt) > 0.000001 && symbol) {
                 // Convert to Binance symbol format (remove / and :)
-                const binanceSymbol = symbol.replace(/[/:]/g, '').toUpperCase();
+                const binanceSymbol = toBinanceSymbolId(symbol);
                 const side = positionAmt > 0 ? 'long' : 'short';
-                
+
                 seedPositionCache(userId, binanceSymbol, {
                   positionAmt: positionAmt,
                   entryPrice: entryPrice,
@@ -843,7 +849,7 @@ app.post("/api/agent/start", async (req, res) => {
                   side: side,
                   updateTime: Date.now(),
                 });
-                
+
                 logger.info(`📊 [Live] Seeded position: ${binanceSymbol} ${side} ${Math.abs(positionAmt)} @ $${entryPrice}`);
                 seededCount++;
               }
@@ -2194,7 +2200,11 @@ app.post("/api/agent/creation/prepare", async (req, res) => {
     }
     
     const { mode = 'paper', capitalUsd = defaultCapital, maxLeverage, aggressiveness, symbol } = req.body;
-    
+
+    if (mode !== 'paper' && mode !== 'live') {
+      return res.status(400).json({ error: `Invalid mode: ${mode}. Must be 'paper' or 'live'` });
+    }
+
     // Get existing agents (if any) - we allow adding more agents
     const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
     const existingAgents = userAgents.get(agentKey);
@@ -2223,13 +2233,18 @@ app.post("/api/agent/creation/prepare", async (req, res) => {
 
 app.post("/api/agent/creation/create-session", async (req, res) => {
   try {
+    const userId = (req as any)?.user?.id;
     const { creationId, symbol } = req.body;
-    
+
     const creation = pendingCreations.get(creationId);
     if (creation) {
+      // Verify ownership — only the user who created this can modify it
+      if (creation.userId !== userId) {
+        return res.status(403).json({ error: "Not authorized to modify this creation" });
+      }
       creation.symbol = symbol;
     }
-    
+
     res.json({
       success: true,
       symbol,
@@ -2471,6 +2486,10 @@ app.post("/api/agent/creation/bulk", async (req, res) => {
     }
 
     const { mode = 'paper', symbols, maxLeverage } = req.body;
+
+    if (mode !== 'paper' && mode !== 'live') {
+      return res.status(400).json({ error: `Invalid mode: ${mode}. Must be 'paper' or 'live'` });
+    }
 
     if (!Array.isArray(symbols) || symbols.length === 0) {
       return res.status(400).json({ error: "symbols must be a non-empty array" });
@@ -2782,9 +2801,9 @@ app.post("/api/agent/restart", async (req, res) => {
             const unrealizedPnl = parseFloat(pos?.unrealizedPnl || pos?.info?.unRealizedProfit || '0');
             
             if (Math.abs(positionAmt) > 0.000001 && symbol) {
-              const binanceSymbol = symbol.replace(/[/:]/g, '').toUpperCase();
+              const binanceSymbol = toBinanceSymbolId(symbol);
               const side = positionAmt > 0 ? 'long' : 'short';
-              
+
               seedPositionCache(userId, binanceSymbol, {
                 positionAmt: positionAmt,
                 entryPrice: entryPrice,
@@ -2792,7 +2811,7 @@ app.post("/api/agent/restart", async (req, res) => {
                 side: side,
                 updateTime: Date.now(),
               });
-              
+
               logger.info(`📊 [Restart Live] Seeded position: ${binanceSymbol} ${side} ${Math.abs(positionAmt)} @ $${entryPrice}`);
               seededCount++;
             }
@@ -2902,6 +2921,9 @@ app.post("/api/agent/restart", async (req, res) => {
 app.post("/api/agent/stop-all", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
     let stoppedCount = 0;
 
     // Stop both paper and live
@@ -2934,6 +2956,10 @@ app.post("/api/agent/stop-all", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 app.post("/api/ops/kill-switch", async (req, res) => {
   try {
+    const userRole = (req as any)?.user?.role;
+    if (userRole !== 'admin') {
+      return res.status(403).json({ error: "Admin access required for kill switch" });
+    }
     const { closePositions = false, reason = 'Manual kill switch activated' } = req.body || {};
 
     logger.error(`🚨🚨🚨 KILL SWITCH ACTIVATED | reason: ${reason} | closePositions: ${closePositions}`);
@@ -3031,6 +3057,10 @@ app.get("/api/ops/kill-switch/status", async (req, res) => {
 // V5.65: Reset kill switch (reopen circuit breaker)
 app.post("/api/ops/kill-switch/reset", async (req, res) => {
   try {
+    const userRole = (req as any)?.user?.role;
+    if (userRole !== 'admin') {
+      return res.status(403).json({ error: "Admin access required for kill switch reset" });
+    }
     const { globalRestCircuitBreaker } = await import('./services/globalRestCircuitBreaker.js');
     const { orderQueue } = await import('./services/orderQueue.js');
 
@@ -3824,8 +3854,11 @@ function broadcast(type: string, data: any, symbol?: string, userId?: string) {
   for (const [ws, clientData] of wsClients) {
     if (ws.readyState !== WebSocket.OPEN) continue;
 
-    // User isolation: only send to this user's clients (skip if userId not set on client)
-    if (userId && clientData.userId && clientData.userId !== userId) continue;
+    // Skip unauthenticated clients — they should not receive any data
+    if (!clientData.authenticated) continue;
+
+    // User isolation: only send to this user's clients
+    if (userId && clientData.userId !== userId) continue;
 
     // If symbol provided, only send to clients subscribed to that symbol
     if (symbol && clientData.subscribedSymbol) {
@@ -3841,6 +3874,9 @@ function broadcast(type: string, data: any, symbol?: string, userId?: string) {
 
 // Initialize notification service with broadcast function
 initNotificationService(broadcast);
+
+// Initialize Telegram notifications with prisma (per-user chat ID lookup)
+initTelegramNotifications(prisma);
 
 // V5.71: Initialize signal radar with broadcast function
 setRadarBroadcast(broadcast);

@@ -4,6 +4,7 @@
  */
 
 import { runBacktest, type BacktestParams, type BacktestResult } from '../../src/services/backtestService.js';
+import { preloadMarkets } from '../../src/exchange/ccxtClient.js';
 
 // Fixed parameters for reproducible tests
 const BASE_PARAMS: BacktestParams = {
@@ -15,6 +16,10 @@ const BASE_PARAMS: BacktestParams = {
 };
 
 describe('Parity Integration Tests', () => {
+  beforeAll(async () => {
+    await preloadMarkets();
+  }, 30_000);
+
   // ── Test 1: Determinism ─────────────────────────────────────────────
   it('should produce identical results on two consecutive backtest runs', async () => {
     const result1 = await runBacktest(BASE_PARAMS);
