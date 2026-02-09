@@ -24,6 +24,7 @@ import {
   calcATR,             // Shared indicator
   calcBBPosition,      // Shared indicator
   calcTrendStrength,   // Shared indicator
+  calcVolRatio,        // Shared indicator
   type Candle,
   type Position,
   type MarketConditions,
@@ -1203,17 +1204,31 @@ export class SimpleAgent {
       const now = Date.now();
       const CANDLE_INTERVAL_MS = 15 * 60 * 1000;
 
-      if (engineResult && engineResult.closedCandles.length >= 61) {
+      // Always fetch fresh candles for price + stale-signal validation
+      const allCandles = await this.fetchCandles();
+
+      // Validate engine result freshness: candleCloseTs must match actual latest closed candle
+      let useEngine = false;
+      if (engineResult && engineResult.closedCandles.length >= 61 && allCandles.length > 0) {
+        let latestClosedTs = allCandles[allCandles.length - 1].timestamp;
+        if (allCandles[allCandles.length - 1].isFinal === false && allCandles.length >= 2) {
+          latestClosedTs = allCandles[allCandles.length - 2].timestamp;
+        }
+        useEngine = engineResult.candleCloseTs === latestClosedTs;
+      }
+
+      if (useEngine && engineResult) {
         // ── Engine path: reuse shared signal computation ──
         signal = engineResult.signal;
         candles = engineResult.closedCandles;
         btcCandles = engineResult.btcCandles;
-        currentPrice = engineResult.currentPrice;
+        // Use fresh price from latest candle (engine price can be up to 15s stale)
+        currentPrice = allCandles[allCandles.length - 1].close;
         lastClosedCandleTs = engineResult.candleCloseTs;
         this.lastPrice = currentPrice;
       } else {
         // ── Fallback path: compute signal ourselves (startup / no engine) ──
-        const allCandles = await this.fetchCandles();
+        // allCandles already fetched above for validation
         if (allCandles.length < 61) {
           if (this.tickCount % 10 === 1) {
             logger.info(`⚠️ [${shortSymbol}] Not enough candles (${allCandles.length}/61)`);
@@ -1415,11 +1430,10 @@ export class SimpleAgent {
           const closes = candles.map(c => c.close);
           const volumes = candles.map(c => c.volume);
           roc5 = calcROC(closes, 5);
-          const currentVol = volumes[volumes.length - 1];
-          const avgVol19 = volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19;
-          volumeRatio = avgVol19 > 0 ? currentVol / avgVol19 : 1;
+          volumeRatio = calcVolRatio(volumes);
           const bbPosition = calcBBPosition(candles, 20, 2);
-          const atrPct = calcATR(candles, 14) ?? 0;
+          const atrRaw = calcATR(candles, 14) ?? 0;
+          const atrPct = atrRaw ? (atrRaw / currentPrice) * 100 : 0;
           const trendStrength = calcTrendStrength(closes, 50);
 
           qualityScore = globalSignalRanker.calculateScore({

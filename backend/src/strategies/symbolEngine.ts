@@ -33,8 +33,9 @@ import { type SignalFeatures } from '../services/signalRadarService.js';
 const logger = createLogger('symbol-engine');
 
 const TICK_INTERVAL_MS = 15_000; // 15 seconds, aligned with agent ticks
-const MIN_CANDLES = 50;          // Minimum candles needed for indicators
-const MIN_BTC_1H_CANDLES = 11;   // Minimum BTC 1h candles for MTF filter
+const MIN_CANDLES = 61;           // Minimum candles for indicators (match agent threshold)
+const MIN_BTC_15M_CANDLES = 201;  // Need 200 for SMA200 + 1 current (match agent + checkMomentumSignal)
+const MIN_BTC_1H_CANDLES = 11;    // Minimum BTC 1h candles for MTF filter
 
 export interface SymbolSignalResult {
   signal: SignalResult;
@@ -65,6 +66,7 @@ export class SymbolEngine extends EventEmitter {
   private marketConditions: MarketConditions | null = null;
   private running: boolean = false;
   private tickCount: number = 0;
+  private tickInProgress: boolean = false;
 
   constructor(symbol: string) {
     super();
@@ -104,6 +106,18 @@ export class SymbolEngine extends EventEmitter {
   }
 
   private async tick(): Promise<void> {
+    // Re-entrancy guard (matches agent pattern)
+    if (this.tickInProgress) return;
+    this.tickInProgress = true;
+
+    try {
+      await this.tickInner();
+    } finally {
+      this.tickInProgress = false;
+    }
+  }
+
+  private async tickInner(): Promise<void> {
     this.tickCount++;
 
     // 1. Get symbol candles from WS cache
@@ -119,11 +133,11 @@ export class SymbolEngine extends EventEmitter {
     // Convert to Candle format (getKlinesWithMeta already returns the right shape)
     this.candles = rawCandles as Candle[];
 
-    // 2. Get BTC 15m candles from global cache
+    // 2. Get BTC 15m candles from global cache (need 200+ for SMA200 in checkMomentumSignal)
     const btcCache = globalCacheManager.getBtc15mCache();
-    if (!btcCache || !btcCache.candles || btcCache.candles.length < MIN_CANDLES) {
+    if (!btcCache || !btcCache.candles || btcCache.candles.length < MIN_BTC_15M_CANDLES) {
       if (this.tickCount % 10 === 1) {
-        logger.debug(`[SymbolEngine] [${this.shortSymbol}] Waiting for BTC 15m cache`);
+        logger.debug(`[SymbolEngine] [${this.shortSymbol}] Waiting for BTC 15m cache (${btcCache?.candles?.length || 0}/${MIN_BTC_15M_CANDLES})`);
       }
       return;
     }
