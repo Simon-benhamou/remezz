@@ -4423,7 +4423,7 @@ async function runStartupSequence(): Promise<void> {
   logger.info('♻️ Step 5/5: Restoring active sessions...');
   await restoreActiveSessions();
 
-  // Start background refresh job
+  // Safety-net refresh every 2h (fills any WS gaps). Primary data comes from WS kline streams.
   startCandleRefreshJob();
 
   // Register BTC candle backfill on WebSocket reconnect (fills gaps from disconnects)

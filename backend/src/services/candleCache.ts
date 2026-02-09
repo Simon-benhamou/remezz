@@ -37,8 +37,9 @@ const SEED_SYMBOLS = [
 // How many candles to fetch
 const CANDLES_TO_FETCH = 300; // ~3 days of 15m candles
 
-// Background refresh interval
-const REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+// Background refresh interval — safety net for WS gaps (not the primary data source)
+// WS kline streams handle real-time updates; this just fills any missed candles
+const REFRESH_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours (was 15min → caused IP bans)
 
 let refreshInterval: NodeJS.Timeout | null = null;
 
