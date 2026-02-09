@@ -74,33 +74,8 @@ let heartbeatInterval: NodeJS.Timeout | null = null;
 let dailyReportInterval: NodeJS.Timeout | null = null;
 
 // ============================================================================
-// TELEGRAM SEND
-// ============================================================================
-
-async function sendTelegramMessage(text: string): Promise<void> {
-  if (!isEnabled) return;
-
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      logger.error(`[TelegramReporter] Failed to send: ${error}`);
-    }
-  } catch (error: any) {
-    logger.error(`[TelegramReporter] Error:`, error.message);
-  }
-}
-
-// ============================================================================
 // PUBLIC API - TRACKING
+// (Per-user notifications are handled by notifications.ts, not this reporter)
 // ============================================================================
 
 /**
