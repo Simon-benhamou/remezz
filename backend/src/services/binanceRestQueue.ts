@@ -347,12 +347,27 @@ class BinanceRestQueue {
    * Handle IP ban detection
    */
   private handleIpBan(errorMsg: string): void {
+    // Binance error may contain "banned until <timestamp_ms>"
     const banMatch = errorMsg.match(/banned until (\d+)/);
-    const banUntil = banMatch ? parseInt(banMatch[1]) : Date.now() + 60 * 60 * 1000;
-    const banDurationMs = Math.max(banUntil - Date.now(), 60 * 60 * 1000);
+    let banUntilAbsolute: number;
 
-    logger.error(`IP BAN DETECTED - setting ban for ${Math.ceil(banDurationMs / 60000)} minutes`);
-    setIpBan(banDurationMs);
+    if (banMatch) {
+      // Binance gave us the exact unban timestamp
+      const parsed = parseInt(banMatch[1]);
+      // Sanity: if parsed is in the past or >24h away, use 5 min default
+      if (parsed > Date.now() && parsed < Date.now() + 24 * 60 * 60 * 1000) {
+        banUntilAbsolute = parsed;
+      } else {
+        banUntilAbsolute = Date.now() + 5 * 60 * 1000;
+      }
+    } else {
+      // No timestamp in error — assume short ban (5 minutes, not 60!)
+      banUntilAbsolute = Date.now() + 5 * 60 * 1000;
+    }
+
+    const durationMin = Math.ceil((banUntilAbsolute - Date.now()) / 60000);
+    logger.error(`IP BAN DETECTED - setting ban for ${durationMin} minutes (until ${new Date(banUntilAbsolute).toISOString()})`);
+    setIpBan(banUntilAbsolute);
   }
 
   /**
