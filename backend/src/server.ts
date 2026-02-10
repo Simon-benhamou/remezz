@@ -1412,10 +1412,15 @@ app.delete("/api/agent/sessions/:id", async (req, res) => {
         const agentIndex = agentData.agents.findIndex(a => a.getStatus().sessionId === id);
         if (agentIndex !== -1) {
           const agent = agentData.agents[agentIndex];
+          const stoppedSymbol = agent.getStatus().symbol;
           await agent.stop();
+
+          // SymbolEngine Phase 1: Unsubscribe this symbol
+          symbolEngineManager.unsubscribe(stoppedSymbol);
+
           agentData.agents.splice(agentIndex, 1);
           logger.info(`🗑️ Stopped and removed agent for session ${id} (${found.mode})`);
-          
+
           // If no more agents for this mode, clean up entry
           if (agentData.agents.length === 0) {
             userAgents.delete(agentKey);
@@ -2470,10 +2475,13 @@ app.post("/api/agent/creation/activate", async (req, res) => {
     
     // Start the single agent
     await agent.start();
-    
+
+    // SymbolEngine Phase 1: Subscribe to engine for this symbol
+    symbolEngineManager.subscribe(selectedSymbol);
+
     // Clean up pending creation
     pendingCreations.delete(creationId);
-    
+
     logger.info(`✅ Created 1 agent for ${selectedSymbol} for ${userId}`);
     
     res.json({
@@ -2672,6 +2680,11 @@ app.post("/api/agent/creation/bulk", async (req, res) => {
         errors.push({ symbol: rawSymbol, error: err?.message || 'Failed to create' });
         logger.error(`[Bulk] Failed to create agent for ${rawSymbol}:`, err?.message);
       }
+    }
+
+    // SymbolEngine Phase 1: Subscribe to engines for each created symbol
+    for (const r of results) {
+      symbolEngineManager.subscribe(r.symbol);
     }
 
     logger.info(`[Bulk] Created ${results.length}/${symbols.length} agents for ${userId}`);
