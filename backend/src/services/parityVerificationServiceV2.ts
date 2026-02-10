@@ -908,6 +908,8 @@ export async function getParityResultsV2(opts: {
   limit?: number;
   offset?: number;
   onlyMismatches?: boolean;
+  userId?: string;
+  mode?: 'paper' | 'live';
 } = {}): Promise<{
   results: any[];
   summary: {
@@ -920,8 +922,29 @@ export async function getParityResultsV2(opts: {
   const limit = opts.limit || 100;
   const offset = opts.offset || 0;
 
-  // Build where clause
-  const where = opts.onlyMismatches ? { overallMatch: false } : {};
+  // Build where clause with user/mode filtering via trade → session join
+  const where: any = {};
+  if (opts.onlyMismatches) where.overallMatch = false;
+
+  // Filter by userId and/or mode through Trade → AgentSession
+  if (opts.userId || opts.mode) {
+    const sessionWhere: any = {};
+    if (opts.userId) sessionWhere.userId = opts.userId;
+    if (opts.mode) sessionWhere.mode = opts.mode;
+
+    // Get tradeIds belonging to this user/mode
+    const trades = await prisma.trade.findMany({
+      where: { session: sessionWhere },
+      select: { id: true },
+    });
+    const tradeIds = trades.map(t => t.id);
+
+    if (tradeIds.length === 0) {
+      return { results: [], summary: { total: 0, matched: 0, mismatched: 0, matchRate: 0 } };
+    }
+
+    where.tradeId = { in: tradeIds };
+  }
 
   // Fetch results
   const [results, totalCount, matchedCount] = await Promise.all([
@@ -931,8 +954,8 @@ export async function getParityResultsV2(opts: {
       take: limit,
       skip: offset,
     }),
-    prisma.tradeParityResult.count(),
-    prisma.tradeParityResult.count({ where: { overallMatch: true } }),
+    prisma.tradeParityResult.count({ where }),
+    prisma.tradeParityResult.count({ where: { ...where, overallMatch: true } }),
   ]);
 
   return {

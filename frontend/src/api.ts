@@ -325,7 +325,7 @@ export const api = {
         mismatched: number;
         failed: number;
       },
-    getParityResults: async (opts: { limit?: number; offset?: number; onlyMismatches?: boolean } = {}) =>
+    getParityResults: async (opts: { limit?: number; offset?: number; onlyMismatches?: boolean; mode?: 'paper' | 'live' } = {}) =>
       (await client.get('/api/backtest/parity-results', { params: opts })).data as {
         results: Array<{
           id: string;

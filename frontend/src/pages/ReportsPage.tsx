@@ -135,6 +135,7 @@ function SortIcon({ dir }: { dir: SortDir }) {
 // ============================================================================
 
 function ParityVerificationPanel() {
+  const { mode } = useMode();
   const [results, setResults] = React.useState<ParityResult[]>([]);
   const [filteredResults, setFilteredResults] = React.useState<ParityResult[]>([]);
   const [summary, setSummary] = React.useState<{
@@ -164,7 +165,7 @@ function ParityVerificationPanel() {
 
   React.useEffect(() => {
     loadResults();
-  }, []);
+  }, [mode]);
 
   // Valid category keys for validation
   const validCategories: ParityCategory[] = ['MATCH', 'EXIT_MISMATCH', 'NO_SIGNAL', 'PNL_VARIANCE', 'DATA_ERROR'];
@@ -256,7 +257,7 @@ function ParityVerificationPanel() {
   const loadResults = async () => {
     setLoading(true);
     try {
-      const data = await api.backtest.getParityResults({ limit: 200 });
+      const data = await api.backtest.getParityResults({ limit: 200, mode: mode as 'paper' | 'live' });
       // Cast side to proper type since API returns string
       const typedResults = (data.results || []).map((r: any) => ({
         ...r,

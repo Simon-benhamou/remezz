@@ -274,11 +274,14 @@ router.get('/parity-results', authenticateUser, async (req: AuthenticatedRequest
     const limit = req.query.limit ? Number(req.query.limit) : 100;
     const offset = req.query.offset ? Number(req.query.offset) : 0;
     const onlyMismatches = req.query.onlyMismatches === 'true';
+    const mode = req.query.mode === 'paper' || req.query.mode === 'live' ? req.query.mode : undefined;
 
     const result = await getParityResultsV2({
       limit,
       offset,
       onlyMismatches,
+      userId: req.user?.id,
+      mode,
     });
 
     res.json(result);

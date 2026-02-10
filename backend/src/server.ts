@@ -1954,19 +1954,27 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
     const { mode } = req.params;
     logger.debug(`[Capital] Snapshot request - userId: ${userId}, mode: ${mode}`);
     
-    // For LIVE mode, use WebSocket cache first (0 weight), then REST fallback
+    // For LIVE mode, use WebSocket balance + CapitalPool tracking
     if (mode === 'live' && userId) {
       try {
         // 🚀 Try WebSocket cache FIRST (0 weight)
         const wsBalance = await getBalanceFromWebSocket(userId, 'USDT');
-        
+
         if (wsBalance && wsBalance.total > 0) {
-          logger.debug('[Capital] Using WebSocket balance (0 weight)');
+          // V5.94 FIX: Merge WS balance with CapitalPool tracking
+          // WS gives real-time total balance, CapitalPool tracks reserved/inPosition locally
+          // Previously returned hardcoded reservedUSD=0, ignoring agent commit() tracking
+          const liveAgentData = getAllUserAgents(userId)?.live;
+          const poolStatus = liveAgentData?.capitalPool.getStatus();
+          const reservedUsd = poolStatus?.reservedUsd ?? 0;
+          const inPositionsUsd = poolStatus?.inPositionsUsd ?? 0;
+
+          logger.debug('[Capital] Using WebSocket balance + CapitalPool tracking (0 weight)');
           return res.json({
             totalUSD: wsBalance.total,
-            freeUSD: wsBalance.free,
-            reservedUSD: 0,
-            inPositionsUSD: wsBalance.locked,
+            freeUSD: Math.max(0, wsBalance.total - reservedUsd - inPositionsUsd),
+            reservedUSD: reservedUsd,
+            inPositionsUSD: inPositionsUsd,
             ts: Date.now(),
             source: 'websocket',
           });
@@ -1992,12 +2000,18 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
             // Seed cache for future use
             seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: usedUsdt });
 
-            logger.debug('[Capital] Using REST balance (circuit open)');
+            // V5.94 FIX: Merge REST balance with CapitalPool tracking (same fix as WS path)
+            const liveAgentDataRest = getAllUserAgents(userId)?.live;
+            const poolStatusRest = liveAgentDataRest?.capitalPool.getStatus();
+            const reservedUsdRest = poolStatusRest?.reservedUsd ?? 0;
+            const inPositionsUsdRest = poolStatusRest?.inPositionsUsd ?? 0;
+
+            logger.debug('[Capital] Using REST balance + CapitalPool tracking');
             return res.json({
               totalUSD: totalUsdt,
-              freeUSD: freeUsdt,
-              reservedUSD: 0,
-              inPositionsUSD: usedUsdt,
+              freeUSD: Math.max(0, totalUsdt - reservedUsdRest - inPositionsUsdRest),
+              reservedUSD: reservedUsdRest,
+              inPositionsUSD: inPositionsUsdRest,
               ts: Date.now(),
               source: 'exchange',
             });
