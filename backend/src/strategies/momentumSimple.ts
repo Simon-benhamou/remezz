@@ -517,6 +517,13 @@ export const MomentumConfig = {
     NFS_CANDLE_BODY_RATIO_THRESHOLD: 0.5,     // Body >= 50% of candle range
     NFS_MOMENTUM_ROC5_THRESHOLD: 0.5,         // |ROC5| >= 0.5%
 
+    // NFS Low-Volume Breach Demotion (V5.93)
+    // When trailing breach happens on low volume, demote confidence one level
+    // HIGH→MED (wait 1 more candle), MED→LOW (wait 2 more candles)
+    // Prevents noise exits on big winners where bounce has no volume conviction
+    NFS_LOW_VOL_DEMOTION_ENABLED: true,       // Demote NFS confidence when breach volume is low
+    NFS_LOW_VOL_DEMOTION_THRESHOLD: 0.7,      // Volume ratio < 0.7x average → demote one level
+
     // NFS Order Execution
     NFS_USE_LIMIT_ORDER: true,                // Use LIMIT order for exits (vs market)
     NFS_LIMIT_ORDER_TIMEOUT_MS: 3000,         // Max wait for LIMIT fill

@@ -9,6 +9,7 @@
  */
 
 import { createLogger } from '../utils/logger.js';
+import { MomentumConfig } from '../strategies/momentumSimple.js';
 
 const logger = createLogger('nfs');
 
@@ -214,13 +215,14 @@ export class NfsCalculator {
         return this.createSafeResult('Invalid computed score');
       }
 
-      const confidence = this.determineConfidence(score);
+      const rawConfidence = this.determineConfidence(score);
+      const confidence = this.applyLowVolumeDemotion(rawConfidence, components.volumeRatio);
       const recommendation = this.determineRecommendation(score, confidence);
 
       return {
         score,
         confidence,
-        shouldExitImmediately: score >= this.config.HIGH_CONFIDENCE_THRESHOLD,
+        shouldExitImmediately: confidence === 'HIGH' && score >= this.config.HIGH_CONFIDENCE_THRESHOLD,
         components,
         recommendation,
       };
@@ -300,13 +302,14 @@ export class NfsCalculator {
         return this.createSafeResult('Invalid realtime score');
       }
 
-      const confidence = this.determineConfidence(score);
+      const rawConfidence = this.determineConfidence(score);
+      const confidence = this.applyLowVolumeDemotion(rawConfidence, components.volumeRatio);
       const recommendation = this.determineRecommendation(score, confidence);
 
       return {
         score,
         confidence,
-        shouldExitImmediately: score >= this.config.HIGH_CONFIDENCE_THRESHOLD,
+        shouldExitImmediately: confidence === 'HIGH' && score >= this.config.HIGH_CONFIDENCE_THRESHOLD,
         components,
         recommendation,
       };
@@ -453,6 +456,28 @@ export class NfsCalculator {
     if (score >= this.config.HIGH_CONFIDENCE_THRESHOLD) return 'HIGH';
     if (score >= this.config.MEDIUM_CONFIDENCE_THRESHOLD) return 'MEDIUM';
     return 'LOW';
+  }
+
+  /**
+   * V5.93: Demote confidence one level if breach volume is low.
+   * A trailing breach on low volume is likely noise (wick), not a real reversal.
+   * HIGH → MEDIUM (wait 1 more candle), MEDIUM → LOW (wait 2 more candles).
+   */
+  private applyLowVolumeDemotion(
+    confidence: 'HIGH' | 'MEDIUM' | 'LOW',
+    volumeRatio: number,
+  ): 'HIGH' | 'MEDIUM' | 'LOW' {
+    const enabled = (MomentumConfig.EXIT as any).NFS_LOW_VOL_DEMOTION_ENABLED ?? false;
+    const threshold = (MomentumConfig.EXIT as any).NFS_LOW_VOL_DEMOTION_THRESHOLD ?? 0.7;
+
+    if (!enabled || confidence === 'LOW') return confidence;
+    if (volumeRatio >= threshold) return confidence;
+
+    const demoted = confidence === 'HIGH' ? 'MEDIUM' : 'LOW';
+    logger.info(
+      `📉 [NFS] Low-volume demotion: ${confidence}→${demoted} (volRatio=${volumeRatio.toFixed(2)} < ${threshold})`,
+    );
+    return demoted;
   }
 
   private determineRecommendation(

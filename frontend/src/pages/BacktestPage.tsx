@@ -216,7 +216,7 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
   const areaD = pathD + ` L ${xScale(data.length - 1)} ${height - padding.bottom} L ${padding.left} ${height - padding.bottom} Z`;
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', background: 'var(--bg-primary)', borderRadius: 8 }}>
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', borderRadius: 8 }}>
       {/* Grid lines */}
       {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => (
         <g key={i}>
@@ -225,13 +225,13 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
             x2={width - padding.right}
             y1={padding.top + pct * chartHeight}
             y2={padding.top + pct * chartHeight}
-            stroke="var(--bg-elevated)"
+            stroke="rgba(148,163,184,0.2)"
             strokeDasharray="3,3"
           />
           <text
             x={padding.left - 5}
             y={padding.top + pct * chartHeight + 4}
-            fill="var(--text-secondary)"
+            fill="#94a3b8"
             fontSize={10}
             textAnchor="end"
           >
@@ -243,21 +243,21 @@ const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = 
       {/* Area fill */}
       <defs>
         <linearGradient id="equityGradient" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="var(--success)" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="var(--success)" stopOpacity="0" />
+          <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
         </linearGradient>
       </defs>
       <path d={areaD} fill="url(#equityGradient)" />
 
       {/* Line */}
-      <path d={pathD} fill="none" stroke="var(--success)" strokeWidth={2} />
+      <path d={pathD} fill="none" stroke="#10b981" strokeWidth={2.5} />
 
       {/* Final value dot */}
       <circle
         cx={xScale(data.length - 1)}
         cy={yScale(data[data.length - 1].equity)}
         r={4}
-        fill="var(--success)"
+        fill="#10b981"
       />
     </svg>
   );
@@ -281,18 +281,18 @@ const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }
   const areaD = `M ${padding.left} ${padding.top} ` + pathD.substring(2) + ` L ${xScale(data.length - 1)} ${padding.top} Z`;
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', background: 'var(--bg-primary)', borderRadius: 8 }}>
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', borderRadius: 8 }}>
       {/* Area fill */}
       <defs>
         <linearGradient id="ddGradient" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="var(--error)" stopOpacity="0.4" />
-          <stop offset="100%" stopColor="var(--error)" stopOpacity="0" />
+          <stop offset="0%" stopColor="#ef4444" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#ef4444" stopOpacity="0.02" />
         </linearGradient>
       </defs>
       <path d={areaD} fill="url(#ddGradient)" />
 
       {/* Line */}
-      <path d={pathD} fill="none" stroke="var(--error)" strokeWidth={2} />
+      <path d={pathD} fill="none" stroke="#ef4444" strokeWidth={2.5} />
 
       {/* Max DD line */}
       <line
@@ -300,14 +300,14 @@ const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }
         x2={width - padding.right}
         y1={yScale(maxDD)}
         y2={yScale(maxDD)}
-        stroke="var(--error)"
+        stroke="#ef4444"
         strokeDasharray="5,5"
-        opacity={0.5}
+        opacity={0.6}
       />
       <text
         x={width - padding.right}
         y={yScale(maxDD) - 5}
-        fill="var(--error)"
+        fill="#f87171"
         fontSize={10}
         textAnchor="end"
       >

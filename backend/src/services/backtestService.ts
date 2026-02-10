@@ -645,6 +645,13 @@ function calculateNfsScoreForBreach(
     confidence = 'LOW';
   }
 
+  // V5.93: Low-volume breach demotion — demote confidence one level if volume is weak
+  const lowVolEnabled = (MomentumConfig.EXIT as any).NFS_LOW_VOL_DEMOTION_ENABLED ?? false;
+  const lowVolThreshold = (MomentumConfig.EXIT as any).NFS_LOW_VOL_DEMOTION_THRESHOLD ?? 0.7;
+  if (lowVolEnabled && confidence !== 'LOW' && volumeRatio < lowVolThreshold) {
+    confidence = confidence === 'HIGH' ? 'MEDIUM' : 'LOW';
+  }
+
   return { score, confidence };
 }
 

@@ -543,7 +543,7 @@ function ParityVerificationPanel() {
     return Object.entries(categoryStats).map(([key, value]) => ({
       name: categoryConfig[key as ParityCategory].label,
       value,
-      color: key === 'MATCH' ? 'var(--success)' : key === 'NO_SIGNAL' ? '#faad14' : key === 'PNL_VARIANCE' ? '#1890ff' : 'var(--error)',
+      color: key === 'MATCH' ? '#10b981' : key === 'NO_SIGNAL' ? '#faad14' : key === 'PNL_VARIANCE' ? '#1890ff' : '#ef4444',
     })).filter(d => d.value > 0);
   }, [categoryStats]);
 
