@@ -13,6 +13,7 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'node:events';
 import crypto from 'crypto';
 import { getConfig } from '../utils/env.js';
+import { isIpBanned, setIpBan } from '../exchange/ccxtClient.js';
 import { evaluateTickerFrame } from '../data/tickerValidation.js';
 import {
   recordMarketFrame,
@@ -490,13 +491,11 @@ class BinanceWebSocketManager {
       this.timestampDriftForceAgeMs = Math.max(5_000, cfg.WS_MAX_TIMESTAMP_DRIFT_MS - 1_000);
     }
 
-    if (!this.isTestMode) {
-      void this.refreshServerTimeOffset();
-    }
-
-    if (!this.isTestMode) {
-      this.ensureExchangeInfoFresh({ force: true });
-    }
+    // NOTE: refreshServerTimeOffset() and ensureExchangeInfoFresh() are NOT called
+    // in the constructor. They fire direct REST calls that bypass binanceRestQueue,
+    // and at startup preloadMarkets() already loads exchangeInfo via the queue.
+    // Time sync starts after WS connects (startServerTimeSync), and exchangeInfo
+    // refreshes on its TTL schedule after the first successful load.
     
     // Start health monitor to auto-reconnect if unhealthy for too long
     if (!this.isTestMode) {
@@ -1072,12 +1071,23 @@ class BinanceWebSocketManager {
   }
 
   private async refreshExchangeSymbols(): Promise<void> {
+    // Check IP ban before making direct REST call
+    if (isIpBanned()) return;
+
     const url = `${this.endpoints.rest}/fapi/v1/exchangeInfo`;
     const response = await exchangeInfoRestLimiter.run(() => fetch(url));
 
     if (!response.ok) {
-      // V5.24: If rate limited, silently skip without throwing to avoid log spam
       if (response.status === 418 || response.status === 429) {
+        // Report ban so the rest of the system knows
+        const body = await response.text().catch(() => '');
+        const banMatch = body.match(/banned until (\d+)/);
+        if (banMatch) {
+          const ts = parseInt(banMatch[1], 10);
+          if (ts > Date.now()) setIpBan(ts);
+        } else {
+          setIpBan(Date.now() + 5 * 60 * 1000);
+        }
         console.debug('⏳ Exchange info fetch skipped (rate limited) - will retry later');
         return;
       }
@@ -1117,6 +1127,8 @@ class BinanceWebSocketManager {
     this.tradableSymbolsReady = normalized.length > 0;
     this.rejectedSymbols.clear();
     this.invalidSymbolNoticeTs = new Map();
+    // Mark as freshly loaded so ensureExchangeInfoFresh() doesn't immediately trigger a redundant REST refresh
+    this.exchangeInfoLastFetchedMs = Date.now();
   }
 
   /**
@@ -1479,12 +1491,22 @@ class BinanceWebSocketManager {
 
     const task = (async () => {
       try {
+        // Check IP ban before making direct REST call
+        if (isIpBanned()) return;
+
         const start = Date.now();
         const response = await fetch(`${this.endpoints.rest}/fapi/v1/time`);
         if (!response.ok) {
-          // V5.24: If rate limited (418/429), back off silently - don't keep logging
           if (response.status === 418 || response.status === 429) {
-            // Already rate limited, just skip silently until ban expires
+            // Report ban so the rest of the system knows
+            const body = await response.text().catch(() => '');
+            const banMatch = body.match(/banned until (\d+)/);
+            if (banMatch) {
+              const ts = parseInt(banMatch[1], 10);
+              if (ts > Date.now()) setIpBan(ts);
+            } else {
+              setIpBan(Date.now() + 5 * 60 * 1000); // fallback 5 min
+            }
             return;
           }
           throw new Error(`HTTP ${response.status}`);

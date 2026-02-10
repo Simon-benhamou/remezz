@@ -74,6 +74,7 @@ import { ExchangeOrderManager } from './exchangeOrderManager.js';
 import { PositionOpener } from './positionOpener.js';
 import { RealtimeExitHandler } from './realtimeExitHandler.js';
 import { ipWeightTracker } from '../services/ipWeightTracker.js';
+import { isIpBanned } from '../exchange/ccxtClient.js';
 import { symbolEngineManager } from './symbolEngineManager.js';
 import type { SymbolSignalResult } from './symbolEngine.js';
 import {
@@ -207,7 +208,7 @@ export class CapitalPool {
       //    - AND we have NEVER synced before (hasEverSynced = false)
       //    - AND force flag is set
       // This prevents excessive REST calls during temporary WS disconnections
-      const shouldFallbackToRest = !balance && (!this.hasEverSynced || force) && this.exchange && this.exchange.fetchBalance;
+      const shouldFallbackToRest = !balance && (!this.hasEverSynced || force) && this.exchange && this.exchange.fetchBalance && !isIpBanned();
 
       if (shouldFallbackToRest && this.exchange?.fetchBalance) {
         console.log(`[CapitalPool] WebSocket cache empty on ${force ? 'forced' : 'initial'} sync, falling back to REST fetchBalance...`);
@@ -2761,7 +2762,7 @@ export class SimpleAgent {
 
         // 3. REST API fallback (V5.86: 250 candles for SMA200 regime)
         try {
-          if (this.config.exchange.fetchOHLCV) {
+          if (this.config.exchange.fetchOHLCV && !isIpBanned()) {
             const ohlcv = await this.config.exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250);
             if (ohlcv && ohlcv.length >= 11) {
               const candles: Candle[] = ohlcv.map((c, idx) => ({

@@ -223,7 +223,7 @@ export const MomentumConfig = {
     VOL_SPIKE: 2.0,              // Volume > 2x moyenne (était 2.5x)
     PRICE_BELOW_MA20: true,      // Prix < MA20
     PRICE_BELOW_BB_LOWER: true,  // Prix < BB Lower (nouveau filtre)
-    MAX_CONSEC_DOWN: 4,          // V5.8.1: Max 4 (was 5) - +13% ROI
+    MAX_CONSEC_DOWN: 6,          // V5.93: Max 6 (was 4) - backtest 2025: +30% PnL, +0.21 Sharpe, +1.3% WR, -3% DD
   },
 
   // ═══════════════════════════════════════════════════════════════════════════

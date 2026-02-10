@@ -4425,6 +4425,18 @@ async function runStartupSequence(): Promise<void> {
     } else {
       logger.warn('⚠️ WebSocket timeout - using REST');
     }
+
+    // Seed WS tradable symbols from preloaded markets (avoids separate REST call to exchangeInfo)
+    if (marketsLoaded) {
+      try {
+        const { getCachedExchange } = await import('./exchange/ccxtClient.js');
+        const exchange = await getCachedExchange();
+        if (exchange?.symbols?.length) {
+          ws.seedExchangeSymbols(exchange.symbols.map((s: string) => s.split('/')[0] + 'USDT'));
+          logger.info(`✅ Seeded WS tradable symbols from markets cache (${exchange.symbols.length})`);
+        }
+      } catch {}
+    }
   } catch (error) {
     logger.warn('⚠️ Failed to initialize WebSocket:', error);
   }
