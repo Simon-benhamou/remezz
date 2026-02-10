@@ -358,12 +358,14 @@ export default function ProfessionalChart({
     ensureLine(entryLineRef, priceOrNull(position?.entryPrice), {
       title: 'Entry',
       color: '#38bdf8',
-      lineWidth: 2,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
     });
     ensureLine(stopLineRef, priceOrNull(position?.stopPrice), {
       title: 'Stop',
       color: '#ef4444',
-      lineWidth: 2,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
     });
     ensureLine(supportLineRef, priceOrNull(primarySupport), {
       title: 'Support',
@@ -468,34 +470,55 @@ export default function ProfessionalChart({
 
     const markers: any[] = [];
 
-    orders?.forEach(order => {
-      if (!order.createdAt) return;
+    // Collect filled orders and detect entry vs exit
+    const filledOrders = (orders || []).filter(
+      (o: any) => o.status?.toLowerCase() === 'filled' && o.createdAt,
+    );
 
+    filledOrders.forEach((order: any) => {
       const time = (new Date(order.createdAt).getTime() / 1000) as UTCTimestamp;
-      const clientId = order.clientOrderId || '';
-      const isExit = clientId.includes('.exit') || clientId.includes('_exit_');
-      const isFilled = order.status?.toLowerCase() === 'filled';
+      const clientId = (order.clientOrderId || '').toLowerCase();
+      const price = Number(order.avgPrice || order.price || 0);
 
-      if (isFilled) {
-        if (isExit) {
-          markers.push({
-            time,
-            position: 'aboveBar',
-            color: colors.downColor,
-            shape: 'arrowDown',
-            text: `Exit @ ${formatPriceDisplay(Number(order.price || order.avgPrice || 0))}`,
-          });
-        } else {
-          markers.push({
-            time,
-            position: 'belowBar',
-            color: colors.upColor,
-            shape: 'arrowUp',
-            text: `Entry @ ${formatPriceDisplay(Number(order.price || order.avgPrice || 0))}`,
-          });
-        }
+      // Multi-layered exit detection:
+      // 1. clientOrderId contains exit/close/sl/tp/trailing/stoploss/takeprofit
+      // 2. reduceOnly flag
+      // 3. order type is stop_market / take_profit_market
+      const exitPatterns = ['exit', 'close', '_sl', '.sl', 'stoploss', 'stop_loss', 'takeprofit', 'take_profit', 'trailing', '_tp'];
+      const hasExitPattern = exitPatterns.some(p => clientId.includes(p));
+      const isReduceOnly = order.reduceOnly === true;
+      const isExitType = ['stop_market', 'take_profit_market', 'stop', 'take_profit'].includes(order.type?.toLowerCase() || '');
+      const isExit = hasExitPattern || isReduceOnly || isExitType;
+
+      if (isExit) {
+        markers.push({
+          time,
+          position: 'aboveBar',
+          color: '#f59e0b',  // amber for exit
+          shape: 'arrowDown',
+          text: `Exit @ ${formatPriceDisplay(price)}`,
+        });
+      } else {
+        markers.push({
+          time,
+          position: 'belowBar',
+          color: '#38bdf8',  // cyan for entry
+          shape: 'arrowUp',
+          text: `Entry @ ${formatPriceDisplay(price)}`,
+        });
       }
     });
+
+    // Fallback: if all markers are entries (detection failed) and there are exactly 2,
+    // treat the second chronologically as exit
+    if (markers.length === 2 && markers.every(m => m.text.startsWith('Entry'))) {
+      markers.sort((a, b) => a.time - b.time);
+      const exitMarker = markers[1];
+      exitMarker.text = exitMarker.text.replace('Entry', 'Exit');
+      exitMarker.position = 'aboveBar';
+      exitMarker.color = '#f59e0b';
+      exitMarker.shape = 'arrowDown';
+    }
 
     // Sort markers by time
     markers.sort((a, b) => a.time - b.time);
