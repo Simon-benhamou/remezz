@@ -1277,7 +1277,7 @@ export class SimpleAgent {
 
         const allBtcCandles1h = await this.fetchBtcCandles1h();
         const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
-        const MIN_BTC_1H_CANDLES = 11;
+        const MIN_BTC_1H_CANDLES = 201; // Need 200 for SMA200 regime + 1 (match backtest)
         if (btcCandles1h.length < MIN_BTC_1H_CANDLES) {
           if (this.tickCount % 10 === 1) {
             logger.info(`⚠️ [${shortSymbol}] Waiting for BTC 1h data (${btcCandles1h.length}/${MIN_BTC_1H_CANDLES})`);

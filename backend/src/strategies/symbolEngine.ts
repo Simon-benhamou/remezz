@@ -35,7 +35,7 @@ const logger = createLogger('symbol-engine');
 const TICK_INTERVAL_MS = 15_000; // 15 seconds, aligned with agent ticks
 const MIN_CANDLES = 61;           // Minimum candles for indicators (match agent threshold)
 const MIN_BTC_15M_CANDLES = 201;  // Need 200 for SMA200 + 1 current (match agent + checkMomentumSignal)
-const MIN_BTC_1H_CANDLES = 11;    // Minimum BTC 1h candles for MTF filter
+const MIN_BTC_1H_CANDLES = 201;   // Need 200 for SMA200 regime + 1 current (match backtest)
 
 export interface SymbolSignalResult {
   signal: SignalResult;
