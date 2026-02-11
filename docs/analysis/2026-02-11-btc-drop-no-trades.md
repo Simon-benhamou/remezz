@@ -134,54 +134,82 @@ on each 15m candle close (isFinal=true):
      -> If NFS HIGH: exit immediately                   (line 1870)
 ```
 
-## Root Cause: NFS Score Sensitivity at the HIGH/MEDIUM Boundary
+## Root Cause: WebSocket vs Historical Candle Data Discrepancy
 
-The code logic is **correctly aligned** - both use the same `shouldExitPosition()`,
-same watermark updates, same trailing calculation, same NFS thresholds (HIGH >= 70).
+**Important context**: V5.93 Low-Volume Demotion was added AFTER this trade.
+The live at trade time had NO demotion. Yet the parity simulation (which runs
+with current code INCLUDING demotion) still exits earlier. This rules out
+NFS demotion as the cause and narrows the issue to **data differences**.
 
-The 30-minute gap is most likely caused by **NFS score divergence** at the
-HIGH/MEDIUM boundary (score ~70) on the first breach candle:
+### What the parity simulation does
 
-### Why NFS scores can differ between live and backtest:
+The parity tool (`parityVerificationServiceV2.ts:simulateExit()`) fetches
+**historical candles from Binance REST API** and simulates exit forward from
+the recorded entry. It does NOT replay WebSocket data from trade time.
 
-1. **Candle data finalization**: Binance finalizes candle data (especially volume)
-   slightly after the candle closes. The backtest sees the final historical volume;
-   the live sees the initial real-time volume. Even a 5-10% difference in volume
-   can shift the NFS score across the 70-point threshold.
+This means:
+- **Parity/Backtest**: Uses finalized historical REST candle data (high/low/volume/close)
+- **Live at trade time**: Used real-time WebSocket kline data
 
-2. **V5.93 Low-Volume Demotion**: Both paths have `NFS_LOW_VOL_DEMOTION_ENABLED: true`
-   with threshold 0.7x. If volume ratio is borderline (e.g., 0.68x live vs 0.72x
-   backtest), the live demotes HIGH -> MEDIUM while backtest keeps HIGH.
-   (momentumSimple.ts:524, backtestService.ts:649, nfsRealtimeExit.ts:470)
+### Three possible causes (in priority order):
 
-3. **NFS component sensitivity**: The score is composed of 5 components weighted
-   35:25:20:10:10. Volume alone is worth 20 points. If volume is below the 1.5x
-   threshold in live but above in backtest (or half-credit vs full-credit), that's
-   a 10-20 point swing - easily crossing the 70 threshold.
+**1. Candle high/low differ between WebSocket (live) and REST API (backtest)**
 
-### The cascade effect:
+For the trailing stop breach check (`momentumSimple.ts:2674`):
+```
+wickBreached = effectiveHigh >= trailingStopPrice  // SHORT
+closeBreached = currentPrice >= trailingStopPrice
+```
+Both conditions must pass. If the candle's HIGH as seen live (WebSocket) was
+slightly lower than the finalized HIGH in REST API, the wick breach wouldn't
+trigger in live but would in backtest.
+
+Binance can adjust candle extremes (high/low) after the candle closes - late
+trades or aggregation corrections. WebSocket klines are built incrementally
+from tick data; REST historical candles are the finalized version.
+
+**2. Volume difference affecting NFS score**
+
+NFS score has volume as 20% of its weight. If the breach candle's volume
+differed between live (WebSocket) and backtest (REST):
+- Volume component alone can swing the NFS score by 10-20 points
+- If score drops from 75 to 62 → HIGH becomes MEDIUM
+- MEDIUM requires 1-candle confirmation → adds 1+ candles delay
+- If the next candle's close recovers below the trailing stop → counter resets
+- Fresh breach needed → adds another 1-2 candles
+
+**3. LowWaterMark tracking difference from candle data**
+
+For SHORT: `trailingStop = lowWaterMark * (1 + distance%)`
+
+If a prior candle's LOW was lower in WebSocket (real-time) than in REST (historical):
+- Live lowWaterMark would be LOWER → trailing stop would be LOWER
+- Price needs to rise MORE to breach the live's trailing stop
+- Could delay breach detection by 1-2 candles
+
+### The likely cascade:
 
 ```
 Candle 15:45-16:00 (breach candle):
-  Backtest: NFS = 75 (HIGH) -> EXIT IMMEDIATELY at 16:00
-  Live:     NFS = 62 (MEDIUM, demoted from HIGH due to volume) -> wait 1 confirm
+  Parity (REST data):    HIGH >= trailingStop? YES → closeBreached? YES → NFS HIGH → EXIT
+  Live (WebSocket data): HIGH >= trailingStop? NO (slightly lower high) → no breach detected
 
 Candle 16:00-16:15:
-  Live: close recovers below trailing stop -> trailingBreached = false -> RESET counter
+  Live: Still no breach (or wick-only breach, close recovers → reset)
 
 Candle 16:15-16:30:
-  Live: breach again, NFS = 78 (HIGH this time) -> EXIT at 16:30
+  Live: Price rises further → breach confirmed → NFS HIGH → EXIT at 16:30
 ```
-
-This produces the observed: backtest NFS_HIGH at 16:00, live NFS_HIGH at 16:30.
 
 ## Is This a Bug?
 
-**Not a logic bug** - the code is correctly aligned. It's a **data sensitivity issue**
-at the NFS score boundary. The NFS score is deterministic given the same inputs, but
-live and backtest see slightly different inputs (volume primarily).
+**Not a logic bug** - the code paths are correctly aligned and use the same functions.
+It's a **data source discrepancy**: WebSocket kline data during the trade differed
+from finalized REST API historical data used by the parity simulation.
 
-The comment at backtestService.ts:750-753 acknowledges this:
+This is an inherent limitation of comparing a live WebSocket-driven system against
+a backtest/parity simulation that uses historical REST data. The code at
+backtestService.ts:750-753 acknowledges the timing difference:
 ```
 // NOTE: Backtest uses EXIT_TRAIL_NFS_HIGH (immediate per-candle evaluation).
 // Live 15m layer uses EXIT_TRAIL_NFS_HIGH_15M (deferred to 15m close per V5.90).
@@ -189,26 +217,42 @@ The comment at backtestService.ts:750-753 acknowledges this:
 // different timing. This is intentional, not a parity bug.
 ```
 
+But the comment attributes it to architectural timing when the real issue may be
+**different candle data between live and backtest**.
+
 ## Impact Assessment
 
-- **Frequency**: This occurs when NFS score is borderline (~65-75) at the breach moment
-- **PnL cost**: In this case, 2.66% lost profit due to delayed exit
-- **For SHORT**: Price bounced up between 16:00-16:30, reducing profit from 5.65% to 2.99%
+- **Frequency**: Occurs whenever candle extremes (high/low) or volume differ between
+  WebSocket and REST API at a moment when the trailing stop is near the price
+- **PnL cost**: In this case, 2.66% lost profit due to 30-minute delayed exit
+- **For SHORT**: Price bounced up between 16:00 and 16:30, reducing profit from 5.65% to 2.99%
 
-## Possible Mitigations
+## Recommended Actions
 
-1. **Proactive LIMIT order (V5.87)**: The realtime 1m monitor should place a LIMIT
-   order at the trailing stop price BEFORE the breach. If working correctly, this
-   would fill at the exact trailing price regardless of NFS score on the 15m layer.
-   -> **Check if proactive LIMIT was active for this trade**
+### Immediate diagnostics
 
-2. **NFS score logging**: Add side-by-side NFS component logging to parity reports
-   so the exact component that diverged can be identified (was it volume? ATR? breach depth?)
+1. **Was proactive LIMIT (V5.87) active for this trade?**
+   If yes → why didn't it fill at the trailing stop price?
+   If no → this is expected behavior for the 15m exit layer
 
-3. **NFS hysteresis band**: Instead of hard threshold at 70, use a band (68-72).
-   If score is in the band, default to HIGH to avoid the demotion delay.
-   This would reduce sensitivity at the boundary.
+2. **Add candle data comparison logging**: When the 15m exit check runs, log
+   the candle high/low/volume alongside what the REST API returns for the same
+   candle. This will confirm if data discrepancy is the cause.
 
-4. **Volume data stabilization**: Fetch candle data 2-3 seconds after close
+3. **Log NFS score components on breach**: Both live and parity should log
+   the exact NFS components (breachATR, breachDepth, volume, bodyRatio, momentum)
+   so divergence can be pinpointed.
+
+### Structural improvements
+
+4. **NFS hysteresis band**: Instead of hard threshold at 70, use a band (68-72).
+   If score is in the band AND trailing is breached, default to HIGH.
+   This reduces sensitivity at the boundary.
+
+5. **Parity verification with WebSocket data**: Store the raw WebSocket candle
+   data used at trade time and replay it in parity verification instead of
+   fetching from REST API. This would make parity comparisons truly apples-to-apples.
+
+6. **Volume data stabilization**: Fetch candle data 2-3 seconds after close
    (instead of immediately) to allow Binance to finalize the volume.
-   Trade-off: adds 2-3 seconds latency to ALL exits.
+   Trade-off: adds 2-3s latency to ALL exits.
