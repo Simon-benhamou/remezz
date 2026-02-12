@@ -1757,7 +1757,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const signal = checkMomentumSignal(
           symbol,
           windowCandles,
-          btcCandles.slice(Math.max(0, btcIdx - 200), btcIdx + 1), // BTC 15m candles for volatility filter
+          btcCandles.slice(Math.max(0, btcIdx - 201), btcIdx), // V5.94 FIX: Exclude current BTC 15m candle (match live behavior)
+          // Live filters out isFinal=false candles, so it never sees the current forming candle.
+          // Previously btcIdx+1 included the current candle with its FINAL values (look-ahead bias).
           {
             nowMs: btcCandle.timestamp,
             btcCandles1h: btcCandles1hWindow, // V5.36: Pass 1h candles for MTF filter
