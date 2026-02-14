@@ -1,6 +1,7 @@
 import ccxt from 'ccxt';
 import { resolveSymbol, getUserExchange } from '../exchange/ccxtClient.js';
 import { getConfig } from '../utils/env.js';
+import { ipWeightTracker } from '../services/ipWeightTracker.js';
 
 export interface BookLevel { price: number; size: number }
 export interface DepthSnapshot { timestamp: number; bids: BookLevel[]; asks: BookLevel[] }
@@ -111,7 +112,9 @@ export async function fetchDepth(symbol: string, levels: number, userId?: string
   }
 
   try {
+    if (!ipWeightTracker.canMakeCall(5)) return null;
     const book = await exchange.fetchOrderBook(resolvedSymbol, depthLevels);
+    ipWeightTracker.record(5, `fetchOrderBook:${resolvedSymbol}`);
     const bids = normalizeLevels(book?.bids || [], depthLevels);
     const asks = normalizeLevels(book?.asks || [], depthLevels);
     if (!bids.length || !asks.length) {

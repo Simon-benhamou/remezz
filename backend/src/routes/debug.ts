@@ -4,6 +4,7 @@ import { getUserCredentials } from '../services/userCredentials.js';
 import { getUserExchange, validateUserCredentials, clearUserExchangeCache } from '../exchange/ccxtClient.js';
 import { prisma } from '../db/client.js';
 import { encryptApiKey, decryptApiKey } from '../utils/crypto.js';
+import { ipWeightTracker } from '../services/ipWeightTracker.js';
 
 export const router = Router();
 
@@ -158,8 +159,10 @@ router.post('/test-credentials', async (req: AuthenticatedRequest, res) => {
       const { runExclusiveBalanceFetch } = await import('../services/binanceWebSocket.js');
       const keyUser = (req as AuthenticatedRequest).user?.id || 'manual_debug';
       balance = await runExclusiveBalanceFetch<any>(keyUser, 'USDT', () => exchange.fetchBalance()) as any;
+      ipWeightTracker.record(5, 'fetchBalance:debug:test');
     } else {
       balance = await exchange.fetchBalance();
+      ipWeightTracker.record(5, 'fetchBalance:debug:test');
     }
     
     console.log('✅ Balance fetch successful!');
@@ -366,6 +369,7 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
       if ((credentials.exchange || '').toLowerCase() === 'binance') {
         const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
         balance = await runExclusiveBalanceFetch<any>(req.user!.id, 'USDT', () => exchange.fetchBalance()) as any;
+        ipWeightTracker.record(5, 'fetchBalance:debug:validate');
         try {
           const total = Number(balance?.total?.USDT ?? 0);
           const free = Number(balance?.free?.USDT ?? 0);
@@ -376,6 +380,7 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
         } catch {}
       } else {
         balance = await exchange.fetchBalance();
+        ipWeightTracker.record(5, 'fetchBalance:debug:validate');
       }
       console.log('Balance fetched successfully:', JSON.stringify(balance, null, 2));
     } catch (error: any) {
@@ -787,6 +792,7 @@ router.get('/diagnose-apikeys', async (req: AuthenticatedRequest, res) => {
       if ((credentials.exchange || '').toLowerCase() === 'binance') {
         const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
         balance = await runExclusiveBalanceFetch<any>(userId, 'USDT', () => exchange.fetchBalance()) as any;
+        ipWeightTracker.record(5, 'fetchBalance:debug:fullTest');
         try {
           const total = Number(balance?.total?.USDT ?? 0);
           const free = Number(balance?.free?.USDT ?? 0);
@@ -797,11 +803,12 @@ router.get('/diagnose-apikeys', async (req: AuthenticatedRequest, res) => {
         } catch {}
       } else {
         balance = await exchange.fetchBalance();
+        ipWeightTracker.record(5, 'fetchBalance:debug:fullTest');
       }
 
-      results.push({ 
-        step: 'balance_check', 
-        success: true, 
+      results.push({
+        step: 'balance_check',
+        success: true,
         message: 'Balance fetched successfully',
         currencies: Object.keys(balance || {}).length,
         hasFree: !!balance.free,

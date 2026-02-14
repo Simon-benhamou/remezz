@@ -61,6 +61,7 @@ import { getCachedExchange } from '../exchange/ccxtClient.js';
 
 // V5.25: Import global REST circuit breaker to avoid bans
 import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
+import { ipWeightTracker } from './ipWeightTracker.js';
 
 // V5.22: Import shared signal scoring function (ensures backtest = production)
 import { calculateSignalScore } from '../strategies/signalRanker.js';
@@ -1003,14 +1004,19 @@ async function fetchCandlesFromCcxt(
 
   while (cursor < until) {
     try {
-      // V5.25: Check circuit breaker before each REST call
+      // V5.25: Check circuit breaker + weight budget before each REST call
       if (!globalRestCircuitBreaker.canMakeRequest()) {
         console.error(`[Backtest] 🚫 REST circuit breaker is OPEN - cannot fetch ${symbol}`);
         console.error(`[Backtest] Please wait for rate limit to expire before running backtest`);
         throw new Error('REST_CIRCUIT_BREAKER_OPEN');
       }
-      
+      if (!ipWeightTracker.canMakeCall(10)) {
+        const ok = await ipWeightTracker.waitForBudget(10, `backtest:fetchOHLCV:15m:${symbol}`, 60_000);
+        if (!ok) throw new Error('IP_WEIGHT_BUDGET_EXHAUSTED');
+      }
+
       const ohlcv = await exchange.fetchOHLCV(symbol, '15m', cursor, 1000);
+      ipWeightTracker.record(10, `backtest:fetchOHLCV:15m:${symbol}`);
       if (!ohlcv || ohlcv.length === 0) break;
 
       let progressed = false;
@@ -1104,8 +1110,13 @@ async function fetchCandles1hFromCcxt(
         console.error(`[Backtest] 🚫 REST circuit breaker is OPEN - cannot fetch 1h ${symbol}`);
         throw new Error('REST_CIRCUIT_BREAKER_OPEN');
       }
+      if (!ipWeightTracker.canMakeCall(10)) {
+        const ok = await ipWeightTracker.waitForBudget(10, `backtest:fetchOHLCV:1h:${symbol}`, 60_000);
+        if (!ok) throw new Error('IP_WEIGHT_BUDGET_EXHAUSTED');
+      }
 
       const ohlcv = await exchange.fetchOHLCV(symbol, '1h', cursor, 1000);
+      ipWeightTracker.record(10, `backtest:fetchOHLCV:1h:${symbol}`);
       if (!ohlcv || ohlcv.length === 0) break;
 
       let progressed = false;

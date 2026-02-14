@@ -6,7 +6,7 @@
  *
  * Architecture:
  * - All REST calls go through this queue
- * - Weight tracking per minute (Binance limit: 2400/min, we use 1000 safe threshold)
+ * - Weight tracking unified with ipWeightTracker (single source of truth for 2400w/min Binance limit)
  * - Priority-based execution (critical > high > normal > low)
  * - Automatic IP ban detection and handling
  *
@@ -19,6 +19,7 @@
 
 import { createLogger } from '../utils/logger.js';
 import { isIpBanned, setIpBan, getIpBanExpiry } from '../exchange/ccxtClient.js';
+import { ipWeightTracker } from './ipWeightTracker.js';
 
 const logger = createLogger('RestQueue');
 
@@ -85,10 +86,6 @@ class BinanceRestQueue {
   private paused = false;
   private requestIdCounter = 0;
 
-  // Weight tracking
-  private weightUsedThisMinute = 0;
-  private weightResetAt = Date.now() + 60_000;
-
   // Stats
   private stats = {
     totalEnqueued: 0,
@@ -100,7 +97,7 @@ class BinanceRestQueue {
 
   // Configuration
   private config: QueueConfig = {
-    maxWeightPerMinute: 1000,      // Safe threshold (Binance hard limit: 2400)
+    maxWeightPerMinute: 2400,      // Binance hard limit — ipWeightTracker enforces this
     minDelayBetweenCallsMs: 100,   // Minimum delay between any two calls
     maxRetries: 2,                  // Retry failed requests (not bans)
     banBackoffMs: 5000,            // Wait after detecting rate limit warning
@@ -110,8 +107,7 @@ class BinanceRestQueue {
     if (config) {
       this.config = { ...this.config, ...config };
     }
-    logger.info('BinanceRestQueue initialized', {
-      maxWeightPerMinute: this.config.maxWeightPerMinute,
+    logger.info('BinanceRestQueue initialized (unified with ipWeightTracker)', {
       minDelayMs: this.config.minDelayBetweenCallsMs,
     });
   }
@@ -216,17 +212,14 @@ class BinanceRestQueue {
         if (this.queue.length === 0) break;
       }
 
-      // Reset weight counter if minute has passed
-      this.resetWeightIfNeeded();
-
       const request = this.queue[0];
       if (!request) break;
 
-      // Check if we have weight budget
-      if (this.weightUsedThisMinute + request.weight > this.config.maxWeightPerMinute) {
-        const waitMs = Math.max(0, this.weightResetAt - Date.now());
-        logger.info(`Weight limit reached (${this.weightUsedThisMinute}/${this.config.maxWeightPerMinute}) - waiting ${Math.ceil(waitMs / 1000)}s for reset`);
-        await this.sleep(waitMs + 1000); // +1s buffer
+      // Check if we have weight budget (unified via ipWeightTracker)
+      if (!ipWeightTracker.canMakeCall(request.weight)) {
+        const currentWeight = ipWeightTracker.getCurrentWeight();
+        logger.info(`Weight limit reached (${currentWeight}/2400) - waiting for budget to free up (next: ${request.tag}, weight: ${request.weight})`);
+        await this.sleep(2_000); // Wait 2s and re-check
         continue;
       }
 
@@ -255,8 +248,8 @@ class BinanceRestQueue {
 
       const result = await request.fn();
 
-      // Success - update weight and stats
-      this.weightUsedThisMinute += request.weight;
+      // Success - record weight in unified tracker (single source of truth)
+      ipWeightTracker.record(request.weight, `queue:${request.tag}`);
       this.stats.totalExecuted++;
 
       logger.debug(`[${request.id}] Success: ${request.tag}`);
@@ -299,20 +292,6 @@ class BinanceRestQueue {
       this.stats.totalFailed++;
       logger.error(`[${request.id}] Failed: ${request.tag} - ${errorMsg}`);
       request.reject(error);
-    }
-  }
-
-  /**
-   * Reset weight counter if a minute has passed
-   */
-  private resetWeightIfNeeded(): void {
-    const now = Date.now();
-    if (now >= this.weightResetAt) {
-      if (this.weightUsedThisMinute > 0) {
-        logger.debug(`Weight reset: ${this.weightUsedThisMinute} -> 0`);
-      }
-      this.weightUsedThisMinute = 0;
-      this.weightResetAt = now + 60_000;
     }
   }
 
@@ -429,8 +408,8 @@ class BinanceRestQueue {
       totalFailed: this.stats.totalFailed,
       totalRetried: this.stats.totalRetried,
       currentQueueSize: this.queue.length,
-      weightUsedThisMinute: this.weightUsedThisMinute,
-      weightResetAt: this.weightResetAt,
+      weightUsedThisMinute: ipWeightTracker.getCurrentWeight(), // Unified tracker
+      weightResetAt: 0, // No longer relevant — ipWeightTracker uses rolling 60s window
       avgWaitTimeMs: this.stats.totalExecuted > 0
         ? Math.round(this.stats.totalWaitTimeMs / this.stats.totalExecuted)
         : 0,
@@ -454,11 +433,10 @@ class BinanceRestQueue {
   }
 
   /**
-   * Get remaining weight budget for this minute
+   * Get remaining weight budget for this minute (via unified tracker)
    */
   getRemainingWeight(): number {
-    this.resetWeightIfNeeded();
-    return Math.max(0, this.config.maxWeightPerMinute - this.weightUsedThisMinute);
+    return Math.max(0, 2400 - ipWeightTracker.getCurrentWeight());
   }
 
   /**
@@ -466,8 +444,7 @@ class BinanceRestQueue {
    */
   canExecuteImmediately(weight: number): boolean {
     if (isIpBanned()) return false;
-    this.resetWeightIfNeeded();
-    return this.weightUsedThisMinute + weight <= this.config.maxWeightPerMinute && this.queue.length === 0;
+    return ipWeightTracker.canMakeCall(weight) && this.queue.length === 0;
   }
 
   private sleep(ms: number): Promise<void> {

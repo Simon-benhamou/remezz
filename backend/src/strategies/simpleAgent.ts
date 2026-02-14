@@ -2762,8 +2762,9 @@ export class SimpleAgent {
 
         // 3. REST API fallback (V5.86: 250 candles for SMA200 regime)
         try {
-          if (this.config.exchange.fetchOHLCV && !isIpBanned()) {
+          if (this.config.exchange.fetchOHLCV && !isIpBanned() && ipWeightTracker.canMakeCall(10)) {
             const ohlcv = await this.config.exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250);
+            ipWeightTracker.record(10, 'fetchOHLCV:BTC_1h:fallback');
             if (ohlcv && ohlcv.length >= 11) {
               const candles: Candle[] = ohlcv.map((c, idx) => ({
                 timestamp: c[0] as number, open: c[1] as number,
@@ -2968,12 +2969,16 @@ export class SimpleAgent {
 
           // REST fallback (only if WS is not active or had no data)
           // V5.66: Use deduplicator to prevent concurrent identical calls
-          if (!exchangeOrderId && this.config.exchange.fetchMyTrades) {
+          if (!exchangeOrderId && this.config.exchange.fetchMyTrades && ipWeightTracker.canMakeCall(10)) {
             const since = Date.now() - 3600000;
             const key = makeFetchMyTradesKey(this.config.userId, symbol, since);
             const trades = await exchangeAPIDeduplicator.execute(
               key,
-              () => this.config.exchange.fetchMyTrades!(symbol, since, 10),
+              async () => {
+                const result = await this.config.exchange.fetchMyTrades!(symbol, since, 10);
+                ipWeightTracker.record(10, `fetchMyTrades:exitSync:${symbol}`);
+                return result;
+              },
               5_000, // 5s cache TTL for exit sync
               `${this.config.sessionId}:exitSync`
             );
@@ -3277,7 +3282,7 @@ export class SimpleAgent {
 
       // Get all trades from Binance for the last 2 hours (to catch recent misses)
       // V5.66: Use deduplicator to prevent concurrent identical calls
-      if (!this.config.exchange.fetchMyTrades) {
+      if (!this.config.exchange.fetchMyTrades || !ipWeightTracker.canMakeCall(10)) {
         return;
       }
 
@@ -3285,7 +3290,11 @@ export class SimpleAgent {
       const key = makeFetchMyTradesKey(this.config.userId, symbol, since);
       const binanceTrades = await exchangeAPIDeduplicator.execute(
         key,
-        () => this.config.exchange.fetchMyTrades!(symbol, since, 50),
+        async () => {
+          const result = await this.config.exchange.fetchMyTrades!(symbol, since, 50);
+          ipWeightTracker.record(10, `fetchMyTrades:missingTrades:${symbol}`);
+          return result;
+        },
         10_000, // 10s cache TTL for missing trades check
         `${this.config.sessionId}:missingTradesCheck`
       );

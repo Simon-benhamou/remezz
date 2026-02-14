@@ -643,9 +643,12 @@ export class PositionOpener {
 
             // Fetch fresh order status
             try {
-              const orders = await this.ctx.exchange.fetchMyTrades?.(symbol, undefined, 1);
-              if (orders && orders.length > 0 && orders[0].order === lastStatus.id) {
-                lastStatus = { ...lastStatus, filled: orders[0].amount, status: 'closed' };
+              if (ipWeightTracker.canMakeCall(10)) {
+                const orders = await this.ctx.exchange.fetchMyTrades?.(symbol, undefined, 1);
+                ipWeightTracker.record(10, `fetchMyTrades:limitPoll:${symbol}`);
+                if (orders && orders.length > 0 && orders[0].order === lastStatus.id) {
+                  lastStatus = { ...lastStatus, filled: orders[0].amount, status: 'closed' };
+                }
               }
             } catch {
               // Ignore fetch errors, continue polling
@@ -658,6 +661,7 @@ export class PositionOpener {
               logger.warn(`⏱️ [${symbol}] Limit order timeout after ${timeoutMs}ms - cancelling and using market order`);
               try {
                 await this.ctx.exchange.cancelOrder?.(limitOrder.id, symbol);
+                ipWeightTracker.record(1, `cancelOrder:limitTimeout:${symbol}`);
               } catch (cancelErr) {
                 logger.debug(`[${symbol}] Cancel order error (may already be filled/cancelled): ${cancelErr}`);
               }
@@ -665,6 +669,7 @@ export class PositionOpener {
               logger.error(`❌ [${symbol}] Limit order not filled and fallback disabled - aborting entry`);
               try {
                 await this.ctx.exchange.cancelOrder?.(limitOrder.id, symbol);
+                ipWeightTracker.record(1, `cancelOrder:limitAbort:${symbol}`);
               } catch {
                 // Ignore
               }

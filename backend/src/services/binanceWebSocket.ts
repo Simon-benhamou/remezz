@@ -14,6 +14,7 @@ import { EventEmitter } from 'node:events';
 import crypto from 'crypto';
 import { getConfig } from '../utils/env.js';
 import { isIpBanned, setIpBan } from '../exchange/ccxtClient.js';
+import { ipWeightTracker } from './ipWeightTracker.js';
 import { evaluateTickerFrame } from '../data/tickerValidation.js';
 import {
   recordMarketFrame,
@@ -1071,11 +1072,12 @@ class BinanceWebSocketManager {
   }
 
   private async refreshExchangeSymbols(): Promise<void> {
-    // Check IP ban before making direct REST call
-    if (isIpBanned()) return;
+    // Check IP ban + weight budget before making direct REST call
+    if (isIpBanned() || !ipWeightTracker.canMakeCall(40)) return;
 
     const url = `${this.endpoints.rest}/fapi/v1/exchangeInfo`;
     const response = await exchangeInfoRestLimiter.run(() => fetch(url));
+    ipWeightTracker.record(40, 'exchangeInfo:refreshSymbols');
 
     if (!response.ok) {
       if (response.status === 418 || response.status === 429) {
@@ -1491,11 +1493,12 @@ class BinanceWebSocketManager {
 
     const task = (async () => {
       try {
-        // Check IP ban before making direct REST call
-        if (isIpBanned()) return;
+        // Check IP ban + weight budget before making direct REST call
+        if (isIpBanned() || !ipWeightTracker.canMakeCall(1)) return;
 
         const start = Date.now();
         const response = await fetch(`${this.endpoints.rest}/fapi/v1/time`);
+        ipWeightTracker.record(1, 'time:healthCheck');
         if (!response.ok) {
           if (response.status === 418 || response.status === 429) {
             // Report ban so the rest of the system knows
@@ -1825,8 +1828,10 @@ class BinanceWebSocketManager {
 
   private async fetchBookTickerSnapshot(symbol: string): Promise<void> {
     try {
+      if (!ipWeightTracker.canMakeCall(2)) return;
       const url = `${BINANCE_ENDPOINTS.rest}/fapi/v1/ticker/bookTicker?symbol=${symbol}`;
       const response = await bookTickerRestLimiter.run(() => fetch(url));
+      ipWeightTracker.record(2, `bookTicker:snapshot:${symbol}`);
       if (response.status === 429) {
         const retryAfter = Number(response.headers.get('retry-after'));
         const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0

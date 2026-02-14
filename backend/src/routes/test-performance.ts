@@ -1,17 +1,27 @@
 import { Router } from 'express';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
+import { ipWeightTracker } from '../services/ipWeightTracker.js';
 
 export const router = Router();
 
 // Test endpoint to see real 24h performance data
+// WARNING: This endpoint uses ~80w (loadMarkets 40w + fetchTickers 40w)
 router.get('/top-performers', async (req, res) => {
   try {
+    // Guard: these debug endpoints are expensive — block if budget is tight
+    if (!ipWeightTracker.canMakeCall(80)) {
+      return res.status(429).json({
+        success: false,
+        error: `API weight budget too low (${ipWeightTracker.getCurrentWeight()}/2400). Try again later.`,
+      });
+    }
+
     console.log('📊 Fetching real-time top performers from exchange...');
-    
+
     const { EXCHANGE_ID } = getConfig();
     const ExchangeClass = (ccxt as any)[EXCHANGE_ID];
-    
+
     if (!ExchangeClass) {
       return res.json({
         success: false,
@@ -26,20 +36,21 @@ router.get('/top-performers', async (req, res) => {
     });
 
     await exchange.loadMarkets();
-    
+    ipWeightTracker.record(40, 'loadMarkets:topPerformers');
+
     // Get all markets and filter for USDT perpetuals
     const allMarkets = Object.keys(exchange.markets || {});
-    console.log(`� Total markets available: ${allMarkets.length}`);
-    
+    console.log(`📈 Total markets available: ${allMarkets.length}`);
+
     const perpetualMarkets = allMarkets.filter(symbol => {
       try {
         if (!symbol || typeof symbol !== 'string') return false;
-        
+
         const market = exchange.markets[symbol];
         if (!market) return false;
-        
+
         // Crypto.com uses USD-settled perpetuals in format: SYMBOL/USD:USD
-        return market.swap === true && 
+        return market.swap === true &&
                market.active === true &&
                market.settle === 'USD' && // USD-settled perpetuals
                symbol.includes('/USD:USD'); // Perpetual format on Crypto.com
@@ -53,9 +64,10 @@ router.get('/top-performers', async (req, res) => {
     // Get a reasonable sample to avoid rate limits (first 30)
     const sampleMarkets = perpetualMarkets.slice(0, 30);
     console.log(`🎯 Testing ${sampleMarkets.length} markets:`, sampleMarkets.slice(0, 5));
-    
+
     // Fetch tickers for the sample
     const tickers = await exchange.fetchTickers(sampleMarkets);
+    ipWeightTracker.record(40, 'fetchTickers:topPerformers');
     
     // Convert to array and calculate performance metrics
     const cryptoPerformance = Object.entries(tickers).map(([symbol, ticker]) => {
@@ -128,9 +140,13 @@ router.get('/top-performers', async (req, res) => {
 // Debug endpoint to see swap market structure specifically
 router.get('/debug-swaps', async (req, res) => {
   try {
+    if (!ipWeightTracker.canMakeCall(40)) {
+      return res.status(429).json({ success: false, error: `API weight budget too low (${ipWeightTracker.getCurrentWeight()}/2400)` });
+    }
+
     const { EXCHANGE_ID } = getConfig();
     const ExchangeClass = (ccxt as any)[EXCHANGE_ID];
-    
+
     if (!ExchangeClass) {
       return res.json({ success: false, error: 'Exchange not available' });
     }
@@ -141,6 +157,7 @@ router.get('/debug-swaps', async (req, res) => {
     });
 
     await exchange.loadMarkets();
+    ipWeightTracker.record(40, 'loadMarkets:debugSwaps');
     
     const allMarkets = Object.keys(exchange.markets || {});
     
@@ -202,9 +219,13 @@ router.get('/debug-swaps', async (req, res) => {
 // Debug endpoint to see market structure
 router.get('/debug-markets', async (req, res) => {
   try {
+    if (!ipWeightTracker.canMakeCall(40)) {
+      return res.status(429).json({ success: false, error: `API weight budget too low (${ipWeightTracker.getCurrentWeight()}/2400)` });
+    }
+
     const { EXCHANGE_ID } = getConfig();
     const ExchangeClass = (ccxt as any)[EXCHANGE_ID];
-    
+
     if (!ExchangeClass) {
       return res.json({ success: false, error: 'Exchange not available' });
     }
@@ -215,6 +236,7 @@ router.get('/debug-markets', async (req, res) => {
     });
 
     await exchange.loadMarkets();
+    ipWeightTracker.record(40, 'loadMarkets:debugMarkets');
     
     const allMarkets = Object.keys(exchange.markets || {});
     

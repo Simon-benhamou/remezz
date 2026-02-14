@@ -2,6 +2,7 @@ import { resolveSymbol } from '../exchange/ccxtClient.js';
 import { ema, rsi, atr } from './indicators.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
+import { ipWeightTracker } from '../services/ipWeightTracker.js';
 import {
   getBinanceWebSocket,
   getTickerFromWebSocket,
@@ -348,8 +349,10 @@ function shouldUseWebsocketForTimeframe(tf: string): boolean {
 
 async function populateBidAskFromOrderBook(ex: any, symbol: string, ticker: any) {
   if (!ex || typeof ex.fetchOrderBook !== 'function') return;
+  if (!ipWeightTracker.canMakeCall(5)) return;
   try {
     const book = await ex.fetchOrderBook(symbol, 5);
+    ipWeightTracker.record(5, `fetchOrderBook:bidAsk:${symbol}`);
     const bestBid = pickFirstNumber(book?.bids?.[0]?.[0]);
     const bestAsk = pickFirstNumber(book?.asks?.[0]?.[0]);
     if (bestBid !== undefined) ticker.bid = bestBid;
@@ -597,12 +600,20 @@ async function fetchOhlcvRest(symbol: string, tf: string, limit: number, userId?
   }
 
   try {
-    return await ex.fetchOHLCV(resolvedSymbol, tf, undefined, limit);
+    if (!ipWeightTracker.canMakeCall(10)) {
+      const ok = await ipWeightTracker.waitForBudget(10, `market:fetchOHLCV:${resolvedSymbol}`, 30_000);
+      if (!ok) throw new Error('IP_WEIGHT_BUDGET_EXHAUSTED');
+    }
+    const result = await ex.fetchOHLCV(resolvedSymbol, tf, undefined, limit);
+    ipWeightTracker.record(10, `market:fetchOHLCV:${resolvedSymbol}:${tf}`);
+    return result;
   } catch (err) {
     try {
       const altTf = tf === '15m' ? '5m' : tf === '1h' ? '30m' : tf;
       if (altTf !== tf) {
-        return await ex.fetchOHLCV(resolvedSymbol, altTf, undefined, limit);
+        const result = await ex.fetchOHLCV(resolvedSymbol, altTf, undefined, limit);
+        ipWeightTracker.record(10, `market:fetchOHLCV:${resolvedSymbol}:${altTf}`);
+        return result;
       }
     } catch {}
     throw err;
