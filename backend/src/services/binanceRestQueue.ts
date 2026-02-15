@@ -85,6 +85,8 @@ class BinanceRestQueue {
   private processing = false;
   private paused = false;
   private requestIdCounter = 0;
+  private banExpiredCallbacks: Array<() => void> = [];
+  private banExpiryTimer: NodeJS.Timeout | null = null;
 
   // Stats
   private stats = {
@@ -133,6 +135,10 @@ class BinanceRestQueue {
     if (isIpBanned() && priority !== 'critical') {
       const banExpiry = getIpBanExpiry();
       const waitMs = Math.max(0, banExpiry - Date.now());
+      // Ensure ban-expired callbacks are scheduled even if ban was set externally
+      if (!this.banExpiryTimer && this.banExpiredCallbacks.length > 0) {
+        this.scheduleBanExpiryCallbacks(banExpiry);
+      }
       throw new Error(`IP banned - ${Math.ceil(waitMs / 60000)} minutes remaining. Request rejected: ${tag}`);
     }
 
@@ -206,6 +212,18 @@ class BinanceRestQueue {
 
           if (this.paused) break;
           logger.info('IP ban expired - resuming queue');
+
+          // Cancel the timer — fire callbacks immediately since we detected ban expiry in-loop
+          if (this.banExpiryTimer) {
+            clearTimeout(this.banExpiryTimer);
+            this.banExpiryTimer = null;
+          }
+          logger.info(`Firing ${this.banExpiredCallbacks.length} ban-expired callbacks`);
+          for (const cb of this.banExpiredCallbacks) {
+            try { cb(); } catch (e: any) {
+              logger.warn('Ban-expired callback error:', e?.message);
+            }
+          }
         }
 
         // rejectNonCritical may have emptied the queue
@@ -351,6 +369,39 @@ class BinanceRestQueue {
     const durationMin = Math.ceil((banUntilAbsolute - Date.now()) / 60000);
     logger.error(`IP BAN DETECTED - setting ban for ${durationMin} minutes (until ${new Date(banUntilAbsolute).toISOString()})`);
     setIpBan(banUntilAbsolute);
+
+    // Schedule ban-expired callbacks (re-seed candles, etc.)
+    this.scheduleBanExpiryCallbacks(banUntilAbsolute);
+  }
+
+  /**
+   * Schedule a timer to fire ban-expired callbacks when the ban lifts.
+   * This ensures callbacks fire even if processQueue isn't running during the ban.
+   */
+  private scheduleBanExpiryCallbacks(banUntil: number): void {
+    // Clear any existing timer (ban may have been extended)
+    if (this.banExpiryTimer) {
+      clearTimeout(this.banExpiryTimer);
+      this.banExpiryTimer = null;
+    }
+
+    const delayMs = Math.max(0, banUntil - Date.now()) + 5_000; // 5s buffer after ban expiry
+    logger.info(`Scheduled ban-expired callbacks in ${Math.ceil(delayMs / 1000)}s`);
+
+    this.banExpiryTimer = setTimeout(() => {
+      this.banExpiryTimer = null;
+      if (isIpBanned()) {
+        // Ban was extended, don't fire yet
+        logger.info('Ban still active at scheduled callback time, skipping');
+        return;
+      }
+      logger.info(`Firing ${this.banExpiredCallbacks.length} ban-expired callbacks`);
+      for (const cb of this.banExpiredCallbacks) {
+        try { cb(); } catch (e: any) {
+          logger.warn('Ban-expired callback error:', e?.message);
+        }
+      }
+    }, delayMs);
   }
 
   /**
@@ -384,6 +435,14 @@ class BinanceRestQueue {
     this.paused = false;
     logger.info('Queue resumed');
     this.processQueue();
+  }
+
+  /**
+   * Register a callback to run when an IP ban expires.
+   * Used to trigger candle cache re-seeding so agents recover quickly.
+   */
+  onBanExpired(callback: () => void): void {
+    this.banExpiredCallbacks.push(callback);
   }
 
   /**

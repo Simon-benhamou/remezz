@@ -4516,6 +4516,15 @@ async function runStartupSequence(): Promise<void> {
     logger.warn('⚠️ Failed to register reconnect backfill:', error);
   }
 
+  // Re-seed candle cache when IP ban expires (agents stuck at 2/61 candles without this)
+  binanceRestQueue.onBanExpired(() => {
+    logger.info('🔄 IP ban expired - re-seeding candle cache for all symbols...');
+    seedFreshCandles().catch(err => {
+      logger.warn('⚠️ Post-ban candle re-seed failed:', err?.message || err);
+    });
+  });
+  logger.info('✅ Registered candle re-seed on IP ban expiry');
+
   logger.info('✅ Startup complete - BinanceRestQueue managing all REST calls');
   logger.info(`📊 Queue stats: ${JSON.stringify(binanceRestQueue.getStats())}`);
 
