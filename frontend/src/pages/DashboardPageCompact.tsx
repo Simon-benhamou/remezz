@@ -116,15 +116,24 @@ export default function DashboardPageCompact() {
     );
     let cumulative = 0;
     const intl = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-    return sorted.map((trade) => {
-      // Net PnL = realizedPnl - fees
+
+    // Start from $0 baseline so the line has a visible origin
+    const firstDate = new Date(sorted[0].createdAt);
+    const baselineDate = new Date(firstDate);
+    baselineDate.setHours(baselineDate.getHours() - 1); // Slightly before first trade
+    const points = [
+      { date: intl.format(baselineDate), value: 0, fullDate: baselineDate.toISOString() },
+    ];
+
+    for (const trade of sorted) {
       cumulative += Number(trade.realizedPnlUsd || 0) - Number(trade.feesUsd || 0);
-      return {
+      points.push({
         date: intl.format(new Date(trade.createdAt)),
         value: Number(cumulative.toFixed(2)),
         fullDate: trade.createdAt,
-      };
-    });
+      });
+    }
+    return points;
   }, [trades]);
 
   // Stats - use ov.todayPnlUsd from backend (already includes fees) for accuracy
@@ -460,6 +469,7 @@ export default function DashboardPageCompact() {
                       dataKey="date"
                       tick={{ fill: '#94a3b8', fontSize: 11 }}
                       axisLine={{ stroke: 'rgba(30, 58, 95, 0.25)' }}
+                      padding={{ left: 10, right: 10 }}
                     />
                     <YAxis
                       tick={{ fill: '#94a3b8', fontSize: 11 }}
@@ -494,6 +504,8 @@ export default function DashboardPageCompact() {
                       stroke={stats.totalPnl >= 0 ? '#10b981' : '#ef4444'}
                       strokeWidth={2}
                       fill={stats.totalPnl >= 0 ? 'url(#pnlGradientPositive)' : 'url(#pnlGradientNegative)'}
+                      dot={chartData.length <= 20 ? { r: 3, fill: stats.totalPnl >= 0 ? '#10b981' : '#ef4444' } : false}
+                      isAnimationActive={chartData.length > 2}
                     />
                   </AreaChart>
                 </ResponsiveContainer>
