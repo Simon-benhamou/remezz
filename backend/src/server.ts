@@ -189,6 +189,7 @@ const allowedOrigins = new Set<string>([
   "http://localhost:5173",
   "https://remezz.up.railway.app",
   "https://trading-agent-ia-v3-frontend-production.up.railway.app",
+  "https://remezz.com",
 ]);
 
 const app = express();

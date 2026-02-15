@@ -15,7 +15,7 @@ export default defineConfig({
   },
   server: { host: true },
   preview: {
-    allowedHosts: ["remezz.up.railway.app"],
+    allowedHosts: ["remezz.up.railway.app","remezz.com","api.remezz.com"],
   },
   test: {
     environment: "jsdom",
