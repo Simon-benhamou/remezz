@@ -1513,10 +1513,22 @@ class BinanceWebSocketManager {
         const start = Date.now();
         const response = await fetch(`${this.endpoints.rest}/fapi/v1/time`);
         ipWeightTracker.record(1, 'time:healthCheck');
+
+        // V5.95: Log Binance's actual weight tracking (different from ours if other processes share IP)
+        const binanceWeight = response.headers.get('x-mbx-used-weight-1m') || response.headers.get('X-MBX-USED-WEIGHT-1M');
+        if (binanceWeight) {
+          const bw = parseInt(binanceWeight, 10);
+          const ourWeight = ipWeightTracker.getCurrentWeight();
+          if (bw > 100 || bw > ourWeight * 2) {
+            console.warn(`⚠️ Binance reports weight ${bw}/2400 but our tracker says ${ourWeight} — ${bw - ourWeight}w unaccounted for!`);
+          }
+        }
+
         if (!response.ok) {
           if (response.status === 418 || response.status === 429) {
             // Report ban so the rest of the system knows
             const body = await response.text().catch(() => '');
+            console.warn(`🚫 Time sync got HTTP ${response.status} | binanceWeight=${binanceWeight} | body=${body.substring(0, 200)}`);
             const banMatch = body.match(/banned until (\d+)/);
             if (banMatch) {
               const ts = parseInt(banMatch[1], 10);
