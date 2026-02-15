@@ -18,7 +18,7 @@
  */
 
 import { createLogger } from '../utils/logger.js';
-import { isIpBanned, setIpBan, getIpBanExpiry } from '../exchange/ccxtClient.js';
+import { isIpBanned, setIpBan, getIpBanExpiry, setGeoBlock, isGeoBlocked } from '../exchange/ccxtClient.js';
 import { ipWeightTracker } from './ipWeightTracker.js';
 
 const logger = createLogger('RestQueue');
@@ -276,6 +276,14 @@ class BinanceRestQueue {
     } catch (error: any) {
       const errorMsg = error?.message || String(error);
 
+      // Check for geo-restriction (451) — permanent block, no retries
+      if (this.isGeoBlockError(errorMsg)) {
+        setGeoBlock(`restQueue:${request.tag}`);
+        this.rejectNonCritical('Geo-blocked (451)');
+        request.reject(new Error(`Geo-blocked (451): ${request.tag} — change VPS region`));
+        return;
+      }
+
       // Check for IP ban
       if (this.isIpBanError(errorMsg)) {
         this.handleIpBan(errorMsg);
@@ -311,6 +319,15 @@ class BinanceRestQueue {
       logger.error(`[${request.id}] Failed: ${request.tag} - ${errorMsg}`);
       request.reject(error);
     }
+  }
+
+  /**
+   * Check if error indicates geo-restriction (HTTP 451)
+   */
+  private isGeoBlockError(msg: string): boolean {
+    return msg.includes('451') ||
+           msg.includes('restricted location') ||
+           msg.includes('Eligibility');
   }
 
   /**

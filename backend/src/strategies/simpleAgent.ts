@@ -74,7 +74,7 @@ import { ExchangeOrderManager } from './exchangeOrderManager.js';
 import { PositionOpener } from './positionOpener.js';
 import { RealtimeExitHandler } from './realtimeExitHandler.js';
 import { ipWeightTracker } from '../services/ipWeightTracker.js';
-import { isIpBanned } from '../exchange/ccxtClient.js';
+import { isIpBanned, setGeoBlock } from '../exchange/ccxtClient.js';
 import { symbolEngineManager } from './symbolEngineManager.js';
 import type { SymbolSignalResult } from './symbolEngine.js';
 import {
@@ -2779,7 +2779,11 @@ export class SimpleAgent {
             }
           }
         } catch (error: unknown) {
-          logger.warn(`[fetchBtcCandles1h] REST fallback failed: ${errMsg(error)}`);
+          const msg = errMsg(error);
+          if (msg.includes('451') || msg.includes('restricted location')) {
+            setGeoBlock('fetchBtcCandles1h');
+          }
+          logger.warn(`[fetchBtcCandles1h] REST fallback failed: ${msg}`);
         }
 
         logger.warn('[fetchBtcCandles1h] No BTC 1h data available - MTF filter will be bypassed');

@@ -27,8 +27,27 @@ let globalMarketsCache: {
 // V5.25: Track if we're currently IP banned
 let ipBannedUntil: number = 0;
 
+// V5.95: Track 451 geo-restriction (separate from IP ban — longer suppression)
+let geoBlockedUntil: number = 0;
+
 export function isIpBanned(): boolean {
-  return Date.now() < ipBannedUntil;
+  return Date.now() < ipBannedUntil || Date.now() < geoBlockedUntil;
+}
+
+export function setGeoBlock(source?: string): void {
+  // Geo-block for 60 minutes — no point retrying, IP is in a restricted region
+  geoBlockedUntil = Date.now() + 60 * 60 * 1000;
+  console.error(`🌍 GEO-BLOCKED (HTTP 451): Your server IP is in a Binance-restricted region. `
+    + `All REST calls suppressed for 60min. Change your VPS region to a Binance-allowed location. `
+    + `[source: ${source ?? 'unknown'}]`);
+}
+
+export function isGeoBlocked(): boolean {
+  return Date.now() < geoBlockedUntil;
+}
+
+export function getGeoBlockExpiry(): number {
+  return geoBlockedUntil;
 }
 
 export function setIpBan(untilTimestamp: number, source?: string): void {

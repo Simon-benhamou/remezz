@@ -18,7 +18,7 @@ import { getConfig } from "./utils/env.js";
 import { authMiddleware, AuthenticatedRequest } from "./utils/security.js";
 import { prisma } from "./db/client.js";
 import { initializeDatabaseConnection, disconnectDatabase } from "./db/connection.js";
-import { getUserExchange, preloadMarkets, isIpBanned, setIpBan, getIpBanExpiry, areMarketsLoaded, initializeMinimalMarkets, getCachedExchange } from "./exchange/ccxtClient.js";
+import { getUserExchange, preloadMarkets, isIpBanned, setIpBan, getIpBanExpiry, areMarketsLoaded, initializeMinimalMarkets, getCachedExchange, isGeoBlocked, getGeoBlockExpiry } from "./exchange/ccxtClient.js";
 import { getUserCredentials } from "./services/userCredentials.js";
 
 // Essential routes
@@ -262,6 +262,8 @@ app.get("/api/health", (_req, res) => {
       topCallers: ipWeightTracker.getTopCallers(10),
       interceptedCalls: getInterceptedCallsSummary(),
       lastBinanceWeight: getLastBinanceWeight(),
+      geoBlocked: isGeoBlocked(),
+      geoBlockExpiry: isGeoBlocked() ? new Date(getGeoBlockExpiry()).toISOString() : null,
     },
     symbolEngines: symbolEngineManager.getStats(),
   });

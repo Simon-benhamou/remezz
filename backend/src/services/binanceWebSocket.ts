@@ -13,7 +13,7 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'node:events';
 import crypto from 'crypto';
 import { getConfig } from '../utils/env.js';
-import { isIpBanned, setIpBan } from '../exchange/ccxtClient.js';
+import { isIpBanned, setIpBan, setGeoBlock } from '../exchange/ccxtClient.js';
 import { ipWeightTracker } from './ipWeightTracker.js';
 import { binanceRestQueue } from './binanceRestQueue.js';
 import { evaluateTickerFrame } from '../data/tickerValidation.js';
@@ -1094,6 +1094,10 @@ class BinanceWebSocketManager {
     ipWeightTracker.record(40, 'exchangeInfo:refreshSymbols');
 
     if (!response.ok) {
+      if (response.status === 451) {
+        setGeoBlock('ws:exchangeInfo');
+        return;
+      }
       if (response.status === 418 || response.status === 429) {
         // Report ban so the rest of the system knows
         const body = await response.text().catch(() => '');
@@ -1520,6 +1524,10 @@ class BinanceWebSocketManager {
         const binanceWeight = response.headers.get('x-mbx-used-weight-1m') || response.headers.get('X-MBX-USED-WEIGHT-1M');
 
         if (!response.ok) {
+          if (response.status === 451) {
+            setGeoBlock('ws:serverTimeSync');
+            return;
+          }
           if (response.status === 418 || response.status === 429) {
             // Report ban so the rest of the system knows
             const body = await response.text().catch(() => '');
