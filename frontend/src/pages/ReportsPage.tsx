@@ -27,6 +27,7 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  Clock,
 } from 'lucide-react';
 
 dayjs.extend(relativeTime);
@@ -35,7 +36,7 @@ dayjs.extend(relativeTime);
 // TYPES
 // ============================================================================
 
-type ParityCategory = 'MATCH' | 'EXIT_MISMATCH' | 'NO_SIGNAL' | 'PNL_VARIANCE' | 'DATA_ERROR';
+type ParityCategory = 'MATCH' | 'EXIT_MISMATCH' | 'NO_SIGNAL' | 'PNL_VARIANCE' | 'DURATION_MISMATCH' | 'DATA_ERROR';
 
 interface ParityResult {
   id: string;
@@ -101,6 +102,13 @@ const categoryConfig: Record<ParityCategory, { colorClass: string; bgClass: stri
     icon: <Info className="h-3.5 w-3.5" />,
     label: 'PnL Variance',
     description: 'Same exit reason but PnL differs - usually acceptable slippage',
+  },
+  DURATION_MISMATCH: {
+    colorClass: 'text-orange-500',
+    bgClass: 'bg-orange-500/10 text-orange-500 border-orange-500/20',
+    icon: <Clock className="h-3.5 w-3.5" />,
+    label: 'Duration Mismatch',
+    description: 'Same exit reason but hold duration differs significantly',
   },
   DATA_ERROR: {
     colorClass: 'text-muted-foreground',
@@ -168,7 +176,7 @@ function ParityVerificationPanel() {
   }, [mode]);
 
   // Valid category keys for validation
-  const validCategories: ParityCategory[] = ['MATCH', 'EXIT_MISMATCH', 'NO_SIGNAL', 'PNL_VARIANCE', 'DATA_ERROR'];
+  const validCategories: ParityCategory[] = ['MATCH', 'EXIT_MISMATCH', 'NO_SIGNAL', 'PNL_VARIANCE', 'DURATION_MISMATCH', 'DATA_ERROR'];
 
   // Parse mismatch details from V2 format
   const parseDetails = React.useCallback((record: ParityResult): ParsedMismatchDetails | null => {
@@ -246,6 +254,7 @@ function ParityVerificationPanel() {
       EXIT_MISMATCH: 0,
       NO_SIGNAL: 0,
       PNL_VARIANCE: 0,
+      DURATION_MISMATCH: 0,
       DATA_ERROR: 0,
     };
     for (const r of results) {
@@ -543,7 +552,7 @@ function ParityVerificationPanel() {
     return Object.entries(categoryStats).map(([key, value]) => ({
       name: categoryConfig[key as ParityCategory].label,
       value,
-      color: key === 'MATCH' ? '#10b981' : key === 'NO_SIGNAL' ? '#faad14' : key === 'PNL_VARIANCE' ? '#1890ff' : '#ef4444',
+      color: key === 'MATCH' ? '#10b981' : key === 'NO_SIGNAL' ? '#faad14' : key === 'PNL_VARIANCE' ? '#1890ff' : key === 'DURATION_MISMATCH' ? '#f97316' : key === 'DATA_ERROR' ? '#94a3b8' : '#ef4444',
     })).filter(d => d.value > 0);
   }, [categoryStats]);
 
@@ -697,7 +706,7 @@ function ParityVerificationPanel() {
             <div>
               <span className="mr-1 text-xs text-muted-foreground">Category:</span>
               <div className="inline-flex flex-wrap gap-1">
-                {(['MATCH', 'NO_SIGNAL', 'EXIT_MISMATCH', 'PNL_VARIANCE'] as ParityCategory[]).map(cat => (
+                {(['MATCH', 'NO_SIGNAL', 'EXIT_MISMATCH', 'PNL_VARIANCE', 'DURATION_MISMATCH'] as ParityCategory[]).map(cat => (
                   <button
                     key={cat}
                     onClick={() => toggleFilter(categoryFilter, cat, setCategoryFilter)}
