@@ -18,6 +18,7 @@
 
 import { prisma } from '../db/client.js';
 import * as ccxt from 'ccxt';
+import { binanceRestQueue, BINANCE_WEIGHTS } from './binanceRestQueue.js';
 import {
   checkMomentumSignal,
   shouldExitPosition,
@@ -148,7 +149,16 @@ async function fetchCandlesForTrade(
 
     while (cursor < until) {
       try {
-        const ohlcv = await ex.fetchOHLCV(sym, timeframe, cursor, 1000);
+        // Route through binanceRestQueue — single gateway for ALL Binance REST calls.
+        // Queue handles weight tracking, IP ban detection, and rate limiting.
+        const ohlcv = await binanceRestQueue.enqueue(
+          () => ex.fetchOHLCV(sym, timeframe, cursor, 1000),
+          {
+            weight: BINANCE_WEIGHTS.FETCH_OHLCV,
+            priority: 'low',
+            tag: `parity-v2:${sym}:${timeframe}`,
+          },
+        );
         if (!ohlcv || ohlcv.length === 0) break;
 
         for (const c of ohlcv) {
@@ -169,8 +179,6 @@ async function fetchCandlesForTrade(
         const lastTs = ohlcv[ohlcv.length - 1][0] as number;
         if (lastTs <= cursor) break;
         cursor = lastTs + 1;
-
-        await new Promise(r => setTimeout(r, 100)); // Rate limiting
       } catch (e: any) {
         logger.error(`Error fetching ${sym} ${timeframe}: ${e.message}`);
         break;

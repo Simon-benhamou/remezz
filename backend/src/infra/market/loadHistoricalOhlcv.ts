@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import ccxt from 'ccxt';
+import { binanceRestQueue, BINANCE_WEIGHTS } from '../../services/binanceRestQueue.js';
 
 export type HistoricalCandle = {
   timestamp: number;
@@ -117,7 +118,15 @@ async function loadFromCcxtPaginated(
         Math.max(100, remaining + 50),
       );
       try {
-        const ohlcv = await exchange.fetchOHLCV(candidate, params.timeframe, cursor, batchLimit);
+        // Route through binanceRestQueue — single gateway for ALL Binance REST calls
+        const ohlcv = await binanceRestQueue.enqueue(
+          () => exchange.fetchOHLCV(candidate, params.timeframe, cursor, batchLimit),
+          {
+            weight: BINANCE_WEIGHTS.FETCH_OHLCV,
+            priority: 'low',
+            tag: `loadHistoricalOhlcv:${candidate}:${params.timeframe}`,
+          },
+        );
         if (!Array.isArray(ohlcv) || !ohlcv.length) {
           break;
         }

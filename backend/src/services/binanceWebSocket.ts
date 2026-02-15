@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import { getConfig } from '../utils/env.js';
 import { isIpBanned, setIpBan } from '../exchange/ccxtClient.js';
 import { ipWeightTracker } from './ipWeightTracker.js';
+import { binanceRestQueue } from './binanceRestQueue.js';
 import { evaluateTickerFrame } from '../data/tickerValidation.js';
 import {
   recordMarketFrame,
@@ -284,13 +285,15 @@ function logRestFallbackSuppressed(event: {
 export async function scheduleBinanceRestFallback<T>(
   symbol: string,
   task: () => Promise<T>,
-  options?: { reason?: string; force?: boolean },
+  options?: { reason?: string; force?: boolean; weight?: number },
 ): Promise<T | null> {
   // Timestamp drift indicates local lag/clock skew; REST won't fix it and can cause 429 storms.
   // So we hard-suppress REST fallback attempts for this reason unless explicitly forced.
   if (!options?.force && options?.reason === 'ws_timestamp_drift') {
     return null;
   }
+
+  const weight = options?.weight ?? 1;
 
   const key = normalizeRestFallbackKey(symbol);
   const existing = restFallbackInflight.get(key);
@@ -318,6 +321,17 @@ export async function scheduleBinanceRestFallback<T>(
 
   const promise = (async () => {
     try {
+      if (weight > 0) {
+        // Route through binanceRestQueue — single gateway for weight tracking + IP ban.
+        // Ticker calls (weight=1) go through queue. OHLCV calls pass weight=0
+        // because the inner fetchBinanceOhlcv already routes through the queue.
+        return await binanceRestQueue.enqueue(task, {
+          weight,
+          priority: 'low',
+          tag: `fallback:${key}:${options?.reason ?? 'unknown'}`,
+        });
+      }
+      // weight=0: inner function handles its own queue routing (e.g. fetchBinanceOhlcv)
       return await task();
     } finally {
       restFallbackInflight.delete(key);

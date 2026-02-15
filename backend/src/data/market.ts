@@ -1191,6 +1191,7 @@ export async function getOHLCV(
           // For normal "stuck" warmup or failed synthesis, we MUST respect the global rate limiter
           // to avoid IP bans when multiple agents fail simultaneously.
           force: restDueToPolicy,
+          weight: 0, // fetchBinanceOhlcv records its own weight internally
         },
       );
       if (!forcedRest) {

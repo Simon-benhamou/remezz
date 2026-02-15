@@ -68,6 +68,8 @@ npm run migrate             # Run migrations
 - `optimizationService.ts` - Grid search over parameter combinations, ranked by out-of-sample Sharpe ratio
 - `nfsRealtimeExit.ts` - Advanced trailing stop with stagnant detection
 - `apiDeduplicator.ts` - Deduplicates concurrent API calls (3x reduction)
+- `binanceRestQueue.ts` - **Single gateway** for ALL Binance REST calls. Priority-based execution (critical > high > normal > low), automatic weight tracking via `ipWeightTracker`, IP ban detection, retry logic. All callers (`fetchBinanceOhlcv`, `scheduleBinanceRestFallback`, `parityVerificationServiceV2`, `loadHistoricalOhlcv`, `candleCache`) route through this queue
+- `binanceRest.ts` - OHLCV fetcher using direct HTTP to Binance. Routes through `binanceRestQueue` for weight tracking. Response parsing and normalization
 - `candleCache.ts` - PostgreSQL candle storage with background updates (V5.77)
 
 **Exchange** (`src/exchange/`)
@@ -102,7 +104,7 @@ npm run migrate             # Run migrations
 - **Error Handling**: Use `errMsg(error: unknown): string` helper for safe error extraction in `catch (error: unknown)` blocks (no `catch (error: any)`)
 - **MomentumConfig Mutability**: `MomentumConfig` is a mutable `const` object (not `as const`) so tests can toggle fields like `CASH_MODE.ENABLED`
 - **Cash Mode**: Market regime detection (ADX + ATR + SMA200 slope) skips entries in CHOPPY/LOW_VOL regimes. Integrated at top of `checkMomentumSignal()`
-- **IP Weight Tracking**: All REST API calls tracked via `ipWeightTracker` singleton. Soft limit at 1800w/min (75%), hard limit 2400w/min. Stats exposed at `/api/health`
+- **Single REST Gateway**: ALL Binance REST calls route through `binanceRestQueue` (single gateway). The queue handles weight tracking via `ipWeightTracker`, IP ban detection, priority ordering, rate limiting (100ms between calls), and retry logic. No direct `fetch()` or `exchange.*()` calls to Binance outside the queue. This prevents the whack-a-mole problem where new REST paths bypass weight tracking. Key callers: `fetchBinanceOhlcv` (OHLCV via direct HTTP), `scheduleBinanceRestFallback` (ticker fallbacks), `candleCache` (startup seeding), `parityVerificationServiceV2` (parity checks), `loadHistoricalOhlcv` (backtest data). Exception: WS manager internal calls (exchangeInfo, time, bookTicker) use own limiters with manual `ipWeightTracker.record()`. Soft limit 1800w/min (75%), hard limit 2400w/min. Stats exposed at `/api/health`
 - **Paper Mode Without API Keys**: Users without Binance keys can use paper trading. `createPaperExchangeStub()` in server.ts provides a minimal exchange interface. All exchange method calls in paper mode are guarded by truthiness checks
 - **Live Mode API Key Guard**: `requireApiKeysForLive()` blocks live session creation without valid API keys (checked on all 4 session endpoints + restore)
 
@@ -212,6 +214,12 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Optimization script**: `scripts/optimize-strategy.ts` — 3-phase parameter sweep (entry, exit, symbols). `scripts/test-all-symbols.ts` — individual symbol profitability testing.
   - **Findings document**: `docs/optimization-findings-v5.92.md` — full analysis of 28+ backtest runs.
 
+- V5.94: Backtest BTC 15m look-ahead bias fix:
+  - **Problem**: Backtest included the current (forming) BTC 15m candle in signal computation via `btcIdx+1`, using its final close/high/low/volume. Live excludes in-progress candles (`isFinal=false`), giving backtest a subtle advantage on BTC ATR/volatility and ADX calculations.
+  - **Fix**: Use `btcIdx` (exclusive end) instead of `btcIdx+1` in `backtestService.ts`, matching live's `isFinal` filtering exactly.
+  - **Impact**: 743 → 741 trades, 64.7% → 64.6% WR, $59,808 → $56,169 PnL (minimal degradation, better parity).
+  - **Verification script**: `scripts/bt-verify-fix.ts` — compares before/after backtest results.
+
 ## Multi-User Scaling
 
 System designed for 40+ users × 20 agents (800+ concurrent agents) with single Binance IP.
@@ -226,7 +234,7 @@ System designed for 40+ users × 20 agents (800+ concurrent agents) with single 
 - **Estimated total**: ~180w/min = 7.5% of budget
 
 ### Key Safeguards
-- `ipWeightTracker.ts`: Tracks all REST weight per minute, warns at 75% (1800w)
+- `ipWeightTracker.ts`: Single source of truth for all REST weight per minute. `binanceRestQueue` auto-records after each execution. All direct REST calls also record weight. Warns at 75% (1800w)
 - `orderTradeUpdateByOrderId` cache: Capped at 2000 entries with LRU eviction
 - `checkProactiveLimitFill()`: WS-first with REST fallback after 10s (prevents hang if WS event lost)
 - Staggered session restore: 500ms between users at startup (avoids burst)

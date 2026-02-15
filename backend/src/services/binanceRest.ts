@@ -1,16 +1,11 @@
-import { createBinanceRestLimiter, toBinanceSymbolId, BINANCE_REST_BASE_URL, BINANCE_REST_429_BACKOFF_MS } from './binanceWebSocket.js';
-import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
+import { toBinanceSymbolId, BINANCE_REST_BASE_URL } from './binanceWebSocket.js';
+import { binanceRestQueue, BINANCE_WEIGHTS } from './binanceRestQueue.js';
+import { isIpBanned, getIpBanExpiry, resetCcxtIpBan } from '../exchange/ccxtClient.js';
 
 const REST_ZERO_LOG_INTERVAL_MS = 60_000;
 const restZeroLogTs = new Map<string, number>();
 
 const MAX_KLINE_LIMIT = 1500;
-
-const ohlcvLimiter = createBinanceRestLimiter();
-
-// Track IP ban status to avoid spamming requests while banned
-let ipBannedUntil: number = 0;
-const IP_BAN_COOLDOWN_MS = 5 * 60 * 1000; // Extra 5 minutes after ban expires
 
 type FetchImpl = (input: string | URL, init?: any) => Promise<any>;
 
@@ -44,6 +39,13 @@ function normalizeRow(row: any): number[] | null {
   return parsed;
 }
 
+/**
+ * Fetch OHLCV candles from Binance REST API.
+ *
+ * All calls are routed through binanceRestQueue (single gateway)
+ * which handles: weight tracking, IP ban detection, priority ordering,
+ * rate limiting, and retry logic.
+ */
 export async function fetchBinanceOhlcv(
   symbol: string,
   timeframe: string,
@@ -59,27 +61,6 @@ export async function fetchBinanceOhlcv(
     throw new Error('binance_rest_invalid_symbol');
   }
 
-  // Check if IP is currently banned
-  const now = Date.now();
-  if (ipBannedUntil > now) {
-    const waitSeconds = Math.ceil((ipBannedUntil - now) / 1000);
-    throw Object.assign(
-      new Error(`binance_rest_ip_banned_wait_${waitSeconds}s`),
-      { bannedUntil: ipBannedUntil }
-    );
-  }
-
-  // 🔥 Check global REST circuit breaker (coordinates across ALL agents)
-  if (!globalRestCircuitBreaker.canMakeRequest()) {
-    const state = globalRestCircuitBreaker.getState();
-    const remainingMs = globalRestCircuitBreaker.getRemainingCooldown();
-    const remainingSeconds = Math.ceil(remainingMs / 1000);
-    throw Object.assign(
-      new Error(`global_rest_circuit_open_wait_${remainingSeconds}s`),
-      { circuitState: state, remainingMs }
-    );
-  }
-
   const params = new URLSearchParams({
     symbol: symbolId,
     interval: timeframe,
@@ -87,61 +68,38 @@ export async function fetchBinanceOhlcv(
   });
   const url = `${BINANCE_REST_BASE_URL}/fapi/v1/klines?${params.toString()}`;
 
-  const response = await ohlcvLimiter.run(() => fetchImpl(url, { signal: options?.signal }));
-  
-  if (response.status === 429) {
-    ohlcvLimiter.backoff(BINANCE_REST_429_BACKOFF_MS);
-    // Record failure in global circuit breaker
-    globalRestCircuitBreaker.recordFailure('ohlcv', symbolId, 'rate_limited_429');
-    throw new Error('binance_rest_rate_limited');
-  }
-  
-  if (response.status === 418 || !response.ok) {
-    const body = await response.text().catch(() => '');
-    
-    // Check for IP ban message
-    if (body.includes('"code":-1003') && body.includes('banned until')) {
-      try {
-        const parsed = JSON.parse(body);
-        const banMatch = parsed.msg?.match(/banned until (\d+)/);
-        if (banMatch) {
-          let banTimestamp = parseInt(banMatch[1], 10);
-          // Binance returns timestamp in milliseconds
-          // Only convert if it looks like seconds (< 10 billion = year ~2286 in seconds)
-          // Current ms timestamps are ~1.7 trillion, so anything > 100 billion is already ms
-          if (banTimestamp < 100_000_000_000) {
-            banTimestamp = banTimestamp * 1000;
-          }
-          // Add cooldown period after ban expires
-          ipBannedUntil = banTimestamp + IP_BAN_COOLDOWN_MS;
-          console.error(`🚫 Binance IP ban detected until ${new Date(banTimestamp).toISOString()} (+ ${IP_BAN_COOLDOWN_MS/1000/60}min cooldown)`);
-          // Record IP ban in global circuit breaker (force open until ban + cooldown expires)
-          globalRestCircuitBreaker.forceOpen(`ip_ban_until_${new Date(banTimestamp).toISOString()}`, ipBannedUntil);
-        }
-      } catch (parseError) {
-        // Fallback: ban for 10 minutes if we can't parse the timestamp
-        ipBannedUntil = now + 10 * 60 * 1000;
-        console.error(`🚫 Binance IP ban detected (timestamp parse failed), waiting 10 minutes`);
-        // Force open circuit breaker for fallback ban
-        globalRestCircuitBreaker.forceOpen('ip_ban_parse_failed_10min', ipBannedUntil);
+  // Route through binanceRestQueue — single gateway for ALL Binance REST calls.
+  // Queue handles: canMakeCall(), record(), IP ban detection, retry, priority ordering.
+  const payload = await binanceRestQueue.enqueue(
+    async () => {
+      const response = await fetchImpl(url, { signal: options?.signal });
+
+      if (response.status === 429) {
+        throw new Error('binance_rest_rate_limited');
       }
-    }
-    
-    const error = new Error(`binance_rest_http_${response.status}`);
-    (error as any).body = body;
-    throw error;
-  }
 
-  let payload: any;
-  try {
-    payload = await response.json();
-  } catch (error) {
-    throw new Error('binance_rest_invalid_json');
-  }
+      if (response.status === 418 || !response.ok) {
+        const body = await response.text().catch(() => '');
+        const error = new Error(`binance_rest_http_${response.status}: ${body}`);
+        // Include ban info in error message so queue's handleIpBan can parse it
+        if (body.includes('"code":-1003') && body.includes('banned until')) {
+          (error as any).message = `IP banned - ${body}`;
+        }
+        throw error;
+      }
 
-  if (!Array.isArray(payload)) {
-    throw new Error('binance_rest_invalid_payload');
-  }
+      const json = await response.json();
+      if (!Array.isArray(json)) {
+        throw new Error('binance_rest_invalid_payload');
+      }
+      return json;
+    },
+    {
+      weight: BINANCE_WEIGHTS.FETCH_OHLCV,
+      priority: 'low',
+      tag: `ohlcv:${symbolId}:${timeframe}`,
+    },
+  );
 
   const normalized: number[][] = [];
   let zeroVolumeCount = 0;
@@ -204,30 +162,17 @@ export async function fetchBinanceOhlcv(
   return normalized;
 }
 
-/**
- * Check if Binance REST API is currently IP banned
- */
+/** Check if Binance REST is currently IP banned (delegates to ccxtClient) */
 export function isBinanceRestIpBanned(): boolean {
-  return ipBannedUntil > Date.now();
+  return isIpBanned();
 }
 
-/**
- * Get timestamp when IP ban will expire (0 if not banned)
- */
+/** Get IP ban expiry timestamp (delegates to ccxtClient) */
 export function getBinanceIpBanExpiry(): number {
-  return ipBannedUntil;
+  return getIpBanExpiry();
 }
 
-/**
- * V5.73: Emergency reset of IP ban state
- * Use when the ban has actually expired but state is stuck
- */
+/** Emergency reset of IP ban state (delegates to ccxtClient) */
 export function resetBinanceIpBan(): { wasSet: boolean; previousExpiry: number } {
-  const wasSet = ipBannedUntil > 0;
-  const previousExpiry = ipBannedUntil;
-  ipBannedUntil = 0;
-  if (wasSet) {
-    console.log(`🔄 IP ban state manually reset (was: ${new Date(previousExpiry).toISOString()})`);
-  }
-  return { wasSet, previousExpiry };
+  return resetCcxtIpBan();
 }
