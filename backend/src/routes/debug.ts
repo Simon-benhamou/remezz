@@ -71,6 +71,7 @@ router.get('/test-exchange', async (req, res) => {
     // Test public market data
     try {
       await exchange.loadMarkets();
+      ipWeightTracker.record(40, 'loadMarkets:debug:validate');
       const markets = Object.keys(exchange.markets || {});
       
       res.json({
