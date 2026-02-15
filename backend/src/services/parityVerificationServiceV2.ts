@@ -23,6 +23,7 @@ import {
   checkMomentumSignal,
   shouldExitPosition,
   updatePositionWaterMarks,
+  calcDynamicStopLoss,
   MomentumConfig,
   type Candle,
   type Position,
@@ -416,21 +417,34 @@ function simulateExit(
   entryTs: number,
   entryPrice: number,
   side: 'long' | 'short',
-  leverage: number
+  leverage: number,
+  symbol: string
 ): ExitSimResult | null {
   // Find entry candle index
   const entryIdx = candles.findIndex(c => c.timestamp >= entryTs);
   if (entryIdx < 0) return null;
 
-  // Create position object
+  // V5.95: Compute entry-time SL% using candles up to entry (matching live behavior).
+  // Live places a fixed STOP_MARKET order at entry using calcDynamicStopLoss().
+  // Previously, sim let shouldExitPosition() recalculate dynamic SL per candle,
+  // which could shift with volatility regime changes → duration mismatch.
+  const entrySlResult = calcDynamicStopLoss(candles.slice(0, entryIdx + 1), symbol);
+  const entrySlPct = entrySlResult.slPct;
+  const fixedSlPrice = side === 'long'
+    ? entryPrice * (1 - entrySlPct / 100)
+    : entryPrice * (1 + entrySlPct / 100);
+
+  logger.info(`[SIM-EXIT] ${symbol} entry-time SL: ${entrySlPct.toFixed(2)}% (${entrySlResult.isDynamic ? 'dynamic' : 'static'}, tier=${entrySlResult.tier ?? 'default'}), fixedSlPrice=${fixedSlPrice.toFixed(4)}`);
+
+  // Create position object with entry-time SL locked
   let position: Position = {
-    symbol: 'SIM',
+    symbol,
     side,
     entryPrice,
     entryTime: entryTs,
     qty: 1,
     leverage,
-    stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
+    stopLossPct: entrySlPct,
     highWaterMark: entryPrice,
     lowWaterMark: entryPrice,
     maxPnlPct: 0,
@@ -449,6 +463,28 @@ function simulateExit(
     const candle = candles[i];
     const holdMinutes = Math.round((candle.timestamp - entryTs) / 60000);
 
+    // V5.95: Check fixed SL BEFORE shouldExitPosition (matches live exchange SL behavior).
+    // Live uses STOP_MARKET with workingType=MARK_PRICE, sim uses candle.low/high.
+    // This is checked first because the exchange SL triggers independently of the agent.
+    const slTriggered = side === 'long'
+      ? candle.low <= fixedSlPrice
+      : candle.high >= fixedSlPrice;
+
+    if (slTriggered) {
+      const pnlPct = side === 'long'
+        ? ((fixedSlPrice - entryPrice) / entryPrice) * 100 * leverage
+        : ((entryPrice - fixedSlPrice) / entryPrice) * 100 * leverage;
+      const candlesHeld = i - entryIdx;
+
+      return {
+        exitReason: EXIT_SIGNAL_REASON_MAP['stoploss'] ?? 'STOP_LOSS',
+        exitPrice: fixedSlPrice,
+        exitCandleIndex: candlesHeld,
+        pnlPct,
+        durationMin: candlesHeld * 15,
+      };
+    }
+
     // Get BTC candles up to this point
     const btcWindow = btcCandles.filter(c => c.timestamp <= candle.timestamp);
 
@@ -459,7 +495,7 @@ function simulateExit(
     const windowStart = Math.max(0, i - 200);
     const windowCandles = candles.slice(windowStart, i + 1);
 
-    // Check exit
+    // Check exit (shouldExitPosition still handles trailing, NFS, stagnant, regime, time)
     const exitSignal = shouldExitPosition(position, candle.close, windowCandles, {
       nowMs: candle.timestamp,
       priceHigh: candle.high,
@@ -537,14 +573,12 @@ function simulateExit(
       position.trailingBreachCandles = 0;
     }
 
-    // Check other exit conditions
-    if (exitSignal.shouldExit && exitSignal.reason !== 'trailing_breach') {
+    // Check other exit conditions (skip stoploss - already handled by fixed SL above)
+    if (exitSignal.shouldExit && exitSignal.reason !== 'trailing_breach' && exitSignal.reason !== 'stoploss') {
       let exitPrice = candle.close;
-      if (exitSignal.reason === 'stoploss' || exitSignal.reason === 'stagnant_trade') {
-        const slPct = exitSignal.effectiveSlPct ?? position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
-        exitPrice = side === 'long'
-          ? entryPrice * (1 - slPct / 100)
-          : entryPrice * (1 + slPct / 100);
+      if (exitSignal.reason === 'stagnant_trade') {
+        // Stagnant exits at the fixed SL price (same as live)
+        exitPrice = fixedSlPrice;
       }
 
       const pnlPct = side === 'long'
@@ -650,7 +684,7 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   logger.info(`[PARITY-V2] Signal check: wouldEnter=${signalCheck.wouldEnter}, reason=${signalCheck.reason} | btc1h=${btcCandles1h.length} candles`);
 
   // 4. Simulate exit (regardless of signal validity - we want to compare exit logic)
-  const exitSim = simulateExit(symbolCandles, btcCandles, entryTs, entryPrice, side, leverage);
+  const exitSim = simulateExit(symbolCandles, btcCandles, entryTs, entryPrice, side, leverage, symbol);
 
   if (!exitSim) {
     return {
