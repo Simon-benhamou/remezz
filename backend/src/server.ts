@@ -3,6 +3,10 @@
  * Momentum strategy only - Vol 5x + BTC MA50 + 2h momentum
  */
 import "dotenv/config";
+// V5.95: Global fetch interceptor — MUST be before any Binance/CCXT imports
+// Wraps globalThis.fetch to log all outbound Binance REST calls and track weight gaps
+import { getInterceptedCallsSummary, getLastBinanceWeight } from './utils/fetchInterceptor.js';
+
 import http from "http";
 import express from "express";
 import cors from "cors";
@@ -253,7 +257,12 @@ app.get("/api/health", (_req, res) => {
     agents: agentCount,
     wsConnections: wsCount,
     time: new Date().toISOString(),
-    apiWeight: { ...ipWeightTracker.getStats(), topCallers: ipWeightTracker.getTopCallers(10) },
+    apiWeight: {
+      ...ipWeightTracker.getStats(),
+      topCallers: ipWeightTracker.getTopCallers(10),
+      interceptedCalls: getInterceptedCallsSummary(),
+      lastBinanceWeight: getLastBinanceWeight(),
+    },
     symbolEngines: symbolEngineManager.getStats(),
   });
 });
