@@ -1100,9 +1100,9 @@ class BinanceWebSocketManager {
         const banMatch = body.match(/banned until (\d+)/);
         if (banMatch) {
           const ts = parseInt(banMatch[1], 10);
-          if (ts > Date.now()) setIpBan(ts);
+          if (ts > Date.now()) setIpBan(ts, 'ws:exchangeInfo');
         } else {
-          setIpBan(Date.now() + 5 * 60 * 1000);
+          setIpBan(Date.now() + 5 * 60 * 1000, 'ws:exchangeInfo');
         }
         console.debug('⏳ Exchange info fetch skipped (rate limited) - will retry later');
         return;
@@ -1520,9 +1520,9 @@ class BinanceWebSocketManager {
             const banMatch = body.match(/banned until (\d+)/);
             if (banMatch) {
               const ts = parseInt(banMatch[1], 10);
-              if (ts > Date.now()) setIpBan(ts);
+              if (ts > Date.now()) setIpBan(ts, 'ws:serverTimeSync');
             } else {
-              setIpBan(Date.now() + 5 * 60 * 1000); // fallback 5 min
+              setIpBan(Date.now() + 5 * 60 * 1000, 'ws:serverTimeSync'); // fallback 5 min
             }
             return;
           }

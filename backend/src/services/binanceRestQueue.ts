@@ -368,7 +368,7 @@ class BinanceRestQueue {
 
     const durationMin = Math.ceil((banUntilAbsolute - Date.now()) / 60000);
     logger.error(`IP BAN DETECTED - setting ban for ${durationMin} minutes (until ${new Date(banUntilAbsolute).toISOString()})`);
-    setIpBan(banUntilAbsolute);
+    setIpBan(banUntilAbsolute, `restQueue:${errorMsg.substring(0, 80)}`);
 
     // Schedule ban-expired callbacks (re-seed candles, etc.)
     this.scheduleBanExpiryCallbacks(banUntilAbsolute);

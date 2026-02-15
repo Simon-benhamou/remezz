@@ -31,9 +31,18 @@ export function isIpBanned(): boolean {
   return Date.now() < ipBannedUntil;
 }
 
-export function setIpBan(untilTimestamp: number): void {
+export function setIpBan(untilTimestamp: number, source?: string): void {
   ipBannedUntil = untilTimestamp;
-  console.warn(`🚫 IP banned until ${new Date(untilTimestamp).toISOString()}`);
+  const durationMin = Math.ceil((untilTimestamp - Date.now()) / 60000);
+  console.warn(`🚫 IP banned until ${new Date(untilTimestamp).toISOString()} (${durationMin}min) [source: ${source ?? 'unknown'}]`);
+
+  // V5.95: Dump weight breakdown on ban for debugging (async import to avoid circular deps)
+  import('../services/ipWeightTracker.js').then(({ ipWeightTracker }) => {
+    const stats = ipWeightTracker.getStats();
+    const topCallers = ipWeightTracker.getTopCallers(10);
+    console.warn(`📊 IP WEIGHT AT BAN TIME: ${stats.currentWeight}/${stats.maxWeight} (${stats.pctUsed}%) | calls=${stats.callsLastMinute} | total=${stats.totalRecorded}`);
+    console.warn(`📊 TOP CALLERS: ${JSON.stringify(topCallers)}`);
+  }).catch(() => { /* ignore if tracker not yet initialized */ });
 }
 
 export function getIpBanExpiry(): number {

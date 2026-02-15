@@ -253,7 +253,7 @@ app.get("/api/health", (_req, res) => {
     agents: agentCount,
     wsConnections: wsCount,
     time: new Date().toISOString(),
-    apiWeight: ipWeightTracker.getStats(),
+    apiWeight: { ...ipWeightTracker.getStats(), topCallers: ipWeightTracker.getTopCallers(10) },
     symbolEngines: symbolEngineManager.getStats(),
   });
 });
@@ -785,11 +785,10 @@ app.post("/api/agent/start", async (req, res) => {
             
             const balance: any = await exchangeAPIDeduplicator.execute(
               makeFetchBalanceKey(userId),
-              () => exchange.fetchBalance({ type: 'future' }),
+              async () => { const r = await exchange.fetchBalance({ type: 'future' }); ipWeightTracker.record(5, `fetchBalance:startLive:${userId}`); return r; },
               IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
               `api_balance_${userId}`
             );
-            ipWeightTracker.record(5, `fetchBalance:startLive:${userId}`);
             const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
             const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
             const lockedUsdt = totalUsdt - freeUsdt;
@@ -1858,11 +1857,10 @@ app.get("/api/agent/portfolio", async (req, res) => {
           if (exchange && exchange.fetchBalance) {
             const balance: any = await exchangeAPIDeduplicator.execute(
               makeFetchBalanceKey(userId),
-              () => exchange.fetchBalance({ type: 'future' }),
+              async () => { const r = await exchange.fetchBalance({ type: 'future' }); ipWeightTracker.record(5, `fetchBalance:portfolio:${userId}`); return r; },
               IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
               `api_balance_portfolio_${userId}`
             );
-            ipWeightTracker.record(5, `fetchBalance:portfolio:${userId}`);
             const usdtTotal = balance?.USDT || balance?.total?.USDT || 0;
             const usdtFree = balance?.free?.USDT || 0;
             const usdtUsed = balance?.used?.USDT || 0;
@@ -1987,11 +1985,10 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
           if (exchange && exchange.fetchBalance) {
             const balance: any = await exchangeAPIDeduplicator.execute(
               makeFetchBalanceKey(userId),
-              () => exchange.fetchBalance({ type: 'future' }),
+              async () => { const r = await exchange.fetchBalance({ type: 'future' }); ipWeightTracker.record(5, `fetchBalance:capital:${userId}`); return r; },
               IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
               `api_balance_capital_${userId}`
             );
-            ipWeightTracker.record(5, `fetchBalance:capital:${userId}`);
 
             const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
             const usedUsdt = parseFloat(balance?.used?.USDT || balance?.USDT?.used || '0') || 0;
@@ -2368,11 +2365,10 @@ app.post("/api/agent/creation/activate", async (req, res) => {
           
           const balance: any = await exchangeAPIDeduplicator.execute(
             makeFetchBalanceKey(userId),
-            () => exchange.fetchBalance({ type: 'future' }),
+            async () => { const r = await exchange.fetchBalance({ type: 'future' }); ipWeightTracker.record(5, `fetchBalance:bulkStart:${userId}`); return r; },
             IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
             `api_balance_bulkStart_${userId}`
           );
-          ipWeightTracker.record(5, `fetchBalance:bulkStart:${userId}`);
           const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
           const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
 
@@ -2589,11 +2585,10 @@ app.post("/api/agent/creation/bulk", async (req, res) => {
           }
           const balance: any = await exchangeAPIDeduplicator.execute(
             makeFetchBalanceKey(userId),
-            () => exchange.fetchBalance({ type: 'future' }),
+            async () => { const r = await exchange.fetchBalance({ type: 'future' }); ipWeightTracker.record(5, `fetchBalance:bulk:${userId}`); return r; },
             IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
             `api_balance_bulk_${userId}`
           );
-          ipWeightTracker.record(5, `fetchBalance:bulk:${userId}`);
           const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
           const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
           if (totalUsdt > 0) {
@@ -2797,11 +2792,10 @@ app.post("/api/agent/restart", async (req, res) => {
           
           const balance: any = await exchangeAPIDeduplicator.execute(
             makeFetchBalanceKey(userId),
-            () => exchange.fetchBalance({ type: 'future' }),
+            async () => { const r = await exchange.fetchBalance({ type: 'future' }); ipWeightTracker.record(5, `fetchBalance:restart:${userId}`); return r; },
             IP_WEIGHT.FETCH_BALANCE_DEDUP_MS,
             `api_balance_restart_${userId}`
           );
-          ipWeightTracker.record(5, `fetchBalance:restart:${userId}`);
           const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
           const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
           const lockedUsdt = totalUsdt - freeUsdt;
@@ -4208,7 +4202,7 @@ async function restoreActiveSessions() {
                     }
                     const durationMin = Math.ceil((banUntilAbsolute - Date.now()) / 60000);
                     logger.warn(`🚫 [Restore] IP ban detected during user data subscription - setting ban for ${durationMin} minutes`);
-                    setIpBan(banUntilAbsolute);
+                    setIpBan(banUntilAbsolute, 'server:restoreUserDataSub');
                   } else {
                     logger.warn(`⚠️ [Restore] Failed to subscribe to user data:`, errMsg);
                   }
@@ -4303,9 +4297,8 @@ async function restoreActiveSessions() {
               try {
                 const balance = await binanceRestQueue.enqueue<any>(
                   () => exchange.fetchBalance({ type: 'future' }),
-                  { weight: BINANCE_WEIGHTS.FETCH_BALANCE, priority: 'high', tag: `fetchBalance_${userId}` }
+                  { weight: BINANCE_WEIGHTS.FETCH_BALANCE, priority: 'high', tag: `fetchBalance:restore:${userId}` }
                 );
-                ipWeightTracker.record(BINANCE_WEIGHTS.FETCH_BALANCE, `fetchBalance:restore:${userId}`);
                 const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
                 const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
 
