@@ -5,7 +5,7 @@
 import "dotenv/config";
 // V5.95: Global fetch interceptor — MUST be before any Binance/CCXT imports
 // Wraps globalThis.fetch to log all outbound Binance REST calls and track weight gaps
-import { getInterceptedCallsSummary, getLastBinanceWeight } from './utils/fetchInterceptor.js';
+import { getInterceptedCallsSummary, getLastBinanceWeight, getFullDiagnosis, detectExternalIp } from './utils/fetchInterceptor.js';
 
 import http from "http";
 import express from "express";
@@ -265,6 +265,12 @@ app.get("/api/health", (_req, res) => {
     },
     symbolEngines: symbolEngineManager.getStats(),
   });
+});
+
+// V5.95: Full IP weight diagnosis endpoint (public — needed for debugging without auth)
+app.get("/api/ip-weight-diagnosis", (_req, res) => {
+  const diagnosis = getFullDiagnosis();
+  res.json(diagnosis);
 });
 
 // Protected routes
@@ -4651,8 +4657,17 @@ server.timeout = 10 * 60 * 1000;
 server.keepAliveTimeout = 10 * 60 * 1000;
 
 server.listen(cfg.PORT, () => {
-  logger.info(`✅ Server listening on :${cfg.PORT}`);
+  logger.info(`✅ Server listening on :${cfg.PORT} | PID=${process.pid}`);
   logger.info(`📈 Strategy: Momentum Simple (Vol 5x + BTC MA50 + 2h Mom)`);
+
+  // V5.95: Detect and log our external IP at startup
+  detectExternalIp().then(ip => {
+    if (ip) {
+      logger.info(`🌐 External IP: ${ip} — all Binance weight from this IP is shared`);
+    } else {
+      logger.warn(`⚠️ Could not detect external IP`);
+    }
+  });
 
   // V5.79: Start Telegram reporter for periodic heartbeats and daily reports
   startTelegramReporter();

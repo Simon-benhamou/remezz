@@ -1514,15 +1514,10 @@ class BinanceWebSocketManager {
         const response = await fetch(`${this.endpoints.rest}/fapi/v1/time`);
         ipWeightTracker.record(1, 'time:healthCheck');
 
-        // V5.95: Log Binance's actual weight tracking (different from ours if other processes share IP)
+        // V5.95: Log Binance's actual weight tracking
+        // The fetch interceptor now handles weight gap detection and logging.
+        // Just read the header for ban detection below.
         const binanceWeight = response.headers.get('x-mbx-used-weight-1m') || response.headers.get('X-MBX-USED-WEIGHT-1M');
-        if (binanceWeight) {
-          const bw = parseInt(binanceWeight, 10);
-          const ourWeight = ipWeightTracker.getCurrentWeight();
-          if (bw > 100 || bw > ourWeight * 2) {
-            console.warn(`⚠️ Binance reports weight ${bw}/2400 but our tracker says ${ourWeight} — ${bw - ourWeight}w unaccounted for!`);
-          }
-        }
 
         if (!response.ok) {
           if (response.status === 418 || response.status === 429) {
