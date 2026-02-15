@@ -187,9 +187,9 @@ const allowedFromEnv = (cfg.CORS_ORIGIN || "").split(",").map(s => s.trim()).fil
 const allowedOrigins = new Set<string>([
   ...allowedFromEnv,
   "http://localhost:5173",
-  "https://remezz.up.railway.app",
-  "https://trading-agent-ia-v3-frontend-production.up.railway.app",
   "https://remezz.com",
+  "https://api.remezz.com"
+
 ]);
 
 const app = express();
