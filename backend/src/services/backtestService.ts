@@ -1781,7 +1781,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // V5.80: TOXIC HOURS FILTER - Validated on 24 months (4297 trades)
         // Hours with WR significantly below 74.1% baseline:
         // 04:00: 58.2% | 05:00: 66.7% | 09:00: 65.6% | 18:00: 61.7% | 21:00: 62.1%
-        const signalHourUtc = new Date(current.timestamp).getUTCHours();
+        // V5.95 FIX: Use candle CLOSE time (open + 15min) to match live wall-clock behavior.
+        // Binance timestamps are candle OPEN time, but signal is detected at CLOSE.
+        // Live uses new Date() ≈ close time, so backtest must align.
+        const signalHourUtc = new Date(current.timestamp + 15 * 60 * 1000).getUTCHours();
         if (signalHourUtc === 4 || signalHourUtc === 5 || signalHourUtc === 9 || signalHourUtc === 18 || signalHourUtc === 21) {
           continue; // Skip toxic hours
         }
