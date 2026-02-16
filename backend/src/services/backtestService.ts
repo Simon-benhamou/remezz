@@ -1804,11 +1804,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         
         // Core indicators
         const roc5 = calcROC(closes, 5);
-        const volumeRatio = volumes[volumes.length - 1] / (volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19);
+        // V5.95 FIX: Use calcVolRatio() for parity with live (20-bar avg instead of 19-bar)
+        const volumeRatio = calcVolRatio(volumes);
         
         // V5.23: New indicators for enhanced scoring
         const bbPosition = calcBBPosition(windowCandles, 20, 2);
-        const atrPct = calcATR(windowCandles, 14);
+        // V5.95 FIX: Normalize ATR as percentage of price (match live behavior in simpleAgent.ts)
+        // Previously passed raw ATR ($800 for BTC) instead of percentage (0.8%), causing
+        // atrScore=0 for ALL signals (15% of score lost) and different ranking vs live.
+        const atrRaw = calcATR(windowCandles, 14) ?? 0;
+        const atrPct = atrRaw ? (atrRaw / current.close) * 100 : 0;
         const trendStrength = calcTrendStrength(closes, 50);
         
         // V5.23: Use enhanced multi-factor scoring
