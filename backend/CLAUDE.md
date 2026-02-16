@@ -240,6 +240,11 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Future**: S/R has real signal value but needs smarter implementation (dynamic zones, breakout/bounce classification, multi-TF confluence) before re-enabling. See `docs/DRASH-SOD-PLAN.md`.
   - **Scripts preserved**: `scripts/compare-sr-filter.ts`, `scripts/grid-search-short-sr.ts`, `scripts/analyze-sr-proximity.ts` for future research.
 
+- V5.100: Parity verification 1h candle look-ahead bias fix:
+  - **Problem**: Parity `checkSignalAtEntry()` filtered BTC 1h candles by open time (`c.timestamp <= lastClosedCandleTs`), which included the currently-forming 1h candle. Since parity runs AFTER the trade with historical data, it used the candle's FINAL close price — data unavailable at signal time. When BTC is near SMA200, this extra candle flips the regime (bear→bull), causing false NO_SIGNAL parity mismatches.
+  - **Fix**: Changed filter to `c.timestamp + CANDLE_1H_MS <= lastClosedCandleTs` (close time filter). Now matches both backtest (`c.timestamp + 1h <= btcCandle.timestamp`) and live (`isFinal !== false`). All three paths use only CLOSED 1h candles for regime computation.
+  - **File**: `parityVerificationServiceV2.ts` line 279.
+
 - V5.95: Parity sim fixed SL at entry time:
   - **Problem**: Parity sim let `shouldExitPosition()` recalculate dynamic SL% per candle (volatility regime can shift mid-trade). Live places a fixed `STOP_MARKET` order at entry using `calcDynamicStopLoss()` — never recalculated. This caused DURATION_MISMATCH when the sim's dynamic SL triggered earlier/later than the fixed live SL.
   - **Fix**: `simulateExit()` in `parityVerificationServiceV2.ts` now computes entry-time SL% via `calcDynamicStopLoss(candles.slice(0, entryIdx+1), symbol)` and checks `candle.low <= fixedSlPrice` (longs) / `candle.high >= fixedSlPrice` (shorts) before calling `shouldExitPosition()`. The `shouldExitPosition` stoploss path is skipped (already handled). Stagnant exits use the same fixed SL price.

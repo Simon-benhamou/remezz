@@ -276,7 +276,12 @@ function checkSignalAtEntry(
   }
 
   // V5.86: Filter BTC 1h candles to entry time for regime calculation
-  const btcWindow1h = btcCandles1h.filter(c => c.timestamp <= lastClosedCandleTs);
+  // FIX: Use close time (timestamp + 1h) not open time — must only include CLOSED 1h candles.
+  // Matches backtest (c.timestamp + 1h <= btcCandle.timestamp) and live (isFinal filter).
+  // Old filter (c.timestamp <= lastClosedCandleTs) included the forming 1h candle,
+  // which used its FINAL close price (look-ahead bias) and could flip the regime.
+  const CANDLE_1H_MS = 60 * 60 * 1000;
+  const btcWindow1h = btcCandles1h.filter(c => c.timestamp + CANDLE_1H_MS <= lastClosedCandleTs);
 
   // Check if signal would fire
   try {
