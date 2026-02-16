@@ -1781,7 +1781,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         // V5.80: TOXIC HOURS FILTER - Validated on 24 months (4297 trades)
         // Hours with WR significantly below 74.1% baseline:
         // 04:00: 58.2% | 05:00: 66.7% | 09:00: 65.6% | 18:00: 61.7% | 21:00: 62.1%
-        const signalHourUtc = new Date(current.timestamp).getUTCHours();
+        // V5.95 FIX: Use candle CLOSE time (open + 15min) to match live wall-clock behavior.
+        // Binance timestamps are candle OPEN time, but signal is detected at CLOSE.
+        // Live uses new Date() ≈ close time, so backtest must align.
+        const signalHourUtc = new Date(current.timestamp + 15 * 60 * 1000).getUTCHours();
         if (signalHourUtc === 4 || signalHourUtc === 5 || signalHourUtc === 9 || signalHourUtc === 18 || signalHourUtc === 21) {
           continue; // Skip toxic hours
         }
@@ -1804,11 +1807,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         
         // Core indicators
         const roc5 = calcROC(closes, 5);
-        const volumeRatio = volumes[volumes.length - 1] / (volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / 19);
+        // V5.95 FIX: Use calcVolRatio() for parity with live (20-bar avg instead of 19-bar)
+        const volumeRatio = calcVolRatio(volumes);
         
         // V5.23: New indicators for enhanced scoring
         const bbPosition = calcBBPosition(windowCandles, 20, 2);
-        const atrPct = calcATR(windowCandles, 14);
+        // V5.95 FIX: Normalize ATR as percentage of price (match live behavior in simpleAgent.ts)
+        // Previously passed raw ATR ($800 for BTC) instead of percentage (0.8%), causing
+        // atrScore=0 for ALL signals (15% of score lost) and different ranking vs live.
+        const atrRaw = calcATR(windowCandles, 14) ?? 0;
+        const atrPct = atrRaw ? (atrRaw / current.close) * 100 : 0;
         const trendStrength = calcTrendStrength(closes, 50);
         
         // V5.23: Use enhanced multi-factor scoring
