@@ -11,6 +11,7 @@
  */
 
 import { createLogger } from '../utils/logger.js';
+import { MomentumConfig } from './momentumSimple.js';
 
 const logger = createLogger('signal-ranker');
 
@@ -102,7 +103,8 @@ export function calculateSignalScore(params: {
   // Counter-trend = 0 points (no penalty, just no bonus)
   
   // 6. Context (V5.99 Drash) — adjusts ranking based on S/R, breakout quality, correlation
-  const contextComponent = (params.contextScore ?? 0) * 10 * 0.20;
+  const contextWeight = MomentumConfig.DRASH_CONTEXT.WEIGHT_IN_SIGNAL_SCORE;
+  const contextComponent = (params.contextScore ?? 0) * 10 * contextWeight;
 
   return bbScore + rocScore + volScore + atrScore + trendScore + contextComponent;
 }

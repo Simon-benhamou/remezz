@@ -713,7 +713,7 @@ export const MomentumConfig = {
   // Modular context factors for signal ranking (score, don't filter)
   // ═══════════════════════════════════════════════════════════════════════════
   DRASH_CONTEXT: {
-    ENABLED: true,
+    ENABLED: false,  // Disabled: OOS backtest shows baseline wins at all weights (0.05-0.20)
     WEIGHT_IN_SIGNAL_SCORE: 0.20,
 
     FACTORS: {

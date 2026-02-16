@@ -214,15 +214,17 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Optimization script**: `scripts/optimize-strategy.ts` — 3-phase parameter sweep (entry, exit, symbols). `scripts/test-all-symbols.ts` — individual symbol profitability testing.
   - **Findings document**: `docs/optimization-findings-v5.92.md` — full analysis of 28+ backtest runs.
 
-- V5.99: Drash Context Score — modular signal context analysis:
+- V5.99: Drash Context Score — modular signal context analysis (DISABLED):
   - **Problem**: V5.96 S/R binary filter improved quality but destroyed ROI by killing 16% of trades. Strategy needs contextual awareness without reducing trade count.
-  - **Solution**: 3 independently-toggleable scoring factors that adjust signal ranking (score, not filter). Added to `calculateSignalScore()` as 6th factor (20% weight).
-  - **Factor 1 — S/R Proximity** (`contextScore.ts`): Pivot-based support/resistance detection on last 200 candles. LONG at support = boost, LONG into resistance = penalize. Reverse for SHORT. Min 2 touches for valid level. Strength bonus at 4+ touches.
-  - **Factor 2 — Breakout Quality**: Assesses BB breakout distance, candle body conviction (full body vs wick), and volume confirmation. Strong breakout + full body + high volume = boost. Weak breakout + wick + low volume = penalize.
-  - **Factor 3 — Market Correlation**: Detects herd moves vs isolated signals using ROC1 across all tracked symbols. Isolated move (<30% same direction) = boost. Herd (>60% same direction) = penalize.
-  - **Config**: `MomentumConfig.DRASH_CONTEXT` with `ENABLED` toggle and per-factor `FACTORS.{SR_PROXIMITY,BREAKOUT_QUALITY,MARKET_CORRELATION}.ENABLED` toggles and weights.
-  - **Key design**: Unlike V5.96 (binary filter), context score only adjusts ranking priority — never blocks entries. Trade count stays identical to baseline.
-  - **Validation**: Train/test split (Jun 2024 - Jun 2025 train, Jul - Dec 2025 OOS). Script: `scripts/compare-drash-context.ts` tests all 8 factor combinations (2^3).
+  - **Approach 1 — Ranking (failed)**: 3 independently-toggleable scoring factors adjust signal ranking (score, don't filter). Added to `calculateSignalScore()` as 6th factor.
+  - **Factor 1 — S/R Proximity** (`contextScore.ts`): Pivot-based support/resistance detection on last 200 candles. LONG at support = boost, LONG into resistance = penalize.
+  - **Factor 2 — Breakout Quality**: BB breakout distance + candle body conviction + volume confirmation scoring.
+  - **Factor 3 — Market Correlation**: Herd vs isolated signal detection via ROC1 across tracked symbols.
+  - **Results**: All 8 factor combinations tested (train Jun 2024-Jun 2025, OOS Jul-Dec 2025). ALL factors improve in-sample (+353% ROI best) but DEGRADE out-of-sample (-10% to -15% ROI). Correlation factor = no-op (identical to baseline). Sensitivity analysis at weights 0.05/0.10/0.15/0.20 all degrade OOS ~-11% ROI. **Ranking reshuffles overfit to train data.**
+  - **Root cause**: With 205 OOS trades across 5 symbols, few moments have competing signals. Re-ranking rarely changes which trade gets taken, and when it does, it overfits.
+  - **Status**: `DRASH_CONTEXT.ENABLED = false`. Infrastructure preserved for filter-based approach (block signals with bad context score).
+  - **Config**: `MomentumConfig.DRASH_CONTEXT` with `ENABLED` toggle and per-factor `FACTORS.{SR_PROXIMITY,BREAKOUT_QUALITY,MARKET_CORRELATION}.ENABLED` toggles.
+  - **Scripts**: `scripts/compare-drash-context.ts` (8-combo comparison), `scripts/sensitivity-drash-weight.ts` (weight sensitivity).
   - **Files**: `contextScore.ts` (module), `signalRanker.ts` (scoring), `backtestService.ts` (backtest), `simpleAgent.ts` (live).
 
 - V5.98: S/R proximity filter REMOVED (reverted V5.96-V5.97):
