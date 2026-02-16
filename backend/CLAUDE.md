@@ -242,10 +242,11 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Future**: S/R has real signal value but needs smarter implementation (dynamic zones, breakout/bounce classification, multi-TF confluence) before re-enabling. See `docs/DRASH-SOD-PLAN.md`.
   - **Scripts preserved**: `scripts/compare-sr-filter.ts`, `scripts/grid-search-short-sr.ts`, `scripts/analyze-sr-proximity.ts` for future research.
 
-- V5.100: Parity verification 1h candle look-ahead bias fix:
-  - **Problem**: Parity `checkSignalAtEntry()` filtered BTC 1h candles by open time (`c.timestamp <= lastClosedCandleTs`), which included the currently-forming 1h candle. Since parity runs AFTER the trade with historical data, it used the candle's FINAL close price — data unavailable at signal time. When BTC is near SMA200, this extra candle flips the regime (bear→bull), causing false NO_SIGNAL parity mismatches.
-  - **Fix**: Changed filter to `c.timestamp + CANDLE_1H_MS <= lastClosedCandleTs` (close time filter). Now matches both backtest (`c.timestamp + 1h <= btcCandle.timestamp`) and live (`isFinal !== false`). All three paths use only CLOSED 1h candles for regime computation.
-  - **File**: `parityVerificationServiceV2.ts` line 279.
+- V5.100: Parity verification 1h candle filter fix (two bugs):
+  - **Problem 1**: Parity filtered BTC 1h candles by open time (`c.timestamp <= lastClosedCandleTs`), including the forming 1h candle with its future close price (look-ahead bias). Flipped regime near SMA200.
+  - **Problem 2**: Reference time was `lastClosedCandleTs` (15m candle OPEN time), 15min behind the backtest's `btcCandle.timestamp` (CURRENT 15m candle open = PREVIOUS candle CLOSE time). At hour boundaries (XX:45 signals), this excluded the 1h candle that just closed, causing MTF filter mismatches.
+  - **Fix**: `c.timestamp + CANDLE_1H_MS <= currentCandleStart` — uses close-time filter with correct reference. `currentCandleStart` = close time of last closed 15m candle = backtest's `btcCandle.timestamp`. Fixes both regime and MTF parity.
+  - **File**: `parityVerificationServiceV2.ts` line 284.
 
 - V5.95: Parity sim fixed SL at entry time:
   - **Problem**: Parity sim let `shouldExitPosition()` recalculate dynamic SL% per candle (volatility regime can shift mid-trade). Live places a fixed `STOP_MARKET` order at entry using `calcDynamicStopLoss()` — never recalculated. This caused DURATION_MISMATCH when the sim's dynamic SL triggered earlier/later than the fixed live SL.
