@@ -1432,6 +1432,7 @@ export function calcRocAcceleration(closes: number[], fastPeriod: number): numbe
   return rocNow - rocPrev;
 }
 
+
 // ============================================================================
 // V5.64: WICK BREAKOUT EARLY ENTRY FUNCTIONS
 // ============================================================================
@@ -2005,12 +2006,12 @@ export function checkMomentumSignal(
       }
     }
 
-    // ✅ ALL LONG CONDITIONS MET (V5.78: with pattern quality filters)
+    // ✅ ALL LONG CONDITIONS MET
     const confidence = Math.min(1, (volRatio / 3) * 0.3 + (roc10 / 0.04) * 0.3 + (distanceFromUpper * 50) * 0.2 + 0.2);
     return {
       valid: true,
       side: 'long',
-      reason: `v5.78_bull_long_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|dist=${(distanceFromUpper*100).toFixed(2)}%`,
+      reason: `v5.98_bull_long_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|dist=${(distanceFromUpper*100).toFixed(2)}%`,
       confidence,
       features
     };
@@ -2164,12 +2165,12 @@ export function checkMomentumSignal(
       }
     }
 
-    // ✅ ALL SHORT CONDITIONS MET (V5.78: with pattern quality filters)
+    // ✅ ALL SHORT CONDITIONS MET
     const confidence = Math.min(1, (volRatio / 4) * 0.3 + (Math.abs(roc5) / 0.04) * 0.3 + (distanceFromLower * 50) * 0.2 + 0.2);
     return {
       valid: true,
       side: 'short',
-      reason: `v5.78_bear_short_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|dist=${(distanceFromLower*100).toFixed(2)}%`,
+      reason: `v5.98_bear_short_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|dist=${(distanceFromLower*100).toFixed(2)}%`,
       confidence,
       features
     };
