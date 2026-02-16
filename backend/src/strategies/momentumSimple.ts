@@ -707,6 +707,44 @@ export const MomentumConfig = {
     ATR_DECLINING_RATIO: 0.85,        // ATR declining > 15% = volatility drying up
     SMA200_SLOPE_FLAT_PCT: 0.05,      // SMA200 slope near zero = ranging market
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // V5.99: DRASH CONTEXT SCORING
+  // Modular context factors for signal ranking (score, don't filter)
+  // ═══════════════════════════════════════════════════════════════════════════
+  DRASH_CONTEXT: {
+    ENABLED: true,
+    WEIGHT_IN_SIGNAL_SCORE: 0.20,
+
+    FACTORS: {
+      SR_PROXIMITY: {
+        ENABLED: true,
+        WEIGHT: 0.40,
+        LOOKBACK_CANDLES: 200,
+        PIVOT_LOOKBACK: 5,
+        MIN_TOUCHES: 2,
+        CLUSTER_PCT: 0.3,
+        NEAR_THRESHOLD_PCT: 1.5,
+        FAR_THRESHOLD_PCT: 5.0,
+      },
+      BREAKOUT_QUALITY: {
+        ENABLED: true,
+        WEIGHT: 0.35,
+        STRONG_BREAKOUT_PCT: 1.5,
+        WEAK_BREAKOUT_PCT: 0.3,
+        STRONG_BODY_RATIO: 0.7,
+        WEAK_BODY_RATIO: 0.3,
+        VOL_CONFIRM_MULT: 2.0,
+      },
+      MARKET_CORRELATION: {
+        ENABLED: true,
+        WEIGHT: 0.25,
+        ROC1_THRESHOLD_PCT: 0.5,
+        HERD_THRESHOLD: 0.6,
+        ISOLATED_THRESHOLD: 0.3,
+      },
+    },
+  },
 };
 
 // Alias pour rétrocompatibilité
