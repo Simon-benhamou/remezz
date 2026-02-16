@@ -176,15 +176,15 @@ export default function AgentCreationModal({
   return (
     <Dialog
       open={visible}
-      onOpenChange={(open) => {
+      onOpenChange={(open: boolean) => {
         if (!open && !creating) handleClose();
       }}
     >
       <DialogContent
         className="p-0 gap-0 max-w-[min(92vw,860px)] border-0 text-foreground"
         style={{ background: '#0f172a', borderRadius: 16, border: '1px solid rgba(40, 68, 105, 0.4)' }}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
+        onPointerDownOutside={(e: Event) => e.preventDefault()}
+        onInteractOutside={(e: Event) => e.preventDefault()}
       >
         {/* Header */}
         <DialogHeader
@@ -390,7 +390,7 @@ export default function AgentCreationModal({
                   max={10}
                   step={1}
                   value={[maxLeverage]}
-                  onValueChange={(value) => setMaxLeverage(value[0])}
+                  onValueChange={(value: number[]) => setMaxLeverage(value[0])}
                 />
                 <div className="flex justify-between mt-1.5 text-xs text-slate-500">
                   <span>1x</span>

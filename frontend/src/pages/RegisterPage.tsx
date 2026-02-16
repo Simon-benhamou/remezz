@@ -59,7 +59,7 @@ export default function RegisterPage() {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   const form = useForm<RegisterFormValues>({
-    resolver: zodResolver(registerSchema),
+    resolver: zodResolver(registerSchema as any),
     defaultValues: {
       registrationCode: '',
       username: '',

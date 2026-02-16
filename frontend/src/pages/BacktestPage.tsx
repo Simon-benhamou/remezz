@@ -360,7 +360,7 @@ export default function BacktestPage() {
   ];
 
   const form = useForm<BacktestFormValues>({
-    resolver: zodResolver(backtestSchema),
+    resolver: zodResolver(backtestSchema as any),
     defaultValues: {
       startDate: '2024-01-01',
       endDate: '2025-12-26',
@@ -655,7 +655,7 @@ export default function BacktestPage() {
                 control={form.control}
                 name="leverage"
                 render={({ field }) => (
-                  <Select value={String(field.value)} onValueChange={(v) => field.onChange(Number(v))}>
+                  <Select value={String(field.value)} onValueChange={(v: string) => field.onChange(Number(v))}>
                     <SelectTrigger className="w-[80px]">
                       <SelectValue />
                     </SelectTrigger>
@@ -895,7 +895,7 @@ export default function BacktestPage() {
                     <span className="flex items-center gap-1 text-sm text-muted-foreground">
                       <Filter className="h-4 w-4" /> Filters:
                     </span>
-                    <Select value={selectedMonth} onValueChange={(v) => setSelectedMonth(v)}>
+                    <Select value={selectedMonth} onValueChange={(v: string) => setSelectedMonth(v)}>
                       <SelectTrigger className="w-[140px]">
                         <SelectValue />
                       </SelectTrigger>
@@ -906,7 +906,7 @@ export default function BacktestPage() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <Select value={selectedSymbol} onValueChange={(v) => setSelectedSymbol(v)}>
+                    <Select value={selectedSymbol} onValueChange={(v: string) => setSelectedSymbol(v)}>
                       <SelectTrigger className="w-[140px]">
                         <SelectValue />
                       </SelectTrigger>
@@ -917,7 +917,7 @@ export default function BacktestPage() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <Select value={selectedSide} onValueChange={(v) => setSelectedSide(v as 'all' | 'long' | 'short')}>
+                    <Select value={selectedSide} onValueChange={(v: string) => setSelectedSide(v as 'all' | 'long' | 'short')}>
                       <SelectTrigger className="w-[100px]">
                         <SelectValue />
                       </SelectTrigger>
@@ -1003,7 +1003,7 @@ export default function BacktestPage() {
                   <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
                     <span>{sortedTrades.length} trades</span>
                     <div className="flex items-center gap-2">
-                      <Select value={String(tradePageSize)} onValueChange={(v) => { setTradePageSize(Number(v)); setTradePage(1); }}>
+                      <Select value={String(tradePageSize)} onValueChange={(v: string) => { setTradePageSize(Number(v)); setTradePage(1); }}>
                         <SelectTrigger className="h-8 w-[70px]">
                           <SelectValue />
                         </SelectTrigger>

@@ -131,12 +131,12 @@ function ProfileTab({ userInfo, onUserUpdate }: { userInfo: UserInfo | null; onU
   const [passwordLoading, setPasswordLoading] = useState(false);
 
   const profileForm = useForm<ProfileFormValues>({
-    resolver: zodResolver(profileSchema),
+    resolver: zodResolver(profileSchema as any),
     defaultValues: { email: userInfo?.email || '' },
   });
 
   const passwordForm = useForm<PasswordFormValues>({
-    resolver: zodResolver(passwordSchema),
+    resolver: zodResolver(passwordSchema as any),
     defaultValues: {
       currentPassword: '',
       newPassword: '',
@@ -337,7 +337,7 @@ function ApiKeysTab() {
   const [addLoading, setAddLoading] = useState(false);
 
   const apiKeyForm = useForm<ApiKeyFormValues>({
-    resolver: zodResolver(apiKeySchema),
+    resolver: zodResolver(apiKeySchema as any),
     defaultValues: { exchange: '', keyName: '', apiKey: '', apiSecret: '' },
   });
 

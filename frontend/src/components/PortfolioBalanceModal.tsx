@@ -154,14 +154,14 @@ export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }
     <TooltipProvider>
       <Dialog
         open={open}
-        onOpenChange={(isOpen) => {
+        onOpenChange={(isOpen: boolean) => {
           if (!isOpen && !loading) onClose();
         }}
       >
         <DialogContent
           className={cn(currentReservations.length > 0 ? 'max-w-[800px]' : 'max-w-[600px]')}
-          onPointerDownOutside={(e) => { if (loading) e.preventDefault(); }}
-          onEscapeKeyDown={(e) => { if (loading) e.preventDefault(); }}
+          onPointerDownOutside={(e: Event) => { if (loading) e.preventDefault(); }}
+          onEscapeKeyDown={(e: KeyboardEvent) => { if (loading) e.preventDefault(); }}
         >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg">

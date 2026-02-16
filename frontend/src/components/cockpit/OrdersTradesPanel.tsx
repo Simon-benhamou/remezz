@@ -155,7 +155,7 @@ const SimplePagination: React.FC<PaginationProps> = ({
       <div className="flex items-center gap-2">
         <Select
           value={String(pageSize)}
-          onValueChange={(v) => { onPageSizeChange(Number(v)); onPageChange(1); }}
+          onValueChange={(v: string) => { onPageSizeChange(Number(v)); onPageChange(1); }}
         >
           <SelectTrigger className="h-7 w-[70px] text-xs bg-[rgba(30,41,59,0.8)] border-[var(--border-subtle)]">
             <SelectValue />
@@ -654,7 +654,7 @@ const FiltersBar: React.FC<FiltersBarProps> = ({ filters, onFilterChange, showSi
         {showSideFilter && (
           <Select
             value={filters.side || ''}
-            onValueChange={(value) => onFilterChange({ ...filters, side: value as TradeFilters['side'] })}
+            onValueChange={(value: string) => onFilterChange({ ...filters, side: value as TradeFilters['side'] })}
           >
             <SelectTrigger className="h-7 min-w-[100px] text-xs bg-[rgba(30,41,59,0.8)] border-[var(--border-subtle)]">
               <SelectValue placeholder="Side" />
@@ -668,7 +668,7 @@ const FiltersBar: React.FC<FiltersBarProps> = ({ filters, onFilterChange, showSi
 
         <Select
           value={filters.result || ''}
-          onValueChange={(value) => onFilterChange({ ...filters, result: value as TradeFilters['result'] })}
+          onValueChange={(value: string) => onFilterChange({ ...filters, result: value as TradeFilters['result'] })}
         >
           <SelectTrigger className="h-7 min-w-[100px] text-xs bg-[rgba(30,41,59,0.8)] border-[var(--border-subtle)]">
             <SelectValue placeholder="Result" />

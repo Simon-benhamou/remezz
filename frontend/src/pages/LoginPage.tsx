@@ -31,7 +31,7 @@ export default function LoginPage() {
   const { signIn, isLoading, isAuthenticated } = useAuth();
 
   const form = useForm<LoginFormValues>({
-    resolver: zodResolver(loginSchema),
+    resolver: zodResolver(loginSchema as any),
     defaultValues: {
       username: '',
       password: '',

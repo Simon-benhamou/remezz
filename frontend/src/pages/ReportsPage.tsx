@@ -660,8 +660,9 @@ function ParityVerificationPanel() {
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
+                  {/* @ts-expect-error recharts v3 JSX type issue */}
                   <Legend layout="vertical" align="right" verticalAlign="middle" iconSize={8}
-                          formatter={(value) => <span style={{ fontSize: '11px' }}>{value}</span>} />
+                          formatter={(value: string) => <span style={{ fontSize: '11px' }}>{value}</span>} />
                 </PieChart>
               </ResponsiveContainer>
             ) : (

@@ -474,12 +474,13 @@ export default function DashboardPageCompact() {
                     <YAxis
                       tick={{ fill: '#94a3b8', fontSize: 11 }}
                       axisLine={{ stroke: 'rgba(30, 58, 95, 0.25)' }}
-                      tickFormatter={(v) => `$${v}`}
+                      tickFormatter={(v: number) => `$${v}`}
                       width={60}
                     />
+                    {/* @ts-expect-error recharts v3 JSX type issue */}
                     <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="3 3" />
                     <RechartsTooltip
-                      content={({ label, payload }) => {
+                      content={({ label, payload }: { label: string; payload: any[] }) => {
                         if (!payload || payload.length === 0) return null;
                         const value = payload[0]?.value as number;
                         return (

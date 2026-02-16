@@ -124,13 +124,13 @@ export default function LandingPage() {
 
   // Login form
   const loginForm = useForm<LoginFormValues>({
-    resolver: zodResolver(loginSchema),
+    resolver: zodResolver(loginSchema as any),
     defaultValues: { username: '', password: '' },
   });
 
   // Register form
   const registerForm = useForm<RegisterFormValues>({
-    resolver: zodResolver(registerSchema),
+    resolver: zodResolver(registerSchema as any),
     defaultValues: {
       registrationCode: '',
       username: '',

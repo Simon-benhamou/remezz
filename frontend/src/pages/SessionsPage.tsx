@@ -234,7 +234,7 @@ export default function SessionsPage() {
               <ToggleGroup
                 type="single"
                 value={viewMode}
-                onValueChange={(v) => v && setViewMode(v as ViewMode)}
+                onValueChange={(v: string) => v && setViewMode(v as ViewMode)}
                 className="bg-muted rounded-md"
               >
                 <ToggleGroupItem value="cards" aria-label="Card view" size="sm">
@@ -557,7 +557,7 @@ export default function SessionsPage() {
         )}
 
         {/* Confirm Dialog */}
-        <Dialog open={confirmState.open} onOpenChange={(open) => setConfirmState((prev) => ({ ...prev, open }))}>
+        <Dialog open={confirmState.open} onOpenChange={(open: boolean) => setConfirmState((prev) => ({ ...prev, open }))}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{confirmState.title}</DialogTitle>
