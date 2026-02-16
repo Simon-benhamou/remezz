@@ -245,8 +245,9 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
 - V5.100: Parity verification 1h candle filter fix (two bugs):
   - **Problem 1**: Parity filtered BTC 1h candles by open time (`c.timestamp <= lastClosedCandleTs`), including the forming 1h candle with its future close price (look-ahead bias). Flipped regime near SMA200.
   - **Problem 2**: Reference time was `lastClosedCandleTs` (15m candle OPEN time), 15min behind the backtest's `btcCandle.timestamp` (CURRENT 15m candle open = PREVIOUS candle CLOSE time). At hour boundaries (XX:45 signals), this excluded the 1h candle that just closed, causing MTF filter mismatches.
-  - **Fix**: `c.timestamp + CANDLE_1H_MS <= currentCandleStart` — uses close-time filter with correct reference. `currentCandleStart` = close time of last closed 15m candle = backtest's `btcCandle.timestamp`. Fixes both regime and MTF parity.
-  - **File**: `parityVerificationServiceV2.ts` line 284.
+  - **Parity fix**: `c.timestamp + CANDLE_1H_MS <= currentCandleStart` — uses close-time filter with correct reference. `currentCandleStart` = close time of last closed 15m candle = backtest's `btcCandle.timestamp`.
+  - **Live fix**: Replaced `isFinal !== false` filter with timestamp-based `c.timestamp + 1h <= now` in both entry and exit paths (`simpleAgent.ts`). The `isFinal` flag can be stale in the 15-min TTL cache — if cached before a 1h candle closed, the flag stays `false` even though the candle has since closed. Timestamp check is deterministic and matches backtest exactly.
+  - **Files**: `parityVerificationServiceV2.ts` line 284, `simpleAgent.ts` lines 1282 and 1646.
 
 - V5.95: Parity sim fixed SL at entry time:
   - **Problem**: Parity sim let `shouldExitPosition()` recalculate dynamic SL% per candle (volatility regime can shift mid-trade). Live places a fixed `STOP_MARKET` order at entry using `calcDynamicStopLoss()` — never recalculated. This caused DURATION_MISMATCH when the sim's dynamic SL triggered earlier/later than the fixed live SL.

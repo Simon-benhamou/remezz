@@ -1279,7 +1279,13 @@ export class SimpleAgent {
         btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
 
         const allBtcCandles1h = await this.fetchBtcCandles1h();
-        const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
+        // V5.100 FIX: Use timestamp-based close detection instead of isFinal flag.
+        // The isFinal flag can be stale if the 1h cache (15min TTL) was refreshed
+        // before a 1h candle closed — its isFinal stays false in the snapshot.
+        // Timestamp check is deterministic: a 1h candle is closed if now >= open + 1h.
+        // Matches backtest (c.timestamp + 1h <= btcCandle.timestamp) exactly.
+        const CANDLE_1H_MS_ENTRY = 60 * 60 * 1000;
+        const btcCandles1h = allBtcCandles1h.filter(c => c.timestamp + CANDLE_1H_MS_ENTRY <= now);
         const MIN_BTC_1H_CANDLES = 201; // Need 200 for SMA200 regime + 1 (match backtest)
         if (btcCandles1h.length < MIN_BTC_1H_CANDLES) {
           if (this.tickCount % 10 === 1) {
@@ -1492,6 +1498,12 @@ export class SimpleAgent {
             });
             logger.info(`📐 [${shortSymbol}] Context: score=${ctx.combined.toFixed(2)} sr=${ctx.srProximity?.toFixed(2) ?? 'off'} bq=${ctx.breakoutQuality?.toFixed(2) ?? 'off'} mc=${ctx.marketCorrelation?.toFixed(2) ?? 'off'}`);
           }
+
+          // Filter mode: skip signal if context score below threshold
+          if (MomentumConfig.DRASH_CONTEXT.FILTER_MODE && ctx.combined < MomentumConfig.DRASH_CONTEXT.FILTER_THRESHOLD) {
+            logger.info(`🚫 [${shortSymbol}] Context filter: score ${ctx.combined.toFixed(2)} < threshold ${MomentumConfig.DRASH_CONTEXT.FILTER_THRESHOLD} — skipping signal`);
+            return; // Skip this signal entirely
+          }
         }
 
         // V5.22: Add signal to global ranker for prioritization
@@ -1636,8 +1648,10 @@ export class SimpleAgent {
       const btcCandles = lastClosedBtcIdx >= 0 ? allBtcCandles.slice(0, lastClosedBtcIdx + 1) : [];
 
       // V5.82: Fetch BTC 1h candles for regime SMA200
+      // V5.100 FIX: Timestamp-based close detection (same as entry path)
       const allBtcCandles1h = await this.fetchBtcCandles1h();
-      const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
+      const CANDLE_1H_MS_EXIT = 60 * 60 * 1000;
+      const btcCandles1h = allBtcCandles1h.filter(c => c.timestamp + CANDLE_1H_MS_EXIT <= Date.now());
 
       // Only process exit once per newly-closed candle.
       if (latestClosedCandle.timestamp === this.lastProcessedExitCandleTs) {
