@@ -66,6 +66,7 @@ export function calculateSignalScore(params: {
   atrPct: number;
   trendStrength: number;
   side: 'long' | 'short';
+  contextScore?: number;
 }): number {
   const { roc5, volumeRatio, bbPosition, atrPct, trendStrength, side } = params;
   
@@ -100,7 +101,10 @@ export function calculateSignalScore(params: {
   }
   // Counter-trend = 0 points (no penalty, just no bonus)
   
-  return bbScore + rocScore + volScore + atrScore + trendScore;
+  // 6. Context (V5.99 Drash) — adjusts ranking based on S/R, breakout quality, correlation
+  const contextComponent = (params.contextScore ?? 0) * 10 * 0.20;
+
+  return bbScore + rocScore + volScore + atrScore + trendScore + contextComponent;
 }
 
 // Backward compatibility: Use V5.22 scoring if only 2 params provided
@@ -269,6 +273,7 @@ class SignalRanker {
     atrPct: number;
     trendStrength: number;
     side: 'long' | 'short';
+    contextScore?: number;
   }): number {
     return calculateSignalScore(params);
   }
