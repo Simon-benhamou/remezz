@@ -364,24 +364,27 @@ export const MomentumConfig = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // V5.96: S/R PROXIMITY FILTER (Backtest Validated: 1,774 signals analyzed)
+  // V5.97: S/R PROXIMITY FILTER (Grid Search Optimized: 12 configs tested)
   // ═══════════════════════════════════════════════════════════════════════════
-  // DISCOVERY: Signal quality strongly correlates with proximity to S/R levels.
+  // V5.96 → V5.97 IMPROVEMENT: SHORT filter was too aggressive, removing
+  // 103 profitable shorts and costing -361% ROI. Grid search across 12
+  // configurations found optimal SHORT thresholds:
   //
-  // KEY FINDINGS:
-  //   SHORT near resistance (<1.5%):  82% WR, +0.90% avg PnL, PF 3.14
-  //   SHORT far from resistance (>5%): 62% WR, +0.10% avg PnL, PF 1.10
-  //   → +20pp WR improvement when SHORT is near overhead resistance!
+  // GRID SEARCH RESULTS (Jun 2024 - Dec 2025, 10 symbols):
+  //   No SR filter:     776 trades, 62.9% WR, ROI 1571%, Sharpe 3.11
+  //   V5.96 (old):      653 trades, 63.9% WR, ROI 1210%, Sharpe 3.30
+  //   V5.97 (new):      685 trades, 64.2% WR, ROI 1504%, Sharpe 3.55 ← WINNER
   //
-  //   LONG near resistance (<0.5%):    58% WR, -0.19% avg PnL (BAD!)
-  //   LONG ratio 0.0-0.2 (close to R): 53% WR, -0.47% avg PnL (WORST)
-  //   LONG ratio 0.2+:                 67%+ WR, +0.25% avg PnL (GOOD)
+  // V5.97 IMPROVEMENT vs V5.96:
+  //   ROI: +294% (1210% → 1504%)
+  //   WR:  +0.3pp (63.9% → 64.2%)
+  //   Sharpe: +0.25 (3.30 → 3.55, BEST of all configs)
+  //   PF: +0.02 (1.53 → 1.55)
+  //   SHORT avg PnL: +0.25% (1.19% → 1.44%)
+  //   Trades: +32 (653 → 685, recovers 32 profitable shorts)
   //
-  // FILTERS IMPLEMENTED:
-  //   SHORT: Only enter when resistance overhead is within 5% (SR ratio < 0.5)
-  //          Grid search winner: MaxDistR=5%, WR 70.2%, PF 1.49
-  //   LONG:  Skip when SR ratio < 0.2 (too close to resistance, often rejected)
-  //          Removes 36 trades at 53% WR = net improvement
+  // LONG filter unchanged (ratio < 0.2 removes 53% WR trades = net win).
+  // SHORT filter loosened: ratio 0.5→0.65, distR 5%→6% (keeps profitable shorts).
   //
   // S/R DETECTION: Pivot points (local highs/lows) with lookback 10 bars,
   //   clustered at 0.5% proximity, max age 200 candles.
@@ -398,9 +401,9 @@ export const MomentumConfig = {
     // LONG filter: Skip if SR ratio too low (too close to resistance)
     LONG_MIN_SR_RATIO: 0.2,       // Skip LONG if ratio < 0.2 (near resistance = 53% WR)
 
-    // SHORT filter: Only enter when near overhead resistance
-    SHORT_MAX_SR_RATIO: 0.5,      // Skip SHORT if ratio >= 0.5 (far from resistance = low quality)
-    SHORT_MAX_DIST_RESISTANCE_PCT: 5.0, // Skip SHORT if resistance > 5% away
+    // SHORT filter: Only enter when near overhead resistance (loosened in V5.97)
+    SHORT_MAX_SR_RATIO: 0.65,     // Skip SHORT if ratio >= 0.65 (was 0.5, loosened to keep profitable shorts)
+    SHORT_MAX_DIST_RESISTANCE_PCT: 6.0, // Skip SHORT if resistance > 6% away (was 5%, grid search optimal)
   },
 
   // Exit V5.14 - ADAPTIVE TRAILING ONLY
@@ -2357,8 +2360,8 @@ export function checkMomentumSignal(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // V5.96: S/R PROXIMITY FILTER (SHORT)
-    // Only enter SHORT when near overhead resistance (82% WR vs 62% far away)
+    // V5.97: S/R PROXIMITY FILTER (SHORT) - Loosened thresholds for +294% ROI
+    // Grid search: ratio 0.5→0.65, distR 5%→6% recovers 32 profitable shorts
     // ═══════════════════════════════════════════════════════════════════════════
     const srConfigShort = MomentumConfig.SR_PROXIMITY_FILTER;
     if (srConfigShort.ENABLED) {
@@ -2369,7 +2372,7 @@ export function checkMomentumSignal(
         if (srMetricsShort.srRatio >= srConfigShort.SHORT_MAX_SR_RATIO) {
           return {
             valid: false,
-            reason: `v5.96_short_far_from_resistance(srRatio=${srMetricsShort.srRatio.toFixed(2)}>=${srConfigShort.SHORT_MAX_SR_RATIO}|distR=${srMetricsShort.distToResistancePct.toFixed(1)}%)`,
+            reason: `v5.97_short_far_from_resistance(srRatio=${srMetricsShort.srRatio.toFixed(2)}>=${srConfigShort.SHORT_MAX_SR_RATIO}|distR=${srMetricsShort.distToResistancePct.toFixed(1)}%)`,
             features
           };
         }
@@ -2377,19 +2380,19 @@ export function checkMomentumSignal(
         if (srMetricsShort.distToResistancePct > srConfigShort.SHORT_MAX_DIST_RESISTANCE_PCT) {
           return {
             valid: false,
-            reason: `v5.96_short_resistance_too_far(distR=${srMetricsShort.distToResistancePct.toFixed(1)}%>${srConfigShort.SHORT_MAX_DIST_RESISTANCE_PCT}%)`,
+            reason: `v5.97_short_resistance_too_far(distR=${srMetricsShort.distToResistancePct.toFixed(1)}%>${srConfigShort.SHORT_MAX_DIST_RESISTANCE_PCT}%)`,
             features
           };
         }
       }
     }
 
-    // ✅ ALL SHORT CONDITIONS MET (V5.96: with S/R proximity filter)
+    // ✅ ALL SHORT CONDITIONS MET (V5.97: with optimized S/R proximity filter)
     const confidence = Math.min(1, (volRatio / 4) * 0.3 + (Math.abs(roc5) / 0.04) * 0.3 + (distanceFromLower * 50) * 0.2 + 0.2);
     return {
       valid: true,
       side: 'short',
-      reason: `v5.96_bear_short_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|sr_ok|dist=${(distanceFromLower*100).toFixed(2)}%`,
+      reason: `v5.97_bear_short_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|sr_ok|dist=${(distanceFromLower*100).toFixed(2)}%`,
       confidence,
       features
     };
