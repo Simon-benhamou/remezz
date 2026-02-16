@@ -214,6 +214,17 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Optimization script**: `scripts/optimize-strategy.ts` — 3-phase parameter sweep (entry, exit, symbols). `scripts/test-all-symbols.ts` — individual symbol profitability testing.
   - **Findings document**: `docs/optimization-findings-v5.92.md` — full analysis of 28+ backtest runs.
 
+- V5.99: Drash Context Score — modular signal context analysis:
+  - **Problem**: V5.96 S/R binary filter improved quality but destroyed ROI by killing 16% of trades. Strategy needs contextual awareness without reducing trade count.
+  - **Solution**: 3 independently-toggleable scoring factors that adjust signal ranking (score, not filter). Added to `calculateSignalScore()` as 6th factor (20% weight).
+  - **Factor 1 — S/R Proximity** (`contextScore.ts`): Pivot-based support/resistance detection on last 200 candles. LONG at support = boost, LONG into resistance = penalize. Reverse for SHORT. Min 2 touches for valid level. Strength bonus at 4+ touches.
+  - **Factor 2 — Breakout Quality**: Assesses BB breakout distance, candle body conviction (full body vs wick), and volume confirmation. Strong breakout + full body + high volume = boost. Weak breakout + wick + low volume = penalize.
+  - **Factor 3 — Market Correlation**: Detects herd moves vs isolated signals using ROC1 across all tracked symbols. Isolated move (<30% same direction) = boost. Herd (>60% same direction) = penalize.
+  - **Config**: `MomentumConfig.DRASH_CONTEXT` with `ENABLED` toggle and per-factor `FACTORS.{SR_PROXIMITY,BREAKOUT_QUALITY,MARKET_CORRELATION}.ENABLED` toggles and weights.
+  - **Key design**: Unlike V5.96 (binary filter), context score only adjusts ranking priority — never blocks entries. Trade count stays identical to baseline.
+  - **Validation**: Train/test split (Jun 2024 - Jun 2025 train, Jul - Dec 2025 OOS). Script: `scripts/compare-drash-context.ts` tests all 8 factor combinations (2^3).
+  - **Files**: `contextScore.ts` (module), `signalRanker.ts` (scoring), `backtestService.ts` (backtest), `simpleAgent.ts` (live).
+
 - V5.98: S/R proximity filter REMOVED (reverted V5.96-V5.97):
   - **Context**: V5.96 added pivot-based S/R proximity filter (Peshat/Remez in PaRDeS framework). V5.97 loosened SHORT thresholds via 12-config grid search.
   - **Problem**: Filter improved quality metrics (WR +1pp, Sharpe +0.19) but DESTROYED ROI vs baseline:
