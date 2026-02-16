@@ -363,6 +363,46 @@ export const MomentumConfig = {
     ROC_ACCEL_SLOW_PERIOD: 5,       // compared to ROC of 5 candles before that
   },
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // V5.96: S/R PROXIMITY FILTER (Backtest Validated: 1,774 signals analyzed)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DISCOVERY: Signal quality strongly correlates with proximity to S/R levels.
+  //
+  // KEY FINDINGS:
+  //   SHORT near resistance (<1.5%):  82% WR, +0.90% avg PnL, PF 3.14
+  //   SHORT far from resistance (>5%): 62% WR, +0.10% avg PnL, PF 1.10
+  //   → +20pp WR improvement when SHORT is near overhead resistance!
+  //
+  //   LONG near resistance (<0.5%):    58% WR, -0.19% avg PnL (BAD!)
+  //   LONG ratio 0.0-0.2 (close to R): 53% WR, -0.47% avg PnL (WORST)
+  //   LONG ratio 0.2+:                 67%+ WR, +0.25% avg PnL (GOOD)
+  //
+  // FILTERS IMPLEMENTED:
+  //   SHORT: Only enter when resistance overhead is within 5% (SR ratio < 0.5)
+  //          Grid search winner: MaxDistR=5%, WR 70.2%, PF 1.49
+  //   LONG:  Skip when SR ratio < 0.2 (too close to resistance, often rejected)
+  //          Removes 36 trades at 53% WR = net improvement
+  //
+  // S/R DETECTION: Pivot points (local highs/lows) with lookback 10 bars,
+  //   clustered at 0.5% proximity, max age 200 candles.
+  // ═══════════════════════════════════════════════════════════════════════════
+  SR_PROXIMITY_FILTER: {
+    ENABLED: true,
+
+    // Pivot detection parameters
+    PIVOT_LEFT_BARS: 10,           // Bars to left for pivot detection
+    PIVOT_RIGHT_BARS: 10,          // Bars to right for pivot detection
+    CLUSTER_PCT: 0.5,              // % range to merge nearby S/R levels
+    MAX_LEVEL_AGE: 200,            // Only use S/R levels from last N candles
+
+    // LONG filter: Skip if SR ratio too low (too close to resistance)
+    LONG_MIN_SR_RATIO: 0.2,       // Skip LONG if ratio < 0.2 (near resistance = 53% WR)
+
+    // SHORT filter: Only enter when near overhead resistance
+    SHORT_MAX_SR_RATIO: 0.5,      // Skip SHORT if ratio >= 0.5 (far from resistance = low quality)
+    SHORT_MAX_DIST_RESISTANCE_PCT: 5.0, // Skip SHORT if resistance > 5% away
+  },
+
   // Exit V5.14 - ADAPTIVE TRAILING ONLY
   // ═══════════════════════════════════════════════════════════════════════════
   // BACKTEST RESULTS: Trailing adaptatif 0.3-0.8% basé sur volatilité (ATR)
@@ -1433,6 +1473,141 @@ export function calcRocAcceleration(closes: number[], fastPeriod: number): numbe
 }
 
 // ============================================================================
+// V5.96: S/R PROXIMITY DETECTION FUNCTIONS
+// ============================================================================
+// Detect support/resistance levels using pivot points (local highs/lows)
+// and measure proximity of current price to nearest levels.
+// Used by SR_PROXIMITY_FILTER to improve signal quality.
+// ============================================================================
+
+interface SRLevel {
+  price: number;
+  type: 'support' | 'resistance';
+  strength: number;
+  lastTouchIdx: number;
+}
+
+/**
+ * Find pivot highs and lows. A pivot high has the highest high in a window;
+ * a pivot low has the lowest low.
+ */
+function findPivotPoints(
+  candles: Candle[],
+  leftBars: number,
+  rightBars: number,
+): { pivotHighs: { idx: number; price: number }[]; pivotLows: { idx: number; price: number }[] } {
+  const pivotHighs: { idx: number; price: number }[] = [];
+  const pivotLows: { idx: number; price: number }[] = [];
+
+  for (let i = leftBars; i < candles.length - rightBars; i++) {
+    let isHigh = true;
+    let isLow = true;
+
+    for (let j = i - leftBars; j <= i + rightBars; j++) {
+      if (j === i) continue;
+      if (candles[j].high >= candles[i].high) isHigh = false;
+      if (candles[j].low <= candles[i].low) isLow = false;
+      if (!isHigh && !isLow) break;
+    }
+
+    if (isHigh) pivotHighs.push({ idx: i, price: candles[i].high });
+    if (isLow) pivotLows.push({ idx: i, price: candles[i].low });
+  }
+
+  return { pivotHighs, pivotLows };
+}
+
+/**
+ * Cluster nearby price levels into support/resistance zones.
+ */
+function clusterSRLevels(
+  pivotHighs: { idx: number; price: number }[],
+  pivotLows: { idx: number; price: number }[],
+  clusterPct: number,
+): SRLevel[] {
+  const all: { price: number; type: 'support' | 'resistance'; idx: number }[] = [];
+  for (const p of pivotHighs) all.push({ price: p.price, type: 'resistance', idx: p.idx });
+  for (const p of pivotLows) all.push({ price: p.price, type: 'support', idx: p.idx });
+  all.sort((a, b) => a.price - b.price);
+
+  const clusters: SRLevel[] = [];
+  let i = 0;
+  while (i < all.length) {
+    const start = all[i];
+    const range = start.price * (clusterPct / 100);
+    const members: typeof all = [start];
+    let j = i + 1;
+    while (j < all.length && all[j].price - start.price <= range) {
+      members.push(all[j]);
+      j++;
+    }
+    const avgPrice = members.reduce((s, m) => s + m.price, 0) / members.length;
+    const supports = members.filter(m => m.type === 'support').length;
+    const resistances = members.filter(m => m.type === 'resistance').length;
+    const maxIdx = Math.max(...members.map(m => m.idx));
+    clusters.push({
+      price: avgPrice,
+      type: supports >= resistances ? 'support' : 'resistance',
+      strength: members.length,
+      lastTouchIdx: maxIdx,
+    });
+    i = j;
+  }
+  return clusters;
+}
+
+/**
+ * Calculate S/R ratio for current price: 0 = at resistance, 1 = at support.
+ * Returns { srRatio, distToSupportPct, distToResistancePct } or null if insufficient data.
+ */
+export function calcSRProximity(
+  candles: Candle[],
+  currentIdx: number,
+): { srRatio: number; distToSupportPct: number; distToResistancePct: number } | null {
+  const cfg = MomentumConfig.SR_PROXIMITY_FILTER;
+  if (candles.length < cfg.PIVOT_LEFT_BARS + cfg.PIVOT_RIGHT_BARS + 1) return null;
+
+  const currentPrice = candles[currentIdx]?.close;
+  if (!currentPrice) return null;
+
+  // Only use candles BEFORE currentIdx - rightBars to avoid look-ahead
+  const endIdx = currentIdx - cfg.PIVOT_RIGHT_BARS;
+  if (endIdx < cfg.PIVOT_LEFT_BARS + cfg.PIVOT_RIGHT_BARS) return null;
+
+  const sliceStart = Math.max(0, endIdx - cfg.MAX_LEVEL_AGE);
+  const windowCandles = candles.slice(sliceStart, endIdx + 1);
+  if (windowCandles.length < cfg.PIVOT_LEFT_BARS + cfg.PIVOT_RIGHT_BARS + 1) return null;
+
+  const { pivotHighs, pivotLows } = findPivotPoints(windowCandles, cfg.PIVOT_LEFT_BARS, cfg.PIVOT_RIGHT_BARS);
+  if (pivotHighs.length === 0 && pivotLows.length === 0) return null;
+
+  const srLevels = clusterSRLevels(pivotHighs, pivotLows, cfg.CLUSTER_PCT);
+
+  // Find nearest support (below price) and resistance (above price)
+  let nearestSupport = 0;
+  let nearestResistance = Infinity;
+
+  for (const level of srLevels) {
+    if (level.price < currentPrice) {
+      if (level.price > nearestSupport) nearestSupport = level.price;
+    } else {
+      if (level.price < nearestResistance) nearestResistance = level.price;
+    }
+  }
+
+  // Fallback if no support/resistance found
+  if (nearestSupport === 0) nearestSupport = currentPrice * 0.95;
+  if (!Number.isFinite(nearestResistance)) nearestResistance = currentPrice * 1.05;
+
+  const distToSupportPct = ((currentPrice - nearestSupport) / currentPrice) * 100;
+  const distToResistancePct = ((nearestResistance - currentPrice) / currentPrice) * 100;
+  const totalDist = distToSupportPct + distToResistancePct;
+  const srRatio = totalDist > 0 ? distToResistancePct / totalDist : 0.5;
+
+  return { srRatio, distToSupportPct, distToResistancePct };
+}
+
+// ============================================================================
 // V5.64: WICK BREAKOUT EARLY ENTRY FUNCTIONS
 // ============================================================================
 // Shared functions used by both backtest and production for consistent logic
@@ -2005,12 +2180,29 @@ export function checkMomentumSignal(
       }
     }
 
-    // ✅ ALL LONG CONDITIONS MET (V5.78: with pattern quality filters)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // V5.96: S/R PROXIMITY FILTER (LONG)
+    // Skip LONG if too close to resistance (SR ratio < 0.2 = 53% WR vs 67% baseline)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const srConfig = MomentumConfig.SR_PROXIMITY_FILTER;
+    if (srConfig.ENABLED) {
+      const candleIdx = candles.length - 1;
+      const srMetrics = calcSRProximity(candles, candleIdx);
+      if (srMetrics && srMetrics.srRatio < srConfig.LONG_MIN_SR_RATIO) {
+        return {
+          valid: false,
+          reason: `v5.96_long_near_resistance(srRatio=${srMetrics.srRatio.toFixed(2)}<${srConfig.LONG_MIN_SR_RATIO}|distR=${srMetrics.distToResistancePct.toFixed(1)}%|distS=${srMetrics.distToSupportPct.toFixed(1)}%)`,
+          features
+        };
+      }
+    }
+
+    // ✅ ALL LONG CONDITIONS MET (V5.96: with S/R proximity filter)
     const confidence = Math.min(1, (volRatio / 3) * 0.3 + (roc10 / 0.04) * 0.3 + (distanceFromUpper * 50) * 0.2 + 0.2);
     return {
       valid: true,
       side: 'long',
-      reason: `v5.78_bull_long_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|dist=${(distanceFromUpper*100).toFixed(2)}%`,
+      reason: `v5.96_bull_long_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|sr_ok|dist=${(distanceFromUpper*100).toFixed(2)}%`,
       confidence,
       features
     };
@@ -2164,12 +2356,40 @@ export function checkMomentumSignal(
       }
     }
 
-    // ✅ ALL SHORT CONDITIONS MET (V5.78: with pattern quality filters)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // V5.96: S/R PROXIMITY FILTER (SHORT)
+    // Only enter SHORT when near overhead resistance (82% WR vs 62% far away)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const srConfigShort = MomentumConfig.SR_PROXIMITY_FILTER;
+    if (srConfigShort.ENABLED) {
+      const candleIdxShort = candles.length - 1;
+      const srMetricsShort = calcSRProximity(candles, candleIdxShort);
+      if (srMetricsShort) {
+        // Check SR ratio: skip if far from resistance (ratio >= threshold)
+        if (srMetricsShort.srRatio >= srConfigShort.SHORT_MAX_SR_RATIO) {
+          return {
+            valid: false,
+            reason: `v5.96_short_far_from_resistance(srRatio=${srMetricsShort.srRatio.toFixed(2)}>=${srConfigShort.SHORT_MAX_SR_RATIO}|distR=${srMetricsShort.distToResistancePct.toFixed(1)}%)`,
+            features
+          };
+        }
+        // Also check absolute distance
+        if (srMetricsShort.distToResistancePct > srConfigShort.SHORT_MAX_DIST_RESISTANCE_PCT) {
+          return {
+            valid: false,
+            reason: `v5.96_short_resistance_too_far(distR=${srMetricsShort.distToResistancePct.toFixed(1)}%>${srConfigShort.SHORT_MAX_DIST_RESISTANCE_PCT}%)`,
+            features
+          };
+        }
+      }
+    }
+
+    // ✅ ALL SHORT CONDITIONS MET (V5.96: with S/R proximity filter)
     const confidence = Math.min(1, (volRatio / 4) * 0.3 + (Math.abs(roc5) / 0.04) * 0.3 + (distanceFromLower * 50) * 0.2 + 0.2);
     return {
       valid: true,
       side: 'short',
-      reason: `v5.78_bear_short_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|dist=${(distanceFromLower*100).toFixed(2)}%`,
+      reason: `v5.96_bear_short_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|sr_ok|dist=${(distanceFromLower*100).toFixed(2)}%`,
       confidence,
       features
     };
