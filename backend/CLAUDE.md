@@ -250,6 +250,12 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Future**: S/R has real signal value but needs smarter implementation (dynamic zones, breakout/bounce classification, multi-TF confluence) before re-enabling. See `docs/DRASH-SOD-PLAN.md`.
   - **Scripts preserved**: `scripts/compare-sr-filter.ts`, `scripts/grid-search-short-sr.ts`, `scripts/analyze-sr-proximity.ts` for future research.
 
+- V5.106: Parity verification off-by-one candle fix:
+  - **Problem**: `forcedEntryTimestamp` was one candle too early. V5.46 changed `position.entryTime` from `Date.now()` (~candle close + 2s) to `lastCandle.timestamp` (candle OPEN time). But `parityVerificationServiceV2.ts` still assumed wall-clock entry time. Result: `forcedEntryTimestamp = candle_open` matched `btcCandle.timestamp = candle_open` in the BT loop, where the signal candle ISN'T closed yet → NO_SIGNAL for every trade.
+  - **Fix**: `forcedEntryTimestamp = floor(entryTs / 15min) * 15min + CANDLE_15M_MS`. Adding one candle shifts from open time to close time, aligning with when the BT loop has the signal candle available.
+  - **Impact**: All parity verifications since V5.46 were checking the WRONG candle (one candle early). This caused: systematic NO_SIGNAL false positives, wildly incorrect PnL comparisons (BT entered one candle early → different price/timing/exit), and misleading parity match rates.
+  - **File**: `parityVerificationServiceV2.ts` line 122.
+
 - V5.105: Critical fixes — exit loop, circuit breaker double-gate, SymbolEngine parity:
   - **Exit loop fix** (`simpleAgent.ts`, `realtimeExitHandler.ts`): When exchange SL fired, `reduceOnly` order failed (position already gone), failure path restarted RT monitor → infinite loop (5-6 close attempts). Fix: detect `ReduceOnly` rejection + check WS position cache before restarting monitor. Added 3-attempt/30s guard with `syncWithExchange()` fallback. Removed `setClosingPosition(false)` from `startIfNeeded()` that broke the re-entry guard.
   - **Circuit breaker double-gate** (`simpleAgent.ts`): `canMakeCriticalRequest()` was called in agent (Gate 1) AND order queue (Gate 2) with shared rate-limit state. Gate 1 consumed the 5s slot, so Gate 2 blocked all exits for 5 seconds. Fix: removed agent-level check — queue already handles CB + CRITICAL priority.

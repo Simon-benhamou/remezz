@@ -116,10 +116,11 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   logger.info(`[PARITY-V2] Verifying ${symbol} ${side} @ ${trade.entryTs.toISOString()}`);
 
   // 2. Compute forced entry timestamp
-  // Entry happens ~2s after a candle closes. The BTC candle open time at that moment
-  // is the floor of entryTs to the 15m boundary. This matches the backtest main loop
-  // where btcCandle.timestamp === forcedEntry.entryTimestamp.
-  const forcedEntryTimestamp = Math.floor(entryTs / CANDLE_15M_MS) * CANDLE_15M_MS;
+  // V5.46 changed entryTs from wall-clock (Date.now()) to candle OPEN time (lastCandle.timestamp).
+  // entryTs = candle open time (e.g., 14:30). The signal was computed at candle CLOSE (14:45).
+  // In the backtest loop, the candle at 14:30 is only "closed" when btcCandle.timestamp = 14:45.
+  // So we add CANDLE_15M_MS to shift from open time to close time.
+  const forcedEntryTimestamp = Math.floor(entryTs / CANDLE_15M_MS) * CANDLE_15M_MS + CANDLE_15M_MS;
 
   // 3. Run backtest with forcedEntry
   let btResult: BacktestResult;
