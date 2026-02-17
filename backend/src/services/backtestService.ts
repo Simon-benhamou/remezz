@@ -65,7 +65,6 @@ import { ipWeightTracker } from './ipWeightTracker.js';
 
 // V5.22: Import shared signal scoring function (ensures backtest = production)
 import { calculateSignalScore } from '../strategies/signalRanker.js';
-import { calcContextScore } from '../strategies/contextScore.js';
 
 import {
   EXIT_TRAIL, EXIT_TRAIL_NFS_HIGH, EXIT_TRAIL_NFS_MED, EXIT_TRAIL_NFS_LOW,
@@ -1431,6 +1430,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   // Skips more losers (727) than winners (382), improves win rate 58.5% → 66.7%
   let consecutiveLosers = 0;
   let tradesToSkip = 0;
+
   const CONSECUTIVE_LOSER_THRESHOLD = 2;  // Trigger after this many consecutive losers
   const TRADES_TO_SKIP = 1;               // Skip this many trades, then resume
   let tradeId = 0;
@@ -1495,8 +1495,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       isBullRegime: boolean;
     };
     
-    const signalCandidates: SignalCandidate[] = [];
-    
+    let signalCandidates: SignalCandidate[] = [];
+
     // Process each symbol - handle exits and collect entry signals
     for (const symbol of symbols) {
       const candles = allData[symbol];
@@ -1839,62 +1839,6 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           current,
           idx,
           isBullRegime
-        });
-      }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // V5.99: DRASH CONTEXT SCORING
-    // Compute per-symbol ROC1 for market correlation factor, then
-    // apply context score to re-rank signal candidates
-    // ═══════════════════════════════════════════════════════════════════
-    if (MomentumConfig.DRASH_CONTEXT.ENABLED && signalCandidates.length > 0) {
-      const allSymbolsROC1 = new Map<string, number>();
-      for (const sym of symbols) {
-        const sCandles = allData[sym];
-        const sIdx = symbolIdx[sym];
-        if (sIdx >= 2) {
-          const prevClose = sCandles[sIdx].close;
-          const prevPrevClose = sCandles[sIdx - 1].close;
-          allSymbolsROC1.set(sym, (prevClose - prevPrevClose) / prevPrevClose);
-        }
-      }
-
-      for (const candidate of signalCandidates) {
-        const windowCandles = candidate.candles;
-        const current = candidate.current;
-        const closes = windowCandles.map((c: BacktestCandle) => c.close);
-        const volumes = windowCandles.map((c: BacktestCandle) => c.volume);
-
-        const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
-        const volRatio = calcVolRatio(volumes);
-
-        const ctx = calcContextScore({
-          candles: windowCandles,
-          currentCandle: current,
-          currentPrice: current.close,
-          bb: { upper: bb.upper, lower: bb.lower },
-          side: candidate.signal.side!,
-          volRatio,
-          allSymbolsROC1,
-          currentSymbol: candidate.symbol,
-        });
-
-        // Re-compute score with context
-        const roc5 = calcROC(closes, 5);
-        const bbPosition = calcBBPosition(windowCandles, 20, 2);
-        const atrRaw = calcATR(windowCandles, 14) ?? 0;
-        const atrPct = atrRaw ? (atrRaw / current.close) * 100 : 0;
-        const trendStrength = calcTrendStrength(closes, 50);
-
-        candidate.score = calculateSignalScore({
-          roc5,
-          volumeRatio: volRatio,
-          bbPosition,
-          atrPct,
-          trendStrength,
-          side: candidate.signal.side!,
-          contextScore: ctx.combined,
         });
       }
     }

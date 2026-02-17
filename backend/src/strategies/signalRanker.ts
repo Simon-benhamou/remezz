@@ -11,7 +11,6 @@
  */
 
 import { createLogger } from '../utils/logger.js';
-import { MomentumConfig } from './momentumSimple.js';
 
 const logger = createLogger('signal-ranker');
 
@@ -67,10 +66,9 @@ export function calculateSignalScore(params: {
   atrPct: number;
   trendStrength: number;
   side: 'long' | 'short';
-  contextScore?: number;
 }): number {
   const { roc5, volumeRatio, bbPosition, atrPct, trendStrength, side } = params;
-  
+
   // 1. BB Position (30%) - Buy low, sell high
   let bbScore = 0;
   if (side === 'long') {
@@ -80,17 +78,17 @@ export function calculateSignalScore(params: {
     // SHORT: Prefer selling near upper band (1 = perfect, 0 = worst)
     bbScore = bbPosition * 10 * 0.3;
   }
-  
+
   // 2. ROC Momentum (25%) - Strong movement in our direction
   const rocScore = Math.abs(roc5) * 10 * 0.25;
-  
+
   // 3. Volume (20%) - High volume = conviction (cap at 3x)
   const volScore = Math.min(volumeRatio, 3) * 10 * 0.2;
-  
+
   // 4. ATR Filter (15%) - Penalty for high volatility
   // Low ATR (<2%) = full points, High ATR (>5%) = zero points
   const atrScore = Math.max(0, 1 - (atrPct - 2) / 3) * 10 * 0.15;
-  
+
   // 5. Trend Strength (10%) - Alignment with SMA50
   let trendScore = 0;
   if (side === 'long' && trendStrength > 0) {
@@ -101,12 +99,8 @@ export function calculateSignalScore(params: {
     trendScore = Math.min(Math.abs(trendStrength) / 0.05, 1) * 10 * 0.1;
   }
   // Counter-trend = 0 points (no penalty, just no bonus)
-  
-  // 6. Context (V5.99 Drash) — adjusts ranking based on S/R, breakout quality, correlation
-  const contextWeight = MomentumConfig.DRASH_CONTEXT.WEIGHT_IN_SIGNAL_SCORE;
-  const contextComponent = (params.contextScore ?? 0) * 10 * contextWeight;
 
-  return bbScore + rocScore + volScore + atrScore + trendScore + contextComponent;
+  return bbScore + rocScore + volScore + atrScore + trendScore;
 }
 
 // Backward compatibility: Use V5.22 scoring if only 2 params provided
@@ -275,7 +269,6 @@ class SignalRanker {
     atrPct: number;
     trendStrength: number;
     side: 'long' | 'short';
-    contextScore?: number;
   }): number {
     return calculateSignalScore(params);
   }

@@ -214,18 +214,16 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Optimization script**: `scripts/optimize-strategy.ts` — 3-phase parameter sweep (entry, exit, symbols). `scripts/test-all-symbols.ts` — individual symbol profitability testing.
   - **Findings document**: `docs/optimization-findings-v5.92.md` — full analysis of 28+ backtest runs.
 
-- V5.99: Drash Context Score — modular signal context analysis (DISABLED):
-  - **Problem**: V5.96 S/R binary filter improved quality but destroyed ROI by killing 16% of trades. Strategy needs contextual awareness without reducing trade count.
-  - **Approach 1 — Ranking (failed)**: 3 independently-toggleable scoring factors adjust signal ranking (score, don't filter). Added to `calculateSignalScore()` as 6th factor.
-  - **Factor 1 — S/R Proximity** (`contextScore.ts`): Pivot-based support/resistance detection on last 200 candles. LONG at support = boost, LONG into resistance = penalize.
-  - **Factor 2 — Breakout Quality**: BB breakout distance + candle body conviction + volume confirmation scoring.
-  - **Factor 3 — Market Correlation**: Herd vs isolated signal detection via ROC1 across tracked symbols.
-  - **Results**: All 8 factor combinations tested (train Jun 2024-Jun 2025, OOS Jul-Dec 2025). ALL factors improve in-sample (+353% ROI best) but DEGRADE out-of-sample (-10% to -15% ROI). Correlation factor = no-op (identical to baseline). Sensitivity analysis at weights 0.05/0.10/0.15/0.20 all degrade OOS ~-11% ROI. **Ranking reshuffles overfit to train data.**
-  - **Root cause**: With 205 OOS trades across 5 symbols, few moments have competing signals. Re-ranking rarely changes which trade gets taken, and when it does, it overfits.
-  - **Status**: `DRASH_CONTEXT.ENABLED = false`. Infrastructure preserved for filter-based approach (block signals with bad context score).
-  - **Config**: `MomentumConfig.DRASH_CONTEXT` with `ENABLED` toggle and per-factor `FACTORS.{SR_PROXIMITY,BREAKOUT_QUALITY,MARKET_CORRELATION}.ENABLED` toggles.
-  - **Scripts**: `scripts/compare-drash-context.ts` (8-combo comparison), `scripts/sensitivity-drash-weight.ts` (weight sensitivity).
-  - **Files**: `contextScore.ts` (module), `signalRanker.ts` (scoring), `backtestService.ts` (backtest), `simpleAgent.ts` (live).
+- V5.101: SR Filter Internalization + Parity via Backtest Engine:
+  - **Problem 1**: S/R filter lived outside `checkMomentumSignal()` — applied separately in backtestService.ts and simpleAgent.ts. Parity missed it entirely. Every new filter required replication in 3 places.
+  - **Problem 2**: Parity reimplemented ~600 lines of exit logic (NFS, trailing, SL, regime) instead of using the backtest engine's `forcedEntry` + `parityMode` (built in V5.54).
+  - **Solution Part 1**: Moved `findSRLevels()` + `calcSRProximityScore()` + `SRLevel` from `contextScore.ts` into `momentumSimple.ts`. Added SR filter check inside `checkMomentumSignal()` before both LONG and SHORT `return { valid: true }` statements. Config: `MomentumConfig.SR_FILTER` (flat, replaces nested `DRASH_CONTEXT`). **SR_FILTER.ENABLED = false** (V5.98 proved it destroys ROI; internalized for future toggle). Deleted `contextScore.ts`, removed DRASH blocks from backtestService.ts and simpleAgent.ts, cleaned `contextScore` param from signalRanker.ts.
+  - **Solution Part 2**: Rewrote `parityVerificationServiceV2.ts` from ~630 lines to ~350 lines. Now calls `runBacktest()` with `forcedEntry` mode. Backtest handles signal detection, NFS, trailing, SL, regime exits — zero reimplementation. Signal validity checked via `validSignals` array (specifically looks for `NO_SIGNAL_AT_FORCED_TIME` reason to avoid false positives from parityMode signals at other candles).
+  - **Auto-parity benefits**: Any future strategy change (new filters, exit tweaks) is automatically reflected in parity with zero maintenance. ~10s per trade verification.
+  - **Config**: `MomentumConfig.SR_FILTER` with `ENABLED: false`, `FILTER_THRESHOLD: -0.3`, `LOOKBACK_CANDLES: 200`, `PIVOT_LOOKBACK: 5`, `MIN_TOUCHES: 2`, `CLUSTER_PCT: 0.3`, `NEAR_THRESHOLD_PCT: 1.5`, `FAR_THRESHOLD_PCT: 5.0`.
+  - **Deleted files**: `contextScore.ts`, `scripts/sensitivity-drash-weight.ts`, `scripts/compare-drash-context.ts`, `scripts/compare-drash-filter.ts`.
+  - **Modified files**: `momentumSimple.ts`, `backtestService.ts`, `simpleAgent.ts`, `signalRanker.ts`, `parityVerificationServiceV2.ts`, `test/unit/contextScore.test.ts`.
+  - **Parity test script**: `scripts/run-parity-v2-test.ts` — runs `verifyTradeV2()` on recent DB trades. Validated on WIF/FET trades: 1 MATCH, 1 EXIT_MISMATCH (REGIME_CHANGE vs MOMENTUM_REVERSAL — pre-existing gap), 1 NO_SIGNAL (data difference between live WS and backtest historical candles).
 
 - V5.98: S/R proximity filter REMOVED (reverted V5.96-V5.97):
   - **Context**: V5.96 added pivot-based S/R proximity filter (Peshat/Remez in PaRDeS framework). V5.97 loosened SHORT thresholds via 12-config grid search.

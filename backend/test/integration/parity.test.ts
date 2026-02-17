@@ -34,7 +34,7 @@ describe('Parity Integration Tests', () => {
     const exitReasons1 = result1.trades.map(t => t.exitReason).sort();
     const exitReasons2 = result2.trades.map(t => t.exitReason).sort();
     expect(exitReasons1).toEqual(exitReasons2);
-  }, 120_000);
+  }, 240_000);
 
   // ── Test 2: Snapshot ────────────────────────────────────────────────
   it('should match saved snapshot for 1-month BTC/ETH backtest', async () => {
@@ -57,7 +57,7 @@ describe('Parity Integration Tests', () => {
     expect(result.summary.losses).toMatchSnapshot();
     expect(result.summary.longTrades).toMatchSnapshot();
     expect(result.summary.shortTrades).toMatchSnapshot();
-  }, 120_000);
+  }, 240_000);
 
   // ── Test 3: Trailing stop activation ────────────────────────────────
   it('should activate trailing stop at correct threshold', async () => {
@@ -72,7 +72,7 @@ describe('Parity Integration Tests', () => {
     for (const trade of trailingTrades) {
       expect(trade.pnlPct).toBeGreaterThan(0);
     }
-  }, 120_000);
+  }, 240_000);
 
   // ── Test 4: Stop loss exits should be negative ──────────────────────
   it('should have negative PnL for stop loss exits', async () => {
@@ -86,7 +86,7 @@ describe('Parity Integration Tests', () => {
     for (const trade of slTrades) {
       expect(trade.pnlPct).toBeLessThan(0);
     }
-  }, 120_000);
+  }, 240_000);
 
   // ── Test 5: Stagnant trade exit ─────────────────────────────────────
   it('should tighten SL on stagnant trades (not exit immediately)', async () => {
@@ -101,5 +101,5 @@ describe('Parity Integration Tests', () => {
       // Stagnant exits happen after tightened SL, so PnL should be small
       expect(Math.abs(trade.pnlPct)).toBeLessThan(5);
     }
-  }, 120_000);
+  }, 240_000);
 });

@@ -25,14 +25,14 @@ import {
   calcBBPosition,      // Shared indicator
   calcTrendStrength,   // Shared indicator
   calcVolRatio,        // Shared indicator
-  calcBollingerBands,  // V5.99: Needed for context scoring
+
   type Candle,
   type Position,
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger, runWithUserId } from '../utils/logger.js';
 import { globalSignalRanker } from './signalRanker.js';
-import { calcContextScore } from './contextScore.js';
+
 import {
   getBinanceWebSocket,
   getKlinesWithMeta,  // V5.50: Added for accurate candle close detection using isFinal flag
@@ -1450,55 +1450,6 @@ export class SimpleAgent {
         }
 
         logger.info(`📊 [${shortSymbol}] Signal Quality Score: ${qualityScore.toFixed(2)} | ${engineResult ? 'via SymbolEngine' : 'self-computed'}`);
-
-        // V5.99: Drash context scoring
-        if (MomentumConfig.DRASH_CONTEXT.ENABLED) {
-          const allSymbolsROC1 = new Map<string, number>();
-          // Market correlation: use empty map for now (live will get 0 for this factor)
-          // Future: populate from WS ticker cache across all tracked symbols
-
-          const currentCandles = candles; // Already available in scope
-          const currentCandle = currentCandles[currentCandles.length - 1];
-          const closes = currentCandles.map(c => c.close);
-
-          const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
-
-          const ctx = calcContextScore({
-            candles: currentCandles,
-            currentCandle,
-            currentPrice: currentCandle.close,
-            bb: { upper: bb.upper, lower: bb.lower },
-            side: signal.side,
-            volRatio: signal.features?.volRatio ?? 1,
-            allSymbolsROC1,
-            currentSymbol: symbol,
-          });
-
-          if (ctx.combined !== 0) {
-            const ctxCloses = closes;
-            const ctxBBPosition = calcBBPosition(currentCandles, 20, 2);
-            const ctxAtrRaw = calcATR(currentCandles, 14) ?? 0;
-            const ctxAtrPct = ctxAtrRaw ? (ctxAtrRaw / currentPrice) * 100 : 0;
-            const ctxTrendStrength = calcTrendStrength(ctxCloses, 50);
-
-            qualityScore = globalSignalRanker.calculateScore({
-              roc5,
-              volumeRatio,
-              bbPosition: ctxBBPosition,
-              atrPct: ctxAtrPct,
-              trendStrength: ctxTrendStrength,
-              side: signal.side,
-              contextScore: ctx.combined,
-            });
-            logger.info(`📐 [${shortSymbol}] Context: score=${ctx.combined.toFixed(2)} sr=${ctx.srProximity?.toFixed(2) ?? 'off'} bq=${ctx.breakoutQuality?.toFixed(2) ?? 'off'} mc=${ctx.marketCorrelation?.toFixed(2) ?? 'off'}`);
-          }
-
-          // Filter mode: skip signal if context score below threshold
-          if (MomentumConfig.DRASH_CONTEXT.FILTER_MODE && ctx.combined < MomentumConfig.DRASH_CONTEXT.FILTER_THRESHOLD) {
-            logger.info(`🚫 [${shortSymbol}] Context filter: score ${ctx.combined.toFixed(2)} < threshold ${MomentumConfig.DRASH_CONTEXT.FILTER_THRESHOLD} — skipping signal`);
-            return; // Skip this signal entirely
-          }
-        }
 
         // V5.22: Add signal to global ranker for prioritization
         globalSignalRanker.addSignal({

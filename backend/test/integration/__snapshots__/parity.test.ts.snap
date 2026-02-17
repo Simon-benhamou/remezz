@@ -2,19 +2,19 @@
 
 exports[`Parity Integration Tests should have negative PnL for stop loss exits 1`] = `
 {
-  "avgHoldMinutes": 131,
+  "avgHoldMinutes": 138,
   "avgLossUsd": Any<Number>,
   "avgTradeUsd": Any<Number>,
   "avgWinUsd": Any<Number>,
   "finalCapital": Any<Number>,
   "longTrades": 0,
   "losses": 1,
-  "maxDrawdownPct": 1.7242200000000139,
-  "profitFactor": 3.054973006242444,
+  "maxDrawdownPct": 0,
+  "profitFactor": 3.1515950074046946,
   "sharpeRatio": Any<Number>,
   "shortTrades": 4,
   "totalFeesUsd": Any<Number>,
-  "totalPnlPct": 3.543225556823378,
+  "totalPnlPct": 3.8241721415866103,
   "totalPnlUsd": Any<Number>,
   "totalTrades": 4,
   "winRate": 75,
@@ -31,3 +31,35 @@ exports[`Parity Integration Tests should have negative PnL for stop loss exits 4
 exports[`Parity Integration Tests should have negative PnL for stop loss exits 5`] = `0`;
 
 exports[`Parity Integration Tests should have negative PnL for stop loss exits 6`] = `4`;
+
+exports[`Parity Integration Tests should match saved snapshot for 1-month BTC/ETH backtest 1`] = `
+{
+  "avgHoldMinutes": 138,
+  "avgLossUsd": Any<Number>,
+  "avgTradeUsd": Any<Number>,
+  "avgWinUsd": Any<Number>,
+  "finalCapital": Any<Number>,
+  "longTrades": 0,
+  "losses": 1,
+  "maxDrawdownPct": 0,
+  "profitFactor": 3.1515950074046946,
+  "sharpeRatio": Any<Number>,
+  "shortTrades": 4,
+  "totalFeesUsd": Any<Number>,
+  "totalPnlPct": 3.8241721415866103,
+  "totalPnlUsd": Any<Number>,
+  "totalTrades": 4,
+  "winRate": 75,
+  "wins": 3,
+}
+`;
+
+exports[`Parity Integration Tests should match saved snapshot for 1-month BTC/ETH backtest 2`] = `4`;
+
+exports[`Parity Integration Tests should match saved snapshot for 1-month BTC/ETH backtest 3`] = `3`;
+
+exports[`Parity Integration Tests should match saved snapshot for 1-month BTC/ETH backtest 4`] = `1`;
+
+exports[`Parity Integration Tests should match saved snapshot for 1-month BTC/ETH backtest 5`] = `0`;
+
+exports[`Parity Integration Tests should match saved snapshot for 1-month BTC/ETH backtest 6`] = `4`;

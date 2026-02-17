@@ -709,41 +709,21 @@ export const MomentumConfig = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // V5.99: DRASH CONTEXT SCORING
-  // Modular context factors for signal ranking (score, don't filter)
+  // V5.101: S/R Proximity Filter (inside checkMomentumSignal)
+  // Replaces V5.99 DRASH_CONTEXT — filter is now internal to signal detection.
+  // No external application needed (backtest, live, parity all automatic).
   // ═══════════════════════════════════════════════════════════════════════════
-  DRASH_CONTEXT: {
-    ENABLED: false,  // Disabled: OOS backtest shows baseline wins at all weights (0.05-0.20)
-    WEIGHT_IN_SIGNAL_SCORE: 0.20,
-
-    FACTORS: {
-      SR_PROXIMITY: {
-        ENABLED: true,
-        WEIGHT: 0.40,
-        LOOKBACK_CANDLES: 200,
-        PIVOT_LOOKBACK: 5,
-        MIN_TOUCHES: 2,
-        CLUSTER_PCT: 0.3,
-        NEAR_THRESHOLD_PCT: 1.5,
-        FAR_THRESHOLD_PCT: 5.0,
-      },
-      BREAKOUT_QUALITY: {
-        ENABLED: true,
-        WEIGHT: 0.35,
-        STRONG_BREAKOUT_PCT: 1.5,
-        WEAK_BREAKOUT_PCT: 0.3,
-        STRONG_BODY_RATIO: 0.7,
-        WEAK_BODY_RATIO: 0.3,
-        VOL_CONFIRM_MULT: 2.0,
-      },
-      MARKET_CORRELATION: {
-        ENABLED: true,
-        WEIGHT: 0.25,
-        ROC1_THRESHOLD_PCT: 0.5,
-        HERD_THRESHOLD: 0.6,
-        ISOLATED_THRESHOLD: 0.3,
-      },
-    },
+  // V5.98: SR filter disabled — destroys ROI even with loosened thresholds.
+  // Internalized here (V5.101) for future use; toggle ENABLED when ready.
+  SR_FILTER: {
+    ENABLED: false,
+    FILTER_THRESHOLD: -0.3,
+    LOOKBACK_CANDLES: 200,
+    PIVOT_LOOKBACK: 5,
+    MIN_TOUCHES: 2,
+    CLUSTER_PCT: 0.3,
+    NEAR_THRESHOLD_PCT: 1.5,
+    FAR_THRESHOLD_PCT: 5.0,
   },
 };
 
@@ -1004,6 +984,168 @@ export function calcTrendStrength(closes: number[], period = 50): number {
   const sma = calcSMA(closes, period);
   const currentPrice = closes[closes.length - 1];
   return sma > 0 ? (currentPrice - sma) / sma : 0;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// V5.101: S/R LEVEL DETECTION & PROXIMITY SCORING
+// Moved from contextScore.ts — pure functions, no external deps.
+// Used by the SR filter inside checkMomentumSignal().
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface SRLevel {
+  price: number;
+  type: 'support' | 'resistance';
+  touches: number;
+}
+
+/**
+ * Detect support/resistance levels from pivot points in candle history.
+ *
+ * A pivot HIGH is a candle whose high is >= all highs within `pivotLookback`
+ * candles on each side.  Pivot LOW is symmetrical on lows.
+ *
+ * Nearby pivots are clustered (within `clusterPct`%), touches counted,
+ * and weak levels (< minTouches) filtered out.
+ */
+export function findSRLevels(
+  candles: Candle[],
+  opts: { lookbackCandles: number; pivotLookback: number; minTouches: number; clusterPct: number },
+): SRLevel[] {
+  const { lookbackCandles, pivotLookback, minTouches, clusterPct } = opts;
+
+  // Use only the most recent `lookbackCandles` candles
+  const slice = candles.length > lookbackCandles
+    ? candles.slice(candles.length - lookbackCandles)
+    : candles;
+
+  if (slice.length < pivotLookback * 2 + 1) return [];
+
+  // --- Find pivot points ---
+  const pivots: { price: number; type: 'support' | 'resistance' }[] = [];
+
+  for (let i = pivotLookback; i < slice.length - pivotLookback; i++) {
+    const c = slice[i];
+
+    // Pivot HIGH
+    let isHigh = true;
+    for (let j = 1; j <= pivotLookback; j++) {
+      if (slice[i - j].high > c.high || slice[i + j].high > c.high) {
+        isHigh = false;
+        break;
+      }
+    }
+    if (isHigh) pivots.push({ price: c.high, type: 'resistance' });
+
+    // Pivot LOW
+    let isLow = true;
+    for (let j = 1; j <= pivotLookback; j++) {
+      if (slice[i - j].low < c.low || slice[i + j].low < c.low) {
+        isLow = false;
+        break;
+      }
+    }
+    if (isLow) pivots.push({ price: c.low, type: 'support' });
+  }
+
+  if (pivots.length === 0) return [];
+
+  // --- Cluster nearby pivots ---
+  pivots.sort((a, b) => a.price - b.price);
+
+  const clusters: { prices: number[]; type: 'support' | 'resistance' }[] = [];
+
+  for (const pivot of pivots) {
+    let merged = false;
+    for (const cluster of clusters) {
+      const avgPrice = cluster.prices.reduce((s, p) => s + p, 0) / cluster.prices.length;
+      const distance = Math.abs(pivot.price - avgPrice) / avgPrice * 100;
+      if (distance <= clusterPct) {
+        cluster.prices.push(pivot.price);
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) {
+      clusters.push({ prices: [pivot.price], type: pivot.type });
+    }
+  }
+
+  // --- Build levels, filter by minTouches ---
+  const levels: SRLevel[] = [];
+  for (const cluster of clusters) {
+    if (cluster.prices.length < minTouches) continue;
+    const avgPrice = cluster.prices.reduce((s, p) => s + p, 0) / cluster.prices.length;
+    levels.push({
+      price: avgPrice,
+      type: cluster.type,
+      touches: cluster.prices.length,
+    });
+  }
+
+  return levels;
+}
+
+/**
+ * Score how favourable the current price is relative to nearby S/R levels.
+ *
+ * - LONG near support   → +1.0  (bouncing off support)
+ * - LONG near resistance → -1.0  (running into ceiling)
+ * - SHORT near resistance → +1.0  (bouncing off resistance)
+ * - SHORT near support   → -0.8  (running into floor, slightly less penalised)
+ * - No nearby S/R         →  0.0
+ *
+ * Strength bonus: levels with 4+ touches get a 1.2x multiplier (capped at |1.0|).
+ */
+export function calcSRProximityScore(
+  price: number,
+  side: 'long' | 'short',
+  levels: SRLevel[],
+  opts: { nearThresholdPct: number; farThresholdPct: number },
+): number {
+  if (levels.length === 0) return 0;
+
+  const { nearThresholdPct, farThresholdPct } = opts;
+
+  let bestScore = 0;
+
+  for (const level of levels) {
+    const distPct = Math.abs(price - level.price) / price * 100;
+
+    // Skip levels that are too far away
+    if (distPct > farThresholdPct) continue;
+
+    // Proximity factor: 1.0 at distPct=0, linearly to 0.0 at farThresholdPct
+    const proximity = 1 - distPct / farThresholdPct;
+
+    let rawScore = 0;
+
+    if (side === 'long') {
+      if (level.type === 'support' && price >= level.price * (1 - nearThresholdPct / 100)) {
+        rawScore = proximity;
+      } else if (level.type === 'resistance' && price <= level.price * (1 + nearThresholdPct / 100)) {
+        rawScore = -proximity;
+      }
+    } else {
+      if (level.type === 'resistance' && price <= level.price * (1 + nearThresholdPct / 100)) {
+        rawScore = proximity;
+      } else if (level.type === 'support' && price >= level.price * (1 - nearThresholdPct / 100)) {
+        rawScore = -0.8 * proximity;
+      }
+    }
+
+    // Strength bonus for 4+ touches
+    if (level.touches >= 4) {
+      rawScore *= 1.2;
+    }
+
+    // Keep the strongest absolute score
+    if (Math.abs(rawScore) > Math.abs(bestScore)) {
+      bestScore = rawScore;
+    }
+  }
+
+  // Clamp to [-1, +1]
+  return Math.max(-1, Math.min(1, bestScore));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2044,6 +2186,24 @@ export function checkMomentumSignal(
       }
     }
 
+    // V5.101: S/R proximity filter
+    if (MomentumConfig.SR_FILTER.ENABLED) {
+      const srCfg = MomentumConfig.SR_FILTER;
+      const levels = findSRLevels(candles, {
+        lookbackCandles: srCfg.LOOKBACK_CANDLES,
+        pivotLookback: srCfg.PIVOT_LOOKBACK,
+        minTouches: srCfg.MIN_TOUCHES,
+        clusterPct: srCfg.CLUSTER_PCT,
+      });
+      const srScore = calcSRProximityScore(close, 'long', levels, {
+        nearThresholdPct: srCfg.NEAR_THRESHOLD_PCT,
+        farThresholdPct: srCfg.FAR_THRESHOLD_PCT,
+      });
+      if (srScore < srCfg.FILTER_THRESHOLD) {
+        return { valid: false, reason: `v5.101_sr_filter(score=${srScore.toFixed(2)})`, features };
+      }
+    }
+
     // ✅ ALL LONG CONDITIONS MET
     const confidence = Math.min(1, (volRatio / 3) * 0.3 + (roc10 / 0.04) * 0.3 + (distanceFromUpper * 50) * 0.2 + 0.2);
     return {
@@ -2200,6 +2360,24 @@ export function checkMomentumSignal(
           reason: `v5.78_short_roc_accel_positive(${rocAccel.toFixed(2)} > ${patternConfigShort.SHORT_MAX_ROC_ACCEL})`,
           features
         };
+      }
+    }
+
+    // V5.101: S/R proximity filter
+    if (MomentumConfig.SR_FILTER.ENABLED) {
+      const srCfg = MomentumConfig.SR_FILTER;
+      const levels = findSRLevels(candles, {
+        lookbackCandles: srCfg.LOOKBACK_CANDLES,
+        pivotLookback: srCfg.PIVOT_LOOKBACK,
+        minTouches: srCfg.MIN_TOUCHES,
+        clusterPct: srCfg.CLUSTER_PCT,
+      });
+      const srScore = calcSRProximityScore(close, 'short', levels, {
+        nearThresholdPct: srCfg.NEAR_THRESHOLD_PCT,
+        farThresholdPct: srCfg.FAR_THRESHOLD_PCT,
+      });
+      if (srScore < srCfg.FILTER_THRESHOLD) {
+        return { valid: false, reason: `v5.101_sr_filter(score=${srScore.toFixed(2)})`, features };
       }
     }
 
