@@ -1332,8 +1332,9 @@ function calculateRealisticHoldMinutes(
 ): { holdMinutes: number; entryTimestamp: number; exitTimestamp: number } {
   const candleDurationMs = 15 * 60 * 1000;
 
-  // Estimate entry time (for wick breakout entries)
-  const entryTiming = estimateIntrabarTiming(entryCandle, entryPrice, side, true);
+  // V5.101: Entry always at candle close (V5.91 disabled wick breakout entry).
+  // Use candle end time, not intrabar estimate.
+  const entryTimestamp = entryCandle.timestamp + candleDurationMs;
 
   // For exits, check if it's an intrabar exit type
   const isIntrabarExit = exitReason.includes('NFS_HIGH') ||
@@ -1352,12 +1353,12 @@ function calculateRealisticHoldMinutes(
     exitTimestamp = exitCandle.timestamp + candleDurationMs;
   }
 
-  const holdMs = exitTimestamp - entryTiming.estimatedTimestamp;
+  const holdMs = exitTimestamp - entryTimestamp;
   const holdMinutes = Math.max(1, Math.round(holdMs / 60000)); // At least 1 minute
 
   return {
     holdMinutes,
-    entryTimestamp: entryTiming.estimatedTimestamp,
+    entryTimestamp,
     exitTimestamp,
   };
 }
