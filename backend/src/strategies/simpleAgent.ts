@@ -3444,7 +3444,8 @@ export class SimpleAgent {
     );
     if (result.success) {
       // Update SessionKpi (non-critical, outside transaction)
-      await this.persistence.updateSessionKpi(pnlUsd, pnlPct, this.position, this.lastPrice);
+      // Pass null for currentPosition — position was just closed, unrealized should be 0
+      await this.persistence.updateSessionKpi(pnlUsd, pnlPct, null, this.lastPrice);
     }
     return result.success;
   }

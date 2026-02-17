@@ -90,12 +90,11 @@ async function enrichSession(session: AgentSession): Promise<AgentSession> {
   try {
     const perf = await api.getPerf(session.id).catch(() => null);
     const realized = Number(perf?.realizedPnlUsd ?? 0);
-    const unrealized = Number(perf?.unrealizedPnlUsd ?? 0);
     const startBalance = Number(session.startBalanceUsd ?? 0);
     const roiPct = Number(perf?.roiPct ?? (startBalance > 0 ? (realized / startBalance) * 100 : 0));
     return {
       ...session,
-      pnlUsd: realized + unrealized,
+      pnlUsd: realized,
       roiPct,
       winRate: perf?.winRate ?? session.winRate,
       totalTrades: perf?.totalTrades ?? session.totalTrades ?? 0,
