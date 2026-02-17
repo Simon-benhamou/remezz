@@ -1247,9 +1247,18 @@ export function detectMarketRegime(
   // SMA200 slope (flat = ranging)
   const closes1h = btcCandles1h.filter(c => c.isFinal !== false).map(c => c.close);
   let sma200SlopeFlat = false;
+  // Try 1h closes first; fall back to 15m if insufficient data for SMA200 slope
+  let slopeCloses: number[] | null;
   if (closes1h.length >= 205) {
-    const sma200Now = calcSMA(closes1h.slice(-200), 200);
-    const sma200Prev = calcSMA(closes1h.slice(-205, -5), 200);
+    slopeCloses = closes1h;
+  } else if (btcCandles.length >= 205) {
+    slopeCloses = btcCandles.filter(c => c.isFinal !== false).map(c => c.close);
+  } else {
+    slopeCloses = null;
+  }
+  if (slopeCloses && slopeCloses.length >= 205) {
+    const sma200Now = calcSMA(slopeCloses.slice(-200), 200);
+    const sma200Prev = calcSMA(slopeCloses.slice(-205, -5), 200);
     if (sma200Prev > 0) {
       const slopePct = Math.abs((sma200Now - sma200Prev) / sma200Prev);
       sma200SlopeFlat = slopePct < cfg.SMA200_SLOPE_FLAT_PCT / 100;

@@ -27,6 +27,9 @@ import {
   loadLocalJsonCandles,
   mergeDedupCandles,
   sliceCandlesByTime,
+  detectAndWarnGaps,
+  CANDLE_15M_MS,
+  CANDLE_1H_MS,
   type BacktestCandle,
 } from './backtest/localOhlcvJsonStore.js';
 
@@ -1061,7 +1064,9 @@ async function fetchCandles(
 
   const local = await loadLocalJsonCandles(symbol, '15m');
   if (!local) {
-    return await fetchCandlesFromCcxt(exchange, symbol, since, until);
+    const candles = await fetchCandlesFromCcxt(exchange, symbol, since, until);
+    detectAndWarnGaps(candles, symbol, CANDLE_15M_MS);
+    return candles;
   }
 
   const needBefore = since < local.startTs;
@@ -1079,7 +1084,9 @@ async function fetchCandles(
     parts.push(afterCandles);
   }
 
-  return mergeDedupCandles(parts);
+  const merged = mergeDedupCandles(parts);
+  detectAndWarnGaps(merged, symbol, CANDLE_15M_MS);
+  return merged;
 }
 
 // V5.36: Fetch 1h candles for Multi-Timeframe Confluence filter
@@ -1160,7 +1167,9 @@ async function fetchCandles1h(
   const local = await loadLocalJsonCandles(symbol, '1h');
   if (!local) {
     console.log(`[Backtest] No local 1h data for ${symbol}, fetching from API`);
-    return await fetchCandles1hFromCcxt(exchange, symbol, since, until);
+    const candles = await fetchCandles1hFromCcxt(exchange, symbol, since, until);
+    detectAndWarnGaps(candles, symbol, CANDLE_1H_MS);
+    return candles;
   }
 
   const needBefore = since < local.startTs;
@@ -1169,7 +1178,9 @@ async function fetchCandles1h(
   // If local data covers everything, use it
   if (!needBefore && !needAfter) {
     console.log(`[Backtest] Using local 1h data for ${symbol} (full coverage)`);
-    return sliceCandlesByTime(local.candles, since, until);
+    const sliced = sliceCandlesByTime(local.candles, since, until);
+    detectAndWarnGaps(sliced, symbol, CANDLE_1H_MS);
+    return sliced;
   }
 
   // Otherwise, merge local with API data for gaps
@@ -1187,7 +1198,9 @@ async function fetchCandles1h(
     parts.push(afterCandles);
   }
 
-  return mergeDedupCandles(parts);
+  const merged1h = mergeDedupCandles(parts);
+  detectAndWarnGaps(merged1h, symbol, CANDLE_1H_MS);
+  return merged1h;
 }
 
 // ============================================================================

@@ -187,6 +187,42 @@ export function sliceCandlesByTime(
   return candles.slice(startIdx, endIdxExclusive);
 }
 
+export const CANDLE_15M_MS = 15 * 60 * 1000;
+export const CANDLE_1H_MS = 60 * 60 * 1000;
+
+export type CandleGap = { fromTs: number; toTs: number; missingCount: number };
+
+export function detectAndWarnGaps(
+  candles: BacktestCandle[],
+  symbol: string,
+  intervalMs: number = CANDLE_15M_MS,
+): CandleGap[] {
+  if (candles.length < 2) return [];
+  const gaps: CandleGap[] = [];
+  const threshold = intervalMs * 1.5;
+  for (let i = 1; i < candles.length; i++) {
+    const delta = candles[i].timestamp - candles[i - 1].timestamp;
+    if (delta > threshold) {
+      const missing = Math.round(delta / intervalMs) - 1;
+      gaps.push({ fromTs: candles[i - 1].timestamp, toTs: candles[i].timestamp, missingCount: missing });
+    }
+  }
+  if (gaps.length > 0) {
+    const tf = intervalMs >= 3_600_000 ? `${intervalMs / 3_600_000}h` : `${intervalMs / 60_000}m`;
+    const totalMissing = gaps.reduce((s, g) => s + g.missingCount, 0);
+    console.warn(
+      `[Backtest] ⚠️ ${symbol} ${tf}: ${gaps.length} gap(s) detected (${totalMissing} missing candles). ` +
+      `Indicators computed over non-contiguous data.`
+    );
+    for (const g of gaps) {
+      console.warn(
+        `  gap: ${new Date(g.fromTs).toISOString()} → ${new Date(g.toTs).toISOString()} (${g.missingCount} missing)`
+      );
+    }
+  }
+  return gaps;
+}
+
 export function mergeDedupCandles(parts: BacktestCandle[][]): BacktestCandle[] {
   const map = new Map<number, BacktestCandle>();
   for (const arr of parts) {
