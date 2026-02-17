@@ -18,6 +18,7 @@ import { prisma } from '../db/client.js';
 import { runBacktest, type BacktestResult, type BacktestTrade } from './backtestService.js';
 import { createLogger } from '../utils/logger.js';
 import { normalizeToFamily } from '../types/exitReasons.js';
+import { CANDLE_15M_MS } from '../strategies/momentumSimple.js';
 
 const logger = createLogger('parity-v2');
 
@@ -86,7 +87,6 @@ export type ParityCategory =
 // CONSTANTS
 // ============================================================================
 
-const CANDLE_15M_MS = 15 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 

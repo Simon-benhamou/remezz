@@ -40,6 +40,9 @@ import {
   calcBB,
   calcROC,
   calcVolRatio,
+  calcATR,
+  calcBBPosition,
+  calcTrendStrength,
   countConsecUp,
   countConsecDown,
   getCooldownBars,  // V5.41: Shared cooldown logic
@@ -365,59 +368,10 @@ const SIGNAL_CONFIG = {
 };
 
 // ============================================================================
-// INDICATORS - V5.41: Now imported from momentumSimple.ts for single source of truth
-// calcSMA, calcBB, calcROC, calcVolRatio, countConsecUp, countConsecDown
-// are imported above and no longer duplicated here
+// INDICATORS - V5.41+: All imported from momentumSimple.ts for single source of truth
+// calcSMA, calcBB, calcROC, calcVolRatio, countConsecUp, countConsecDown,
+// calcATR, calcBBPosition, calcTrendStrength
 // ============================================================================
-
-// V5.23: Calculate ATR (Average True Range) as % of price
-// NOTE: This returns % directly, different from momentumSimple.ts which returns absolute
-function calcATR(candles: Candle[], period = 14): number {
-  if (candles.length < period + 1) return 0;
-  
-  const trValues: number[] = [];
-  for (let i = candles.length - period; i < candles.length; i++) {
-    const high = candles[i].high;
-    const low = candles[i].low;
-    const prevClose = i > 0 ? candles[i - 1].close : candles[i].close;
-    
-    const tr = Math.max(
-      high - low,
-      Math.abs(high - prevClose),
-      Math.abs(low - prevClose)
-    );
-    trValues.push(tr);
-  }
-  
-  const atr = trValues.reduce((sum, tr) => sum + tr, 0) / period;
-  const currentPrice = candles[candles.length - 1].close;
-  return currentPrice > 0 ? (atr / currentPrice) * 100 : 0; // Return as %
-}
-
-// V5.23: Calculate BB position (0 = lower band, 0.5 = middle, 1 = upper band)
-function calcBBPosition(candles: Candle[], period = 20, mult = 2): number {
-  const bb = calcBB(candles.map(c => c.close), period, mult);
-  const currentPrice = candles[candles.length - 1].close;
-  
-  if (bb.upper <= bb.lower) return 0.5; // Fallback
-  
-  // Normalize position: 0 = at lower band, 1 = at upper band
-  const position = (currentPrice - bb.lower) / (bb.upper - bb.lower);
-  return Math.max(0, Math.min(1, position)); // Clamp to [0, 1]
-}
-
-// V5.23: Calculate trend strength (distance from SMA50 as %)
-function calcTrendStrength(closes: number[], period = 50): number {
-  if (closes.length < period) return 0;
-  
-  const sma = calcSMA(closes, period);
-  const currentPrice = closes[closes.length - 1];
-  
-  if (sma === 0) return 0;
-  
-  // Positive = uptrend, Negative = downtrend
-  return (currentPrice - sma) / sma;
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // V5.32: BB SQUEEZE DETECTION - Identify volatility compression
@@ -1880,9 +1834,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         
         // V5.23: New indicators for enhanced scoring
         const bbPosition = calcBBPosition(windowCandles, 20, 2);
-        // V5.95 FIX: Normalize ATR as percentage of price (match live behavior in simpleAgent.ts)
-        // Previously passed raw ATR ($800 for BTC) instead of percentage (0.8%), causing
-        // atrScore=0 for ALL signals (15% of score lost) and different ranking vs live.
+        // V5.103 FIX: Import calcATR from momentumSimple.ts (returns raw absolute ATR, same as live)
+        // Previously used local calcATR that returned %, then double-converted here → near-zero ATR scoring
         const atrRaw = calcATR(windowCandles, 14) ?? 0;
         const atrPct = atrRaw ? (atrRaw / current.close) * 100 : 0;
         const trendStrength = calcTrendStrength(closes, 50);

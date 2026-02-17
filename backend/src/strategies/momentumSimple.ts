@@ -975,8 +975,9 @@ export function calcBBPosition(candles: Candle[], period = 20, mult = 2): number
   const bb = calcBB(closes, period, mult);
   const currentPrice = candles[candles.length - 1].close;
   if (bb.upper <= bb.lower) return 0.5;
-  const position = (currentPrice - bb.lower) / (bb.upper - bb.lower);
-  return Math.max(0, Math.min(1, position));
+  // V5.103: Return unclamped position so signal scorer can measure breakout depth
+  // Values > 1.0 = above upper band, < 0.0 = below lower band
+  return (currentPrice - bb.lower) / (bb.upper - bb.lower);
 }
 
 export function calcTrendStrength(closes: number[], period = 50): number {
@@ -2254,11 +2255,11 @@ export function checkMomentumSignal(
     // Skip SHORT if StochRSI < 15 AND volRatio < 4.0 (low quality signal)
     // Analysis: 848 trades filtered, +368% equity improvement
     // ═══════════════════════════════════════════════════════════════════════════
-    if (stochRsi !== null && stochRsi < 15 && volRatio < 4.0) {
-      return { 
-        valid: false, 
-        reason: `v5.9_stochrsi_filter(stochRsi=${stochRsi.toFixed(1)}<15 AND volRatio=${volRatio.toFixed(1)}<4)`, 
-        features 
+    if (stochRsiConfig.ENABLED && stochRsi !== null && stochRsi < stochRsiConfig.MIN_STOCHRSI && volRatio < stochRsiConfig.VOLUME_EXCEPTION_MULTIPLIER) {
+      return {
+        valid: false,
+        reason: `v5.9_stochrsi_filter(stochRsi=${stochRsi.toFixed(1)}<${stochRsiConfig.MIN_STOCHRSI} AND volRatio=${volRatio.toFixed(1)}<${stochRsiConfig.VOLUME_EXCEPTION_MULTIPLIER})`,
+        features
       };
     }
     

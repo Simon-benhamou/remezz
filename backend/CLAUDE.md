@@ -249,6 +249,21 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Future**: S/R has real signal value but needs smarter implementation (dynamic zones, breakout/bounce classification, multi-TF confluence) before re-enabling. See `docs/DRASH-SOD-PLAN.md`.
   - **Scripts preserved**: `scripts/compare-sr-filter.ts`, `scripts/grid-search-short-sr.ts`, `scripts/analyze-sr-proximity.ts` for future research.
 
+- V5.103: PaRDeS audit fixes — signal scoring parity + config hygiene:
+  - **CRITICAL: calcATR double-conversion in backtest** (`backtestService.ts`): Local `calcATR` returned percentage, then line 1887 converted again → near-zero ATR scoring (15% of signal score weight dead). Fixed by deleting local `calcATR`, `calcBBPosition`, `calcTrendStrength` and importing from `momentumSimple.ts`. Backtest signal ranking now matches live.
+  - **BB scoring dead weight in signalRanker** (`signalRanker.ts`): Entry requires BB breakout, so bbPosition was always ~1.0 (LONG) or ~0.0 (SHORT), giving BB score = 0 for every signal. 30% weight contributed nothing. Fixed: `calcBBPosition` now returns unclamped value, scorer measures breakout depth (distance beyond band) instead of position within band.
+  - **StochRSI filter ignoring config** (`momentumSimple.ts:2257`): Hardcoded thresholds `15` and `4.0` instead of `stochRsiConfig.MIN_STOCHRSI` and `stochRsiConfig.VOLUME_EXCEPTION_MULTIPLIER`. `ENABLED` flag completely ignored. Fixed to use config values and respect `ENABLED`.
+  - **Emergency SL fallback** (`positionOpener.ts:891`): `EMERGENCY_STOP_MAX_PCT ?? 3.0` fallback exceeded documented 2.5% cap. Fixed to `?? 2.5`.
+  - **Unity violations fixed**: Imported `CANDLE_15M_MS` in `parityVerificationServiceV2.ts` (was redefined locally). Replaced inline SMA200 in `server.ts` with `calcSMA()` import.
+  - **Parity tolerances documented**: PnL 3%, duration max(30min, 20% of live), exit family comparison via `normalizeToFamily()`.
+  - **Config**: `STOCHRSI_FILTER.ENABLED` now respected, `EMERGENCY_STOP_MAX_PCT` fallback aligned to 2.5%
+  - **Parity impact**: Backtest signal ranking now uses correct ATR (was near-zero) and meaningful BB scoring (was dead weight). Signal selection may differ from pre-V5.103 backtests.
+
+- V5.102b: Backtest entry timestamp fix (commit f1790517):
+  - **Problem**: `calculateRealisticHoldMinutes()` used `estimateIntrabarTiming()` for entry time, but V5.91 disabled wick breakout entry — all entries are at candle close.
+  - **Fix**: Entry timestamp = `entryCandle.timestamp + candleDurationMs` (candle close time). Removes unused intrabar estimation for entries.
+  - **Impact**: More accurate hold duration calculation in backtest trade records.
+
 - V5.102: Regime timeframe switched from 1h to 15m:
   - **Problem**: BTC regime SMA200 on 1h candles (200h = ~8 day lookback) was too slow for aggressive momentum breakout strategy. Regime shifts detected late, missing momentum windows.
   - **Discovery**: Tested 6 configurations (15m/30m/1h/4h SMA200, 30m SMA400, 1h SMA100) over 13 months. 15m SMA200 (50h lookback) dominated: +1435% ROI, +0.51 Sharpe vs 1h baseline on 5 symbols.

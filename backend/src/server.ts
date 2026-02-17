@@ -52,7 +52,7 @@ import {
   resetCapitalPool,
   type CapitalPool
 } from "./strategies/simpleAgent.js";
-import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, LIQUIDATION_CONFIG, getLiquidityTier, getMaxSafePositionSize } from "./strategies/momentumSimple.js";
+import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, LIQUIDATION_CONFIG, getLiquidityTier, getMaxSafePositionSize, calcSMA } from "./strategies/momentumSimple.js";
 import { symbolEngineManager } from "./strategies/symbolEngineManager.js";
 import { USER_LIMITS } from "./config/constants.js";
 
@@ -579,9 +579,8 @@ app.get("/api/market-conditions", async (req, res) => {
       const btcCloses = btcCandles.map((c: any) => c[4]);
       const btcNow = btcCloses[btcCloses.length - 1];
       
-      // SMA200 — aligned with agent regime logic (V5.3)
-      const sma200Slice = btcCloses.slice(-200);
-      const btcSma200 = sma200Slice.reduce((a: number, b: number) => a + b, 0) / sma200Slice.length;
+      // SMA200 — import from momentumSimple.ts (single source of truth)
+      const btcSma200 = calcSMA(btcCloses, 200);
       const btcAboveMa50 = btcNow > btcSma200; // Field name kept for API compat, but uses SMA200
       
       // 6h momentum — timestamp-based lookback to handle candle gaps

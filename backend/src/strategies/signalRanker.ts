@@ -45,7 +45,7 @@ export function calculateSignalScoreV22(roc5: number, volumeRatio: number): numb
  * Any changes here must maintain consistency between the two.
  * 
  * Formula breakdown:
- * - BB Position (30%): Buy low / Sell high in band
+ * - BB Breakout Depth (30%): How far beyond the band (stronger breakout = better)
  * - ROC Momentum (25%): Rate of change strength
  * - Volume (20%): Confirmation with volume
  * - ATR Filter (15%): Penalty for excessive volatility
@@ -53,7 +53,7 @@ export function calculateSignalScoreV22(roc5: number, volumeRatio: number): numb
  * 
  * @param params.roc5 - Rate of change over 5 periods (e.g., 0.02 = 2%)
  * @param params.volumeRatio - Current volume / 19-period average
- * @param params.bbPosition - Position in BB (0=lower, 0.5=middle, 1=upper)
+ * @param params.bbPosition - Position in BB (unclamped: >1.0=above upper, <0.0=below lower)
  * @param params.atrPct - ATR as % of price (e.g., 3.5 = 3.5% volatility)
  * @param params.trendStrength - Price distance from SMA50 (positive=uptrend, negative=downtrend)
  * @param params.side - 'long' or 'short' for directional scoring
@@ -69,14 +69,19 @@ export function calculateSignalScore(params: {
 }): number {
   const { roc5, volumeRatio, bbPosition, atrPct, trendStrength, side } = params;
 
-  // 1. BB Position (30%) - Buy low, sell high
+  // 1. BB Breakout Depth (30%) - Stronger breakout = better signal
+  // V5.103: Entry requires BB breakout (LONG: close > upper, SHORT: close < lower),
+  // so bbPosition is always ~1.0 for LONG and ~0.0 for SHORT. The old formula gave ~0
+  // for every signal. Now we measure how FAR beyond the band the price went.
   let bbScore = 0;
   if (side === 'long') {
-    // LONG: Prefer buying near lower band (0 = perfect, 1 = worst)
-    bbScore = (1 - bbPosition) * 10 * 0.3;
+    // LONG: Reward distance above upper band (bbPosition > 1.0)
+    const excess = Math.max(0, bbPosition - 1.0);
+    bbScore = Math.min(excess / 0.5, 1) * 10 * 0.3;
   } else {
-    // SHORT: Prefer selling near upper band (1 = perfect, 0 = worst)
-    bbScore = bbPosition * 10 * 0.3;
+    // SHORT: Reward distance below lower band (bbPosition < 0.0)
+    const excess = Math.max(0, -bbPosition);
+    bbScore = Math.min(excess / 0.5, 1) * 10 * 0.3;
   }
 
   // 2. ROC Momentum (25%) - Strong movement in our direction
