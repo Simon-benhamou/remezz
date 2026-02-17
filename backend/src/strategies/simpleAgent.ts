@@ -699,6 +699,8 @@ export class SimpleAgent {
   private finalKlineUnsubscribe: (() => void) | null = null; // V5.50: Instant candle close detection
 
   private closingPosition = false;
+  private exitAttemptCount = 0;
+  private lastExitAttemptTs = 0;
 
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
@@ -2050,6 +2052,23 @@ export class SimpleAgent {
       logger.debug(`⚠️ [${symbol}] Close already in progress, skipping duplicate close (${reason})`);
       return;
     }
+
+    // V5.105: Guard against exit loop — max 3 attempts per 30s, then force sync
+    const now = Date.now();
+    if (now - this.lastExitAttemptTs < 30_000) {
+      this.exitAttemptCount++;
+      if (this.exitAttemptCount > 3) {
+        logger.warn(`🔄 [${symbol}] Exceeded 3 exit attempts in 30s — forcing syncWithExchange instead of retrying`);
+        this.exitAttemptCount = 0;
+        this.lastExitAttemptTs = now;
+        await this.syncWithExchange();
+        return;
+      }
+    } else {
+      this.exitAttemptCount = 1;
+      this.lastExitAttemptTs = now;
+    }
+
     this.closingPosition = true;
     this.stopRealtimeExitMonitor();
 
@@ -2208,22 +2227,11 @@ export class SimpleAgent {
     } else {
       // Live close
       try {
-        // 🚫 V5.71: Check circuit breaker with CRITICAL exit allowance
-        // Position exits are critical - we allow them even when circuit is open (rate-limited to 1 per 5s)
-        // This prevents positions from being stuck open during IP bans or rate limits
-        if (!globalRestCircuitBreaker.canMakeCriticalRequest()) {
-          const state = globalRestCircuitBreaker.getState();
-          const remainingMs = state.closesAt ? state.closesAt - Date.now() : 0;
-          const remainingSec = Math.round(remainingMs / 1000);
-          logger.error(`🚫 [${symbol}] REST circuit breaker is OPEN and critical rate limit exceeded - cannot close position (${remainingSec}s remaining) ⚠️ POSITION REMAINS OPEN! Will retry on next cycle.`);
-          // Don't clear position or release capital - the position is still open on exchange!
-          // Reset closingPosition flag so we can retry on next exit check cycle
-          this.closingPosition = false;
-          // Restart RT monitor — close failed, position still needs real-time SL protection
-          this.startRealtimeExitMonitorIfNeeded();
-          return;
-        }
-        
+        // V5.105: Removed circuit breaker check here (was double-gate bug).
+        // The order queue already handles circuit breaker + CRITICAL exit priority.
+        // Having both caused a timing bug: agent consumed the 5s rate-limit slot,
+        // then the queue's check failed for 5s, blocking all exits.
+
         // FIRST: Cancel any open SL/TP orders to avoid orphaned orders
         await this.cancelStopLossOnExchange();
 
@@ -2279,6 +2287,28 @@ export class SimpleAgent {
         const result = await orderQueue.submitOrder(orderRequest);
 
         if (!result.success) {
+          // V5.105: Check if position is already closed on exchange (e.g. SL fired)
+          const errorStr = (result.error || '').toLowerCase();
+          const isAlreadyClosed = errorStr.includes('reduceonly') ||
+                                  errorStr.includes('reduce only') ||
+                                  errorStr.includes('position side does not match') ||
+                                  errorStr.includes('position does not exist');
+          if (isAlreadyClosed) {
+            logger.warn(`🔄 [${symbol}] Exit order rejected (position already closed on exchange) — triggering syncWithExchange`);
+            this.closingPosition = false;
+            await this.syncWithExchange();
+            return;
+          }
+
+          // Also check WS position cache — if exchange shows no position, don't restart RT monitor
+          const wsPos = getPositionFromWebSocket(this.config.userId, symbol);
+          if (!wsPos || Math.abs(wsPos.positionAmt) === 0) {
+            logger.warn(`🔄 [${symbol}] Exit order failed but WS shows no position — triggering syncWithExchange`);
+            this.closingPosition = false;
+            await this.syncWithExchange();
+            return;
+          }
+
           logger.error(`[${symbol}] Exit order FAILED: ${result.error} (${result.errorCode})`);
           this.closingPosition = false;
           // Restart RT monitor — close failed, position still needs real-time SL protection

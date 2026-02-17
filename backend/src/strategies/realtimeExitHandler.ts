@@ -181,7 +181,9 @@ export class RealtimeExitHandler {
     this.lastAppTrailingStop = null;
     this.lastRtTrailingKlineTs = null;
     this.rtTrailingBreachCandles = 0;
-    this.ctx.setClosingPosition(false);
+    // V5.105: Removed setClosingPosition(false) — was breaking the re-entry guard in closePosition().
+    // When closePosition() failed and restarted the RT monitor, this reset allowed immediate re-entry
+    // into closePosition(), causing an infinite exit loop. closingPosition is managed by closePosition() only.
 
     // If realtime trailing is enabled and we use kline-close mode, subscribe to 1m klines.
     try {

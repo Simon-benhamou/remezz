@@ -20,6 +20,7 @@ import {
   calcBBPosition,
   calcVolRatio,
   calcTrendStrength,
+  MomentumConfig,
   type Candle,
   type SignalResult,
   type MarketConditions,
@@ -143,19 +144,7 @@ export class SymbolEngine extends EventEmitter {
     }
     const allBtcCandles15m = btcCache.candles;
 
-    // 3. Get BTC 1h candles from global cache
-    const btc1hCache = globalCacheManager.getBtc1hCache();
-    const allBtcCandles1h = btc1hCache?.candles || [];
-    const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
-
-    if (btcCandles1h.length < MIN_BTC_1H_CANDLES) {
-      if (this.tickCount % 10 === 1) {
-        logger.debug(`[SymbolEngine] [${this.shortSymbol}] Waiting for BTC 1h data (${btcCandles1h.length}/${MIN_BTC_1H_CANDLES})`);
-      }
-      return;
-    }
-
-    // 4. Filter to closed candles only (matching agent's checkEntry logic exactly)
+    // 3. Filter to closed candles only (matching agent's checkEntry logic exactly)
     const lastCandle = this.candles[this.candles.length - 1];
     let lastClosedIdx = this.candles.length - 1;
     if (lastCandle.isFinal === false) {
@@ -173,6 +162,25 @@ export class SymbolEngine extends EventEmitter {
     const btcCandles = btcLastClosedIdx >= 0
       ? allBtcCandles15m.slice(0, btcLastClosedIdx + 1)
       : allBtcCandles15m;
+
+    // 4. Get BTC candles for regime/MTF
+    // V5.105: When regime timeframe is 15m (V5.102), use BTC 15m candles (matching backtest + agent fallback)
+    // Previously always used real 1h candles, causing parity mismatch (different SMA200 → different regime)
+    let btcCandles1h: Candle[];
+    if (MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME === '15m') {
+      btcCandles1h = btcCandles; // Use same 15m candles for regime (matches backtest behavior)
+    } else {
+      const btc1hCache = globalCacheManager.getBtc1hCache();
+      const allBtcCandles1h = btc1hCache?.candles || [];
+      btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
+
+      if (btcCandles1h.length < MIN_BTC_1H_CANDLES) {
+        if (this.tickCount % 10 === 1) {
+          logger.debug(`[SymbolEngine] [${this.shortSymbol}] Waiting for BTC 1h data (${btcCandles1h.length}/${MIN_BTC_1H_CANDLES})`);
+        }
+        return;
+      }
+    }
 
     const isNewCandle = lastClosedCandleTs !== this.lastProcessedCandleTs;
 
