@@ -249,6 +249,20 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Future**: S/R has real signal value but needs smarter implementation (dynamic zones, breakout/bounce classification, multi-TF confluence) before re-enabling. See `docs/DRASH-SOD-PLAN.md`.
   - **Scripts preserved**: `scripts/compare-sr-filter.ts`, `scripts/grid-search-short-sr.ts`, `scripts/analyze-sr-proximity.ts` for future research.
 
+- V5.102: Regime timeframe switched from 1h to 15m:
+  - **Problem**: BTC regime SMA200 on 1h candles (200h = ~8 day lookback) was too slow for aggressive momentum breakout strategy. Regime shifts detected late, missing momentum windows.
+  - **Discovery**: Tested 6 configurations (15m/30m/1h/4h SMA200, 30m SMA400, 1h SMA100) over 13 months. 15m SMA200 (50h lookback) dominated: +1435% ROI, +0.51 Sharpe vs 1h baseline on 5 symbols.
+  - **Validation (3/4 tests PASS)**:
+    - OOS symbols (ADA, DOT, STX, TIA): +2387% ROI, +5.1pp WR, +1.59 Sharpe, -27% DD
+    - Walk-forward H2 (Aug-Feb): +512% ROI, +3.4pp WR, +1.67 Sharpe
+    - All 9 symbols combined: +2325% ROI, +0.19 Sharpe (1155 trades, 63.4% WR)
+    - Walk-forward H1 (Jan-Jul): marginal (+19% ROI but -0.31 Sharpe — stable period)
+  - **Config changes**: `BTC_REGIME_TIMEFRAME: '15m'` (was '1h'), `MULTI_TIMEFRAME_FILTER.TIMEFRAME: '15m'` (was '1h'), `LOOKBACK_CANDLES: 40` (was 10, keeps ~10h window)
+  - **Live/paper**: `simpleAgent.ts` now passes BTC 15m candles for regime/MTF instead of fetching separate 1h candles
+  - **Backtest**: `regimeTimeframeMinutes` param defaults to config value. When 15m, uses BTC 15m candles directly (no aggregation). Cursor-based filtering for O(1) per-step performance.
+  - **Why 15m works**: Strategy enters on 15m signal candles — regime should react at same speed. 50h SMA200 catches short-term regime shifts that matter for breakout entries. Generates more trades (816 vs 587) at same win rate (63.8%).
+  - **Scripts**: `scripts/compare-regime-timeframes.ts` (6-config comparison), `scripts/validate-regime-15m.ts` (OOS + walk-forward validation)
+
 - V5.100: Parity verification 1h candle filter fix (two bugs):
   - **Problem 1**: Parity filtered BTC 1h candles by open time (`c.timestamp <= lastClosedCandleTs`), including the forming 1h candle with its future close price (look-ahead bias). Flipped regime near SMA200.
   - **Problem 2**: Reference time was `lastClosedCandleTs` (15m candle OPEN time), 15min behind the backtest's `btcCandle.timestamp` (CURRENT 15m candle open = PREVIOUS candle CLOSE time). At hour boundaries (XX:45 signals), this excluded the 1h candle that just closed, causing MTF filter mismatches.

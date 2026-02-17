@@ -127,7 +127,7 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
     btResult = await runBacktest({
       startDate: new Date(entryTs - 3 * DAY_MS),           // 3 days warmup for indicators
       endDate: new Date(exitTs + 4 * HOUR_MS),              // buffer after exit
-      dataStartDate: new Date(entryTs - 11 * DAY_MS),       // 1h SMA200 warmup (200h = ~8.3 days)
+      dataStartDate: new Date(entryTs - 11 * DAY_MS),       // V5.102: 15m SMA200 needs 50h, keeping 11 days for margin
       initialCapital: 2000,
       symbols: [symbol],
       leverage,

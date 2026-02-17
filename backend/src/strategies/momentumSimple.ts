@@ -276,8 +276,8 @@ export const MomentumConfig = {
     MAX_CONSEC_UP: 5,            // V5.12: 5
     
     // BTC Regime Filter
-    BTC_SMA_PERIOD: 200,         // SMA 200 pour régime (on 1h = 200h = ~8 days)
-    BTC_REGIME_TIMEFRAME: '1h' as const,  // V5.82: Use 1h for regime SMA200 (more stable, less noise)
+    BTC_SMA_PERIOD: 200,         // SMA 200 (on 15m = 50h = ~2 days — fast regime for momentum breakout)
+    BTC_REGIME_TIMEFRAME: '15m' as const,  // V5.102: Use 15m for regime SMA200 (validated: +2325% ROI, +0.19 Sharpe on 9 symbols)
     BTC_MOMENTUM_MIN: 0,         // Désactivé (utilise SMA200 à la place)
     BTC_MOMENTUM_PERIOD: 24,     // Gardé pour compatibilité
     
@@ -307,11 +307,11 @@ export const MomentumConfig = {
 
   MULTI_TIMEFRAME_FILTER: {
     ENABLED: true,                    // V5.36: Enable MTF filter (2-year validated)
-    TIMEFRAME: '1h',                  // Use 1h candles for higher timeframe
-    MIN_BTC_ROC_LONG: 0.0,            // LONG: Require BTC 1h ROC > 0% (bullish)
-    MAX_BTC_ROC_SHORT: 0.0,           // SHORT: Require BTC 1h ROC < 0% (bearish)
-    LOOKBACK_CANDLES: 10,             // Calculate ROC over 10 candles (10 hours)
-    CACHE_1H_CANDLES: true,           // Cache 1h candles to reduce API calls
+    TIMEFRAME: '15m',                 // V5.102: Use 15m candles (same as signal TF — faster regime)
+    MIN_BTC_ROC_LONG: 0.0,            // LONG: Require BTC 15m ROC > 0% (bullish)
+    MAX_BTC_ROC_SHORT: 0.0,           // SHORT: Require BTC 15m ROC < 0% (bearish)
+    LOOKBACK_CANDLES: 40,             // V5.102: 40 × 15m = 10h (was 10 × 1h = 10h — same window)
+    CACHE_1H_CANDLES: true,           // Cache candles to reduce API calls
     CACHE_REFRESH_MINUTES: 15,        // Refresh cache every 15 minutes
   },
 

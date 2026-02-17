@@ -1292,12 +1292,12 @@ export class SimpleAgent {
         }
         btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
 
-        const allBtcCandles1h = await this.fetchBtcCandles1h();
-        const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
-        const MIN_BTC_1H_CANDLES = 201; // Need 200 for SMA200 regime + 1 (match backtest)
-        if (btcCandles1h.length < MIN_BTC_1H_CANDLES) {
+        // V5.102: Use BTC 15m candles for regime (was 1h) — faster regime switches for momentum breakout
+        const btcCandlesForRegime = btcCandles;
+        const MIN_BTC_REGIME_CANDLES = 201; // Need 200 for SMA200 + 1
+        if (btcCandlesForRegime.length < MIN_BTC_REGIME_CANDLES) {
           if (this.tickCount % 10 === 1) {
-            logger.info(`⚠️ [${shortSymbol}] Waiting for BTC 1h data (${btcCandles1h.length}/${MIN_BTC_1H_CANDLES})`);
+            logger.info(`⚠️ [${shortSymbol}] Waiting for BTC 15m data (${btcCandlesForRegime.length}/${MIN_BTC_REGIME_CANDLES})`);
           }
           this.lastRejectReason = 'waiting_new_candle';
           return;
@@ -1305,7 +1305,7 @@ export class SimpleAgent {
 
         signal = checkMomentumSignal(symbol, candles, btcCandles, {
           nowMs: now,
-          btcCandles1h,
+          btcCandles1h: btcCandlesForRegime,  // V5.102: 15m candles for regime/MTF
         });
       }
 
@@ -1606,9 +1606,8 @@ export class SimpleAgent {
       }
       const btcCandles = lastClosedBtcIdx >= 0 ? allBtcCandles.slice(0, lastClosedBtcIdx + 1) : [];
 
-      // V5.82: Fetch BTC 1h candles for regime SMA200
-      const allBtcCandles1h = await this.fetchBtcCandles1h();
-      const btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
+      // V5.102: Use BTC 15m candles for regime (was 1h — faster regime for momentum breakout)
+      const btcCandles1h = btcCandles; // 15m candles used for regime/MTF
 
       // Only process exit once per newly-closed candle.
       if (latestClosedCandle.timestamp === this.lastProcessedExitCandleTs) {
@@ -1740,7 +1739,7 @@ export class SimpleAgent {
         priceHigh: exitHigh,
         priceLow: exitLow,
         btcCandles: btcCandles,
-        btcCandles1h: btcCandles1h,  // V5.82: 1h candles for regime SMA200
+        btcCandles1h: btcCandles1h,  // V5.102: 15m candles for regime SMA200
       });
 
       // 🔍 DEBUG: Log regime change detection for debugging timing issues

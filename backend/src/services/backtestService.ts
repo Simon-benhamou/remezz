@@ -86,6 +86,37 @@ interface Candle {
   volume: number;
 }
 
+/**
+ * Aggregate 15m candles to a larger timeframe.
+ * Groups candles into buckets of targetMinutes and merges OHLCV.
+ */
+function aggregate15mCandles(candles: Candle[], targetMinutes: number): Candle[] {
+  if (targetMinutes <= 15) return candles; // No aggregation needed
+  const targetMs = targetMinutes * 60 * 1000;
+  const out: Candle[] = [];
+  let bucket: Candle | null = null;
+  let bucketEnd = 0;
+
+  for (const c of candles) {
+    const bucketStart = Math.floor(c.timestamp / targetMs) * targetMs;
+    const thisBucketEnd = bucketStart + targetMs;
+
+    if (!bucket || c.timestamp >= bucketEnd) {
+      // New bucket
+      if (bucket) out.push(bucket);
+      bucket = { ...c, timestamp: bucketStart };
+      bucketEnd = thisBucketEnd;
+    } else {
+      // Merge into existing bucket
+      bucket.high = Math.max(bucket.high, c.high);
+      bucket.low = Math.min(bucket.low, c.low);
+      bucket.close = c.close;
+      bucket.volume += c.volume;
+    }
+  }
+  if (bucket) out.push(bucket);
+  return out;
+}
 
 interface BacktestSimPosition {
   symbol: string;
@@ -169,6 +200,10 @@ export interface BacktestParams {
   // - MEDIUM (40-69): Exit at candle close with 1-candle confirmation
   // - LOW (<40): Exit at candle close with 2-candle confirmation
   nfsAdaptiveTrailing?: boolean;
+  // Regime candle timeframe in minutes. Default 60 (1h).
+  // Aggregates BTC 15m candles to the desired timeframe for SMA200 regime, MTF filter, cash mode.
+  // Options: 15, 30, 60 (default), 120, 240
+  regimeTimeframeMinutes?: number;
 }
 
 export interface BacktestTrade {
@@ -1391,9 +1426,27 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   const btcCloses = btcCandles.map((c) => c.close);
   console.log(`[Backtest] BTC 15m: ${btcCandles.length} candles`);
 
-  // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
-  const btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
-  console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles`);
+  // BTC candles for regime/MTF: derive default from config, or use param override
+  const configTfStr = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME; // e.g. '15m', '1h', '4h'
+  const configTfMin = parseInt(configTfStr) * (configTfStr.includes('h') ? 60 : 1);
+  const regimeTfMin = params.regimeTimeframeMinutes ?? configTfMin;
+  let btcCandles1h: Candle[];
+  if (regimeTfMin === 60) {
+    // Fetch native 1h candles (most accurate for 1h regime)
+    btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
+    console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles (native)`);
+  } else if (regimeTfMin <= 15) {
+    // V5.102: Use BTC 15m candles directly for regime (no aggregation needed)
+    btcCandles1h = btcCandles;
+    console.log(`[Backtest] BTC regime: using 15m candles directly (${btcCandles1h.length} candles)`);
+  } else {
+    // Aggregate 15m candles to desired timeframe
+    btcCandles1h = aggregate15mCandles(btcCandles, regimeTfMin);
+    console.log(`[Backtest] BTC ${regimeTfMin}m: ${btcCandles1h.length} candles (aggregated from 15m)`);
+  }
+
+  // Interval for regime candle filtering (dynamic based on regimeTimeframeMinutes)
+  const CANDLE_REGIME_INTERVAL_MS = regimeTfMin * 60 * 1000;
 
   // Fetch symbol data — parallel batches of 3 to speed up production (no local files)
   const allData: Record<string, Candle[]> = {};
@@ -1458,9 +1511,22 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   type ValidSignal = NonNullable<BacktestResult['validSignals']>[number];
   const allValidSignals: ValidSignal[] = [];
 
+  // Regime candle cursor: advances monotonically for O(1) per-step filtering
+  // Tracks the largest index i where btcCandles1h[i].timestamp + CANDLE_REGIME_INTERVAL_MS <= btcCandle.timestamp
+  let regimeCursorForEntry = 0;
+
   // Main loop - iterate over BTC candles
   for (let btcIdx = startIdx; btcIdx < btcCandles.length; btcIdx++) {
     const btcCandle = btcCandles[btcIdx];
+
+    // Advance regime candle cursor for this BTC timestamp
+    while (
+      regimeCursorForEntry < btcCandles1h.length &&
+      btcCandles1h[regimeCursorForEntry].timestamp + CANDLE_REGIME_INTERVAL_MS <= btcCandle.timestamp
+    ) {
+      regimeCursorForEntry++;
+    }
+    // regimeCursorForEntry is now the EXCLUSIVE end index (first candle that doesn't pass)
 
     if (btcCandle.timestamp < startTimestamp) continue;
     if (btcCandle.timestamp > endDate.getTime()) break;
@@ -1580,9 +1646,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const btcWindowStart = Math.max(0, btcIdxForExit - 200);
         const btcWindowCandles = btcCandles.slice(btcWindowStart, btcIdxForExit + 1);
 
-        // V5.86: Compute 1h candles window for exit (matches entry logic at line 1711)
-        const CANDLE_1H_INTERVAL_MS = 60 * 60 * 1000;
-        const btcCandles1hWindowForExit = btcCandles1h.filter(c => c.timestamp + CANDLE_1H_INTERVAL_MS <= current.timestamp);
+        // V5.86: Compute regime candles window for exit
+        // Use regimeCursorForEntry as upper bound (current.timestamp <= btcCandle.timestamp)
+        const btcCandles1hWindowForExit = btcCandles1h.slice(0, regimeCursorForEntry);
 
         const exitResult = checkBacktestExit(
           pos,
@@ -1746,14 +1812,14 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           if (availableCapital < minAvailableCapital) continue;
         }
 
-        // V5.82: BTC regime uses 1h SMA200 (more stable, matches live)
-        // Fallback to 15m if 1h data insufficient
-        const CANDLE_1H_INTERVAL_MS = 60 * 60 * 1000;
-        const btcCandles1hWindow = btcCandles1h.filter(c => c.timestamp + CANDLE_1H_INTERVAL_MS <= btcCandle.timestamp);
+        // BTC regime uses higher-TF SMA (configurable via regimeTimeframeMinutes)
+        // Fallback to 15m if data insufficient
+        const btcCandles1hWindow = btcCandles1h.slice(0, regimeCursorForEntry);
         let isBullRegime: boolean;
-        if (btcCandles1hWindow.length >= 200) {
+        const smaPeriod = MomentumConfig.ENTRY.BTC_SMA_PERIOD;
+        if (btcCandles1hWindow.length >= smaPeriod) {
           const btcCloses1h = btcCandles1hWindow.map(c => c.close);
-          const btcSma200_1h = calcSMA(btcCloses1h, 200);
+          const btcSma200_1h = calcSMA(btcCloses1h, smaPeriod);
           const btcNow1h = btcCloses1h[btcCloses1h.length - 1];
           isBullRegime = btcNow1h > btcSma200_1h;
         } else {
