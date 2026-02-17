@@ -56,6 +56,7 @@ Every execution decision lives in three places. A change to ONE must be reflecte
 | Cooldown bars | `getCooldownBars` (shared) -- but verify backtest uses it at line ~1482 |
 | Max positions | `positionOpener.ts` (live) + `backtestService.ts` CONFIG.SIZING |
 | Capital management | `CapitalPool` (live/paper) + `capital`/`capitalInUse` in backtest |
+| BTC regime timeframe | `symbolEngine.ts` (btcCandles1h source) + `simpleAgent.ts` + `backtestService.ts` (V5.105: SymbolEngine was missed in V5.102) |
 
 ## Known Live vs Backtest Asymmetries
 

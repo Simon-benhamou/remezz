@@ -43,6 +43,11 @@ momentumSimple.ts (THE source of truth)
 ├── checkBTCVolatility()     -- used by BOTH live and backtest
 ├── MomentumConfig           -- used by BOTH live and backtest
 └── NFS scoring functions    -- used by BOTH live and backtest
+
+CALLERS of checkMomentumSignal (ALL must pass same btcCandles1h source):
+├── symbolEngine.ts          -- primary live signal path (V5.105: must respect BTC_REGIME_TIMEFRAME)
+├── simpleAgent.ts           -- agent fallback path
+└── backtestService.ts       -- backtest simulation
 ```
 
 **If you find yourself writing the same logic in two places, STOP. Extract it to `momentumSimple.ts`.** Duplication is the enemy of unity.
