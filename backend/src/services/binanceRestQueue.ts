@@ -20,6 +20,7 @@
 import { createLogger } from '../utils/logger.js';
 import { isIpBanned, setIpBan, getIpBanExpiry, setGeoBlock, isGeoBlocked } from '../exchange/ccxtClient.js';
 import { ipWeightTracker } from './ipWeightTracker.js';
+import { notifySystemAlert } from '../utils/notifications.js';
 
 const logger = createLogger('RestQueue');
 
@@ -386,6 +387,12 @@ class BinanceRestQueue {
     const durationMin = Math.ceil((banUntilAbsolute - Date.now()) / 60000);
     logger.error(`IP BAN DETECTED - setting ban for ${durationMin} minutes (until ${new Date(banUntilAbsolute).toISOString()})`);
     setIpBan(banUntilAbsolute, `restQueue:${errorMsg.substring(0, 80)}`);
+
+    notifySystemAlert({
+      level: 'critical',
+      title: 'IP BAN DETECTED',
+      message: `Banned for ${durationMin} min.\nExpires: ${new Date(banUntilAbsolute).toISOString()}\n${errorMsg.substring(0, 200)}`,
+    }).catch(() => {});
 
     // Schedule ban-expired callbacks (re-seed candles, etc.)
     this.scheduleBanExpiryCallbacks(banUntilAbsolute);

@@ -240,15 +240,43 @@ Reason: ${position.reason}${balanceInfo}
 }
 
 /**
- * Notify critical system events
+ * Broadcast a message to ALL users with a Telegram chatId configured.
+ * Used for system-wide alerts (IP ban, circuit breaker, server restart).
  */
-export async function notifySystemAlert(_alert: {
+async function broadcastSystemMessage(text: string): Promise<void> {
+  if (!isEnabled || !prisma) return;
+  try {
+    const settings = await prisma.userSetting.findMany({
+      where: { key: 'telegramChatId' },
+      select: { value: true },
+    });
+    for (const s of settings) {
+      if (s.value) await sendTelegramMessage(text, null, s.value);
+    }
+  } catch (err: unknown) {
+    logger.error('[Telegram] broadcastSystemMessage error:', err);
+  }
+}
+
+/**
+ * Notify critical system events (broadcast to all users)
+ */
+export async function notifySystemAlert(alert: {
   level: 'warning' | 'error' | 'critical';
   title: string;
   message: string;
 }): Promise<void> {
-  // Disabled: only entry/exit notifications are sent to Telegram
-  return;
+  if (!isEnabled) return;
+  const emoji = { warning: '⚠️', error: '❌', critical: '🚨' }[alert.level];
+  const text = `${emoji} ${alert.level.toUpperCase()}: ${alert.title}\n\n${alert.message}\n\n⏰ ${new Date().toISOString()}`;
+  await broadcastSystemMessage(text);
+}
+
+/**
+ * Send arbitrary system message to all users (used by daily report)
+ */
+export async function sendSystemMessage(text: string): Promise<void> {
+  await broadcastSystemMessage(text);
 }
 
 /**

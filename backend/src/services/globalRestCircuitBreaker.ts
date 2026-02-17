@@ -10,6 +10,8 @@
  * from REST fallback for a cooldown period (default 60s).
  */
 
+import { notifySystemAlert } from '../utils/notifications.js';
+
 export interface RestFailureRecord {
   timestamp: number;
   agentId: string;
@@ -180,6 +182,12 @@ class GlobalRestCircuitBreaker {
         ago: `${Math.round((Date.now() - f.timestamp) / 1000)}s`,
       })),
     });
+
+    notifySystemAlert({
+      level: 'error',
+      title: 'Circuit Breaker OPENED',
+      message: `REST blocked for ${cooldownSeconds}s.\nFailures: ${this.failureCount}\nSymbols: ${symbols.join(', ')}`,
+    }).catch(() => {});
   }
   
   /**

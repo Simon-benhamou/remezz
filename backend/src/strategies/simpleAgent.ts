@@ -56,7 +56,7 @@ import {
   notifySyncFailure,
   notifySignalDetected,
 } from '../services/notificationService.js';
-import { notifyPositionClosed } from '../utils/notifications.js';
+import { notifyPositionClosed, notifySystemAlert } from '../utils/notifications.js';
 import { trackRejectedSignal, recordTrade, updateAgentState } from '../services/telegramReporter.js';
 import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
 import { calculateOrderPriority, type ExitReason } from '../services/orderPriority.js';
@@ -726,6 +726,10 @@ export class SimpleAgent {
 
   // V5.71: Cache last known BTC regime for real-time Signal Radar
   private lastKnownRegime: 'BULL' | 'BEAR' | 'NEUTRAL' | null = null; // null = not yet calculated
+
+  // Consecutive tick error tracking for Telegram alerts
+  private consecutiveTickErrors = 0;
+  private lastErrorAlertTs = 0;
   
   // Track trailing stop activation (to notify only once)
   private trailingNotified: boolean = false;
@@ -1171,9 +1175,19 @@ export class SimpleAgent {
         logger.info(`🕵️ [${shortSymbol}] 15m CHECK | $${currentPrice.toFixed(2)} | ${featuresSummary} | ${rejectKey} | ${this.config.mode}`);
       }
       
+      this.consecutiveTickErrors = 0;
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Tick error:`, error);
       this.config.onError?.(error as Error);
+      this.consecutiveTickErrors++;
+      if (this.consecutiveTickErrors >= 5 && Date.now() - this.lastErrorAlertTs > 30 * 60 * 1000) {
+        this.lastErrorAlertTs = Date.now();
+        notifySystemAlert({
+          level: 'error',
+          title: `Agent ${this.config.symbol} failing`,
+          message: `${this.consecutiveTickErrors} consecutive tick errors.\nLast: ${errMsg(error)}\nMode: ${this.config.mode}`,
+        }).catch(() => {});
+      }
     } finally {
       // Always release the lock, even if an error occurred
       this.tickInProgress = false;

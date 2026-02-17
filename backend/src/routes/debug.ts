@@ -847,6 +847,21 @@ router.get('/diagnose-apikeys', async (req: AuthenticatedRequest, res) => {
 });
 
 // =============================================================================
+// Force daily BT vs Live report (for testing)
+// =============================================================================
+
+router.post('/force-daily-report', async (req, res) => {
+  try {
+    const { forceDailyReport } = await import('../services/telegramReporter.js');
+    await forceDailyReport();
+    res.json({ success: true, message: 'Daily BT vs Live report sent' });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ success: false, error: msg });
+  }
+});
+
+// =============================================================================
 // V5.73: IP Ban Management Endpoints
 // =============================================================================
 

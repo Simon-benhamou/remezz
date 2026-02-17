@@ -42,7 +42,7 @@ import { orderQueue } from "./services/orderQueue.js";
 import { binanceRestQueue, BINANCE_WEIGHTS } from "./services/binanceRestQueue.js";
 import { seedFreshCandles, startCandleRefreshJob, stopCandleRefreshJob, backfillBtcCandles } from "./services/candleCache.js";
 import { startTelegramReporter, stopTelegramReporter } from "./services/telegramReporter.js";
-import { initTelegramNotifications } from "./utils/notifications.js";
+import { initTelegramNotifications, notifySystemAlert } from "./utils/notifications.js";
 
 // Strategy
 import {
@@ -63,10 +63,20 @@ logger.info("🚀 Starting Simplified Trading Server", { level: logLevel });
 // Process error handlers
 process.on('uncaughtException', (error) => {
   logger.error('🚨 Uncaught Exception', { error: error.message, stack: error.stack });
+  notifySystemAlert({
+    level: 'critical',
+    title: 'Uncaught Exception',
+    message: `${error.message}\n${(error.stack || '').substring(0, 300)}`,
+  }).catch(() => {});
 });
 
 process.on('unhandledRejection', (reason) => {
   logger.error('🚨 Unhandled Rejection', { reason: String(reason) });
+  notifySystemAlert({
+    level: 'error',
+    title: 'Unhandled Rejection',
+    message: String(reason).substring(0, 400),
+  }).catch(() => {});
 });
 
 const cfg = getConfig();
@@ -4662,6 +4672,12 @@ server.keepAliveTimeout = 10 * 60 * 1000;
 server.listen(cfg.PORT, () => {
   logger.info(`✅ Server listening on :${cfg.PORT} | PID=${process.pid}`);
   logger.info(`📈 Strategy: Momentum Simple (Vol 5x + BTC MA50 + 2h Mom)`);
+
+  notifySystemAlert({
+    level: 'warning',
+    title: 'Server Started',
+    message: `PID=${process.pid}, port ${cfg.PORT}.\nCheck for missed signals if this was unexpected.`,
+  }).catch(() => {});
 
   // V5.95: Detect and log our external IP at startup
   detectExternalIp().then(ip => {
