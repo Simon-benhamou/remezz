@@ -794,7 +794,7 @@ export function useSessionState(
   );
 
   const netPnl = useMemo(() => {
-    const realized = trades.reduce((sum, t) => sum + t.realizedPnlUsd, 0);
+    const realized = trades.reduce((sum, t) => sum + (t.realizedPnlUsd || 0) - (t.feesUsd || 0), 0);
     const unrealized = position?.pnlUsd || 0;
     return realized + unrealized;
   }, [trades, position]);
