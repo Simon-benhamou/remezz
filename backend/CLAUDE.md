@@ -52,6 +52,7 @@ npm run migrate             # Run migrations
 - `positionPersistence.ts` - Extracted DB operations (load/save/update positions, session KPIs)
 - `exchangeOrderManager.ts` - Extracted exchange order placement (SL, trailing stop, proactive limits)
 - `realtimeExitMonitor.ts` - RT exit state definitions and interfaces
+- `symbolEngine.ts` - Per-symbol signal computation (shared across users). Uses same `checkMomentumSignal()` as agents. **Must stay aligned with regime timeframe config** (V5.105 fix: was using 1h candles when config was 15m)
 - `cacheManager.ts` - Mutex-protected BTC 15m/1h candle caches and leverage cache (`globalCacheManager` singleton)
 
 **Config & Types** (`src/config/`, `src/types/`)
@@ -248,6 +249,12 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
     - LONG away from resistance: 67% WR (good)
   - **Future**: S/R has real signal value but needs smarter implementation (dynamic zones, breakout/bounce classification, multi-TF confluence) before re-enabling. See `docs/DRASH-SOD-PLAN.md`.
   - **Scripts preserved**: `scripts/compare-sr-filter.ts`, `scripts/grid-search-short-sr.ts`, `scripts/analyze-sr-proximity.ts` for future research.
+
+- V5.105: Critical fixes — exit loop, circuit breaker double-gate, SymbolEngine parity:
+  - **Exit loop fix** (`simpleAgent.ts`, `realtimeExitHandler.ts`): When exchange SL fired, `reduceOnly` order failed (position already gone), failure path restarted RT monitor → infinite loop (5-6 close attempts). Fix: detect `ReduceOnly` rejection + check WS position cache before restarting monitor. Added 3-attempt/30s guard with `syncWithExchange()` fallback. Removed `setClosingPosition(false)` from `startIfNeeded()` that broke the re-entry guard.
+  - **Circuit breaker double-gate** (`simpleAgent.ts`): `canMakeCriticalRequest()` was called in agent (Gate 1) AND order queue (Gate 2) with shared rate-limit state. Gate 1 consumed the 5s slot, so Gate 2 blocked all exits for 5 seconds. Fix: removed agent-level check — queue already handles CB + CRITICAL priority.
+  - **SymbolEngine parity** (`symbolEngine.ts`): Was passing real BTC 1h candles to `checkMomentumSignal` while backtest/agent use BTC 15m per V5.102. Different SMA200 → different regime → live entering SHORT trades the backtest would never take (late entries on exhausted momentum). Fix: when `BTC_REGIME_TIMEFRAME === '15m'`, use BTC 15m candles.
+  - **Parity impact**: SymbolEngine now matches backtest regime detection. Exit loop eliminated. Circuit breaker no longer delays exits.
 
 - V5.104: PaRDeS audit fixes — gap detection (P1) + CHOPPY regime fallback (R4):
   - **P1: Backtest gap detection** (`localOhlcvJsonStore.ts`, `backtestService.ts`): Added `detectAndWarnGaps()` that walks sorted candles and warns about missing candles (gaps > 1.5x expected interval). Called in all 5 code paths of `fetchCandles()` and `fetchCandles1h()` (CCXT-only, local-only full coverage, local+CCXT merge). Informational only — candles not removed. Exports `CANDLE_15M_MS`, `CANDLE_1H_MS`, `CandleGap` type.
