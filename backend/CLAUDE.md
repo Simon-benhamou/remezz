@@ -250,10 +250,17 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Future**: S/R has real signal value but needs smarter implementation (dynamic zones, breakout/bounce classification, multi-TF confluence) before re-enabling. See `docs/DRASH-SOD-PLAN.md`.
   - **Scripts preserved**: `scripts/compare-sr-filter.ts`, `scripts/grid-search-short-sr.ts`, `scripts/analyze-sr-proximity.ts` for future research.
 
-- V5.106: Parity verification off-by-one candle fix:
+- V5.107: Fix parity forced entry timestamp — V5.106 was one candle too LATE (not early):
+  - **Problem**: V5.106 assumed `Trade.entryTs` = candle OPEN time (per V5.46), but V5.86 added `realEntryTime = Date.now()` which takes priority in `positionPersistence.ts:233` (`realEntryTime ?? entryTime ?? Date.now()`). So `Trade.entryTs` is actually **wall-clock** (~candle_close + 2s). V5.106's `+CANDLE_15M_MS` pushed `forcedEntryTimestamp` one candle too far → wrong entry price → systematic EXIT_MISMATCH and PNL_VARIANCE on every trade.
+  - **Fix**: `forcedEntryTimestamp = floor(entryTs / 15min) * 15min` (NO offset). `floor(wallClock / 15min)` naturally gives the candle close boundary, which is exactly `btcCandle.timestamp` when the signal candle was just processed. Diagnostic confirmed: SUI SHORT trade went from EXIT_MISMATCH (SL @ -10.90%) to MATCH (TRAIL_NFS_MED @ +14.86%, 0% PnL diff).
+  - **Root cause chain**: V5.46 set `position.entryTime = candle_open` → V5.86 added `position.realEntryTime = Date.now()` → persistence uses `realEntryTime` first → `Trade.entryTs = wall-clock` → V5.106 assumed candle_open and added wrong offset.
+  - **Documentation**: Added comment in `positionPersistence.ts` warning about the `realEntryTime` priority and its parity implications.
+  - **Files**: `parityVerificationServiceV2.ts` line 123, `positionPersistence.ts` line 233.
+
+- V5.106: (SUPERSEDED by V5.107) Parity verification off-by-one candle fix:
   - **Problem**: `forcedEntryTimestamp` was one candle too early. V5.46 changed `position.entryTime` from `Date.now()` (~candle close + 2s) to `lastCandle.timestamp` (candle OPEN time). But `parityVerificationServiceV2.ts` still assumed wall-clock entry time. Result: `forcedEntryTimestamp = candle_open` matched `btcCandle.timestamp = candle_open` in the BT loop, where the signal candle ISN'T closed yet → NO_SIGNAL for every trade.
   - **Fix**: `forcedEntryTimestamp = floor(entryTs / 15min) * 15min + CANDLE_15M_MS`. Adding one candle shifts from open time to close time, aligning with when the BT loop has the signal candle available.
-  - **Impact**: All parity verifications since V5.46 were checking the WRONG candle (one candle early). This caused: systematic NO_SIGNAL false positives, wildly incorrect PnL comparisons (BT entered one candle early → different price/timing/exit), and misleading parity match rates.
+  - **NOTE**: This fix was based on incorrect assumption that Trade.entryTs = candle open time. In reality, Trade.entryTs = Date.now() (wall-clock) due to V5.86's realEntryTime priority. The +CANDLE_15M_MS actually pushed one candle TOO LATE. Fixed in V5.107.
   - **File**: `parityVerificationServiceV2.ts` line 122.
 
 - V5.105: Critical fixes — exit loop, circuit breaker double-gate, SymbolEngine parity:

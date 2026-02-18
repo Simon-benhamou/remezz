@@ -116,11 +116,17 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   logger.info(`[PARITY-V2] Verifying ${symbol} ${side} @ ${trade.entryTs.toISOString()}`);
 
   // 2. Compute forced entry timestamp
-  // V5.46 changed entryTs from wall-clock (Date.now()) to candle OPEN time (lastCandle.timestamp).
-  // entryTs = candle open time (e.g., 14:30). The signal was computed at candle CLOSE (14:45).
-  // In the backtest loop, the candle at 14:30 is only "closed" when btcCandle.timestamp = 14:45.
-  // So we add CANDLE_15M_MS to shift from open time to close time.
-  const forcedEntryTimestamp = Math.floor(entryTs / CANDLE_15M_MS) * CANDLE_15M_MS + CANDLE_15M_MS;
+  // V5.107 FIX: trade.entryTs = Date.now() (wall-clock, from position.realEntryTime in
+  // positionPersistence.ts:233). V5.46 set position.entryTime = candle open time, but V5.86
+  // added realEntryTime = Date.now() which takes priority in the persistence layer.
+  //
+  // Wall-clock is ~2s after candle close (e.g., 14:45:02 for a 14:30 candle that closed at 14:45).
+  // floor(14:45:02 / 15min) = 14:45, which is exactly btcCandle.timestamp when the signal candle
+  // (14:30, closed at 14:45) was just processed. So NO offset is needed.
+  //
+  // V5.106 incorrectly added +CANDLE_15M_MS assuming entryTs was candle OPEN time, which pushed
+  // the forced entry one candle too late → wrong entry price → systematic EXIT_MISMATCH.
+  const forcedEntryTimestamp = Math.floor(entryTs / CANDLE_15M_MS) * CANDLE_15M_MS;
 
   // 3. Run backtest with forcedEntry
   let btResult: BacktestResult;

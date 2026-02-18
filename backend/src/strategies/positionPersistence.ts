@@ -230,6 +230,12 @@ export class PositionPersistence {
       const calculatedFee = feeUsd ?? (notionalUsd * 0.0004);
 
       const exitTs = new Date();
+      // V5.107 NOTE: realEntryTime (Date.now()) takes priority for Trade.entryTs.
+      // This means Trade.entryTs = wall-clock (~candle_close + 2s), NOT candle open time.
+      // V5.46 set position.entryTime = candle open, but V5.86 added realEntryTime = Date.now().
+      // The parity service (parityVerificationServiceV2) relies on this being wall-clock:
+      // floor(wallClock / 15min) gives the exact candle close boundary for forced entry matching.
+      // DO NOT change this priority without updating parityVerificationServiceV2.ts accordingly.
       const entryTimeMs = position.realEntryTime ?? position.entryTime ?? Date.now();
       const entryTs = new Date(entryTimeMs);
       if (!position.realEntryTime && !position.entryTime) {
