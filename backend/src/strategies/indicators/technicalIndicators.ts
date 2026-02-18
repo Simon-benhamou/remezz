@@ -353,21 +353,49 @@ export function detectMarketRegime(
     return 'CHOPPY';
   }
 
+  // V5.113: Tolerance band around SMA200 to prevent whipsaw
+  const tolerancePct = (MomentumConfig.ENTRY as any).BTC_REGIME_TOLERANCE_PCT ?? 0;
+
   // Determine bull/bear from SMA200 direction
   if (closes1h.length >= 200) {
     const sma200 = calcSMA(closes1h.slice(-200), 200);
     const currentPrice = closes1h[closes1h.length - 1];
-    return currentPrice > sma200 ? 'TRENDING_BULL' : 'TRENDING_BEAR';
+    return classifyRegimeWithTolerance(currentPrice, sma200, tolerancePct, closes1h);
   }
 
   // Default: use 15m data
   const closes15m = btcCandles.map(c => c.close);
   if (closes15m.length >= 200) {
     const sma200 = calcSMA(closes15m.slice(-200), 200);
-    return closes15m[closes15m.length - 1] > sma200 ? 'TRENDING_BULL' : 'TRENDING_BEAR';
+    return classifyRegimeWithTolerance(closes15m[closes15m.length - 1], sma200, tolerancePct, closes15m);
   }
 
   return 'TRENDING_BULL'; // Default to bullish if insufficient data
+}
+
+/**
+ * V5.113: Classify regime with tolerance band around SMA200.
+ * When price is within ±tolerance% of SMA200, use SMA slope to determine direction
+ * (stateless hysteresis — rising SMA = BULL, falling SMA = BEAR).
+ */
+function classifyRegimeWithTolerance(
+  currentPrice: number,
+  sma200: number,
+  tolerancePct: number,
+  closes: number[],
+): MarketRegime {
+  if (tolerancePct <= 0 || sma200 <= 0) {
+    return currentPrice > sma200 ? 'TRENDING_BULL' : 'TRENDING_BEAR';
+  }
+  const tolerance = sma200 * (tolerancePct / 100);
+  if (currentPrice > sma200 + tolerance) return 'TRENDING_BULL';
+  if (currentPrice < sma200 - tolerance) return 'TRENDING_BEAR';
+  // In dead zone: use SMA200 slope to determine direction
+  if (closes.length >= 201) {
+    const sma200Prev = calcSMA(closes.slice(-201, -1), 200);
+    return sma200 >= sma200Prev ? 'TRENDING_BULL' : 'TRENDING_BEAR';
+  }
+  return 'TRENDING_BULL';
 }
 
 /**

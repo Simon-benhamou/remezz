@@ -2600,20 +2600,19 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
 
 import { Worker } from 'node:worker_threads';
 
-// Resolve worker path using eval() to avoid parse errors in Jest/CJS.
-// In ESM (production), eval has access to import.meta.url.
-// In CJS (Jest), this returns null and we fall back to inline execution.
-function resolveWorkerUrl(): URL | null {
+// Worker URL computed at module level. import.meta.url is valid ESM syntax.
+// In Jest/CJS (ts-jest transforms it away), the catch returns null and
+// runBacktest falls back to inline execution on the main thread.
+const _workerUrl: URL | null = (() => {
   try {
-    // eslint-disable-next-line no-eval
-    return eval('new URL("./backtestWorker.js", import.meta.url)') as URL;
+    return new URL('./backtestWorker.js', import.meta.url);
   } catch {
     return null;
   }
-}
+})();
 
 function runOnWorker(input: BacktestComputationInput): Promise<BacktestResult> {
-  const workerUrl = resolveWorkerUrl();
+  const workerUrl = _workerUrl;
   if (!workerUrl) return Promise.reject(new Error('Worker URL not available (CJS/test environment)'));
 
   return new Promise((resolve, reject) => {

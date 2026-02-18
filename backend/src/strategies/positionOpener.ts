@@ -886,10 +886,11 @@ export class PositionOpener {
       const liveEntryFee = liveEntryNotional * 0.0004;
 
       // Exchange-side protection: EMERGENCY STOP ONLY (wide, crash protection)
+      // V5.113: Tier-aware — emergency = baseSlPct + buffer, never tighter than app SL
       const baseSlPct = position.stopLossPct || 2.0;
-      const emergencyTargetPct = baseSlPct * (MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER || 2.5);
-      const emergencyMaxPct = MomentumConfig.EXIT.EMERGENCY_STOP_MAX_PCT ?? 2.5;
-      const emergencySlPct = Math.min(emergencyTargetPct, emergencyMaxPct);
+      const emergencyBufferPct = (MomentumConfig.EXIT as any).EMERGENCY_BUFFER_PCT ?? 0.5;
+      const emergencyAbsoluteMaxPct = (MomentumConfig.EXIT as any).EMERGENCY_ABSOLUTE_MAX_PCT ?? 4.0;
+      const emergencySlPct = Math.min(baseSlPct + emergencyBufferPct, emergencyAbsoluteMaxPct);
       const emergencyStop = position.side === 'long'
         ? position.entryPrice * (1 - emergencySlPct / 100)
         : position.entryPrice * (1 + emergencySlPct / 100);

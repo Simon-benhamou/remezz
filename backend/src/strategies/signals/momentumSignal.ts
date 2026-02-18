@@ -64,7 +64,25 @@ export function getMarketConditions(btcCandles: Candle[], btcCandles1h?: Candle[
     btcNow = btcNow15m;
   }
   const btcAboveMa50 = btcNow15m > btcMa50;
-  const btcAboveSma200 = btcNow > btcSma200;
+
+  // V5.113: Tolerance band around SMA200 to prevent whipsaw
+  const mcTolerancePct = (MomentumConfig.ENTRY as any).BTC_REGIME_TOLERANCE_PCT ?? 0;
+  const mcTolerance = btcSma200 > 0 ? btcSma200 * (mcTolerancePct / 100) : 0;
+  let btcAboveSma200: boolean;
+  if (mcTolerance > 0 && Math.abs(btcNow - btcSma200) <= mcTolerance) {
+    // In dead zone: use SMA200 slope
+    const slopeCloses = btcCandles1h && btcCandles1h.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1
+      ? btcCandles1h.map(c => c.close)
+      : btcCloses;
+    if (slopeCloses.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1) {
+      const sma200Prev = calcSMA(slopeCloses.slice(-(MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1), -1), MomentumConfig.ENTRY.BTC_SMA_PERIOD);
+      btcAboveSma200 = btcSma200 >= sma200Prev;
+    } else {
+      btcAboveSma200 = btcNow > btcSma200;
+    }
+  } else {
+    btcAboveSma200 = btcNow > btcSma200;
+  }
 
   // BTC momentum 6h — timestamp-based lookback to handle candle gaps correctly
   const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
@@ -379,8 +397,28 @@ export function checkMomentumSignal(
     btcSma200 = calcSMA(btcCloses, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
     btcNow = btcCloses[btcCloses.length - 1];
   }
-  const btcInBullRegime = btcNow > btcSma200;
-  const btcInBearRegime = btcNow < btcSma200;
+  // V5.113: Tolerance band around SMA200 to prevent whipsaw at boundary
+  const regimeTolerancePct = (MomentumConfig.ENTRY as any).BTC_REGIME_TOLERANCE_PCT ?? 0;
+  const regimeTolerance = btcSma200 > 0 ? btcSma200 * (regimeTolerancePct / 100) : 0;
+  let btcInBullRegime: boolean;
+  let btcInBearRegime: boolean;
+  if (regimeTolerance > 0 && Math.abs(btcNow - btcSma200) <= regimeTolerance) {
+    // In dead zone: use SMA200 slope to determine regime
+    const btcClosesForSlope = btcCandles1h && btcCandles1h.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1
+      ? btcCandles1h.map(c => c.close)
+      : btcCloses;
+    if (btcClosesForSlope.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1) {
+      const sma200Prev = calcSMA(btcClosesForSlope.slice(-(MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1), -1), MomentumConfig.ENTRY.BTC_SMA_PERIOD);
+      btcInBullRegime = btcSma200 >= sma200Prev;
+      btcInBearRegime = !btcInBullRegime;
+    } else {
+      btcInBullRegime = btcNow > btcSma200;
+      btcInBearRegime = !btcInBullRegime;
+    }
+  } else {
+    btcInBullRegime = btcNow > btcSma200;
+    btcInBearRegime = btcNow < btcSma200;
+  }
 
   // Calcul legacy pour compatibilité features — timestamp-based to handle candle gaps
   const SIX_HOURS_MS = 6 * 60 * 60 * 1000;

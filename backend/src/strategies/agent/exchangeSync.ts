@@ -404,10 +404,11 @@ export class ExchangeSync {
           // Set up stop loss protection for synced positions
           if (mode === 'live') {
             try {
+              // V5.113: Tier-aware emergency SL (same logic as positionOpener)
               const baseSlPct = 2.0;
-              const emergencyTargetPct = baseSlPct * (MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER || 2.5);
-              const emergencyMaxPct = MomentumConfig.EXIT.EMERGENCY_STOP_MAX_PCT ?? 3.0;
-              const emergencySlPct = Math.min(emergencyTargetPct, emergencyMaxPct);
+              const emergencyBufferPct = (MomentumConfig.EXIT as any).EMERGENCY_BUFFER_PCT ?? 0.5;
+              const emergencyAbsoluteMaxPct = (MomentumConfig.EXIT as any).EMERGENCY_ABSOLUTE_MAX_PCT ?? 4.0;
+              const emergencySlPct = Math.min(baseSlPct + emergencyBufferPct, emergencyAbsoluteMaxPct);
               const emergencyStop = exchangeSide === 'long'
                 ? entryPrice * (1 - emergencySlPct / 100)
                 : entryPrice * (1 + emergencySlPct / 100);

@@ -278,6 +278,7 @@ export const MomentumConfig = {
     // BTC Regime Filter
     BTC_SMA_PERIOD: 200,         // SMA 200 (on 15m = 50h = ~2 days — fast regime for momentum breakout)
     BTC_REGIME_TIMEFRAME: '15m' as const,  // V5.102: Use 15m for regime SMA200 (validated: +2325% ROI, +0.19 Sharpe on 9 symbols)
+    BTC_REGIME_TOLERANCE_PCT: 0.2, // V5.113: Dead zone ±0.2% around SMA200 — when price is in band, use SMA slope to determine regime (prevents whipsaw). Validated: +$4.4K PnL, -2.7pp DD, +0.09 Sharpe
     BTC_MOMENTUM_MIN: 0,         // Désactivé (utilise SMA200 à la place)
     BTC_MOMENTUM_PERIOD: 24,     // Gardé pour compatibilité
 
@@ -458,12 +459,11 @@ export const MomentumConfig = {
     USE_EXCHANGE_TRAILING: false,         // App-side trailing is default
 
     // Emergency Stop Loss (Exchange)
-    EMERGENCY_STOP_MULTIPLIER: 2.5,       // Emergency SL = dynamic SL × multiplier, capped
-    EMERGENCY_STOP_MAX_PCT: 2.5,          // V5.81: Aligned with logical SL (was 3.0%, now 2.5%)
-                                          // Parity data shows live loses 2-4% more on SL hits because
-                                          // exchange SL was 3% while backtest exits at exactly 2.5%
-                                          // Example: ATR SL 2% → Emergency 5%
-                                          // Example: ATR SL 3% → Emergency 7.5%
+    // V5.113: Tier-aware — emergency = baseSlPct + buffer, so exchange SL never
+    // fires before the app-side dynamic SL. Old flat 2.5% cap was tighter than
+    // TIER2 HIGH (3.0%) and TIER3 HIGH (3.5%), causing premature stop-outs.
+    EMERGENCY_BUFFER_PCT: 0.5,            // Emergency SL = dynamic SL + buffer (always wider than app SL)
+    EMERGENCY_ABSOLUTE_MAX_PCT: 4.0,      // Hard safety cap (TIER3 HIGH 3.5% + 0.5% = 4.0%)
 
     // Realtime App-Side Exit (WebSocket)
     // Goal: react faster than 15m candle close while filtering micro-noise.
