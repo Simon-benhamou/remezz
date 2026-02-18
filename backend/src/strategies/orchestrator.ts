@@ -36,14 +36,9 @@ import { globalSignalRanker } from './signalRanker.js';
 
 import {
   getBinanceWebSocket,
-  getKlinesWithMeta,  // V5.50: Added for accurate candle close detection using isFinal flag
-  seedKlinesFromWebSocket,
   getPositionFromWebSocket,
-  getLastFilledOrderTradeUpdateFromWebSocket,
-  isUserDataStreamActive,
   type BinanceKlineData,
 } from '../services/binanceWebSocket.js';
-import { globalRestCircuitBreaker } from '../services/globalRestCircuitBreaker.js';
 import {
   notifyTradeExit,
   notifyOrderError,
@@ -59,10 +54,8 @@ import { notifyPositionClosed, notifySystemAlert } from '../utils/notifications.
 import { trackRejectedSignal, recordTrade, updateAgentState } from '../services/telegramReporter.js';
 import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
 import { calculateOrderPriority, type ExitReason } from '../services/orderPriority.js';
-import { exchangeAPIDeduplicator, makeFetchMyTradesKey } from '../services/apiDeduplicator.js';
 import { v4 as uuidv4 } from 'uuid';
 import { CACHE_TTLS, SYNC_INTERVALS } from '../config/constants.js';
-import { globalCacheManager } from './cacheManager.js';
 import { PositionPersistence } from './positionPersistence.js';
 import {
   EXIT_TRAIL, EXIT_TRAIL_NFS_HIGH_15M,
@@ -74,10 +67,7 @@ import {
 import { ExchangeOrderManager } from './exchangeOrderManager.js';
 import { PositionOpener } from './positionOpener.js';
 import { RealtimeExitHandler } from './realtimeExitHandler.js';
-import { ipWeightTracker } from '../services/ipWeightTracker.js';
-import { isIpBanned, setGeoBlock } from '../exchange/ccxtClient.js';
 import { symbolEngineManager } from './symbolEngineManager.js';
-import type { SymbolSignalResult } from './symbolEngine.js';
 import {
   type Candle as NfsCandle,
 } from '../services/nfsRealtimeExit.js';
@@ -98,6 +88,8 @@ function errMsg(error: unknown): string {
 // Exchange type imported from centralized types
 import type { Exchange } from '../types/exchange.js';
 import { CapitalPool, getCapitalPool, resetCapitalPool } from './capitalPool.js';
+import { CandleFetcher } from './agent/candleFetcher.js';
+import { ExchangeSync } from './agent/exchangeSync.js';
 
 // CapitalPool extracted to capitalPool.ts
 
@@ -239,21 +231,12 @@ export class AgentOrchestrator {
   private readonly ENTRY_COOLDOWN_BARS = 8;
   private entryCooldownBarsRemaining: number = 0;
   
-  // Cache pour éviter trop d'appels API (per-symbol only, BTC is global)
-  private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
-  private readonly CACHE_TTL_MS = CACHE_TTLS.SYMBOL_CANDLE_MS;
-  private wsSubscribed = false; // Track if WebSocket kline subscription is active
-  
+  // V5.108: Extracted modules
+  private candleFetcher: CandleFetcher;
+  private exchangeSync: ExchangeSync;
+
   // Guard against concurrent tick execution (prevents re-entrancy/recursion)
   private tickInProgress = false;
-  
-  // Position sync throttling (WebSocket is primary, REST is fallback)
-  private lastPositionSync: number = 0;
-  private readonly POSITION_SYNC_INTERVAL_MS = SYNC_INTERVALS.POSITION_MS;
-
-  // V5.13: Missing trade reconciliation throttling
-  private lastMissingTradesCheck: number = 0;
-  private readonly MISSING_TRADES_CHECK_INTERVAL_MS = SYNC_INTERVALS.MISSING_TRADES_MS;
   
   constructor(config: SimpleAgentConfig) {
     this.config = config;
@@ -265,6 +248,38 @@ export class AgentOrchestrator {
     });
     this.orderManager = new ExchangeOrderManager(config.exchange, config.symbol, config.mode, config.userId);
 
+    // V5.108: Initialize extracted modules
+    this.candleFetcher = new CandleFetcher(config.symbol, config.exchange, CACHE_TTLS.SYMBOL_CANDLE_MS);
+    this.exchangeSync = new ExchangeSync(
+      {
+        symbol: config.symbol,
+        mode: config.mode,
+        userId: config.userId,
+        sessionId: config.sessionId,
+        exchange: config.exchange,
+        prisma: config.prisma,
+        capitalPool: config.capitalPool,
+        persistence: this.persistence,
+        getPosition: () => this.position,
+        setPosition: (pos: Position | null) => { this.position = pos; },
+        isClosingPosition: () => this.closingPosition,
+        savePositionToDb: (pos, action, fee) => this.savePositionToDb(pos, action, fee),
+        saveExitToDb: (pos, price, reason, pnlPct, pnlUsd, orderId, fee) => this.saveExitToDb(pos, price, reason, pnlPct, pnlUsd, orderId, fee),
+        cancelStopLossOnExchange: () => this.cancelStopLossOnExchange(),
+        setStopLossOnExchange: (pos, isUpdate) => this.setStopLossOnExchange(pos, isUpdate),
+        startRealtimeExitMonitorIfNeeded: () => this.startRealtimeExitMonitorIfNeeded(),
+        formatQtyForExchange: (sym, qty) => this.formatQtyForExchange(sym, qty),
+        resetTrailingState: () => {
+          this.trailingNotified = false;
+          this.trailingWidened = false;
+          this.stagnantSlUpdated = false;
+          this.rtExitHandler.resetState();
+        },
+      },
+      SYNC_INTERVALS.POSITION_MS,
+      SYNC_INTERVALS.MISSING_TRADES_MS,
+    );
+
     // Initialize RealtimeExitHandler (owns NFS system + proactive limit state)
     this.rtExitHandler = new RealtimeExitHandler({
       symbol: config.symbol,
@@ -274,8 +289,8 @@ export class AgentOrchestrator {
       isRunning: () => this.running,
       isClosingPosition: () => this.closingPosition,
       setClosingPosition: (val: boolean) => { this.closingPosition = val; },
-      fetchCandles: () => this.fetchCandles(),
-      fetchBtcCandles: () => this.fetchBtcCandles(),
+      fetchCandles: () => this.candleFetcher.fetchCandles(),
+      fetchBtcCandles: () => this.candleFetcher.fetchBtcCandles(),
       orderManager: this.orderManager,
       closePosition: (pos, price, reason) => this.closePosition(pos, price, reason),
       setLastPrice: (price: number) => { this.lastPrice = price; },
@@ -297,8 +312,8 @@ export class AgentOrchestrator {
       setTrailingStopOnExchange: (pos, isWidening) => this.setTrailingStopOnExchange(pos, isWidening),
       formatQtyForExchange: (sym, qty) => this.formatQtyForExchange(sym, qty),
       startRealtimeExitMonitorIfNeeded: () => this.startRealtimeExitMonitorIfNeeded(),
-      fetchBtcCandles: () => this.fetchBtcCandles(),
-      fetchBtcCandles1h: () => this.fetchBtcCandles1h(),
+      fetchBtcCandles: () => this.candleFetcher.fetchBtcCandles(),
+      fetchBtcCandles1h: () => this.candleFetcher.fetchBtcCandles1h(),
       onTrade: config.onTrade ? (trade) => config.onTrade!(trade) : undefined,
     });
   }
@@ -338,11 +353,11 @@ export class AgentOrchestrator {
     });
     
     // Charger les positions existantes depuis la DB
-    await this.loadExistingPosition();
+    await this.exchangeSync.loadExistingPosition();
     
     // 🔄 LIVE MODE: Sync with exchange to catch any missed stop losses
     if (this.config.mode === 'live') {
-      await this.syncWithExchange();
+      await this.exchangeSync.syncWithExchange();
     }
 
     // Live mode: if we start with an existing position, enable realtime WS-based exits.
@@ -502,15 +517,15 @@ export class AgentOrchestrator {
       
       // 🔄 LIVE MODE: Sync with exchange first to detect stop loss executions
       if (this.config.mode === 'live') {
-        await this.syncWithExchange();
+        await this.exchangeSync.syncWithExchange();
       }
       
       // Update market conditions: prefer SymbolEngine cache, fallback to self-computation
       const engineForConditions = symbolEngineManager.getEngine(this.config.symbol);
       const engineConditions = engineForConditions?.getMarketConditions();
       const newConditions = engineConditions || getMarketConditions(
-        (await this.fetchBtcCandles()),
-        (await this.fetchBtcCandles1h()).filter(c => c.isFinal !== false)
+        (await this.candleFetcher.fetchBtcCandles()),
+        (await this.candleFetcher.fetchBtcCandles1h()).filter(c => c.isFinal !== false)
       );
       this.lastMarketConditions = {
         ...newConditions,
@@ -521,7 +536,7 @@ export class AgentOrchestrator {
       this.config.onMarketConditions?.(this.lastMarketConditions);
       
       // Fetch current candles for price and S/R
-      const candles = await this.fetchCandles();
+      const candles = await this.candleFetcher.fetchCandles();
       const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : this.lastPrice;
       this.lastPrice = currentPrice;
       
@@ -708,7 +723,7 @@ export class AgentOrchestrator {
       const CANDLE_INTERVAL_MS = 15 * 60 * 1000;
 
       // Always fetch fresh candles for price + stale-signal validation
-      const allCandles = await this.fetchCandles();
+      const allCandles = await this.candleFetcher.fetchCandles();
 
       // Validate engine result freshness: candleCloseTs must match actual latest closed candle
       let useEngine = false;
@@ -762,7 +777,7 @@ export class AgentOrchestrator {
         }
 
         // Fetch BTC data (only needed in fallback path)
-        const allBtcCandles = await this.fetchBtcCandles();
+        const allBtcCandles = await this.candleFetcher.fetchBtcCandles();
         const MIN_BTC_CANDLES = 201;
         if (allBtcCandles.length < MIN_BTC_CANDLES) {
           if (this.tickCount % 10 === 1) {
@@ -1056,11 +1071,11 @@ export class AgentOrchestrator {
     const symbol = this.config.symbol;
     
     try {
-      const allCandles = await this.fetchCandles();
+      const allCandles = await this.candleFetcher.fetchCandles();
       if (allCandles.length === 0) return;
 
       // Fetch BTC candles for regime detection (V5.13)
-      const allBtcCandles = await this.fetchBtcCandles();
+      const allBtcCandles = await this.candleFetcher.fetchBtcCandles();
 
       // V5.50 FIX: Use isFinal flag from WebSocket instead of time-based heuristic
       // This ensures live trading detects candle close at the EXACT same moment as backtest
@@ -1323,7 +1338,7 @@ export class AgentOrchestrator {
 
         if (nfsEnabled && nfsAdaptive && this.rtExitHandler.getNfsCalculator()) {
           // Calculate NFS score for this breach
-          const symbolCandles = await this.fetchCandles();
+          const symbolCandles = await this.candleFetcher.fetchCandles();
           const nfsCandles = symbolCandles.slice(-25).map(c => ({
             timestamp: c.timestamp,
             open: c.open,
@@ -1545,7 +1560,7 @@ export class AgentOrchestrator {
         logger.warn(`🔄 [${symbol}] Exceeded 3 exit attempts in 30s — forcing syncWithExchange instead of retrying`);
         this.exitAttemptCount = 0;
         this.lastExitAttemptTs = now;
-        await this.syncWithExchange();
+        await this.exchangeSync.syncWithExchange();
         return;
       }
     } else {
@@ -1780,7 +1795,7 @@ export class AgentOrchestrator {
           if (isAlreadyClosed) {
             logger.warn(`🔄 [${symbol}] Exit order rejected (position already closed on exchange) — triggering syncWithExchange`);
             this.closingPosition = false;
-            await this.syncWithExchange();
+            await this.exchangeSync.syncWithExchange();
             return;
           }
 
@@ -1789,7 +1804,7 @@ export class AgentOrchestrator {
           if (!wsPos || Math.abs(wsPos.positionAmt) === 0) {
             logger.warn(`🔄 [${symbol}] Exit order failed but WS shows no position — triggering syncWithExchange`);
             this.closingPosition = false;
-            await this.syncWithExchange();
+            await this.exchangeSync.syncWithExchange();
             return;
           }
 
@@ -2129,202 +2144,9 @@ export class AgentOrchestrator {
     return this.orderManager.formatQtyForExchange(symbol, qty);
   }
   
-  private async fetchCandles(): Promise<Candle[]> {
-    const symbol = this.config.symbol;
-    // Convert CCXT symbol to Binance format: "ETH/USDT:USDT" -> "ETHUSDT"
-    const binanceSymbol = symbol.split('/')[0] + 'USDT';
-    
-    // 1. Subscribe to WebSocket stream (re-subscribe each time to keep TTL alive)
-    try {
-      const ws = getBinanceWebSocket();
-      ws.subscribeToKline(binanceSymbol, '15m');
-      if (!this.wsSubscribed) {
-        this.wsSubscribed = true;
-        logger.info(`📡 [${symbol}] Subscribed to WebSocket kline stream (0 API weight)`);
-      }
-    } catch (error) {
-      if (!this.wsSubscribed) {
-        logger.warn(`⚠️ [${symbol}] Failed to subscribe to WebSocket, will use REST`);
-      }
-    }
-    
-    // 2. Try WebSocket cache first (0 API weight!)
-    // V5.50: Use getKlinesWithMeta to preserve isFinal flag for accurate candle close detection
-    try {
-      const wsKlines = getKlinesWithMeta(binanceSymbol, '15m');
-      if (wsKlines && wsKlines.length >= 50) {
-        const candles: Candle[] = wsKlines.map(c => ({
-          timestamp: c.timestamp,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume,
-          isFinal: c.isFinal,
-        }));
-        
-        // Update local cache with WS data
-        this.candleCache = { candles, fetchedAt: Date.now() };
-        return candles;
-      }
-    } catch (error) {
-      // WebSocket not ready, fall through to cache/wait
-    }
-    
-    // 3. Check local cache (from previous WS data)
-    if (this.candleCache && Date.now() - this.candleCache.fetchedAt < this.CACHE_TTL_MS) {
-      return this.candleCache.candles;
-    }
-    
-    // 4. NO REST FALLBACK - WebSocket only to avoid IP bans
-    // If WebSocket doesn't have enough data yet, use whatever we have
-    // V5.29: Removed REST fallback - caused IP bans from Binance
-    // V5.50: Use getKlinesWithMeta to preserve isFinal flag
-    const wsKlinesPartial = getKlinesWithMeta(binanceSymbol, '15m');
-    if (wsKlinesPartial && wsKlinesPartial.length > 0) {
-      const candles: Candle[] = wsKlinesPartial.map(c => ({
-        timestamp: c.timestamp,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume,
-        isFinal: c.isFinal,
-      }));
-      this.candleCache = { candles, fetchedAt: Date.now() };
-      return candles;
-    }
-    
-    // No data - return cached or empty (agent will skip tick)
-    return this.candleCache?.candles || [];
-  }
-  
-  private async fetchBtcCandles(): Promise<Candle[]> {
-    const btcSymbol = 'BTCUSDT';
 
-    // 1. Subscribe to BTC WebSocket stream
-    try {
-      const ws = getBinanceWebSocket();
-      ws.subscribeToKline(btcSymbol, '15m');
-      if (!globalCacheManager.getBtc15mWsSubscribed()) {
-        globalCacheManager.setBtc15mWsSubscribed(true);
-        logger.info('📡 [BTC] Subscribed to WebSocket kline stream (0 API weight)');
-      }
-    } catch (error) {
-      if (!globalCacheManager.getBtc15mWsSubscribed()) {
-        logger.warn('⚠️ [BTC] Failed to subscribe to WebSocket, will use REST');
-      }
-    }
+  // Candle fetching extracted to agent/candleFetcher.ts
 
-    // 2. Try WebSocket cache first (0 API weight!)
-    try {
-      const wsKlines = getKlinesWithMeta(btcSymbol, '15m');
-      if (wsKlines && wsKlines.length >= 200) {
-        const candles: Candle[] = wsKlines.map(c => ({
-          timestamp: c.timestamp, open: c.open, high: c.high,
-          low: c.low, close: c.close, volume: c.volume, isFinal: c.isFinal,
-        }));
-        globalCacheManager.setBtc15mCache(candles);
-        return candles;
-      }
-    } catch (error) {
-      // WebSocket cache miss
-    }
-
-    // 3. Check global cache
-    if (globalCacheManager.isBtc15mCacheValid()) {
-      return globalCacheManager.getBtc15mCache()!.candles;
-    }
-
-    // 4. WebSocket partial data
-    const wsKlinesPartial = getKlinesWithMeta(btcSymbol, '15m');
-    if (wsKlinesPartial && wsKlinesPartial.length > 0) {
-      const candles: Candle[] = wsKlinesPartial.map(c => ({
-        timestamp: c.timestamp, open: c.open, high: c.high,
-        low: c.low, close: c.close, volume: c.volume, isFinal: c.isFinal,
-      }));
-      globalCacheManager.setBtc15mCache(candles);
-      return candles;
-    }
-
-    return globalCacheManager.getBtc15mCache()?.candles || [];
-  }
-
-  // V5.36: Fetch BTC 1h candles for Multi-Timeframe Confluence filter
-  private async fetchBtcCandles1h(): Promise<Candle[]> {
-    const btcSymbol = 'BTCUSDT';
-    const MIN_FINAL_CANDLES = 11;
-
-    // 0. Check global cache first
-    if (globalCacheManager.isBtc1hCacheValid(MIN_FINAL_CANDLES)) {
-      return globalCacheManager.getBtc1hCache()!.candles;
-    }
-
-    // Prevent multiple concurrent fetches
-    const existing = globalCacheManager.getBtc1hFetchingPromise();
-    if (existing) return existing;
-
-    const fetchPromise = (async () => {
-      try {
-        // 1. Subscribe to BTC 1h WebSocket stream
-        try {
-          const ws = getBinanceWebSocket();
-          ws.subscribeToKline(btcSymbol, '1h');
-        } catch (error) {
-          // Silently fail
-        }
-
-        // 2. Try WebSocket cache first (0 API weight!)
-        try {
-          const wsKlines = getKlinesWithMeta(btcSymbol, '1h');
-          if (wsKlines && wsKlines.length >= 20) {
-            const candles: Candle[] = wsKlines.map(c => ({
-              timestamp: c.timestamp, open: c.open, high: c.high,
-              low: c.low, close: c.close, volume: c.volume, isFinal: c.isFinal,
-            }));
-            globalCacheManager.setBtc1hCache(candles);
-            return candles;
-          }
-        } catch (error) {
-          // WebSocket cache miss
-        }
-
-        // 3. REST API fallback (V5.86: 250 candles for SMA200 regime)
-        try {
-          if (this.config.exchange.fetchOHLCV && !isIpBanned() && ipWeightTracker.canMakeCall(10)) {
-            const ohlcv = await this.config.exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250);
-            ipWeightTracker.record(10, 'fetchOHLCV:BTC_1h:fallback');
-            if (ohlcv && ohlcv.length >= 11) {
-              const candles: Candle[] = ohlcv.map((c, idx) => ({
-                timestamp: c[0] as number, open: c[1] as number,
-                high: c[2] as number, low: c[3] as number,
-                close: c[4] as number, volume: c[5] as number,
-                isFinal: idx < ohlcv.length - 1,
-              }));
-              globalCacheManager.setBtc1hCache(candles);
-              seedKlinesFromWebSocket(btcSymbol, '1h', ohlcv);
-              logger.info(`[fetchBtcCandles1h] REST seeded ${ohlcv.length} candles to WebSocket cache`);
-              return candles;
-            }
-          }
-        } catch (error: unknown) {
-          const msg = errMsg(error);
-          if (msg.includes('451') || msg.includes('restricted location')) {
-            setGeoBlock('fetchBtcCandles1h');
-          }
-          logger.warn(`[fetchBtcCandles1h] REST fallback failed: ${msg}`);
-        }
-
-        logger.warn('[fetchBtcCandles1h] No BTC 1h data available - MTF filter will be bypassed');
-        return [];
-      } finally {
-        globalCacheManager.setBtc1hFetchingPromise(null);
-      }
-    })();
-
-    globalCacheManager.setBtc1hFetchingPromise(fetchPromise);
-    return fetchPromise;
-  }
 
   /**
    * Cancel ALL orders on exchange (both regular AND algo orders)
@@ -2399,554 +2221,9 @@ export class AgentOrchestrator {
   // DATABASE HELPERS
   // ==========================================================================
   
-  private async loadExistingPosition(): Promise<void> {
-    const position = await this.persistence.loadExistingPosition();
-    if (position) {
-      this.position = position;
-      // CRITICAL: Register margin in CapitalPool to prevent double-spending
-      const marginUsd = position.marginUsd ?? (position.qty * position.entryPrice) / (position.leverage ?? 4.5);
-      this.config.capitalPool.commit(this.config.sessionId, marginUsd);
-    }
-  }
-  
-  /**
-   * 🔄 SYNC WITH EXCHANGE (Live Mode Only)
-   * Uses WebSocket for real-time position updates (0 weight!) instead of REST API
-   * Detects if stop losses were executed on Binance
-   */
-  private async syncWithExchange(): Promise<void> {
-    const symbol = this.config.symbol;
-    
-    // Throttle sync to avoid excessive processing
-    const now = Date.now();
-    if (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL_MS) {
-      return;
-    }
-    this.lastPositionSync = now;
-    
-    try {
-      // 🚀 Use WebSocket position cache (0 weight!) instead of fetchPositions (5 weight)
-      const wsPosition = getPositionFromWebSocket(this.config.userId, symbol);
-      
-      let exchangeQty = 0;
-      let exchangeSide: 'long' | 'short' = 'long';
-      let entryPrice = 0;
-      let unrealizedPnl = 0;
-      
-      if (wsPosition) {
-        // Got position from WebSocket cache (0 API weight!)
-        exchangeQty = Math.abs(wsPosition.positionAmt);
-        exchangeSide = wsPosition.side === 'short' ? 'short' : 'long';
-        entryPrice = wsPosition.entryPrice;
-        unrealizedPnl = wsPosition.unrealizedPnl;
-      } else {
-        // NO REST FALLBACK - WebSocket only to prevent IP bans
-        // V5.29: Removed REST fallback completely - caused catastrophic IP bans
-        // Position sync via REST was being called by 20+ agents every 30s = instant ban
-        // 
-        // If WebSocket userData stream is not connected, positions will not sync.
-        // This is acceptable because:
-        // 1. server.ts calls fetchPositions() once at startup to seed cache
-        // 2. WebSocket userData stream should be active (listenKey refresh)
-        // 3. If WS disconnects, better to have stale data than IP ban
-        //
-        // If local position exists but WS says no position:
-        if (this.position !== null) {
-          logger.info(`🔄 [${symbol}] WS has no position but local has one - position may be closed`);
-          // Continue to handle the mismatch below (exchangeQty stays 0)
-        } else {
-          // No position in WS, no position locally - nothing to do
-          return;
-        }
-      }
-      
-      // Case 1: We think we have a position but exchange says NO
-      if (this.position && exchangeQty === 0) {
-        // V5.91: Guard against race with closePosition() — if close is already in progress,
-        // skip to prevent double capital release + double DB save
-        if (this.closingPosition) {
-          logger.info(`🔄 [${symbol}] SYNC: closePosition() in progress — skipping to prevent double processing`);
-          return;
-        }
-        logger.info(`🔴 [${symbol}] SYNC MISMATCH: Position closed on exchange (likely stop loss hit)`);
-        
-        // Try to get the last trade to find exit price and orderId
-        let exitPrice = this.position.entryPrice;
-        let exchangeOrderId: string | undefined;
-        let orderType: string | undefined;
-        
-        // 🔍 Determine exit reason based on order data from Binance
-        let reason = EXIT_SL_EXCHANGE;
-        
-        try {
-          // Prefer WebSocket user-data fills (0 weight) when available
-          if (isUserDataStreamActive(this.config.userId)) {
-            const exitSide = this.position.side === 'long' ? 'SELL' : 'BUY';
-            const wsFill = getLastFilledOrderTradeUpdateFromWebSocket(this.config.userId, symbol, {
-              reduceOnly: true,
-              side: exitSide,
-            });
 
-            if (wsFill) {
-              const wsPrice = Number(wsFill.averagePrice ?? wsFill.lastFilledPrice);
-              if (Number.isFinite(wsPrice) && wsPrice > 0) {
-                exitPrice = wsPrice;
-              }
-              exchangeOrderId = wsFill.orderId;
-              orderType = wsFill.orderType;
-              logger.info(`📈 [${symbol}] Found exit fill via WS: $${exitPrice} orderId=${exchangeOrderId} type=${orderType}`);
-            } else {
-              logger.warn(`⚠️ [${symbol}] No WS exit fill found yet; using entryPrice fallback for sync.`);
-            }
-          }
+  // Exchange sync extracted to agent/exchangeSync.ts
 
-          // REST fallback (only if WS is not active or had no data)
-          // V5.66: Use deduplicator to prevent concurrent identical calls
-          if (!exchangeOrderId && this.config.exchange.fetchMyTrades && ipWeightTracker.canMakeCall(10)) {
-            const since = Date.now() - 3600000;
-            const key = makeFetchMyTradesKey(this.config.userId, symbol, since);
-            const trades = await exchangeAPIDeduplicator.execute(
-              key,
-              async () => {
-                const result = await this.config.exchange.fetchMyTrades!(symbol, since, 10);
-                ipWeightTracker.record(10, `fetchMyTrades:exitSync:${symbol}`);
-                return result;
-              },
-              5_000, // 5s cache TTL for exit sync
-              `${this.config.sessionId}:exitSync`
-            );
-            if (trades && trades.length > 0) {
-              const lastTrade = trades[trades.length - 1];
-              exitPrice = lastTrade.price || exitPrice;
-              exchangeOrderId = lastTrade.order || (lastTrade.info?.orderId as string | undefined);
-              orderType = (lastTrade.info?.type as string | undefined) || lastTrade.type;
-              logger.info(`📈 [${symbol}] Found exit trade via REST: $${exitPrice} orderId=${exchangeOrderId} type=${orderType}`);
-            }
-          }
-        } catch (tradeError) {
-          logger.warn(`⚠️ [${symbol}] Could not determine exit trade:`, tradeError);
-        }
-        
-        // Calculate PnL
-        let pnlPct: number;
-        let pnlUsd: number;
-        if (this.position.side === 'long') {
-          pnlPct = ((exitPrice - this.position.entryPrice) / this.position.entryPrice) * 100;
-          pnlUsd = this.position.qty * (exitPrice - this.position.entryPrice);
-        } else {
-          pnlPct = ((this.position.entryPrice - exitPrice) / this.position.entryPrice) * 100;
-          pnlUsd = this.position.qty * (this.position.entryPrice - exitPrice);
-        }
-        
-        // 🔍 V5.13: IMPROVED exit reason detection using order type
-        // Priority 1: Check if orderType explicitly says TRAILING_STOP_MARKET
-        if (orderType && orderType.includes('TRAILING')) {
-          reason = EXIT_TRAIL_EXCHANGE;
-          logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via orderType=${orderType} (PnL: ${pnlPct.toFixed(2)}%)`);
-        }
-        // Priority 2: Check if orderId matches our tracked trailingOrderId
-        else if (exchangeOrderId && this.position.trailingOrderId && exchangeOrderId === this.position.trailingOrderId) {
-          reason = EXIT_TRAIL_EXCHANGE;
-          logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via orderId match (PnL: ${pnlPct.toFixed(2)}%)`);
-        }
-        // Priority 3: If PnL > -1% and we had a trailing order active, assume trailing
-        // (Trailing activates at +0.8%, so any exit with PnL > -1% is likely trailing)
-        else if (pnlPct > -1 && this.position.trailingOrderId) {
-          reason = EXIT_TRAIL_EXCHANGE;
-          logger.info(`✅ [${symbol}] Detected TRAILING STOP exit via PnL heuristic (PnL: ${pnlPct.toFixed(2)}%)`);
-        }
-        // Priority 4: V5.85 - Check if stagnant was confirmed (exchange SL was tightened)
-        else if (this.position.stagnantState?.confirmed && !this.position.stagnantState?.cancelled) {
-          reason = EXIT_STAGNANT;
-          logger.info(`🐌 [${symbol}] Detected STAGNANT TRADE exit (PnL: ${pnlPct.toFixed(2)}%, stagnant SL hit on exchange)`);
-        }
-        // Priority 5: Fixed stop loss (significant loss or orderType is STOP_MARKET)
-        else {
-          reason = EXIT_SL_EXCHANGE;
-          logger.info(`🛑 [${symbol}] Detected FIXED SL exit (PnL: ${pnlPct.toFixed(2)}%, type=${orderType})`);
-        }
-        
-        const notionalUsd = this.position.qty * this.position.entryPrice;
-        // V5.6: Use stored margin, fallback to notional/leverage or notional
-        const marginToRelease = this.position.marginUsd ?? (this.position.leverage ? notionalUsd / this.position.leverage : notionalUsd);
-        
-        // Release MARGIN (not notional)
-        this.config.capitalPool.release(this.config.sessionId, marginToRelease, pnlUsd);
-        
-        // Calculate fee for synced exit (no order response available, use 0.04%)
-        const syncExitNotionalUsd = this.position.qty * exitPrice;
-        const syncFeeUsd = syncExitNotionalUsd * 0.0004;
-        
-        // Save exit to DB with exchange orderId and calculated fee
-        const syncDbSuccess = await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd, exchangeOrderId, syncFeeUsd);
-
-        logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%, fee: $${syncFeeUsd.toFixed(2)}, margin released: $${marginToRelease.toFixed(2)}`);
-
-        // V5.89: Send Telegram notification for exchange-triggered exits (was missing!)
-        // Previously only closePosition() sent notifications, but exchange-side SL/trailing
-        // exits go through syncWithExchange and silently saved without notifying.
-        if (syncDbSuccess) {
-          const balanceAfterSync = this.config.capitalPool.getTotalCapital();
-          void notifyPositionClosed({
-            agentId: this.config.sessionId,
-            symbol,
-            side: this.position.side,
-            quantity: this.position.qty,
-            entryPrice: this.position.entryPrice,
-            exitPrice,
-            pnl: pnlUsd,
-            pnlPct,
-            reason,
-            mode: 'live',
-            balanceAfter: balanceAfterSync,
-            feesUsd: syncFeeUsd,
-            userId: this.config.userId,
-          });
-
-          notifyTradeExit({
-            symbol,
-            side: this.position.side,
-            entryPrice: this.position.entryPrice,
-            exitPrice,
-            qty: this.position.qty,
-            notionalUsd,
-            pnlUsd,
-            pnlPct,
-            reason,
-            mode: 'live',
-            userId: this.config.userId || undefined,
-          });
-
-          // Record trade for consecutive loser tracking + daily report
-          const isWinnerSync = (pnlUsd - syncFeeUsd) > 0;
-          this.config.capitalPool.recordTradeResult(isWinnerSync, symbol);
-          recordTrade(pnlUsd - syncFeeUsd);
-        }
-        
-        // V5.12: Cancel any remaining orders (trailing stop, backup SL) to avoid orphans
-        // This is CRITICAL - when Binance trailing triggers, the STOP_MARKET remains!
-        logger.info(`🧹 [${symbol}] Cleaning up orphan orders after position close...`);
-        await this.cancelStopLossOnExchange();
-        
-        // Reset trailing flags
-        this.trailingNotified = false;
-        this.trailingWidened = false;
-        this.stagnantSlUpdated = false;
-        // V5.72: Reset trailing tracking (owned by rtExitHandler)
-        this.rtExitHandler.resetState();
-
-        this.position = null;
-      }
-      
-      // Case 2: Exchange has position but we don't know about it
-      else if (!this.position && exchangeQty > 0) {
-        // V5.82: Close dust positions on exchange (residual from floor rounding on exit)
-        // If notional value < $5, this is dust — close it on exchange to prevent re-adoption
-        const dustNotional = exchangeQty * entryPrice;
-        if (dustNotional < 5) {
-          logger.info(`🧹 [${symbol}] SYNC: Dust position detected (${exchangeSide} ${exchangeQty}, notional=$${dustNotional.toFixed(2)}) — closing on exchange`);
-          try {
-            const closeSide = exchangeSide === 'long' ? 'sell' : 'buy';
-            const dustFormattedQty = this.formatQtyForExchange(symbol, exchangeQty);
-            if (dustFormattedQty > 0) {
-              const dustOrder: OrderRequest = {
-                id: uuidv4(),
-                agentId: this.config.sessionId,
-                userId: this.config.userId || 'unknown',
-                priority: 95,
-                symbol,
-                side: closeSide,
-                type: 'market',
-                quantity: dustFormattedQty,
-                params: { reduceOnly: true },
-                isEntry: false,
-                reason: 'dust_position_cleanup',
-                priorityContext: { isEntry: false, reason: 'dust_position_cleanup' },
-                submittedAt: Date.now(),
-                retries: 0,
-                timeoutMs: 30_000,
-              };
-              const dustResult = await orderQueue.submitOrder(dustOrder);
-              if (dustResult.success) {
-                logger.info(`✅ [${symbol}] Dust cleanup SUCCESS | filled=${dustResult.order?.filled}`);
-              } else {
-                logger.warn(`⚠️ [${symbol}] Dust cleanup FAILED: ${dustResult.error}`);
-              }
-            } else {
-              logger.info(`🧹 [${symbol}] Dust qty ${exchangeQty} below step size — cannot close via order`);
-            }
-          } catch (dustErr: any) {
-            logger.warn(`⚠️ [${symbol}] Dust cleanup error: ${dustErr?.message}`);
-          }
-          return;
-        }
-
-        logger.info(`⚠️ [${symbol}] SYNC: Found unexpected position on exchange (${exchangeSide} ${exchangeQty})`);
-        
-        if (entryPrice > 0) {
-          // 🔧 V5.29: Check if position exists in DB to preserve entryTime and maxPnlPct
-          // This is critical for stagnant trade detection after restart
-          let dbEntryTime: number | undefined;
-          let dbMaxPnlPct: number | undefined;
-          
-          try {
-            // V5.44 FIX: Position model doesn't have exitPrice field
-            // We find the most recent position for this session/symbol
-            // An "open" position is one that exists and hasn't been deleted
-            const dbPosition = await this.config.prisma.position.findFirst({
-              where: {
-                sessionId: this.config.sessionId,
-                symbol: this.config.symbol,
-              },
-              orderBy: { openedAt: 'desc' },
-            });
-            
-            if (dbPosition && dbPosition.openedAt) {
-              dbEntryTime = dbPosition.openedAt.getTime();
-              dbMaxPnlPct = dbPosition.maxPnlPct || undefined;
-              const ageMinutes = dbEntryTime ? Math.round((Date.now() - dbEntryTime) / 60000) : 0;
-              logger.info(`📊 [${symbol}] Restored position history from DB: age=${ageMinutes}min, maxPnl=${dbMaxPnlPct?.toFixed(2)}%`);
-            }
-          } catch (dbErr) {
-            logger.warn(`⚠️ [${symbol}] Failed to load DB position:`, dbErr);
-          }
-          
-          // V5.6: Estimate margin - use asset-specific leverage or default to 5x
-          const notionalUsd = exchangeQty * entryPrice;
-          const estimatedLeverage = MomentumConfig.LEVERAGE[symbol] || 5;
-          const estimatedMargin = notionalUsd / estimatedLeverage;
-          
-          this.position = {
-            symbol,
-            side: exchangeSide,
-            entryPrice,
-            qty: exchangeQty,
-            entryTime: dbEntryTime || Date.now(), // Use DB time if available
-            realEntryTime: dbEntryTime || Date.now(),  // V5.86: Use DB time for stagnant detection
-            leverage: estimatedLeverage,
-            marginUsd: estimatedMargin,
-            highWaterMark: exchangeSide === 'long' ? entryPrice : undefined,
-            lowWaterMark: exchangeSide === 'short' ? entryPrice : undefined,
-            maxPnlPct: dbMaxPnlPct, // Preserve max PnL for stagnant detection
-          };
-          
-          // Commit MARGIN (not notional) for this position
-          this.config.capitalPool.commit(this.config.sessionId, estimatedMargin);
-          
-          // Calculate entry fee for synced position (no order available, use 0.04%)
-          const syncEntryFee = notionalUsd * 0.0004;
-          
-          // Save to DB with calculated fee (only if not already saved)
-          if (!dbEntryTime) {
-            await this.savePositionToDb(this.position, 'synced_from_exchange', syncEntryFee);
-          }
-          
-          logger.info(`✅ [${symbol}] Position synced from exchange: ${exchangeSide} @ $${entryPrice} (age: ${Math.round((Date.now() - (dbEntryTime || Date.now())) / 60000)}min)`);
-
-          // ═══════════════════════════════════════════════════════════════════════════
-          // V5.79: CRITICAL - Set up stop loss protection for synced positions
-          // Without this, positions detected by sync would have NO PROTECTION
-          // ═══════════════════════════════════════════════════════════════════════════
-          if (this.config.mode === 'live') {
-            try {
-              // Calculate emergency stop (same logic as live entry)
-              const baseSlPct = 2.0; // Default base SL
-              const emergencyTargetPct = baseSlPct * (MomentumConfig.EXIT.EMERGENCY_STOP_MULTIPLIER || 2.5);
-              const emergencyMaxPct = MomentumConfig.EXIT.EMERGENCY_STOP_MAX_PCT ?? 3.0;
-              const emergencySlPct = Math.min(emergencyTargetPct, emergencyMaxPct);
-              const emergencyStop = exchangeSide === 'long'
-                ? entryPrice * (1 - emergencySlPct / 100)
-                : entryPrice * (1 + emergencySlPct / 100);
-
-              this.position.stopLoss = emergencyStop;
-              this.position.emergencyStopPrice = emergencyStop;
-
-              await this.setStopLossOnExchange(this.position, false);
-              logger.info(`🛡️ [${symbol}] SYNC: Emergency SL set @ $${emergencyStop.toFixed(4)} (${emergencySlPct.toFixed(2)}%) for synced position`);
-
-              // Start realtime exit monitor for the synced position
-              this.startRealtimeExitMonitorIfNeeded();
-            } catch (slError: any) {
-              logger.error(`❌ [${symbol}] SYNC: Failed to set stop loss for synced position: ${slError.message}`);
-              // Position exists but has no protection - will be caught by safety check on next 15m candle
-            }
-          }
-        }
-      }
-
-      // Case 3: Both have position - verify they match (use variables we already have)
-      else if (this.position && exchangeQty > 0) {
-        // Just log for now, could add reconciliation logic
-        logger.info(`✅ [${symbol}] Position verified on exchange: qty=${exchangeQty} entry=$${entryPrice} uPnL=$${unrealizedPnl.toFixed(2)}`);
-      }
-      
-      // 🔍 V5.13: Check for missing trades (trades that happened between ticks)
-      // This runs on every sync to catch trades that completed quickly
-      await this.checkMissingTrades();
-      
-    } catch (error) {
-      logger.error(`❌ [${symbol}] Failed to sync with exchange:`, error);
-    }
-  }
-  
-  /**
-   * 🔍 V5.13: Check for missing trades
-   * Compares Binance trade history with DB to find and log missing trades
-   * This catches trades that completed between ticks (entry->exit->entry within 1 minute)
-   */
-  private async checkMissingTrades(): Promise<void> {
-    const symbol = this.config.symbol;
-    
-    try {
-      if (this.config.mode !== 'live') {
-        return;
-      }
-
-      const now = Date.now();
-      if (now - this.lastMissingTradesCheck < this.MISSING_TRADES_CHECK_INTERVAL_MS) {
-        return;
-      }
-      this.lastMissingTradesCheck = now;
-
-      // If user-data stream is active, rely on WS-based sync (avoid REST bursts)
-      if (isUserDataStreamActive(this.config.userId)) {
-        return;
-      }
-
-      // Get all trades from Binance for the last 2 hours (to catch recent misses)
-      // V5.66: Use deduplicator to prevent concurrent identical calls
-      if (!this.config.exchange.fetchMyTrades || !ipWeightTracker.canMakeCall(10)) {
-        return;
-      }
-
-      const since = Date.now() - 2 * 3600 * 1000; // Last 2 hours
-      const key = makeFetchMyTradesKey(this.config.userId, symbol, since);
-      const binanceTrades = await exchangeAPIDeduplicator.execute(
-        key,
-        async () => {
-          const result = await this.config.exchange.fetchMyTrades!(symbol, since, 50);
-          ipWeightTracker.record(10, `fetchMyTrades:missingTrades:${symbol}`);
-          return result;
-        },
-        10_000, // 10s cache TTL for missing trades check
-        `${this.config.sessionId}:missingTradesCheck`
-      );
-      
-      if (!binanceTrades || binanceTrades.length === 0) {
-        logger.info(`✅ [${symbol}] No Binance trades found in last 24h`);
-        return;
-      }
-      
-      logger.info(`📊 [${symbol}] Found ${binanceTrades.length} Binance trades in last 24h`);
-      
-      // Group trades into entry/exit pairs
-      // Binance returns all trades chronologically, we need to match entries with exits
-      const tradePairs: Array<{
-        entryTrade: any;
-        exitTrade: any;
-      }> = [];
-      
-      let pendingEntry: any = null;
-      
-      for (const trade of binanceTrades) {
-        const side = trade.side; // 'buy' or 'sell'
-        const isBuy = side === 'buy';
-        
-        // For LONG positions: buy=entry, sell=exit
-        // For SHORT positions: sell=entry, buy=exit
-        // We'll assume LONG for simplicity (can be improved with order type detection)
-        
-        if (isBuy && !pendingEntry) {
-          // Entry for LONG
-          pendingEntry = trade;
-        } else if (!isBuy && pendingEntry) {
-          // Exit for LONG
-          tradePairs.push({
-            entryTrade: pendingEntry,
-            exitTrade: trade,
-          });
-          pendingEntry = null;
-        }
-      }
-      
-      logger.info(`📊 [${symbol}] Identified ${tradePairs.length} complete trade pairs from Binance`);
-      
-      // Now check which pairs are missing in our DB
-      let reconciledCount = 0;
-      
-      for (const pair of tradePairs) {
-        const entryOrderId = pair.entryTrade.order || pair.entryTrade.info?.orderId;
-        const exitOrderId = pair.exitTrade.order || pair.exitTrade.info?.orderId;
-        
-        // Check if exit order exists in DB
-        const existingOrder = await this.config.prisma.order.findFirst({
-          where: { clientOrderId: exitOrderId }
-        });
-        
-        if (existingOrder) {
-          // Trade already in DB, skip
-          continue;
-        }
-        
-        // Trade is missing! Reconstruct and save it
-        logger.warn(`⚠️ [${symbol}] Found missing trade: entry=${entryOrderId} exit=${exitOrderId}`);
-        
-        const entryPrice = pair.entryTrade.price;
-        const exitPrice = pair.exitTrade.price;
-        const qty = pair.exitTrade.amount;
-        
-        const pnlPct = ((exitPrice - entryPrice) / entryPrice) * 100;
-        const pnlUsd = qty * (exitPrice - entryPrice);
-        
-        // Determine exit reason based on order type
-        const orderType = pair.exitTrade.info?.type || pair.exitTrade.type;
-        let reason = EXIT_SL_EXCHANGE;
-        
-        if (orderType && orderType.includes('TRAILING')) {
-          reason = EXIT_TRAIL_EXCHANGE;
-        } else if (pnlPct > -1) {
-          reason = EXIT_TRAIL_EXCHANGE;
-        }
-        
-        // Reconstruct position object
-        const reconstructedPosition: Position = {
-          symbol,
-          side: 'long',
-          entryPrice,
-          qty,
-          entryTime: pair.entryTrade.timestamp || Date.now(),
-          leverage: 5, // Estimate
-          marginUsd: (qty * entryPrice) / 5, // Estimate
-          orderId: entryOrderId,
-        };
-        
-        // Check if this entry already exists (avoid duplicate entries)
-        const existingEntry = await this.config.prisma.order.findFirst({
-          where: { clientOrderId: entryOrderId }
-        });
-        
-        if (!existingEntry) {
-          // Save entry first
-          await this.savePositionToDb(reconstructedPosition, 'reconciled_entry', qty * entryPrice * 0.0004);
-        } else {
-          logger.info(`✓ [${symbol}] Entry ${entryOrderId} already exists, skipping entry save`);
-        }
-        
-        // Save exit (use undefined for exchangeOrderId to force unique ID generation)
-        // This avoids the "already exists" check in saveExitToDb
-        const exitFee = qty * exitPrice * 0.0004;
-        await this.saveExitToDb(reconstructedPosition, exitPrice, reason, pnlPct, pnlUsd, undefined, exitFee);
-        
-        reconciledCount++;
-        logger.info(`✅ [${symbol}] Reconciled missing trade: PnL=${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)})`);
-      }
-      
-      logger.info(`✅ [${symbol}] Reconciliation complete: ${reconciledCount} missing trades recovered`);
-      
-    } catch (error: unknown) {
-      logger.error(`❌ [${symbol}] Failed to reconcile trades:`, errMsg(error));
-    }
-  }
   
   private async savePositionToDb(position: Position, _action: string, entryFeeUsd?: number): Promise<void> {
     await this.persistence.savePositionToDb(position, entryFeeUsd);

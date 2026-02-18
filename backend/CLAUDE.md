@@ -46,7 +46,10 @@ npm run migrate             # Run migrations
 **Strategy Engine** (`src/strategies/`)
 - `simpleAgent.ts` - **Barrel re-export file** (V5.108). Re-exports from capitalPool.ts and orchestrator.ts. All existing consumers import from here.
   - `capitalPool.ts` - CapitalPool class (~540 lines). Shared capital management: reserve→commit→release lifecycle, live balance sync, skip-N-trades rule.
-  - `orchestrator.ts` - AgentOrchestrator class (~3280 lines, formerly SimpleAgent). Full trading lifecycle per symbol: entry detection, exit management, position sync, realtime monitoring.
+  - `orchestrator.ts` - AgentOrchestrator class (~2550 lines, formerly SimpleAgent). Core lifecycle: tick, checkEntry, checkExit, closePosition. Delegates data/sync to extracted modules.
+  - `agent/candleFetcher.ts` - CandleFetcher class (~250 lines). Candle data acquisition: symbol 15m, BTC 15m, BTC 1h. WebSocket-first with REST fallback.
+  - `agent/exchangeSync.ts` - ExchangeSync class (~570 lines). Position sync with Binance: 3-case mismatch handler, missing trade reconciliation.
+  - `agent/agentState.ts` - State type definitions: PositionState, TrailingState, SignalState, TimeKeeper, CooldownState, LifecycleState, ErrorState.
 - `positionOpener.ts` - Extracted `openPosition()` (~970 lines). Pre-entry filters, capital sizing, exchange order placement, multi-position support
 - `realtimeExitHandler.ts` - Extracted `checkRealtimeExit()` (~845 lines). Owns all RT exit state, NFS system, proactive limit tracking, trailing breach detection
 - `momentumSimple.ts` - **Barrel re-export file** (V5.108). Re-exports all 54 exports from 5 focused modules below. All existing consumers import from here.
@@ -278,6 +281,15 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Backward compatibility**: `simpleAgent.ts` is now a 24-line barrel that re-exports everything. `AgentOrchestrator` is exported as `SimpleAgent` for all existing consumers. Zero import changes needed.
   - **Circular dep fix**: `positionOpener.ts` now imports `CapitalPool` directly from `capitalPool.ts` instead of via the barrel (avoids orchestrator → positionOpener → simpleAgent → orchestrator cycle).
   - **Zero behavioral changes**: No logic, values, or function signatures were modified.
+
+- V5.108 Phase 3: Further split orchestrator.ts — extract CandleFetcher + ExchangeSync:
+  - **Problem**: `orchestrator.ts` was still 3,276 lines after Phase 2, mixing core lifecycle logic with data acquisition and exchange synchronization.
+  - **Solution**: Extracted into 3 focused modules under `agent/` subdirectory:
+    - `agent/candleFetcher.ts` (253 lines) — `CandleFetcher` class: fetchCandles (symbol 15m), fetchBtcCandles (BTC 15m), fetchBtcCandles1h (BTC 1h). Owns per-symbol candle cache.
+    - `agent/exchangeSync.ts` (568 lines) — `ExchangeSync` class: loadExistingPosition, syncWithExchange (3-case position mismatch handler), checkMissingTrades. Uses callback injection pattern (same as RealtimeExitHandler, PositionOpener).
+    - `agent/agentState.ts` (97 lines) — State type interfaces: PositionState, TrailingState, SignalState, TimeKeeper, CooldownState, LifecycleState, ErrorState.
+  - **Result**: orchestrator.ts reduced from 3,276 → 2,553 lines (723 lines extracted).
+  - **Zero behavioral changes**: Callback injection pattern preserves all state access; all call sites updated mechanically.
 
 - V5.107: Fix parity forced entry timestamp — V5.106 was one candle too LATE (not early):
   - **Problem**: V5.106 assumed `Trade.entryTs` = candle OPEN time (per V5.46), but V5.86 added `realEntryTime = Date.now()` which takes priority in `positionPersistence.ts:233` (`realEntryTime ?? entryTime ?? Date.now()`). So `Trade.entryTs` is actually **wall-clock** (~candle_close + 2s). V5.106's `+CANDLE_15M_MS` pushed `forcedEntryTimestamp` one candle too far → wrong entry price → systematic EXIT_MISMATCH and PNL_VARIANCE on every trade.
