@@ -1254,118 +1254,36 @@ function calculatePnl(
   return { grossPnlPct, netPnlPct, netPnlUsd, feesUsd };
 }
 
-// ============================================================================
-// V5.68: INTRABAR TIMING ESTIMATION
-// ============================================================================
-// Estimates when a price level was reached within a candle for realistic timing.
-// Without tick data, we use OHLC bar order assumption:
-// - Bullish candle (C > O): O → L → H → C (price dips first, then rises)
-// - Bearish candle (C < O): O → H → L → C (price rises first, then drops)
-// This matches typical market microstructure patterns.
-// ============================================================================
-
-interface IntrabarTimingResult {
-  estimatedTimestamp: number;
-  fractionOfCandle: number; // 0.0 = candle open, 1.0 = candle close
-}
-
-function estimateIntrabarTiming(
-  candle: BacktestCandle,
-  targetPrice: number,
-  _side: 'long' | 'short',  // Reserved for future directional estimation
-  _isEntry: boolean         // Reserved for future entry vs exit optimization
-): IntrabarTimingResult {
-  const candleDurationMs = 15 * 60 * 1000; // 15 minutes
-  const { timestamp, open, high, low, close } = candle;
-  const isBullish = close >= open;
-
-  // If price is outside candle range, return candle close time
-  if (targetPrice > high || targetPrice < low) {
-    return { estimatedTimestamp: timestamp + candleDurationMs, fractionOfCandle: 1.0 };
-  }
-
-  // Calculate position within the OHLC range
-  // For bullish candles: O → L (0-0.25) → H (0.25-0.75) → C (0.75-1.0)
-  // For bearish candles: O → H (0-0.25) → L (0.25-0.75) → C (0.75-1.0)
-
-  let fraction = 0.5; // Default to mid-candle
-
-  if (isBullish) {
-    // Bullish: O → L → H → C
-    if (targetPrice <= open && targetPrice >= low) {
-      // Price in the O → L range (first 25% of candle)
-      const range = open - low;
-      fraction = range > 0 ? 0.25 * (1 - (targetPrice - low) / range) : 0.125;
-    } else if (targetPrice >= open && targetPrice <= high) {
-      // Price in the L → H range (middle 50% of candle)
-      const range = high - low;
-      fraction = range > 0 ? 0.25 + 0.5 * ((targetPrice - low) / range) : 0.5;
-    } else {
-      // Price in the H → C range (last 25% of candle)
-      const range = high - close;
-      fraction = range > 0 ? 0.75 + 0.25 * ((high - targetPrice) / range) : 0.875;
-    }
-  } else {
-    // Bearish: O → H → L → C
-    if (targetPrice >= open && targetPrice <= high) {
-      // Price in the O → H range (first 25% of candle)
-      const range = high - open;
-      fraction = range > 0 ? 0.25 * ((targetPrice - open) / range) : 0.125;
-    } else if (targetPrice <= open && targetPrice >= low) {
-      // Price in the H → L range (middle 50% of candle)
-      const range = high - low;
-      fraction = range > 0 ? 0.25 + 0.5 * ((high - targetPrice) / range) : 0.5;
-    } else {
-      // Price in the L → C range (last 25% of candle)
-      const range = close - low;
-      fraction = range > 0 ? 0.75 + 0.25 * ((targetPrice - low) / range) : 0.875;
-    }
-  }
-
-  // Clamp fraction to valid range
-  fraction = Math.max(0.05, Math.min(0.95, fraction));
-
-  const estimatedTimestamp = Math.round(timestamp + fraction * candleDurationMs);
-
-  return { estimatedTimestamp, fractionOfCandle: fraction };
-}
-
 /**
- * Calculate realistic hold time considering intrabar entry/exit timing
+ * Calculate hold time using candle-close timing for both entry and exit.
+ *
+ * Pshat-Emet: Only CLOSED candles are truth. We have no tick data, so all
+ * timestamps are at candle close boundaries. This matches live behavior where
+ * the 15m exit handler evaluates at candle close, even for SL/NFS_HIGH exits
+ * whose exchange fills happen intra-candle.
+ *
+ * Exit PRICES (SL at stop, NFS_HIGH at trailing stop) remain correct — they
+ * match live proactive limit / exchange SL fills.  Only the TIMING is
+ * normalised to candle close, producing holdMinutes in multiples of 15.
  */
 function calculateRealisticHoldMinutes(
   entryCandle: BacktestCandle,
-  entryPrice: number,
+  _entryPrice: number,
   exitCandle: BacktestCandle,
-  exitPrice: number,
-  exitReason: string,
-  side: 'long' | 'short'
+  _exitPrice: number,
+  _exitReason: string,
+  _side: 'long' | 'short'
 ): { holdMinutes: number; entryTimestamp: number; exitTimestamp: number } {
   const candleDurationMs = 15 * 60 * 1000;
 
-  // V5.101: Entry always at candle close (V5.91 disabled wick breakout entry).
-  // Use candle end time, not intrabar estimate.
+  // Entry at candle close (V5.91 disabled wick breakout entry)
   const entryTimestamp = entryCandle.timestamp + candleDurationMs;
 
-  // For exits, check if it's an intrabar exit type
-  const isIntrabarExit = exitReason.includes('NFS_HIGH') ||
-                          exitReason === EXIT_SL ||
-                          exitReason === 'TP' ||
-                          exitReason === 'STOP_LOSS' ||
-                          exitReason === 'TAKE_PROFIT';
-
-  let exitTimestamp: number;
-  if (isIntrabarExit) {
-    // For intrabar exits, estimate when exit price was reached
-    const exitTiming = estimateIntrabarTiming(exitCandle, exitPrice, side, false);
-    exitTimestamp = exitTiming.estimatedTimestamp;
-  } else {
-    // For candle close exits (NFS_MED, NFS_LOW, STAGNANT, etc.), use candle end time
-    exitTimestamp = exitCandle.timestamp + candleDurationMs;
-  }
+  // Exit at candle close — ALL exits evaluated at 15m boundary in live
+  const exitTimestamp = exitCandle.timestamp + candleDurationMs;
 
   const holdMs = exitTimestamp - entryTimestamp;
-  const holdMinutes = Math.max(1, Math.round(holdMs / 60000)); // At least 1 minute
+  const holdMinutes = Math.max(15, Math.round(holdMs / 60000)); // Minimum 1 bar = 15 min
 
   return {
     holdMinutes,
