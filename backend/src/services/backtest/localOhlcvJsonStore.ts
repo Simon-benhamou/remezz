@@ -100,7 +100,7 @@ function pruneCacheIfNeeded(): void {
 
 export async function loadLocalJsonCandles(
   symbol: string,
-  timeframe: '15m' | '1h',
+  timeframe: '1m' | '15m' | '1h',
 ): Promise<{ candles: BacktestCandle[]; startTs: number; endTs: number } | null> {
   const dataDir = await resolveLocalDataDir();
   if (!dataDir) return null;
@@ -187,6 +187,7 @@ export function sliceCandlesByTime(
   return candles.slice(startIdx, endIdxExclusive);
 }
 
+export const CANDLE_1M_MS = 60 * 1000;
 export const CANDLE_15M_MS = 15 * 60 * 1000;
 export const CANDLE_1H_MS = 60 * 60 * 1000;
 

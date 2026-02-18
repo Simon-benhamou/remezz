@@ -305,6 +305,10 @@ export interface BacktestComputationInput {
   btcCandles1h: BacktestCandle[];
   allData: Record<string, BacktestCandle[]>;
   CANDLE_REGIME_INTERVAL_MS: number;
+  // V5.111: Optional 1m candle data for high-resolution exhaustion simulation
+  // When provided, exhaustion detection + stop execution happens at 1m resolution
+  // within each 15m bar (exactly like live trading), instead of approximating on 15m candles.
+  allData1m?: Record<string, BacktestCandle[]>;
 }
 
 // ============================================================================
@@ -1292,7 +1296,7 @@ function calculateRealisticHoldMinutes(
 // ============================================================================
 
 export async function runBacktestComputation(input: BacktestComputationInput): Promise<BacktestResult> {
-  const { params, btcCandles, btcCandles1h, allData, CANDLE_REGIME_INTERVAL_MS } = input;
+  const { params, btcCandles, btcCandles1h, allData, CANDLE_REGIME_INTERVAL_MS, allData1m } = input;
   const { startDate, endDate, initialCapital, symbols, leverage, parityMode, forcedEntry } = params;
   const btcCloses = btcCandles.map((c) => c.close);
 
@@ -1326,6 +1330,10 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
     CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 45,
     MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
   }) : null;
+
+  // V5.111: Per-symbol 1m candle cursor for efficient zoom-in lookup
+  const symbolIdx1m: Record<string, number> = {};
+  for (const symbol of symbols) symbolIdx1m[symbol] = 0;
 
   const positions: Record<string, BacktestSimPosition | null> = {};
   // V5.30: Multi-position support - store additional positions per symbol
@@ -1496,108 +1504,257 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
         const btcCandles1hWindowForExit = btcCandles1h.slice(0, regimeCursorForEntry);
 
         // ═══════════════════════════════════════════════════════════════════
-        // V5.110: EXHAUSTION-BASED PROACTIVE STOP (before standard exit check)
-        // If exhaustion was detected on a previous candle (stop would have been
-        // placed on exchange), check if current candle's low/high breaches the
-        // trailing stop. If yes, the STOP_MARKET would have filled.
+        // V5.111: EXHAUSTION-BASED PROACTIVE STOP (before standard exit check)
+        //
+        // Two modes:
+        // A) With 1m data (allData1m): "Zoom-in" — iterate 1m candles within
+        //    the 15m bar for exhaustion detection + stop execution. This matches
+        //    live behavior exactly (1m closed candle analysis + 1m stop check).
+        // B) Without 1m data: Approximate on 15m candles (V5.110 behavior).
         // ═══════════════════════════════════════════════════════════════════
         if (exhaustionCalc && pos.trailingActive && pos.appTrailingStop) {
-          const trailingStop = pos.appTrailingStop;
+          const candles1m = allData1m?.[symbol];
+          let exhaustionExited = false;
 
-          // Check if existing exhaustion stop triggers on this candle
-          if (pos.exhaustionStopActive && pos.exhaustionStopPrice) {
-            const stopPrice = pos.exhaustionStopPrice;
-            const breached = pos.side === 'long'
-              ? current.low <= stopPrice
-              : current.high >= stopPrice;
+          if (candles1m && candles1m.length > 0) {
+            // ─── MODE A: 1m ZOOM-IN (high fidelity) ───────────────────────
+            // Find the 1m candles within this 15m bar
+            const barStartTs = current.timestamp;
+            const barEndTs = current.timestamp + 15 * 60 * 1000;
 
-            if (breached) {
-              // STOP_MARKET triggered — exit at trailing stop price
-              const pnl = calculatePnl(
-                pos.entryPrice, stopPrice, pos.side, pos.marginUsd, pos.leverage, holdBars,
-              );
-              capital += pnl.netPnlUsd + pos.marginUsd;
-              capitalInUse -= pos.marginUsd;
+            // Advance 1m cursor to this bar
+            while (symbolIdx1m[symbol] < candles1m.length && candles1m[symbolIdx1m[symbol]].timestamp < barStartTs) {
+              symbolIdx1m[symbol]++;
+            }
 
-              const realisticTiming = calculateRealisticHoldMinutes(
-                pos.entryCandle, pos.entryPrice, current, stopPrice, EXIT_TRAIL_PROACTIVE, pos.side,
-              );
-              const month = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 7);
-              const exitDay = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 10);
+            // Collect 1m candles within this 15m bar
+            const bar1mStart = symbolIdx1m[symbol];
+            let bar1mEnd = bar1mStart;
+            while (bar1mEnd < candles1m.length && candles1m[bar1mEnd].timestamp < barEndTs) {
+              bar1mEnd++;
+            }
+            const bar1mCandles = candles1m.slice(bar1mStart, bar1mEnd);
 
-              trades.push({
-                id: `trade_${++tradeId}`,
-                symbol,
-                side: pos.side,
-                entryTime: new Date(realisticTiming.entryTimestamp).toISOString(),
-                exitTime: new Date(realisticTiming.exitTimestamp).toISOString(),
-                entryPrice: pos.entryPrice,
-                exitPrice: stopPrice,
-                qty: pos.qty,
-                notionalUsd: pos.notionalUsd,
-                marginUsd: pos.marginUsd,
-                leverage: pos.leverage,
-                holdMinutes: realisticTiming.holdMinutes,
-                grossPnlPct: pnl.grossPnlPct,
-                netPnlPct: pnl.netPnlPct,
-                netPnlUsd: pnl.netPnlUsd,
-                feesUsd: pnl.feesUsd,
-                exitReason: EXIT_TRAIL_PROACTIVE,
-                entryReason: pos.entryReason,
-                capitalBefore: pos.capitalBefore,
-                capitalAfter: capital + capitalInUse,
-                month,
-                day: exitDay,
-                wasCapped: pos.wasCapped,
-                slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
-              });
+            if (bar1mCandles.length > 0) {
+              // Derive current trailing distance from position state
+              const hwm = pos.side === 'long' ? (pos.highWaterMark ?? pos.entryPrice) : (pos.lowWaterMark ?? pos.entryPrice);
+              const trailingDistPct = pos.side === 'long'
+                ? ((hwm - pos.appTrailingStop) / hwm) * 100
+                : ((pos.appTrailingStop - hwm) / hwm) * 100;
 
-              if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
-              else { consecutiveLosers++; if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; } }
+              let localHwm = hwm;
+              let localTrailing = pos.appTrailingStop;
 
-              // Close multi-positions at same price
-              for (const multiPos of multiPositions[symbol]) {
-                const multiHoldBars = idx - multiPos.entryIdx;
-                const multiPnl = calculatePnl(multiPos.entryPrice, stopPrice, multiPos.side, multiPos.marginUsd, multiPos.leverage, multiHoldBars);
-                capital += multiPnl.netPnlUsd + multiPos.marginUsd;
-                capitalInUse -= multiPos.marginUsd;
+              // Get historical 1m candles for exhaustion (20 before this bar)
+              const hist1mStart = Math.max(0, bar1mStart - 20);
+              const recent1m: ExhaustionCandle[] = candles1m.slice(hist1mStart, bar1mStart).map(c => ({
+                timestamp: c.timestamp, open: c.open, high: c.high, low: c.low,
+                close: c.close, volume: c.volume || 0,
+              }));
+
+              for (const c1m of bar1mCandles) {
+                // 1. Check if existing exhaustion stop triggers on this 1m candle
+                if (pos.exhaustionStopActive && pos.exhaustionStopPrice) {
+                  const breached = pos.side === 'long'
+                    ? c1m.low <= pos.exhaustionStopPrice
+                    : c1m.high >= pos.exhaustionStopPrice;
+
+                  if (breached) {
+                    const stopPrice = pos.exhaustionStopPrice;
+                    const pnl = calculatePnl(
+                      pos.entryPrice, stopPrice, pos.side, pos.marginUsd, pos.leverage, holdBars,
+                    );
+                    capital += pnl.netPnlUsd + pos.marginUsd;
+                    capitalInUse -= pos.marginUsd;
+
+                    // Use 1m candle timestamp for realistic exit time
+                    const entryTs = pos.entryCandle.timestamp;
+                    const exitTs = c1m.timestamp + 60 * 1000; // end of 1m candle
+                    const holdMin = (exitTs - entryTs) / 60000;
+                    const month = new Date(exitTs).toISOString().slice(0, 7);
+                    const exitDay = new Date(exitTs).toISOString().slice(0, 10);
+
+                    trades.push({
+                      id: `trade_${++tradeId}`,
+                      symbol,
+                      side: pos.side,
+                      entryTime: new Date(entryTs).toISOString(),
+                      exitTime: new Date(exitTs).toISOString(),
+                      entryPrice: pos.entryPrice,
+                      exitPrice: stopPrice,
+                      qty: pos.qty,
+                      notionalUsd: pos.notionalUsd,
+                      marginUsd: pos.marginUsd,
+                      leverage: pos.leverage,
+                      holdMinutes: holdMin,
+                      grossPnlPct: pnl.grossPnlPct,
+                      netPnlPct: pnl.netPnlPct,
+                      netPnlUsd: pnl.netPnlUsd,
+                      feesUsd: pnl.feesUsd,
+                      exitReason: EXIT_TRAIL_PROACTIVE,
+                      entryReason: pos.entryReason,
+                      capitalBefore: pos.capitalBefore,
+                      capitalAfter: capital + capitalInUse,
+                      month,
+                      day: exitDay,
+                      wasCapped: pos.wasCapped,
+                      slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+                    });
+
+                    if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
+                    else { consecutiveLosers++; if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; } }
+
+                    for (const multiPos of multiPositions[symbol]) {
+                      const multiHoldBars = idx - multiPos.entryIdx;
+                      const multiPnl = calculatePnl(multiPos.entryPrice, stopPrice, multiPos.side, multiPos.marginUsd, multiPos.leverage, multiHoldBars);
+                      capital += multiPnl.netPnlUsd + multiPos.marginUsd;
+                      capitalInUse -= multiPos.marginUsd;
+                    }
+
+                    positions[symbol] = null;
+                    multiPositions[symbol] = [];
+                    cooldowns[symbol] = getCooldownBars(EXIT_TRAIL_PROACTIVE);
+                    exhaustionExited = true;
+                    break;
+                  }
+                }
+
+                // 2. Update local HWM and trailing from 1m candle
+                if (pos.side === 'long') {
+                  localHwm = Math.max(localHwm, c1m.high);
+                  localTrailing = localHwm * (1 - trailingDistPct / 100);
+                } else {
+                  localHwm = Math.min(localHwm, c1m.low);
+                  localTrailing = localHwm * (1 + trailingDistPct / 100);
+                }
+
+                // Update exhaustion stop price to follow trailing
+                if (pos.exhaustionStopActive) {
+                  pos.exhaustionStopPrice = localTrailing;
+                }
+
+                // 3. Add this closed 1m candle to history and calculate exhaustion
+                recent1m.push({
+                  timestamp: c1m.timestamp, open: c1m.open, high: c1m.high,
+                  low: c1m.low, close: c1m.close, volume: c1m.volume || 0,
+                });
+                if (recent1m.length > 20) recent1m.shift();
+
+                const exhaustionResult = exhaustionCalc.calculate(
+                  recent1m, pos.side, localTrailing, c1m.close,
+                );
+
+                if (exhaustionResult.shouldPlaceStop) {
+                  pos.exhaustionStopActive = true;
+                  pos.exhaustionStopPrice = localTrailing;
+                } else if (pos.exhaustionStopActive && exhaustionResult.score < exhaustionCalc.getConfig().CANCEL_THRESHOLD) {
+                  pos.exhaustionStopActive = false;
+                  pos.exhaustionStopPrice = undefined;
+                }
               }
 
-              positions[symbol] = null;
-              multiPositions[symbol] = [];
-              cooldowns[symbol] = getCooldownBars(EXIT_TRAIL_PROACTIVE);
-              continue;
+              // Sync trailing back to position after 1m zoom-in
+              if (!exhaustionExited) {
+                pos.appTrailingStop = localTrailing;
+                if (pos.side === 'long') {
+                  pos.highWaterMark = localHwm;
+                } else {
+                  pos.lowWaterMark = localHwm;
+                }
+              }
+            }
+          } else {
+            // ─── MODE B: 15m APPROXIMATION (no 1m data) ────────────────────
+            const trailingStop = pos.appTrailingStop;
+
+            if (pos.exhaustionStopActive && pos.exhaustionStopPrice) {
+              const stopPrice = pos.exhaustionStopPrice;
+              const breached = pos.side === 'long'
+                ? current.low <= stopPrice
+                : current.high >= stopPrice;
+
+              if (breached) {
+                const pnl = calculatePnl(
+                  pos.entryPrice, stopPrice, pos.side, pos.marginUsd, pos.leverage, holdBars,
+                );
+                capital += pnl.netPnlUsd + pos.marginUsd;
+                capitalInUse -= pos.marginUsd;
+
+                const realisticTiming = calculateRealisticHoldMinutes(
+                  pos.entryCandle, pos.entryPrice, current, stopPrice, EXIT_TRAIL_PROACTIVE, pos.side,
+                );
+                const month = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 7);
+                const exitDay = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 10);
+
+                trades.push({
+                  id: `trade_${++tradeId}`,
+                  symbol,
+                  side: pos.side,
+                  entryTime: new Date(realisticTiming.entryTimestamp).toISOString(),
+                  exitTime: new Date(realisticTiming.exitTimestamp).toISOString(),
+                  entryPrice: pos.entryPrice,
+                  exitPrice: stopPrice,
+                  qty: pos.qty,
+                  notionalUsd: pos.notionalUsd,
+                  marginUsd: pos.marginUsd,
+                  leverage: pos.leverage,
+                  holdMinutes: realisticTiming.holdMinutes,
+                  grossPnlPct: pnl.grossPnlPct,
+                  netPnlPct: pnl.netPnlPct,
+                  netPnlUsd: pnl.netPnlUsd,
+                  feesUsd: pnl.feesUsd,
+                  exitReason: EXIT_TRAIL_PROACTIVE,
+                  entryReason: pos.entryReason,
+                  capitalBefore: pos.capitalBefore,
+                  capitalAfter: capital + capitalInUse,
+                  month,
+                  day: exitDay,
+                  wasCapped: pos.wasCapped,
+                  slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+                });
+
+                if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
+                else { consecutiveLosers++; if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; } }
+
+                for (const multiPos of multiPositions[symbol]) {
+                  const multiHoldBars = idx - multiPos.entryIdx;
+                  const multiPnl = calculatePnl(multiPos.entryPrice, stopPrice, multiPos.side, multiPos.marginUsd, multiPos.leverage, multiHoldBars);
+                  capital += multiPnl.netPnlUsd + multiPos.marginUsd;
+                  capitalInUse -= multiPos.marginUsd;
+                }
+
+                positions[symbol] = null;
+                multiPositions[symbol] = [];
+                cooldowns[symbol] = getCooldownBars(EXIT_TRAIL_PROACTIVE);
+                exhaustionExited = true;
+              }
+
+              if (!exhaustionExited && Math.abs(trailingStop - pos.exhaustionStopPrice) / pos.exhaustionStopPrice > 0.001) {
+                pos.exhaustionStopPrice = trailingStop;
+              }
             }
 
-            // Update stop price if trailing moved
-            if (Math.abs(trailingStop - pos.exhaustionStopPrice) / pos.exhaustionStopPrice > 0.001) {
-              pos.exhaustionStopPrice = trailingStop;
+            if (!exhaustionExited) {
+              const exhaustionCandles: ExhaustionCandle[] = windowCandles.slice(-20).map(c => ({
+                timestamp: c.timestamp, open: c.open, high: c.high,
+                low: c.low, close: c.close, volume: c.volume || 0,
+              }));
+
+              const exhaustionResult = exhaustionCalc.calculate(
+                exhaustionCandles, pos.side, trailingStop, current.close,
+              );
+
+              if (exhaustionResult.shouldPlaceStop) {
+                pos.exhaustionStopActive = true;
+                pos.exhaustionStopPrice = trailingStop;
+              } else if (pos.exhaustionStopActive && exhaustionResult.score < exhaustionCalc.getConfig().CANCEL_THRESHOLD) {
+                pos.exhaustionStopActive = false;
+                pos.exhaustionStopPrice = undefined;
+              }
             }
           }
 
-          // Calculate exhaustion score on current candle to decide stop placement
-          const exhaustionCandles: ExhaustionCandle[] = windowCandles.slice(-20).map(c => ({
-            timestamp: c.timestamp,
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close,
-            volume: c.volume || 0,
-          }));
-
-          const exhaustionResult = exhaustionCalc.calculate(
-            exhaustionCandles, pos.side, trailingStop, current.close,
-          );
-
-          if (exhaustionResult.shouldPlaceStop) {
-            // Momentum exhaustion detected — simulate STOP_MARKET placement
-            pos.exhaustionStopActive = true;
-            pos.exhaustionStopPrice = trailingStop;
-          } else if (pos.exhaustionStopActive && exhaustionResult.score < exhaustionCalc.getConfig().CANCEL_THRESHOLD) {
-            // Momentum recovered — cancel the simulated stop
-            pos.exhaustionStopActive = false;
-            pos.exhaustionStopPrice = undefined;
-          }
+          if (exhaustionExited) continue;
         }
 
         const exitResult = checkBacktestExit(
