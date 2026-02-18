@@ -25,6 +25,10 @@
     "scripts/temp-*.ts",
     "scripts/deep-*.ts",
     "scripts/check-*.ts",
-    "scripts/reverify-parity.ts"
+    "scripts/reverify-parity.ts",
+    "scripts/bt-all-signals.ts",
+    "scripts/bt-vs-live*.ts",
+    "scripts/candle-ws-vs-rest.ts",
+    "scripts/debug-sessions.ts"
   ]
 }

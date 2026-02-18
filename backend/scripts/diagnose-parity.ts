@@ -346,7 +346,7 @@ async function main() {
 
   await runParityDiagnostic(trade);
 
-  await prisma.$disconnect();
+  await (prisma as any).$disconnect();
   console.log('\nDone.');
   process.exit(0);
 }
