@@ -24,6 +24,11 @@ import {
   type Candle as NfsCandle,
 } from '../services/nfsRealtimeExit.js';
 import {
+  MomentumExhaustionCalculator,
+  type ExhaustionResult,
+  type ExhaustionCandle,
+} from '../services/momentumExhaustion.js';
+import {
   EXIT_TRAIL_RT,
   EXIT_TRAIL_NFS_HIGH,
   EXIT_TRAIL_NFS_MED,
@@ -92,7 +97,11 @@ export class RealtimeExitHandler {
   private nfsCalculator: NfsCalculator | null = null;
   nfsStateMachine: NfsExitStateMachine | null = null;
 
-  // Proactive limit state
+  // Momentum exhaustion detector (V5.110)
+  private exhaustionCalculator: MomentumExhaustionCalculator | null = null;
+  private lastExhaustionScore: number = 0;
+
+  // Proactive stop state (V5.110: STOP_MARKET, was LIMIT)
   proactiveLimitOrderId: string | null = null;
   proactiveLimitPrice: number | null = null;
 
@@ -150,6 +159,17 @@ export class RealtimeExitHandler {
     this.nfsCalculator = calculator;
     this.nfsStateMachine = stateMachine;
     logger.info(`[${this.ctx.symbol}] NFS system initialized | high=${nfsConfig.HIGH_CONFIDENCE_THRESHOLD} medium=${nfsConfig.MEDIUM_CONFIDENCE_THRESHOLD}`);
+
+    // V5.110: Initialize momentum exhaustion detector
+    const exhaustionEnabled = (MomentumConfig.EXIT as any).EXHAUSTION_STOP_ENABLED ?? true;
+    if (exhaustionEnabled) {
+      this.exhaustionCalculator = new MomentumExhaustionCalculator({
+        PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 65,
+        CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 45,
+        MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
+      });
+      logger.info(`[${this.ctx.symbol}] Exhaustion detector initialized | place=${(MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 65} cancel=${(MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 45}`);
+    }
   }
 
   getNfsStateMachine(): NfsExitStateMachine | null {
@@ -436,123 +456,22 @@ export class RealtimeExitHandler {
 
         if (!last.isFinal) {
           // ═══════════════════════════════════════════════════════════════
-          // V5.82: PROACTIVE LIMIT - On non-final candles
+          // V5.110: On non-final candles — only check if proactive STOP filled
+          // (Exhaustion detection runs on CLOSED candles for reliable data)
           // ═══════════════════════════════════════════════════════════════
-          const nfsEnabled = MomentumConfig.EXIT.NFS_ENABLED ?? false;
-          const proactiveEnabled = MomentumConfig.EXIT.NFS_PROACTIVE_LIMIT_ENABLED ?? true;
-
-          if (nfsEnabled && proactiveEnabled && this.nfsCalculator && this.nfsStateMachine && position) {
-            // V5.86 FIX: Calculate if trailing SHOULD be active in real-time
-            const klineClose = last.close;
-            const side = position.side;
-            const posEntryPrice = position.entryPrice;
-
-            const realtimePnlPct = side === 'long'
-              ? ((klineClose - posEntryPrice) / posEntryPrice) * 100
-              : ((posEntryPrice - klineClose) / posEntryPrice) * 100;
-
-            const activationPct = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;
-            const shouldTrailingBeActive = position.trailingActive || realtimePnlPct >= activationPct;
-
-            let trailingStopPrice: number | null = null;
-            if (shouldTrailingBeActive) {
-              if (position.appTrailingStop) {
-                trailingStopPrice = position.appTrailingStop;
-              } else {
-                const baseDistance = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;
-                const hwmPct = side === 'long'
-                  ? position.highWaterMark
-                    ? ((position.highWaterMark - posEntryPrice) / posEntryPrice) * 100
-                    : realtimePnlPct
-                  : position.lowWaterMark
-                    ? ((posEntryPrice - position.lowWaterMark) / posEntryPrice) * 100
-                    : realtimePnlPct;
-
-                const distance = hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT
-                  ? MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT
-                  : baseDistance;
-
-                if (side === 'long' && position.highWaterMark) {
-                  trailingStopPrice = position.highWaterMark * (1 - distance / 100);
-                } else if (side === 'short' && position.lowWaterMark) {
-                  trailingStopPrice = position.lowWaterMark * (1 + distance / 100);
-                }
-              }
-            }
-
-            if (shouldTrailingBeActive && trailingStopPrice) {
-              // Build candle arrays for NFS
-              const prevNfsCandles: NfsCandle[] = (klines || []).slice(-25, -1).map(k => ({
-                timestamp: k.timestamp,
-                open: k.open,
-                high: k.high,
-                low: k.low,
-                close: k.close,
-                volume: k.volume || 0,
-                isFinal: true,
-              }));
-
-              const partialCandle: NfsCandle = {
-                timestamp: last.timestamp,
-                open: last.open,
-                high: last.high,
-                low: last.low,
-                close: last.close,
-                volume: last.volume || 0,
-                isFinal: false,
-              };
-
-              // Run NFS state machine evaluation on partial candle
-              const evalResult = this.nfsStateMachine.evaluate(
-                klineClose,
-                partialCandle,
-                prevNfsCandles,
-                side,
-                trailingStopPrice,
-                position.highWaterMark ?? klineClose,
-                position.lowWaterMark ?? klineClose
+          if (this.proactiveLimitOrderId && position) {
+            const fillResult = await this.checkProactiveLimitFill(symbol, position, currentPrice);
+            if (fillResult?.filled) {
+              const execPx = fillResult.avgPrice;
+              this.stop();
+              logger.info(
+                `🎯🎯🎯 [${symbol}] EXHAUSTION STOP FILLED (intra-candle) @ $${execPx.toFixed(4)} | ` +
+                `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | exhaustion=${this.lastExhaustionScore.toFixed(0)}`
               );
-
-              // Handle proactive LIMIT actions
-              if (evalResult.action === 'PLACE_PROACTIVE_LIMIT' && evalResult.targetPrice) {
-                const orderSide: 'buy' | 'sell' = side === 'long' ? 'sell' : 'buy';
-                logger.info(
-                  `🎯 [${symbol}] PROACTIVE LIMIT: placing ${orderSide} LIMIT @ $${evalResult.targetPrice.toFixed(4)} ` +
-                  `(trailing stop) | NFS=${evalResult.nfsResult?.score.toFixed(0)} | price=$${klineClose.toFixed(4)} | ` +
-                  `dist=${((side === 'long' ? klineClose - trailingStopPrice : trailingStopPrice - klineClose) / trailingStopPrice * 100).toFixed(3)}%`
-                );
-
-                // Cancel any existing proactive limit first
-                if (this.proactiveLimitOrderId) {
-                  try {
-                    await this.cancelProactiveLimit(symbol);
-                  } catch (e) {
-                    logger.warn(`[${symbol}] Failed to cancel existing proactive LIMIT: ${e}`);
-                  }
-                }
-
-                // Place the proactive limit
-                try {
-                  const plOrderId = await this.placeProactiveLimit(symbol, orderSide, position.qty, evalResult.targetPrice);
-                  if (plOrderId) {
-                    this.proactiveLimitOrderId = plOrderId;
-                    this.proactiveLimitPrice = evalResult.targetPrice;
-                    this.nfsStateMachine.setProactiveLimitOrderPending(plOrderId, evalResult.targetPrice);
-                    logger.info(`🎯 [${symbol}] PROACTIVE LIMIT placed: orderId=${plOrderId} @ $${evalResult.targetPrice.toFixed(4)}`);
-                  }
-                } catch (e) {
-                  logger.warn(`[${symbol}] Failed to place proactive LIMIT: ${e}`);
-                }
-              } else if (evalResult.action === 'CANCEL_PROACTIVE_LIMIT') {
-                if (this.proactiveLimitOrderId) {
-                  logger.info(`🎯 [${symbol}] PROACTIVE LIMIT CANCEL: ${evalResult.reason}`);
-                  try {
-                    await this.cancelProactiveLimit(symbol);
-                  } catch (e) {
-                    logger.warn(`[${symbol}] Failed to cancel proactive LIMIT: ${e}`);
-                  }
-                }
-              }
+              this.proactiveLimitOrderId = null;
+              this.proactiveLimitPrice = null;
+              await this.ctx.closePosition(position, execPx, EXIT_TRAIL_PROACTIVE);
+              return;
             }
           }
 
@@ -570,7 +489,7 @@ export class RealtimeExitHandler {
         this.lastRtTrailingKlineTs = last.timestamp;
 
         // ═══════════════════════════════════════════════════════════════════
-        // V5.82: Check if proactive LIMIT was filled during this candle
+        // V5.110: Check if exhaustion STOP_MARKET was filled during this candle
         // ═══════════════════════════════════════════════════════════════════
         if (this.proactiveLimitOrderId && position) {
           const fillResult = await this.checkProactiveLimitFill(symbol, position, currentPrice);
@@ -578,10 +497,9 @@ export class RealtimeExitHandler {
             const execPx = fillResult.avgPrice;
             this.stop();
             logger.info(
-              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED @ $${execPx.toFixed(4)} | ` +
+              `🔋🔋🔋 [${symbol}] EXHAUSTION STOP FILLED @ $${execPx.toFixed(4)} | ` +
               `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | ` +
-              `slippage=0% (exact backtest match!) | ` +
-              `nfs=${this.lastNfsResult?.score.toFixed(0) ?? 'n/a'}`
+              `exhaustion=${this.lastExhaustionScore.toFixed(0)}`
             );
             this.proactiveLimitOrderId = null;
             this.proactiveLimitPrice = null;
@@ -632,6 +550,95 @@ export class RealtimeExitHandler {
           this.trailingUpdateCount++;
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // V5.110: EXHAUSTION-BASED PROACTIVE STOP
+        // Runs on CLOSED candles (reliable data, not partial candle noise).
+        // When momentum exhaustion is detected, places STOP_MARKET at trailing.
+        // The exhaustion score IS the noise filter — replaces blind wick stops.
+        // ═══════════════════════════════════════════════════════════════════
+        if (this.exhaustionCalculator && updatedPosition.trailingActive && updatedPosition.appTrailingStop && klines && klines.length > 0) {
+          const trailingStop = updatedPosition.appTrailingStop;
+          const side = updatedPosition.side;
+
+          // Build candle array from closed 1m klines for exhaustion calc
+          const exhaustionCandles: ExhaustionCandle[] = (klines || [])
+            .filter(k => k.isFinal)
+            .slice(-20)
+            .map(k => ({
+              timestamp: k.timestamp,
+              open: k.open,
+              high: k.high,
+              low: k.low,
+              close: k.close,
+              volume: k.volume || 0,
+            }));
+
+          const exhaustionResult = this.exhaustionCalculator.calculate(
+            exhaustionCandles, side, trailingStop, closePx,
+          );
+          this.lastExhaustionScore = exhaustionResult.score;
+          const exhaustionConfig = this.exhaustionCalculator.getConfig();
+
+          if (exhaustionResult.shouldPlaceStop) {
+            // Exhaustion confirmed — ensure STOP_MARKET is at trailing
+            const orderSide: 'buy' | 'sell' = side === 'long' ? 'sell' : 'buy';
+
+            if (!this.proactiveLimitOrderId) {
+              // No stop order yet — place one
+              logger.info(
+                `🔋 [${symbol}] EXHAUSTION DETECTED (${exhaustionResult.score.toFixed(0)}/100): ` +
+                `ROC=${exhaustionResult.components.rocDeceleration} vol=${exhaustionResult.components.volumeDryUp} ` +
+                `body=${exhaustionResult.components.bodyShrinkage} wick=${exhaustionResult.components.rejectionWicks} ` +
+                `prox=${exhaustionResult.components.proximityToTrailing} | ` +
+                `placing STOP_MARKET @ $${trailingStop.toFixed(4)}`
+              );
+              try {
+                const plOrderId = await this.placeProactiveLimit(symbol, orderSide, updatedPosition.qty, trailingStop);
+                if (plOrderId) {
+                  this.proactiveLimitOrderId = plOrderId;
+                  this.proactiveLimitPrice = trailingStop;
+                  if (this.nfsStateMachine) {
+                    this.nfsStateMachine.setProactiveLimitOrderPending(plOrderId, trailingStop);
+                  }
+                  logger.info(`🔋 [${symbol}] Exhaustion STOP_MARKET placed: orderId=${plOrderId} @ $${trailingStop.toFixed(4)}`);
+                }
+              } catch (e) {
+                logger.warn(`[${symbol}] Failed to place exhaustion STOP_MARKET: ${e}`);
+              }
+            } else if (this.proactiveLimitPrice && Math.abs(trailingStop - this.proactiveLimitPrice) / this.proactiveLimitPrice > 0.001) {
+              // Trailing stop moved by > 0.1% — update the stop order
+              logger.info(
+                `🔋 [${symbol}] Trailing stop moved: $${this.proactiveLimitPrice.toFixed(4)} → $${trailingStop.toFixed(4)} | ` +
+                `exhaustion=${exhaustionResult.score.toFixed(0)} | updating STOP_MARKET`
+              );
+              try {
+                await this.cancelProactiveLimit(symbol);
+                const plOrderId = await this.placeProactiveLimit(symbol, orderSide, updatedPosition.qty, trailingStop);
+                if (plOrderId) {
+                  this.proactiveLimitOrderId = plOrderId;
+                  this.proactiveLimitPrice = trailingStop;
+                  if (this.nfsStateMachine) {
+                    this.nfsStateMachine.setProactiveLimitOrderPending(plOrderId, trailingStop);
+                  }
+                }
+              } catch (e) {
+                logger.warn(`[${symbol}] Failed to update exhaustion STOP_MARKET: ${e}`);
+              }
+            }
+          } else if (this.proactiveLimitOrderId && exhaustionResult.score < exhaustionConfig.CANCEL_THRESHOLD) {
+            // Exhaustion score dropped below cancel threshold (hysteresis)
+            // Momentum recovered — cancel the stop
+            logger.info(
+              `🔋 [${symbol}] Exhaustion RECOVERED (${exhaustionResult.score.toFixed(0)}/${exhaustionConfig.CANCEL_THRESHOLD}) — cancelling STOP_MARKET`
+            );
+            try {
+              await this.cancelProactiveLimit(symbol);
+            } catch (e) {
+              logger.warn(`[${symbol}] Failed to cancel exhaustion STOP_MARKET: ${e}`);
+            }
+          }
+        }
+
         // ONLY react to trailing exits in realtime
         if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
           if (this.rtTrailingBreachCandles > 0 || this.nfsBreachCount > 0) {
@@ -643,16 +650,16 @@ export class RealtimeExitHandler {
           if (this.nfsStateMachine) {
             this.nfsStateMachine.reset();
           }
-          // V5.82: Cancel proactive LIMIT if breach cleared
+          // V5.110: Cancel exhaustion STOP if breach cleared
           if (this.proactiveLimitOrderId) {
-            logger.info(`🎯 [${symbol}] Trailing breach cleared — cancelling proactive LIMIT`);
+            logger.info(`🔋 [${symbol}] Trailing breach cleared — cancelling exhaustion STOP`);
             await this.cancelProactiveLimit(symbol);
           }
           return;
         }
 
         // ═══════════════════════════════════════════════════════════════════
-        // V5.82: If proactive LIMIT is in play and breach confirmed, check fill
+        // V5.110: If exhaustion STOP is in play and breach confirmed, check fill
         // ═══════════════════════════════════════════════════════════════════
         if (this.proactiveLimitOrderId && position) {
           const fillResult = await this.checkProactiveLimitFill(symbol, position, currentPrice);
@@ -660,16 +667,16 @@ export class RealtimeExitHandler {
             const execPx = fillResult.avgPrice;
             this.stop();
             logger.info(
-              `🎯🎯🎯 [${symbol}] PROACTIVE LIMIT FILLED on breach confirm @ $${execPx.toFixed(4)} | ` +
-              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | exact backtest match`
+              `🔋🔋🔋 [${symbol}] EXHAUSTION STOP FILLED on breach confirm @ $${execPx.toFixed(4)} | ` +
+              `trailing=$${this.proactiveLimitPrice?.toFixed(4)} | exhaustion=${this.lastExhaustionScore.toFixed(0)}`
             );
             this.proactiveLimitOrderId = null;
             this.proactiveLimitPrice = null;
             await this.ctx.closePosition(position, execPx, EXIT_TRAIL_PROACTIVE);
             return;
           }
-          // Proactive LIMIT didn't fill yet — cancel it and fall through to normal NFS logic
-          logger.info(`🎯 [${symbol}] Proactive LIMIT not filled on breach — cancelling, using normal NFS flow`);
+          // Exhaustion STOP didn't fill yet — cancel and fall through to normal NFS logic
+          logger.info(`🔋 [${symbol}] Exhaustion STOP not filled on breach — cancelling, using normal NFS flow`);
           await this.cancelProactiveLimit(symbol);
         }
 

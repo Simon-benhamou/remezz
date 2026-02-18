@@ -75,9 +75,13 @@ import { calculateSignalScore } from '../strategies/signalRanker.js';
 import {
   EXIT_TRAIL, EXIT_TRAIL_NFS_HIGH, EXIT_TRAIL_NFS_MED, EXIT_TRAIL_NFS_LOW,
   EXIT_SL, EXIT_TIME, EXIT_REGIME_CHANGE, EXIT_MOMENTUM_REVERSAL,
-  EXIT_STAGNANT, EXIT_STAGNANT_PROFIT, EXIT_END,
+  EXIT_STAGNANT, EXIT_STAGNANT_PROFIT, EXIT_END, EXIT_TRAIL_PROACTIVE,
   EXIT_SIGNAL_REASON_MAP,
 } from '../types/exitReasons.js';
+import {
+  MomentumExhaustionCalculator,
+  type ExhaustionCandle,
+} from './momentumExhaustion.js';
 
 // ============================================================================
 // TYPES
@@ -143,6 +147,8 @@ interface BacktestSimPosition {
   appTrailingStop?: number;
   trailingBreachCandles?: number; // V5.18: Track consecutive 1m-simulated breaches (like prod)
   trailingActive?: boolean; // V5.26: Once trailing activates, it stays active
+  exhaustionStopActive?: boolean; // V5.110: Exhaustion-based STOP_MARKET was placed
+  exhaustionStopPrice?: number;   // V5.110: Price of the exhaustion stop
   maxPnlPct?: number;  // V5.28: Track max raw PnL % for stagnant trade detection
   entryReason?: string;  // V5.32: Track entry reason (anticipatory vs classic)
   // V5.30: Multi-position tracking
@@ -1313,6 +1319,14 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
   const TRADES_TO_SKIP = 1;               // Skip this many trades, then resume
   let tradeId = 0;
 
+  // V5.110: Exhaustion calculator for proactive trailing stop simulation
+  const exhaustionEnabled = (MomentumConfig.EXIT as any).EXHAUSTION_STOP_ENABLED ?? true;
+  const exhaustionCalc = exhaustionEnabled ? new MomentumExhaustionCalculator({
+    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 65,
+    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 45,
+    MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
+  }) : null;
+
   const positions: Record<string, BacktestSimPosition | null> = {};
   // V5.30: Multi-position support - store additional positions per symbol
   const multiPositions: Record<string, BacktestSimPosition[]> = {};
@@ -1481,6 +1495,111 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
         // Use regimeCursorForEntry as upper bound (current.timestamp <= btcCandle.timestamp)
         const btcCandles1hWindowForExit = btcCandles1h.slice(0, regimeCursorForEntry);
 
+        // ═══════════════════════════════════════════════════════════════════
+        // V5.110: EXHAUSTION-BASED PROACTIVE STOP (before standard exit check)
+        // If exhaustion was detected on a previous candle (stop would have been
+        // placed on exchange), check if current candle's low/high breaches the
+        // trailing stop. If yes, the STOP_MARKET would have filled.
+        // ═══════════════════════════════════════════════════════════════════
+        if (exhaustionCalc && pos.trailingActive && pos.appTrailingStop) {
+          const trailingStop = pos.appTrailingStop;
+
+          // Check if existing exhaustion stop triggers on this candle
+          if (pos.exhaustionStopActive && pos.exhaustionStopPrice) {
+            const stopPrice = pos.exhaustionStopPrice;
+            const breached = pos.side === 'long'
+              ? current.low <= stopPrice
+              : current.high >= stopPrice;
+
+            if (breached) {
+              // STOP_MARKET triggered — exit at trailing stop price
+              const pnl = calculatePnl(
+                pos.entryPrice, stopPrice, pos.side, pos.marginUsd, pos.leverage, holdBars,
+              );
+              capital += pnl.netPnlUsd + pos.marginUsd;
+              capitalInUse -= pos.marginUsd;
+
+              const realisticTiming = calculateRealisticHoldMinutes(
+                pos.entryCandle, pos.entryPrice, current, stopPrice, EXIT_TRAIL_PROACTIVE, pos.side,
+              );
+              const month = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 7);
+              const exitDay = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 10);
+
+              trades.push({
+                id: `trade_${++tradeId}`,
+                symbol,
+                side: pos.side,
+                entryTime: new Date(realisticTiming.entryTimestamp).toISOString(),
+                exitTime: new Date(realisticTiming.exitTimestamp).toISOString(),
+                entryPrice: pos.entryPrice,
+                exitPrice: stopPrice,
+                qty: pos.qty,
+                notionalUsd: pos.notionalUsd,
+                marginUsd: pos.marginUsd,
+                leverage: pos.leverage,
+                holdMinutes: realisticTiming.holdMinutes,
+                grossPnlPct: pnl.grossPnlPct,
+                netPnlPct: pnl.netPnlPct,
+                netPnlUsd: pnl.netPnlUsd,
+                feesUsd: pnl.feesUsd,
+                exitReason: EXIT_TRAIL_PROACTIVE,
+                entryReason: pos.entryReason,
+                capitalBefore: pos.capitalBefore,
+                capitalAfter: capital + capitalInUse,
+                month,
+                day: exitDay,
+                wasCapped: pos.wasCapped,
+                slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+              });
+
+              if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
+              else { consecutiveLosers++; if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; } }
+
+              // Close multi-positions at same price
+              for (const multiPos of multiPositions[symbol]) {
+                const multiHoldBars = idx - multiPos.entryIdx;
+                const multiPnl = calculatePnl(multiPos.entryPrice, stopPrice, multiPos.side, multiPos.marginUsd, multiPos.leverage, multiHoldBars);
+                capital += multiPnl.netPnlUsd + multiPos.marginUsd;
+                capitalInUse -= multiPos.marginUsd;
+              }
+
+              positions[symbol] = null;
+              multiPositions[symbol] = [];
+              cooldowns[symbol] = getCooldownBars(EXIT_TRAIL_PROACTIVE);
+              continue;
+            }
+
+            // Update stop price if trailing moved
+            if (Math.abs(trailingStop - pos.exhaustionStopPrice) / pos.exhaustionStopPrice > 0.001) {
+              pos.exhaustionStopPrice = trailingStop;
+            }
+          }
+
+          // Calculate exhaustion score on current candle to decide stop placement
+          const exhaustionCandles: ExhaustionCandle[] = windowCandles.slice(-20).map(c => ({
+            timestamp: c.timestamp,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume || 0,
+          }));
+
+          const exhaustionResult = exhaustionCalc.calculate(
+            exhaustionCandles, pos.side, trailingStop, current.close,
+          );
+
+          if (exhaustionResult.shouldPlaceStop) {
+            // Momentum exhaustion detected — simulate STOP_MARKET placement
+            pos.exhaustionStopActive = true;
+            pos.exhaustionStopPrice = trailingStop;
+          } else if (pos.exhaustionStopActive && exhaustionResult.score < exhaustionCalc.getConfig().CANCEL_THRESHOLD) {
+            // Momentum recovered — cancel the simulated stop
+            pos.exhaustionStopActive = false;
+            pos.exhaustionStopPrice = undefined;
+          }
+        }
+
         const exitResult = checkBacktestExit(
           pos,
           current,
@@ -1490,7 +1609,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           idx,
           params
         );
-        
+
         const shouldExit = exitResult.shouldExit;
         const exitReason = exitResult.exitReason;
         const exitPrice = exitResult.exitPrice;
