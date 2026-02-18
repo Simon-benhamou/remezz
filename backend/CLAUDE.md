@@ -44,7 +44,9 @@ npm run migrate             # Run migrations
 ### Core Components
 
 **Strategy Engine** (`src/strategies/`)
-- `simpleAgent.ts` - Main agent coordinator (~3660 lines). Capital pool, position management, trailing stops, NFS adaptive exits, 15m exit logic
+- `simpleAgent.ts` - **Barrel re-export file** (V5.108). Re-exports from capitalPool.ts and orchestrator.ts. All existing consumers import from here.
+  - `capitalPool.ts` - CapitalPool class (~540 lines). Shared capital management: reserve→commit→release lifecycle, live balance sync, skip-N-trades rule.
+  - `orchestrator.ts` - AgentOrchestrator class (~3280 lines, formerly SimpleAgent). Full trading lifecycle per symbol: entry detection, exit management, position sync, realtime monitoring.
 - `positionOpener.ts` - Extracted `openPosition()` (~970 lines). Pre-entry filters, capital sizing, exchange order placement, multi-position support
 - `realtimeExitHandler.ts` - Extracted `checkRealtimeExit()` (~845 lines). Owns all RT exit state, NFS system, proactive limit tracking, trailing breach detection
 - `momentumSimple.ts` - **Barrel re-export file** (V5.108). Re-exports all 54 exports from 5 focused modules below. All existing consumers import from here.
@@ -266,6 +268,15 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Dependency graph**: `config/ → indicators/ → signals/, exits/, risk/` (no cycles, no sibling imports)
   - **Backward compatibility**: `momentumSimple.ts` is now a 101-line barrel that re-exports all 54 exports. All 45+ consumers continue working with zero import changes.
   - **Single source of truth**: Each function/config lives in exactly ONE file. Changing `BTC_REGIME_TIMEFRAME` propagates automatically to all code paths.
+  - **Zero behavioral changes**: No logic, values, or function signatures were modified.
+
+- V5.108 Phase 2: Architectural refactoring — split simpleAgent.ts into focused modules:
+  - **Problem**: `simpleAgent.ts` was a 3,793-line file containing both the agent orchestrator class AND the CapitalPool class — two completely independent concerns in one file. CapitalPool manages shared capital across agents; AgentOrchestrator manages a single agent's trading lifecycle.
+  - **Solution**: Extracted into 2 focused modules:
+    - `capitalPool.ts` (539 lines) — `CapitalPool` class, `getCapitalPool`, `resetCapitalPool`. Shared capital management with atomic reserve→commit→release, live balance sync, skip-N-trades rule.
+    - `orchestrator.ts` (3,276 lines) — `AgentOrchestrator` class (renamed from `SimpleAgent`), `SimpleAgentConfig`, event types, factory functions.
+  - **Backward compatibility**: `simpleAgent.ts` is now a 24-line barrel that re-exports everything. `AgentOrchestrator` is exported as `SimpleAgent` for all existing consumers. Zero import changes needed.
+  - **Circular dep fix**: `positionOpener.ts` now imports `CapitalPool` directly from `capitalPool.ts` instead of via the barrel (avoids orchestrator → positionOpener → simpleAgent → orchestrator cycle).
   - **Zero behavioral changes**: No logic, values, or function signatures were modified.
 
 - V5.107: Fix parity forced entry timestamp — V5.106 was one candle too LATE (not early):
