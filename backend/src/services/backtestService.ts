@@ -2723,8 +2723,8 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     result = await runBacktestComputation(input);
   }
 
-  // V5.113: Post-process trailing exits at 1m resolution
-  if (params.postProcess1m !== false) {
+  // V5.113: Post-process trailing exits at 1m resolution (opt-in, takes ~5min for API fetches)
+  if (params.postProcess1m === true) {
     try {
       const { postProcess1mTrailingExits } = await import('./backtest/trailingReplay1m.js');
       result = await postProcess1mTrailingExits(result, exchange);
