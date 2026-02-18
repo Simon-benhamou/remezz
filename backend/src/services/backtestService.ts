@@ -1498,8 +1498,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     if (btcCandle.timestamp < startTimestamp) continue;
     if (btcCandle.timestamp > endDate.getTime()) break;
 
-    // Prevent event-loop starvation
-    if (btcIdx % 25 === 0) {
+    // Prevent event-loop starvation: yield every 3 BTC candles (~every 1-2ms)
+    // to let WebSocket heartbeats, health checks, and agent ticks process.
+    // Previously every 25 → caused WS disconnects during backtests (code 1006).
+    if (btcIdx % 3 === 0) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
 
@@ -1532,7 +1534,12 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     let signalCandidates: SignalCandidate[] = [];
 
     // Process each symbol - handle exits and collect entry signals
+    let symbolLoopIdx = 0;
     for (const symbol of symbols) {
+      // Yield inside symbol loop to prevent blocking during heavy per-symbol computation
+      if (symbolLoopIdx++ % 3 === 2) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       const candles = allData[symbol];
       let idx = symbolIdx[symbol];
 
