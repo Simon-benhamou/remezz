@@ -356,4 +356,57 @@ export const api = {
         };
       },
   },
+  // Polymarket experiment API
+  polymarket: {
+    getStatus: async () =>
+      (await client.get('/api/polymarket/status')).data as {
+        window: {
+          windowStart: number;
+          windowEnd: number;
+          startPrice: number;
+          currentPrice: number;
+          elapsed: number;
+          prediction: { direction: string; confidence: number; score: Record<string, number>; microRocPct: number } | null;
+          entryOdds: number | null;
+          status: string;
+        } | null;
+        klines1m: Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number; isFinal: boolean }>;
+      },
+    getStats: async () =>
+      (await client.get('/api/polymarket/stats')).data as {
+        totalWindows: number;
+        totalPredictions: number;
+        wins: number;
+        losses: number;
+        skips: number;
+        winRate: number;
+        cumulativePnl: number;
+        todayWindows: number;
+        todayPredictions: number;
+        todayWins: number;
+        todayLosses: number;
+        todayWinRate: number;
+        todayPnl: number;
+      },
+    getHistory: async (limit = 50) =>
+      (await client.get('/api/polymarket/history', { params: { limit } })).data as {
+        predictions: Array<{
+          id: number;
+          createdAt: string;
+          symbol: string;
+          windowStart: string;
+          windowEnd: string;
+          startPrice: number;
+          endPrice: number | null;
+          prediction: string | null;
+          confidence: number | null;
+          actualResult: string | null;
+          entryOdds: number | null;
+          simulatedPnl: number | null;
+          scoreBreakdown: Record<string, number> | null;
+          isCorrect: boolean | null;
+          skipped: boolean;
+        }>;
+      },
+  },
 };
