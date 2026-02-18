@@ -508,8 +508,8 @@ export const MomentumConfig = {
     // The exhaustion score IS the noise filter (replaces NFS partial-candle scoring).
     // ═══════════════════════════════════════════════════════════════════
     EXHAUSTION_STOP_ENABLED: true,            // Master switch for exhaustion detection
-    EXHAUSTION_PLACEMENT_THRESHOLD: 65,       // Score >= this → place STOP_MARKET (0-100)
-    EXHAUSTION_CANCEL_THRESHOLD: 45,          // Score < this → cancel STOP (hysteresis)
+    EXHAUSTION_PLACEMENT_THRESHOLD: 35,       // Score >= this → place STOP_MARKET (0-100)
+    EXHAUSTION_CANCEL_THRESHOLD: 20,          // Score < this → cancel STOP (hysteresis)
     EXHAUSTION_MIN_CANDLES: 10,               // Min candles needed for reliable calculation
     NFS_HIGH_SCORE_THRESHOLD: 70,             // Score >= this = immediate LIMIT exit
     NFS_MEDIUM_SCORE_THRESHOLD: 40,           // Score >= this = monitor closely
