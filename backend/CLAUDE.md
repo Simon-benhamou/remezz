@@ -508,3 +508,15 @@ On 15m data (less accurate due to wick simulation):
 2. Find optimal threshold where exhaustion adds value (better PnL or better DD)
 3. Decide: enable in live + backtest, or live-only (if 15m approximation stays negative)
 4. Consider: exhaustion could replace 2-candle confirmation entirely for faster reactivity
+
+### V5.111 Backtest Performance Optimization (67s → 53s, 21% faster)
+
+Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
+
+**Optimizations applied:**
+1. **Remove `setImmediate` yields** (~7.5s saved): `runBacktestComputation` always runs in a worker thread (`backtestWorker.ts`) or standalone scripts — the ~50K `setImmediate` yields to protect the server event loop were pure overhead.
+2. **Cache `btcCandles1h` window**: Previously `btcCandles1h.slice(0, regimeCursor)` was called twice per symbol per iteration (growing up to 500 elements). Now cached, only recreated when regime cursor advances.
+3. **Hoist BTC regime + BTC window**: BTC SMA200 regime and BTC 15m window for signal detection were computed 10× per BTC step (once per symbol). Now computed once per BTC step.
+4. **`calcMA` in-place summation**: `calcSMA(values, 200)` was creating a 200-element `slice(-200)` every call. Now sums in-place from array end. Eliminates ~100K allocations per run.
+
+**Remaining bottleneck** (~53s): Indicator math inside `checkMomentumSignal()` and `shouldExitPosition()` — 350K calls computing ATR/BB/ROC/ADX/SMA on 200-candle windows. Further improvement would require incremental (rolling) indicator updates — significant refactor requiring parity verification.
