@@ -216,6 +216,9 @@ export interface BacktestParams {
   // Aggregates BTC 15m candles to the desired timeframe for SMA200 regime, MTF filter, cash mode.
   // Options: 15, 30, 60 (default), 120, 240
   regimeTimeframeMinutes?: number;
+  // V5.113: Post-process trailing exits at 1m resolution (default true)
+  // Fetches 1m candles per trailing trade window and replays exhaustion + STOP_MARKET
+  postProcess1m?: boolean;
 }
 
 export interface BacktestTrade {
@@ -2710,13 +2713,26 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
   // Run computation on worker thread to avoid blocking the event loop.
   // Falls back to inline execution if worker fails (e.g. tsx dev mode).
+  let result: BacktestResult;
   try {
     console.log(`[Backtest] Starting computation on worker thread...`);
-    const result = await runOnWorker(input);
+    result = await runOnWorker(input);
     console.log(`[Backtest] Worker completed: ${result.trades.length} trades, ROI: ${result.summary.totalPnlPct.toFixed(1)}%`);
-    return result;
   } catch (workerError) {
     console.warn(`[Backtest] Worker thread unavailable, running on main thread:`, workerError);
-    return runBacktestComputation(input);
+    result = await runBacktestComputation(input);
   }
+
+  // V5.113: Post-process trailing exits at 1m resolution
+  if (params.postProcess1m !== false) {
+    try {
+      const { postProcess1mTrailingExits } = await import('./backtest/trailingReplay1m.js');
+      result = await postProcess1mTrailingExits(result, exchange);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[Backtest] 1m post-processing failed (using 15m results): ${msg}`);
+    }
+  }
+
+  return result;
 }

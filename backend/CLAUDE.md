@@ -520,3 +520,20 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
 4. **`calcMA` in-place summation**: `calcSMA(values, 200)` was creating a 200-element `slice(-200)` every call. Now sums in-place from array end. Eliminates ~100K allocations per run.
 
 **Remaining bottleneck** (~53s): Indicator math inside `checkMomentumSignal()` and `shouldExitPosition()` — 350K calls computing ATR/BB/ROC/ADX/SMA on 200-candle windows. Further improvement would require incremental (rolling) indicator updates — significant refactor requiring parity verification.
+
+### V5.113: 1m Post-Processing for Backtest Trailing Exits
+
+**Problem**: Backtest trailing exits snap to 15m boundaries (timing faux, PnL approximatif). Live exhaustion detector places STOP_MARKET that fills on any 1m wick → systematic DURATION + PNL mismatch on TRAIL_PROACTIVE trades.
+
+**Solution**: Two-pass architecture:
+1. Pass 1: `runBacktestComputation()` on worker thread (15m, fast, 0 API)
+2. Pass 2: `postProcess1mTrailingExits()` on main thread — fetch 1m candles per trailing trade window, replay exhaustion + STOP_MARKET, adjust trade results, recalculate summary
+
+**Files:**
+- **`services/backtest/trailingReplay1m.ts`** (NEW ~340 lines): `Candle1mFetcher` (cached per-symbol, rate-limited via ipWeightTracker + globalRestCircuitBreaker), `replayTradeAt1m()` (stop_market mode with progressive trailing + exhaustion hysteresis + 15m boundary fallback), `postProcess1mTrailingExits()` (orchestrator), `recalculateSummary()` (rebuilds capital chain, equity/drawdown curves, monthly stats, all summary metrics)
+- **`backtestService.ts`**: `postProcess1m?: boolean` added to `BacktestParams` (default `true`). Called after worker via dynamic import. Graceful fallback on failure.
+- **`parityVerificationServiceV2.ts`**: No changes needed — benefits automatically via `runBacktest()`.
+
+**API budget**: ~400 trailing trades × 1-2 CCXT requests = ~600 requests, ~5min. Cache per-symbol reduces to ~100-200 actual requests.
+**Config**: Uses `MomentumConfig.EXIT.EXHAUSTION_*` thresholds. Trailing tiers read from `MomentumConfig.EXIT.TRAILING_*`.
+**Disable**: Pass `postProcess1m: false` to `runBacktest()` params.
