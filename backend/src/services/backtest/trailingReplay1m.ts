@@ -406,6 +406,15 @@ export async function postProcess1mTrailingExits(
 
   let replayedCount = 0;
 
+  // V5.114: Save original PnLs BEFORE replaying — needed for incremental delta approach.
+  // recalculateSummary must NOT rebuild the capital chain from scratch because trades
+  // have concurrent positions (capital + capitalInUse). A linear rebuild makes later
+  // trades oversized relative to recalculated capital, causing cascading losses and DD>100%.
+  const originalPnls = new Map<string, { netPnlUsd: number; feesUsd: number }>();
+  for (const t of result.trades) {
+    originalPnls.set(t.id, { netPnlUsd: t.netPnlUsd, feesUsd: t.feesUsd });
+  }
+
   for (const [symbol, trades] of Object.entries(bySymbol)) {
     for (const trade of trades) {
       try {
@@ -453,32 +462,60 @@ export async function postProcess1mTrailingExits(
     return result;
   }
 
-  // Recalculate summary with updated trades
-  return recalculateSummary(result, result.params.initialCapital);
+  // V5.114: Use incremental delta approach instead of full capital chain rebuild
+  return recalculateSummaryIncremental(result, originalPnls);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// D) recalculateSummary — rebuild stats after trade modifications
+// D) recalculateSummaryIncremental — V5.114: delta-based approach
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// The old recalculateSummary rebuilt the capital chain linearly:
+//   capitalAfter = capitalBefore + netPnlUsd  (for each trade sequentially)
+//
+// This is WRONG because the 15m backtest has concurrent positions:
+//   capital (free) + capitalInUse (margins of open trades) = total equity
+// When the 1m replay changes some trades' PnL, rebuilding linearly makes
+// subsequent trades' position sizes disproportionate to the recalculated
+// capital — cascading losses can drive capital below zero → DD > 100%.
+//
+// FIX: Keep the original capital chain (which correctly models concurrency)
+// and apply PnL deltas incrementally. Each replayed trade shifts all
+// subsequent capitalBefore/capitalAfter by the cumulative delta.
 
-function recalculateSummary(result: BacktestResult, initialCapital: number): BacktestResult {
+function recalculateSummaryIncremental(
+  result: BacktestResult,
+  originalPnls: Map<string, { netPnlUsd: number; feesUsd: number }>,
+): BacktestResult {
   const trades = result.trades;
+  const initialCapital = result.params.initialCapital;
 
-  // Propagate PnL changes through capital chain
-  let capital = initialCapital;
+  // Apply cumulative PnL deltas to the original capital chain
+  let cumDelta = 0;
   for (const t of trades) {
-    t.capitalBefore = capital;
-    t.capitalAfter = capital + t.netPnlUsd;
-    capital = t.capitalAfter;
+    // Shift by cumulative delta from earlier replayed trades
+    t.capitalBefore += cumDelta;
+    t.capitalAfter += cumDelta;
+
+    // If this trade was replayed, account for its PnL change
+    const orig = originalPnls.get(t.id);
+    if (orig) {
+      const pnlDelta = t.netPnlUsd - orig.netPnlUsd;
+      if (pnlDelta !== 0) {
+        t.capitalAfter += pnlDelta;
+        cumDelta += pnlDelta;
+      }
+    }
   }
 
-  // Rebuild equity curve + drawdown
+  const finalCapital = trades.length > 0 ? trades[trades.length - 1].capitalAfter : initialCapital;
+
+  // Rebuild equity curve + drawdown from adjusted capital chain
   const equityCurve: { date: string; equity: number }[] = [];
   const drawdownCurve: { date: string; drawdown: number }[] = [];
   let peakCapital = initialCapital;
   let maxDrawdown = 0;
 
-  // Group trades by day for equity tracking
   const tradesByDay = new Map<string, BacktestTrade[]>();
   for (const t of trades) {
     const day = new Date(t.exitTime).toISOString().slice(0, 10);
@@ -491,7 +528,7 @@ function recalculateSummary(result: BacktestResult, initialCapital: number): Bac
     equityCurve.push({ date: day, equity });
 
     if (equity > peakCapital) peakCapital = equity;
-    const drawdownPct = ((peakCapital - equity) / peakCapital) * 100;
+    const drawdownPct = peakCapital > 0 ? ((peakCapital - equity) / peakCapital) * 100 : 0;
     if (drawdownPct > maxDrawdown) maxDrawdown = drawdownPct;
     drawdownCurve.push({ date: day, drawdown: drawdownPct });
   }
@@ -546,7 +583,8 @@ function recalculateSummary(result: BacktestResult, initialCapital: number): Bac
   const dailyReturns = equityCurve
     .map((e, i) => {
       if (i === 0) return 0;
-      return ((e.equity - equityCurve[i - 1].equity) / equityCurve[i - 1].equity) * 100;
+      const prev = equityCurve[i - 1].equity;
+      return prev > 0 ? ((e.equity - prev) / prev) * 100 : 0;
     })
     .slice(1);
 
@@ -571,7 +609,7 @@ function recalculateSummary(result: BacktestResult, initialCapital: number): Bac
       avgLossUsd: losses.length > 0 ? grossLosses / losses.length : 0,
       profitFactor: grossLosses > 0 ? grossWins / grossLosses : grossWins > 0 ? Infinity : 0,
       sharpeRatio,
-      finalCapital: capital,
+      finalCapital,
       longTrades: trades.filter(t => t.side === 'long').length,
       shortTrades: trades.filter(t => t.side === 'short').length,
       avgHoldMinutes: trades.length > 0 ? trades.reduce((sum, t) => sum + t.holdMinutes, 0) / trades.length : 0,

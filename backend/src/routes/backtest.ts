@@ -36,6 +36,8 @@ function stableParamsHash(params: BacktestParams): string {
     initialCapital: Number(params.initialCapital),
     leverage: Number(params.leverage),
     symbols: [...params.symbols].sort(),
+    // V5.114: Include postProcess1m in hash — different mode = different results
+    postProcess1m: params.postProcess1m === true,
   };
   return crypto.createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
 }
