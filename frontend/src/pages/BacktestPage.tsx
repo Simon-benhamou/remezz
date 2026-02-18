@@ -330,6 +330,7 @@ export default function BacktestPage() {
   const [selectedMonth, setSelectedMonth] = useState<string | 'all'>('all');
   const [selectedSymbol, setSelectedSymbol] = useState<string | 'all'>('all');
   const [selectedSide, setSelectedSide] = useState<'all' | 'long' | 'short'>('all');
+  const [postProcess1m, setPostProcess1m] = useState(false);
   const [tradePage, setTradePage] = useState(1);
   const [tradePageSize, setTradePageSize] = useState(50);
   const [tradeSortField, setTradeSortField] = useState<'netPnlUsd' | null>(null);
@@ -437,6 +438,7 @@ export default function BacktestPage() {
       initialCapital: values.initialCapital,
       symbols: values.symbols,
       leverage: values.leverage,
+      postProcess1m,
     };
 
     toast.info('Starting backtest... This may take a few minutes.');
@@ -691,6 +693,16 @@ export default function BacktestPage() {
                 })}
               </div>
             </div>
+
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={postProcess1m}
+                onChange={(e) => setPostProcess1m(e.target.checked)}
+                className="h-4 w-4 rounded border-border accent-primary"
+              />
+              <span className="text-xs text-muted-foreground">1m trailing replay <span className="text-[10px] opacity-60">(+5min, API calls)</span></span>
+            </label>
 
             <Button
               type="submit"

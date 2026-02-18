@@ -127,6 +127,7 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
       // V5.93: Default to 10 winners (+1308% ROI combined)
       symbols = ['AVAX/USDT:USDT', 'FET/USDT:USDT', 'WIF/USDT:USDT', 'DOT/USDT:USDT', 'TIA/USDT:USDT', 'IMX/USDT:USDT', 'STX/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'BTC/USDT:USDT'],
       leverage = 4.5,
+      postProcess1m = false,
     } = req.body;
     
     if (!startDate || !endDate) {
@@ -139,6 +140,7 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
       initialCapital: Number(initialCapital),
       symbols: Array.isArray(symbols) ? symbols : [symbols],
       leverage: Number(leverage),
+      postProcess1m: postProcess1m === true,
     };
 
     const userKey = getCacheUserKey(req);
