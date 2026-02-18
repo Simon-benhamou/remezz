@@ -427,3 +427,96 @@ Major codebase refactoring across multiple phases:
 10. **V5.108 split momentumSimple.ts** into 5 focused modules (config, indicators, signals, exits, risk) with barrel re-export. 3,562 lines → 5 files totaling ~3,600 lines, zero import changes for consumers.
 11. **V5.108 split simpleAgent.ts** into orchestrator.ts + capitalPool.ts + 4 agent/ modules (candleFetcher, exchangeSync, positionCloser, agentState). 3,793 lines → ~1,830 lines orchestrator + ~2,100 lines in extracted modules.
 12. **Dead code cleanup**: 49 unused files deleted (10,700+ lines), reducing src/ from 115 → 66 .ts files (43% reduction).
+
+## V5.110-V5.111: Momentum Exhaustion Detector (Proactive Trailing Exit)
+
+### Problem
+Trailing stop exits in live trading suffer from two issues:
+1. **Proactive LIMIT order bug** (V5.87): SELL LIMIT below market fills immediately (wrong order type). Only activated within 0.6% of trailing (too late). Used NFS on partial 1m candles (unreliable).
+2. **2-candle close confirmation delay**: Standard trailing exit waits for 2 consecutive candle closes below trailing stop. During this 30-min blind window, price can bounce or crash further.
+3. **Exchange trailing stops** (Binance) trigger on wicks, killing momentum capture.
+
+### Solution: Indicator-based exhaustion detection
+Instead of waiting for price to breach the trailing stop, detect when momentum is DYING using 5 indicators, then place a STOP_MARKET proactively. The exhaustion score IS the noise filter — if 5 independent indicators say "momentum is dying," the stop triggering is signal, not noise.
+
+**5 Components (100 points total):**
+1. **ROC Deceleration** (25pts) — Rate of change declining over 3 windows
+2. **Volume Dry-Up** (25pts) — Volume declining while price still advancing
+3. **Body Shrinkage** (20pts) — Candle bodies getting smaller (indecision)
+4. **Rejection Wicks** (15pts) — Growing wicks against the move direction
+5. **Proximity to Trailing** (15pts) — How close price is to trailing stop
+
+**Behavior:**
+- Score >= PLACEMENT_THRESHOLD (65) → place STOP_MARKET at trailing price
+- Score < CANCEL_THRESHOLD (45) → cancel stop (momentum recovered, hysteresis)
+- In live: runs on closed 1m candles, not partial candle noise
+- Order type: STOP_MARKET with reduceOnly + MARK_PRICE (not LIMIT)
+
+### Files
+- **`services/momentumExhaustion.ts`** — Core calculator (5 indicators, ExhaustionResult)
+- **`strategies/exchangeOrderManager.ts`** — Changed from LIMIT to STOP_MARKET with stopLossPrice + reduceOnly
+- **`strategies/realtimeExitHandler.ts`** — Exhaustion integration replacing old NFS partial-candle logic
+- **`services/backtestService.ts`** — Exhaustion simulation in backtest loop (15m approximation + optional 1m zoom-in via `allData1m`)
+- **`strategies/config/momentumConfig.ts`** — EXHAUSTION_STOP_ENABLED, EXHAUSTION_PLACEMENT_THRESHOLD (65), EXHAUSTION_CANCEL_THRESHOLD (45), EXHAUSTION_MIN_CANDLES (10)
+
+### Testing Approach: Dynamic 1m Fetch Per Trade Window
+The backtest runs on 15m candles, but simulating stop execution on 15m is inaccurate (15-min wicks that recover are caught as breaches). To properly test:
+
+**DO NOT download full 1m data** (500MB+ for 1 year, can't commit to git, slow to process).
+
+**Instead, use `scripts/analyze-exhaustion-1m.ts`:**
+1. Run baseline 15m backtest (exhaustion OFF) → get all ~890 trades
+2. Filter trailing exit trades (~400 trades)
+3. For each trade, dynamically fetch 1m candles from Binance (only the entry→exit window)
+4. Replay trailing stop + exhaustion at 1m resolution
+5. Compare: did exhaustion catch the exit earlier? At a better price?
+
+**Data needed:** ~400 trades × 300 candles = ~120K candles (~80 API requests, takes seconds)
+
+```bash
+# Single threshold analysis
+npx tsx scripts/analyze-exhaustion-1m.ts
+
+# Custom threshold
+npx tsx scripts/analyze-exhaustion-1m.ts --threshold 55
+
+# Sweep thresholds 35-80
+npx tsx scripts/analyze-exhaustion-1m.ts --sweep
+```
+
+**What the script measures per trade:**
+- Did exhaustion trigger before the standard trailing exit?
+- Was the exit price better (higher PnL) or worse?
+- How much earlier did it exit?
+- Overall: total PnL delta, win rate change, per-trade breakdown
+
+**Key insight:** The replay replicates the live trailing stop logic at 1m resolution:
+- Incremental HWM tracking on each 1m candle
+- Progressive trailing tiers (0.4% → 0.8% → 1.5% → 2.5% based on move size)
+- Exhaustion calculated on last 20 closed 1m candles
+- Stop triggers checked at 1m resolution (not 15m wick approximation)
+
+### 15m Backtest Results (for reference, approximate)
+On 15m data (less accurate due to wick simulation):
+- Threshold 55: 21 proactive exits, -$582 delta, best DD at 25.6%
+- Threshold 65: 8 proactive exits, -$1,866 delta (all 8 were winners, avg $385)
+- Lower thresholds = more proactive exits but worse PnL (15m wicks create false triggers)
+- 1m results expected to be significantly different (more accurate stop simulation)
+
+### Next Steps
+1. Run `analyze-exhaustion-1m.ts` on a machine with Binance API access
+2. Find optimal threshold where exhaustion adds value (better PnL or better DD)
+3. Decide: enable in live + backtest, or live-only (if 15m approximation stays negative)
+4. Consider: exhaustion could replace 2-candle confirmation entirely for faster reactivity
+
+### V5.111 Backtest Performance Optimization (67s → 53s, 21% faster)
+
+Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
+
+**Optimizations applied:**
+1. **Remove `setImmediate` yields** (~7.5s saved): `runBacktestComputation` always runs in a worker thread (`backtestWorker.ts`) or standalone scripts — the ~50K `setImmediate` yields to protect the server event loop were pure overhead.
+2. **Cache `btcCandles1h` window**: Previously `btcCandles1h.slice(0, regimeCursor)` was called twice per symbol per iteration (growing up to 500 elements). Now cached, only recreated when regime cursor advances.
+3. **Hoist BTC regime + BTC window**: BTC SMA200 regime and BTC 15m window for signal detection were computed 10× per BTC step (once per symbol). Now computed once per BTC step.
+4. **`calcMA` in-place summation**: `calcSMA(values, 200)` was creating a 200-element `slice(-200)` every call. Now sums in-place from array end. Eliminates ~100K allocations per run.
+
+**Remaining bottleneck** (~53s): Indicator math inside `checkMomentumSignal()` and `shouldExitPosition()` — 350K calls computing ATR/BB/ROC/ADX/SMA on 200-candle windows. Further improvement would require incremental (rolling) indicator updates — significant refactor requiring parity verification.

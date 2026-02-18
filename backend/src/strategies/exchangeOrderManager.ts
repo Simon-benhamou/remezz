@@ -306,23 +306,32 @@ export class ExchangeOrderManager {
     );
   }
 
-  // ── Proactive LIMIT Orders ─────────────────────────────────────────────
+  // ── Proactive Exhaustion Stop Orders ──────────────────────────────────
+  //
+  // V5.110: Changed from LIMIT to STOP_MARKET.
+  // A SELL LIMIT below market fills immediately (bug).
+  // A STOP_MARKET sits dormant until mark price reaches the trailing stop.
+  // Only placed when MomentumExhaustionCalculator confirms momentum is dying.
 
   async placeProactiveLimit(
     symbol: string, orderSide: 'buy' | 'sell', qty: number, price: number,
   ): Promise<string | null> {
     if (this.mode === 'paper') {
       const orderId = `paper_proactive_${Date.now()}`;
-      logger.debug(`[${symbol}] PAPER proactive LIMIT: ${orderSide} ${qty} @ ${price.toFixed(4)}`);
+      logger.debug(`[${symbol}] PAPER proactive STOP_MARKET: ${orderSide} ${qty} @ stop=$${price.toFixed(4)}`);
       return orderId;
     }
     try {
-      const order = await this.exchange.createOrder(symbol, 'limit', orderSide, qty, price, { timeInForce: 'GTC' });
-      ipWeightTracker.record(1, `proactiveLimit:${symbol}`);
+      const formattedQty = this.formatQtyForExchange(symbol, qty);
+      const order = await this.exchange.createOrder(
+        symbol, 'market', orderSide, formattedQty, undefined,
+        { stopLossPrice: price, reduceOnly: true, workingType: 'MARK_PRICE' },
+      );
+      ipWeightTracker.record(1, `proactiveStop:${symbol}`);
       this.proactiveLimitPlacedAt = Date.now();
       return order.id || null;
     } catch (e: unknown) {
-      logger.warn(`[${symbol}] Failed to place proactive LIMIT: ${errMsg(e)}`);
+      logger.warn(`[${symbol}] Failed to place proactive STOP_MARKET: ${errMsg(e)}`);
       return null;
     }
   }

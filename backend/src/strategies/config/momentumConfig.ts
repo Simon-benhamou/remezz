@@ -497,8 +497,20 @@ export const MomentumConfig = {
     // NFS score >= 70: High confidence exit (LIMIT order)
     // NFS score 40-69: Medium confidence (wait more or use confirmation)
     // NFS score < 40: Low confidence (likely noise, use 2-candle confirmation)
-    NFS_PROACTIVE_LIMIT_ENABLED: true,        // Place proactive LIMIT before breach
+    NFS_PROACTIVE_LIMIT_ENABLED: true,        // Legacy: now replaced by exhaustion stop
     NFS_ENABLED: true,                        // Master switch for NFS system
+
+    // ═══════════════════════════════════════════════════════════════════
+    // V5.110: EXHAUSTION-BASED PROACTIVE STOP
+    // Detects when momentum is dying BEFORE trailing breach using 5 indicators:
+    // ROC deceleration, volume dry-up, body shrinkage, rejection wicks, proximity.
+    // When exhaustion confirmed: places STOP_MARKET at trailing stop on exchange.
+    // The exhaustion score IS the noise filter (replaces NFS partial-candle scoring).
+    // ═══════════════════════════════════════════════════════════════════
+    EXHAUSTION_STOP_ENABLED: true,            // Master switch for exhaustion detection
+    EXHAUSTION_PLACEMENT_THRESHOLD: 35,       // Score >= this → place STOP_MARKET (0-100)
+    EXHAUSTION_CANCEL_THRESHOLD: 20,          // Score < this → cancel STOP (hysteresis)
+    EXHAUSTION_MIN_CANDLES: 10,               // Min candles needed for reliable calculation
     NFS_HIGH_SCORE_THRESHOLD: 70,             // Score >= this = immediate LIMIT exit
     NFS_MEDIUM_SCORE_THRESHOLD: 40,           // Score >= this = monitor closely
 

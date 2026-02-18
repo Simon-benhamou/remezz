@@ -7,8 +7,11 @@ import type { Position } from '../config/momentumConfig.js';
 
 export function calcMA(values: number[], period: number): number {
   if (values.length < period) return values[values.length - 1] || 0;
-  const slice = values.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
+  // V5.111: Avoid slice() allocation — sum in-place from the end
+  let sum = 0;
+  const start = values.length - period;
+  for (let i = start; i < values.length; i++) sum += values[i];
+  return sum / period;
 }
 
 export function calcSMA(values: number[], period: number): number {

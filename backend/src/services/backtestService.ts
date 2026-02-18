@@ -75,9 +75,13 @@ import { calculateSignalScore } from '../strategies/signalRanker.js';
 import {
   EXIT_TRAIL, EXIT_TRAIL_NFS_HIGH, EXIT_TRAIL_NFS_MED, EXIT_TRAIL_NFS_LOW,
   EXIT_SL, EXIT_TIME, EXIT_REGIME_CHANGE, EXIT_MOMENTUM_REVERSAL,
-  EXIT_STAGNANT, EXIT_STAGNANT_PROFIT, EXIT_END,
+  EXIT_STAGNANT, EXIT_STAGNANT_PROFIT, EXIT_END, EXIT_TRAIL_PROACTIVE,
   EXIT_SIGNAL_REASON_MAP,
 } from '../types/exitReasons.js';
+import {
+  MomentumExhaustionCalculator,
+  type ExhaustionCandle,
+} from './momentumExhaustion.js';
 
 // ============================================================================
 // TYPES
@@ -143,6 +147,8 @@ interface BacktestSimPosition {
   appTrailingStop?: number;
   trailingBreachCandles?: number; // V5.18: Track consecutive 1m-simulated breaches (like prod)
   trailingActive?: boolean; // V5.26: Once trailing activates, it stays active
+  exhaustionStopActive?: boolean; // V5.110: Exhaustion-based STOP_MARKET was placed
+  exhaustionStopPrice?: number;   // V5.110: Price of the exhaustion stop
   maxPnlPct?: number;  // V5.28: Track max raw PnL % for stagnant trade detection
   entryReason?: string;  // V5.32: Track entry reason (anticipatory vs classic)
   // V5.30: Multi-position tracking
@@ -290,6 +296,19 @@ export interface BacktestResult {
     price: number;
     reason?: string;  // May be undefined
   }[];
+}
+
+// Worker thread input: pre-loaded candle data for pure computation
+export interface BacktestComputationInput {
+  params: BacktestParams;
+  btcCandles: BacktestCandle[];
+  btcCandles1h: BacktestCandle[];
+  allData: Record<string, BacktestCandle[]>;
+  CANDLE_REGIME_INTERVAL_MS: number;
+  // V5.111: Optional 1m candle data for high-resolution exhaustion simulation
+  // When provided, exhaustion detection + stop execution happens at 1m resolution
+  // within each 15m bar (exactly like live trading), instead of approximating on 15m candles.
+  allData1m?: Record<string, BacktestCandle[]>;
 }
 
 // ============================================================================
@@ -740,43 +759,32 @@ function checkBacktestExit(
         trailingStopPrice
       );
 
-      // NOTE: Backtest uses EXIT_TRAIL_NFS_HIGH/MED/LOW (immediate per-candle evaluation).
-      // Live 15m layer uses EXIT_TRAIL_NFS_HIGH_15M/MED_15M/LOW_15M (deferred to 15m close
-      // per V5.90). The _15M suffix distinguishes the deferral path — same scoring logic,
-      // different timing. This is intentional, not a parity bug.
+      // NFS trailing exit pricing:
+      // In live, the proactive limit order at trailing stop price SHOULD fill
+      // before the candle closes. If it doesn't, the 15m handler exits at
+      // market (candle close). Using trailingStopPrice here represents the
+      // INTENDED behavior. If live proactive limits aren't filling, the fix
+      // belongs in live execution, not in degrading the backtest.
       if (nfsScore.confidence === 'HIGH') {
-        // HIGH confidence: Exit at trailing stop price (best available fill).
-        // In live, proactive limit order is placed at trailing stop BEFORE breach
-        // (V5.87), so fill is at trailing price — matching this backtest behavior.
         return {
           shouldExit: true,
           exitReason: EXIT_TRAIL_NFS_HIGH,
           exitPrice: trailingStopPrice,
         };
       } else if (nfsScore.confidence === 'MEDIUM') {
-        // MEDIUM confidence: 1-candle confirmation, exit at best of trailing stop or close
         if (pos.trailingBreachCandles >= 1) {
-          // V5.81: Use best of trailing stop price or candle close for parity
-          const medExitPrice = pos.side === 'long'
-            ? Math.max(trailingStopPrice, current.close)
-            : Math.min(trailingStopPrice, current.close);
           return {
             shouldExit: true,
             exitReason: EXIT_TRAIL_NFS_MED,
-            exitPrice: medExitPrice,
+            exitPrice: current.close,
           };
         }
       } else {
-        // LOW confidence: 2-candle confirmation, exit at best of trailing stop or close
         if (pos.trailingBreachCandles >= 2) {
-          // V5.81: Use best of trailing stop price or candle close for parity
-          const lowExitPrice = pos.side === 'long'
-            ? Math.max(trailingStopPrice, current.close)
-            : Math.min(trailingStopPrice, current.close);
           return {
             shouldExit: true,
             exitReason: EXIT_TRAIL_NFS_LOW,
-            exitPrice: lowExitPrice,
+            exitPrice: current.close,
           };
         }
       }
@@ -1245,118 +1253,36 @@ function calculatePnl(
   return { grossPnlPct, netPnlPct, netPnlUsd, feesUsd };
 }
 
-// ============================================================================
-// V5.68: INTRABAR TIMING ESTIMATION
-// ============================================================================
-// Estimates when a price level was reached within a candle for realistic timing.
-// Without tick data, we use OHLC bar order assumption:
-// - Bullish candle (C > O): O → L → H → C (price dips first, then rises)
-// - Bearish candle (C < O): O → H → L → C (price rises first, then drops)
-// This matches typical market microstructure patterns.
-// ============================================================================
-
-interface IntrabarTimingResult {
-  estimatedTimestamp: number;
-  fractionOfCandle: number; // 0.0 = candle open, 1.0 = candle close
-}
-
-function estimateIntrabarTiming(
-  candle: BacktestCandle,
-  targetPrice: number,
-  _side: 'long' | 'short',  // Reserved for future directional estimation
-  _isEntry: boolean         // Reserved for future entry vs exit optimization
-): IntrabarTimingResult {
-  const candleDurationMs = 15 * 60 * 1000; // 15 minutes
-  const { timestamp, open, high, low, close } = candle;
-  const isBullish = close >= open;
-
-  // If price is outside candle range, return candle close time
-  if (targetPrice > high || targetPrice < low) {
-    return { estimatedTimestamp: timestamp + candleDurationMs, fractionOfCandle: 1.0 };
-  }
-
-  // Calculate position within the OHLC range
-  // For bullish candles: O → L (0-0.25) → H (0.25-0.75) → C (0.75-1.0)
-  // For bearish candles: O → H (0-0.25) → L (0.25-0.75) → C (0.75-1.0)
-
-  let fraction = 0.5; // Default to mid-candle
-
-  if (isBullish) {
-    // Bullish: O → L → H → C
-    if (targetPrice <= open && targetPrice >= low) {
-      // Price in the O → L range (first 25% of candle)
-      const range = open - low;
-      fraction = range > 0 ? 0.25 * (1 - (targetPrice - low) / range) : 0.125;
-    } else if (targetPrice >= open && targetPrice <= high) {
-      // Price in the L → H range (middle 50% of candle)
-      const range = high - low;
-      fraction = range > 0 ? 0.25 + 0.5 * ((targetPrice - low) / range) : 0.5;
-    } else {
-      // Price in the H → C range (last 25% of candle)
-      const range = high - close;
-      fraction = range > 0 ? 0.75 + 0.25 * ((high - targetPrice) / range) : 0.875;
-    }
-  } else {
-    // Bearish: O → H → L → C
-    if (targetPrice >= open && targetPrice <= high) {
-      // Price in the O → H range (first 25% of candle)
-      const range = high - open;
-      fraction = range > 0 ? 0.25 * ((targetPrice - open) / range) : 0.125;
-    } else if (targetPrice <= open && targetPrice >= low) {
-      // Price in the H → L range (middle 50% of candle)
-      const range = high - low;
-      fraction = range > 0 ? 0.25 + 0.5 * ((high - targetPrice) / range) : 0.5;
-    } else {
-      // Price in the L → C range (last 25% of candle)
-      const range = close - low;
-      fraction = range > 0 ? 0.75 + 0.25 * ((targetPrice - low) / range) : 0.875;
-    }
-  }
-
-  // Clamp fraction to valid range
-  fraction = Math.max(0.05, Math.min(0.95, fraction));
-
-  const estimatedTimestamp = Math.round(timestamp + fraction * candleDurationMs);
-
-  return { estimatedTimestamp, fractionOfCandle: fraction };
-}
-
 /**
- * Calculate realistic hold time considering intrabar entry/exit timing
+ * Calculate hold time using candle-close timing for both entry and exit.
+ *
+ * Pshat-Emet: Only CLOSED candles are truth. We have no tick data, so all
+ * timestamps are at candle close boundaries. This matches live behavior where
+ * the 15m exit handler evaluates at candle close, even for SL/NFS_HIGH exits
+ * whose exchange fills happen intra-candle.
+ *
+ * Exit PRICES (SL at stop, NFS_HIGH at trailing stop) remain correct — they
+ * match live proactive limit / exchange SL fills.  Only the TIMING is
+ * normalised to candle close, producing holdMinutes in multiples of 15.
  */
 function calculateRealisticHoldMinutes(
   entryCandle: BacktestCandle,
-  entryPrice: number,
+  _entryPrice: number,
   exitCandle: BacktestCandle,
-  exitPrice: number,
-  exitReason: string,
-  side: 'long' | 'short'
+  _exitPrice: number,
+  _exitReason: string,
+  _side: 'long' | 'short'
 ): { holdMinutes: number; entryTimestamp: number; exitTimestamp: number } {
   const candleDurationMs = 15 * 60 * 1000;
 
-  // V5.101: Entry always at candle close (V5.91 disabled wick breakout entry).
-  // Use candle end time, not intrabar estimate.
+  // Entry at candle close (V5.91 disabled wick breakout entry)
   const entryTimestamp = entryCandle.timestamp + candleDurationMs;
 
-  // For exits, check if it's an intrabar exit type
-  const isIntrabarExit = exitReason.includes('NFS_HIGH') ||
-                          exitReason === EXIT_SL ||
-                          exitReason === 'TP' ||
-                          exitReason === 'STOP_LOSS' ||
-                          exitReason === 'TAKE_PROFIT';
-
-  let exitTimestamp: number;
-  if (isIntrabarExit) {
-    // For intrabar exits, estimate when exit price was reached
-    const exitTiming = estimateIntrabarTiming(exitCandle, exitPrice, side, false);
-    exitTimestamp = exitTiming.estimatedTimestamp;
-  } else {
-    // For candle close exits (NFS_MED, NFS_LOW, STAGNANT, etc.), use candle end time
-    exitTimestamp = exitCandle.timestamp + candleDurationMs;
-  }
+  // Exit at candle close — ALL exits evaluated at 15m boundary in live
+  const exitTimestamp = exitCandle.timestamp + candleDurationMs;
 
   const holdMs = exitTimestamp - entryTimestamp;
-  const holdMinutes = Math.max(1, Math.round(holdMs / 60000)); // At least 1 minute
+  const holdMinutes = Math.max(15, Math.round(holdMs / 60000)); // Minimum 1 bar = 15 min
 
   return {
     holdMinutes,
@@ -1366,72 +1292,13 @@ function calculateRealisticHoldMinutes(
 }
 
 // ============================================================================
-// MAIN BACKTEST FUNCTION
+// BACKTEST COMPUTATION — Pure CPU simulation (can run on worker thread)
 // ============================================================================
 
-export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
-  const { startDate, endDate, initialCapital, symbols, leverage, signalOverrides, dataStartDate, parityMode, forcedEntry } = params;
-
-  console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
-
-  // V5.25: Check circuit breaker BEFORE starting backtest
-  if (!globalRestCircuitBreaker.canMakeRequest()) {
-    throw new Error('REST circuit breaker is OPEN - Binance rate limit active. Please wait before running backtest.');
-  }
-
-  // V5.25: Use cached exchange to avoid loadMarkets on every backtest
-  // getCachedExchange() loads markets ONCE and caches them globally
-  const exchange = await getCachedExchange();
-  
-  console.log(`[Backtest] Exchange ready (using cached markets - 0 API weight)`);
-
-  // V5.47: Use dataStartDate for loading data (indicator warmup) if provided, otherwise startDate
-  const dataLoadStart = dataStartDate || startDate;
-
-  // Fetch BTC for regime detection
-  const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
+export async function runBacktestComputation(input: BacktestComputationInput): Promise<BacktestResult> {
+  const { params, btcCandles, btcCandles1h, allData, CANDLE_REGIME_INTERVAL_MS, allData1m } = input;
+  const { startDate, endDate, initialCapital, symbols, leverage, parityMode, forcedEntry } = params;
   const btcCloses = btcCandles.map((c) => c.close);
-  console.log(`[Backtest] BTC 15m: ${btcCandles.length} candles`);
-
-  // BTC candles for regime/MTF: derive default from config, or use param override
-  const configTfStr = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME; // e.g. '15m', '1h', '4h'
-  const configTfMin = parseInt(configTfStr) * (configTfStr.includes('h') ? 60 : 1);
-  const regimeTfMin = params.regimeTimeframeMinutes ?? configTfMin;
-  let btcCandles1h: Candle[];
-  if (regimeTfMin === 60) {
-    // Fetch native 1h candles (most accurate for 1h regime)
-    btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
-    console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles (native)`);
-  } else if (regimeTfMin <= 15) {
-    // V5.102: Use BTC 15m candles directly for regime (no aggregation needed)
-    btcCandles1h = btcCandles;
-    console.log(`[Backtest] BTC regime: using 15m candles directly (${btcCandles1h.length} candles)`);
-  } else {
-    // Aggregate 15m candles to desired timeframe
-    btcCandles1h = aggregate15mCandles(btcCandles, regimeTfMin);
-    console.log(`[Backtest] BTC ${regimeTfMin}m: ${btcCandles1h.length} candles (aggregated from 15m)`);
-  }
-
-  // Interval for regime candle filtering (dynamic based on regimeTimeframeMinutes)
-  const CANDLE_REGIME_INTERVAL_MS = regimeTfMin * 60 * 1000;
-
-  // Fetch symbol data — parallel batches of 3 to speed up production (no local files)
-  const allData: Record<string, Candle[]> = {};
-  const BATCH_SIZE = 3;
-  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
-    const batch = symbols.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(
-      batch.map(symbol => fetchCandles(exchange, symbol, dataLoadStart, endDate))
-    );
-    for (let j = 0; j < batch.length; j++) {
-      allData[batch[j]] = results[j];
-      console.log(`[Backtest] ${batch[j]}: ${results[j].length} candles`);
-    }
-    // Small delay between batches to avoid rate-limit bursts
-    if (i + BATCH_SIZE < symbols.length) {
-      await new Promise(r => setTimeout(r, 500));
-    }
-  }
 
   // Track per-symbol candle cursor (avoid O(n²) findIndex)
   const symbolIdx: Record<string, number> = {};
@@ -1455,6 +1322,18 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   const CONSECUTIVE_LOSER_THRESHOLD = 2;  // Trigger after this many consecutive losers
   const TRADES_TO_SKIP = 1;               // Skip this many trades, then resume
   let tradeId = 0;
+
+  // V5.110: Exhaustion calculator for proactive trailing stop simulation
+  const exhaustionEnabled = (MomentumConfig.EXIT as any).EXHAUSTION_STOP_ENABLED ?? true;
+  const exhaustionCalc = exhaustionEnabled ? new MomentumExhaustionCalculator({
+    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 65,
+    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 45,
+    MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
+  }) : null;
+
+  // V5.111: Per-symbol 1m candle cursor for efficient zoom-in lookup
+  const symbolIdx1m: Record<string, number> = {};
+  for (const symbol of symbols) symbolIdx1m[symbol] = 0;
 
   const positions: Record<string, BacktestSimPosition | null> = {};
   // V5.30: Multi-position support - store additional positions per symbol
@@ -1481,6 +1360,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   // Regime candle cursor: advances monotonically for O(1) per-step filtering
   // Tracks the largest index i where btcCandles1h[i].timestamp + CANDLE_REGIME_INTERVAL_MS <= btcCandle.timestamp
   let regimeCursorForEntry = 0;
+  // V5.111: Cache btcCandles1h window — only recreate when cursor advances
+  // Previously sliced twice per symbol per iteration (exit + entry), growing up to ~500 elements
+  let cachedBtcCandles1hWindow: BacktestCandle[] = [];
+  let lastRegimeCursor = -1;
 
   // Main loop - iterate over BTC candles
   for (let btcIdx = startIdx; btcIdx < btcCandles.length; btcIdx++) {
@@ -1493,15 +1376,20 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     ) {
       regimeCursorForEntry++;
     }
+
+    // Update cached 1h window only when cursor changes
+    if (regimeCursorForEntry !== lastRegimeCursor) {
+      cachedBtcCandles1hWindow = btcCandles1h.slice(0, regimeCursorForEntry);
+      lastRegimeCursor = regimeCursorForEntry;
+    }
     // regimeCursorForEntry is now the EXCLUSIVE end index (first candle that doesn't pass)
 
     if (btcCandle.timestamp < startTimestamp) continue;
     if (btcCandle.timestamp > endDate.getTime()) break;
 
-    // Prevent event-loop starvation
-    if (btcIdx % 25 === 0) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    // V5.111: setImmediate yield REMOVED — runBacktestComputation always executes
+    // in a worker thread (backtestWorker.ts) or standalone scripts, never on the
+    // server main event loop. The ~50K yields added ~25s of overhead per run (37%).
 
     const day = new Date(btcCandle.timestamp).toISOString().slice(0, 10);
 
@@ -1515,6 +1403,11 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       if (drawdownPct > maxDrawdown) maxDrawdown = drawdownPct;
       drawdownCurve.push({ date: day, drawdown: drawdownPct });
     }
+
+    // V5.111 PERF: Pre-compute BTC-only values once per BTC step (shared across all symbols)
+    // Previously computed 10x per BTC step (once per symbol).
+    const btcWindowForSignal = btcCandles.slice(Math.max(0, btcIdx - 201), btcIdx);
+    let cachedIsBullRegime: boolean | null = null;
 
     // ═══════════════════════════════════════════════════════════════════
     // V5.22: COLLECT SIGNALS FOR RANKING (Phase 1: Exits + Signal Detection)
@@ -1532,7 +1425,9 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     let signalCandidates: SignalCandidate[] = [];
 
     // Process each symbol - handle exits and collect entry signals
+    let symbolLoopIdx = 0;
     for (const symbol of symbols) {
+      symbolLoopIdx++;
       const candles = allData[symbol];
       let idx = symbolIdx[symbol];
 
@@ -1615,7 +1510,261 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
         // V5.86: Compute regime candles window for exit
         // Use regimeCursorForEntry as upper bound (current.timestamp <= btcCandle.timestamp)
-        const btcCandles1hWindowForExit = btcCandles1h.slice(0, regimeCursorForEntry);
+        const btcCandles1hWindowForExit = cachedBtcCandles1hWindow;
+
+        // ═══════════════════════════════════════════════════════════════════
+        // V5.111: EXHAUSTION-BASED PROACTIVE STOP (before standard exit check)
+        //
+        // Two modes:
+        // A) With 1m data (allData1m): "Zoom-in" — iterate 1m candles within
+        //    the 15m bar for exhaustion detection + stop execution. This matches
+        //    live behavior exactly (1m closed candle analysis + 1m stop check).
+        // B) Without 1m data: Approximate on 15m candles (V5.110 behavior).
+        // ═══════════════════════════════════════════════════════════════════
+        if (exhaustionCalc && pos.trailingActive && pos.appTrailingStop) {
+          const candles1m = allData1m?.[symbol];
+          let exhaustionExited = false;
+
+          if (candles1m && candles1m.length > 0) {
+            // ─── MODE A: 1m ZOOM-IN (high fidelity) ───────────────────────
+            // Find the 1m candles within this 15m bar
+            const barStartTs = current.timestamp;
+            const barEndTs = current.timestamp + 15 * 60 * 1000;
+
+            // Advance 1m cursor to this bar
+            while (symbolIdx1m[symbol] < candles1m.length && candles1m[symbolIdx1m[symbol]].timestamp < barStartTs) {
+              symbolIdx1m[symbol]++;
+            }
+
+            // Collect 1m candles within this 15m bar
+            const bar1mStart = symbolIdx1m[symbol];
+            let bar1mEnd = bar1mStart;
+            while (bar1mEnd < candles1m.length && candles1m[bar1mEnd].timestamp < barEndTs) {
+              bar1mEnd++;
+            }
+            const bar1mCandles = candles1m.slice(bar1mStart, bar1mEnd);
+
+            if (bar1mCandles.length > 0) {
+              // Derive current trailing distance from position state
+              const hwm = pos.side === 'long' ? (pos.highWaterMark ?? pos.entryPrice) : (pos.lowWaterMark ?? pos.entryPrice);
+              const trailingDistPct = pos.side === 'long'
+                ? ((hwm - pos.appTrailingStop) / hwm) * 100
+                : ((pos.appTrailingStop - hwm) / hwm) * 100;
+
+              let localHwm = hwm;
+              let localTrailing = pos.appTrailingStop;
+
+              // Get historical 1m candles for exhaustion (20 before this bar)
+              const hist1mStart = Math.max(0, bar1mStart - 20);
+              const recent1m: ExhaustionCandle[] = candles1m.slice(hist1mStart, bar1mStart).map(c => ({
+                timestamp: c.timestamp, open: c.open, high: c.high, low: c.low,
+                close: c.close, volume: c.volume || 0,
+              }));
+
+              for (const c1m of bar1mCandles) {
+                // 1. Check if existing exhaustion stop triggers on this 1m candle
+                if (pos.exhaustionStopActive && pos.exhaustionStopPrice) {
+                  const breached = pos.side === 'long'
+                    ? c1m.low <= pos.exhaustionStopPrice
+                    : c1m.high >= pos.exhaustionStopPrice;
+
+                  if (breached) {
+                    const stopPrice = pos.exhaustionStopPrice;
+                    const pnl = calculatePnl(
+                      pos.entryPrice, stopPrice, pos.side, pos.marginUsd, pos.leverage, holdBars,
+                    );
+                    capital += pnl.netPnlUsd + pos.marginUsd;
+                    capitalInUse -= pos.marginUsd;
+
+                    // Use 1m candle timestamp for realistic exit time
+                    const entryTs = pos.entryCandle.timestamp;
+                    const exitTs = c1m.timestamp + 60 * 1000; // end of 1m candle
+                    const holdMin = (exitTs - entryTs) / 60000;
+                    const month = new Date(exitTs).toISOString().slice(0, 7);
+                    const exitDay = new Date(exitTs).toISOString().slice(0, 10);
+
+                    trades.push({
+                      id: `trade_${++tradeId}`,
+                      symbol,
+                      side: pos.side,
+                      entryTime: new Date(entryTs).toISOString(),
+                      exitTime: new Date(exitTs).toISOString(),
+                      entryPrice: pos.entryPrice,
+                      exitPrice: stopPrice,
+                      qty: pos.qty,
+                      notionalUsd: pos.notionalUsd,
+                      marginUsd: pos.marginUsd,
+                      leverage: pos.leverage,
+                      holdMinutes: holdMin,
+                      grossPnlPct: pnl.grossPnlPct,
+                      netPnlPct: pnl.netPnlPct,
+                      netPnlUsd: pnl.netPnlUsd,
+                      feesUsd: pnl.feesUsd,
+                      exitReason: EXIT_TRAIL_PROACTIVE,
+                      entryReason: pos.entryReason,
+                      capitalBefore: pos.capitalBefore,
+                      capitalAfter: capital + capitalInUse,
+                      month,
+                      day: exitDay,
+                      wasCapped: pos.wasCapped,
+                      slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+                    });
+
+                    if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
+                    else { consecutiveLosers++; if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; } }
+
+                    for (const multiPos of multiPositions[symbol]) {
+                      const multiHoldBars = idx - multiPos.entryIdx;
+                      const multiPnl = calculatePnl(multiPos.entryPrice, stopPrice, multiPos.side, multiPos.marginUsd, multiPos.leverage, multiHoldBars);
+                      capital += multiPnl.netPnlUsd + multiPos.marginUsd;
+                      capitalInUse -= multiPos.marginUsd;
+                    }
+
+                    positions[symbol] = null;
+                    multiPositions[symbol] = [];
+                    cooldowns[symbol] = getCooldownBars(EXIT_TRAIL_PROACTIVE);
+                    exhaustionExited = true;
+                    break;
+                  }
+                }
+
+                // 2. Update local HWM and trailing from 1m candle
+                if (pos.side === 'long') {
+                  localHwm = Math.max(localHwm, c1m.high);
+                  localTrailing = localHwm * (1 - trailingDistPct / 100);
+                } else {
+                  localHwm = Math.min(localHwm, c1m.low);
+                  localTrailing = localHwm * (1 + trailingDistPct / 100);
+                }
+
+                // Update exhaustion stop price to follow trailing
+                if (pos.exhaustionStopActive) {
+                  pos.exhaustionStopPrice = localTrailing;
+                }
+
+                // 3. Add this closed 1m candle to history and calculate exhaustion
+                recent1m.push({
+                  timestamp: c1m.timestamp, open: c1m.open, high: c1m.high,
+                  low: c1m.low, close: c1m.close, volume: c1m.volume || 0,
+                });
+                if (recent1m.length > 20) recent1m.shift();
+
+                const exhaustionResult = exhaustionCalc.calculate(
+                  recent1m, pos.side, localTrailing, c1m.close,
+                );
+
+                if (exhaustionResult.shouldPlaceStop) {
+                  pos.exhaustionStopActive = true;
+                  pos.exhaustionStopPrice = localTrailing;
+                } else if (pos.exhaustionStopActive && exhaustionResult.score < exhaustionCalc.getConfig().CANCEL_THRESHOLD) {
+                  pos.exhaustionStopActive = false;
+                  pos.exhaustionStopPrice = undefined;
+                }
+              }
+
+              // Sync trailing back to position after 1m zoom-in
+              if (!exhaustionExited) {
+                pos.appTrailingStop = localTrailing;
+                if (pos.side === 'long') {
+                  pos.highWaterMark = localHwm;
+                } else {
+                  pos.lowWaterMark = localHwm;
+                }
+              }
+            }
+          } else {
+            // ─── MODE B: 15m APPROXIMATION (no 1m data) ────────────────────
+            const trailingStop = pos.appTrailingStop;
+
+            if (pos.exhaustionStopActive && pos.exhaustionStopPrice) {
+              const stopPrice = pos.exhaustionStopPrice;
+              const breached = pos.side === 'long'
+                ? current.low <= stopPrice
+                : current.high >= stopPrice;
+
+              if (breached) {
+                const pnl = calculatePnl(
+                  pos.entryPrice, stopPrice, pos.side, pos.marginUsd, pos.leverage, holdBars,
+                );
+                capital += pnl.netPnlUsd + pos.marginUsd;
+                capitalInUse -= pos.marginUsd;
+
+                const realisticTiming = calculateRealisticHoldMinutes(
+                  pos.entryCandle, pos.entryPrice, current, stopPrice, EXIT_TRAIL_PROACTIVE, pos.side,
+                );
+                const month = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 7);
+                const exitDay = new Date(realisticTiming.exitTimestamp).toISOString().slice(0, 10);
+
+                trades.push({
+                  id: `trade_${++tradeId}`,
+                  symbol,
+                  side: pos.side,
+                  entryTime: new Date(realisticTiming.entryTimestamp).toISOString(),
+                  exitTime: new Date(realisticTiming.exitTimestamp).toISOString(),
+                  entryPrice: pos.entryPrice,
+                  exitPrice: stopPrice,
+                  qty: pos.qty,
+                  notionalUsd: pos.notionalUsd,
+                  marginUsd: pos.marginUsd,
+                  leverage: pos.leverage,
+                  holdMinutes: realisticTiming.holdMinutes,
+                  grossPnlPct: pnl.grossPnlPct,
+                  netPnlPct: pnl.netPnlPct,
+                  netPnlUsd: pnl.netPnlUsd,
+                  feesUsd: pnl.feesUsd,
+                  exitReason: EXIT_TRAIL_PROACTIVE,
+                  entryReason: pos.entryReason,
+                  capitalBefore: pos.capitalBefore,
+                  capitalAfter: capital + capitalInUse,
+                  month,
+                  day: exitDay,
+                  wasCapped: pos.wasCapped,
+                  slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+                });
+
+                if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
+                else { consecutiveLosers++; if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; } }
+
+                for (const multiPos of multiPositions[symbol]) {
+                  const multiHoldBars = idx - multiPos.entryIdx;
+                  const multiPnl = calculatePnl(multiPos.entryPrice, stopPrice, multiPos.side, multiPos.marginUsd, multiPos.leverage, multiHoldBars);
+                  capital += multiPnl.netPnlUsd + multiPos.marginUsd;
+                  capitalInUse -= multiPos.marginUsd;
+                }
+
+                positions[symbol] = null;
+                multiPositions[symbol] = [];
+                cooldowns[symbol] = getCooldownBars(EXIT_TRAIL_PROACTIVE);
+                exhaustionExited = true;
+              }
+
+              if (!exhaustionExited && Math.abs(trailingStop - pos.exhaustionStopPrice) / pos.exhaustionStopPrice > 0.001) {
+                pos.exhaustionStopPrice = trailingStop;
+              }
+            }
+
+            if (!exhaustionExited) {
+              const exhaustionCandles: ExhaustionCandle[] = windowCandles.slice(-20).map(c => ({
+                timestamp: c.timestamp, open: c.open, high: c.high,
+                low: c.low, close: c.close, volume: c.volume || 0,
+              }));
+
+              const exhaustionResult = exhaustionCalc.calculate(
+                exhaustionCandles, pos.side, trailingStop, current.close,
+              );
+
+              if (exhaustionResult.shouldPlaceStop) {
+                pos.exhaustionStopActive = true;
+                pos.exhaustionStopPrice = trailingStop;
+              } else if (pos.exhaustionStopActive && exhaustionResult.score < exhaustionCalc.getConfig().CANCEL_THRESHOLD) {
+                pos.exhaustionStopActive = false;
+                pos.exhaustionStopPrice = undefined;
+              }
+            }
+          }
+
+          if (exhaustionExited) continue;
+        }
 
         const exitResult = checkBacktestExit(
           pos,
@@ -1626,7 +1775,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           idx,
           params
         );
-        
+
         const shouldExit = exitResult.shouldExit;
         const exitReason = exitResult.exitReason;
         const exitPrice = exitResult.exitPrice;
@@ -1779,36 +1928,32 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           if (availableCapital < minAvailableCapital) continue;
         }
 
-        // BTC regime uses higher-TF SMA (configurable via regimeTimeframeMinutes)
-        // Fallback to 15m if data insufficient
-        const btcCandles1hWindow = btcCandles1h.slice(0, regimeCursorForEntry);
-        let isBullRegime: boolean;
-        const smaPeriod = MomentumConfig.ENTRY.BTC_SMA_PERIOD;
-        if (btcCandles1hWindow.length >= smaPeriod) {
-          const btcCloses1h = btcCandles1hWindow.map(c => c.close);
-          const btcSma200_1h = calcSMA(btcCloses1h, smaPeriod);
-          const btcNow1h = btcCloses1h[btcCloses1h.length - 1];
-          isBullRegime = btcNow1h > btcSma200_1h;
-        } else {
-          // Fallback to 15m
-          const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
-          const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
-          isBullRegime = btcPriceForRegime > btcSma200;
+        // V5.111 PERF: Use cached BTC regime (same for all 10 symbols in this BTC step)
+        if (cachedIsBullRegime === null) {
+          const btcCandles1hWindow = cachedBtcCandles1hWindow;
+          const smaPeriod = MomentumConfig.ENTRY.BTC_SMA_PERIOD;
+          if (btcCandles1hWindow.length >= smaPeriod) {
+            const btcCloses1h = btcCandles1hWindow.map(c => c.close);
+            const btcSma200_1h = calcSMA(btcCloses1h, smaPeriod);
+            const btcNow1h = btcCloses1h[btcCloses1h.length - 1];
+            cachedIsBullRegime = btcNow1h > btcSma200_1h;
+          } else {
+            const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
+            const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
+            cachedIsBullRegime = btcPriceForRegime > btcSma200;
+          }
         }
-
-        // V5.39 FIX: btcCandles1hWindow already computed above for regime + MTF filter
+        const isBullRegime = cachedIsBullRegime;
 
         // V5.36: Use shared checkMomentumSignal (includes MTF + BTC Vol filters)
         // This ensures 100% parity with production signal logic
         const signal = checkMomentumSignal(
           symbol,
           windowCandles,
-          btcCandles.slice(Math.max(0, btcIdx - 201), btcIdx), // V5.94 FIX: Exclude current BTC 15m candle (match live behavior)
-          // Live filters out isFinal=false candles, so it never sees the current forming candle.
-          // Previously btcIdx+1 included the current candle with its FINAL values (look-ahead bias).
+          btcWindowForSignal, // V5.111 PERF: pre-computed once per BTC step
           {
             nowMs: btcCandle.timestamp,
-            btcCandles1h: btcCandles1hWindow, // V5.36: Pass 1h candles for MTF filter
+            btcCandles1h: cachedBtcCandles1hWindow,
           }
         );
         if (!signal.valid || !signal.side) continue;
@@ -2447,4 +2592,132 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   );
 
   return result;
+}
+
+// ============================================================================
+// WORKER THREAD SPAWNING
+// ============================================================================
+
+import { Worker } from 'node:worker_threads';
+
+// Resolve worker path using eval() to avoid parse errors in Jest/CJS.
+// In ESM (production), eval has access to import.meta.url.
+// In CJS (Jest), this returns null and we fall back to inline execution.
+function resolveWorkerUrl(): URL | null {
+  try {
+    // eslint-disable-next-line no-eval
+    return eval('new URL("./backtestWorker.js", import.meta.url)') as URL;
+  } catch {
+    return null;
+  }
+}
+
+function runOnWorker(input: BacktestComputationInput): Promise<BacktestResult> {
+  const workerUrl = resolveWorkerUrl();
+  if (!workerUrl) return Promise.reject(new Error('Worker URL not available (CJS/test environment)'));
+
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerUrl);
+
+    const timeout = setTimeout(() => {
+      worker.terminate();
+      reject(new Error('Backtest worker timeout (15min)'));
+    }, 15 * 60 * 1000);
+
+    worker.on('message', (msg: { success: boolean; result?: BacktestResult; error?: string }) => {
+      clearTimeout(timeout);
+      worker.terminate();
+      if (msg.success) resolve(msg.result!);
+      else reject(new Error(msg.error || 'Worker error'));
+    });
+
+    worker.on('error', (err) => {
+      clearTimeout(timeout);
+      worker.terminate();
+      reject(err);
+    });
+
+    worker.postMessage(input);
+  });
+}
+
+// ============================================================================
+// MAIN BACKTEST FUNCTION — Loads data (main thread) then offloads computation
+// ============================================================================
+
+export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
+  const { startDate, endDate, symbols, dataStartDate } = params;
+
+  console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
+
+  // V5.25: Check circuit breaker BEFORE starting backtest
+  if (!globalRestCircuitBreaker.canMakeRequest()) {
+    throw new Error('REST circuit breaker is OPEN - Binance rate limit active. Please wait before running backtest.');
+  }
+
+  // V5.25: Use cached exchange to avoid loadMarkets on every backtest
+  const exchange = await getCachedExchange();
+  console.log(`[Backtest] Exchange ready (using cached markets - 0 API weight)`);
+
+  // V5.47: Use dataStartDate for loading data (indicator warmup) if provided
+  const dataLoadStart = dataStartDate || startDate;
+
+  // Fetch BTC for regime detection
+  const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
+  console.log(`[Backtest] BTC 15m: ${btcCandles.length} candles`);
+
+  // BTC candles for regime/MTF: derive default from config, or use param override
+  const configTfStr = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME;
+  const configTfMin = parseInt(configTfStr) * (configTfStr.includes('h') ? 60 : 1);
+  const regimeTfMin = params.regimeTimeframeMinutes ?? configTfMin;
+  let btcCandles1h: BacktestCandle[];
+  if (regimeTfMin === 60) {
+    btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
+    console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles (native)`);
+  } else if (regimeTfMin <= 15) {
+    btcCandles1h = btcCandles;
+    console.log(`[Backtest] BTC regime: using 15m candles directly (${btcCandles1h.length} candles)`);
+  } else {
+    btcCandles1h = aggregate15mCandles(btcCandles, regimeTfMin) as BacktestCandle[];
+    console.log(`[Backtest] BTC ${regimeTfMin}m: ${btcCandles1h.length} candles (aggregated from 15m)`);
+  }
+
+  const CANDLE_REGIME_INTERVAL_MS = regimeTfMin * 60 * 1000;
+
+  // Fetch symbol data — parallel batches of 3
+  const allData: Record<string, BacktestCandle[]> = {};
+  const BATCH_SIZE = 3;
+  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+    const batch = symbols.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(symbol => fetchCandles(exchange, symbol, dataLoadStart, endDate))
+    );
+    for (let j = 0; j < batch.length; j++) {
+      allData[batch[j]] = results[j];
+      console.log(`[Backtest] ${batch[j]}: ${results[j].length} candles`);
+    }
+    if (i + BATCH_SIZE < symbols.length) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
+  const input: BacktestComputationInput = {
+    params,
+    btcCandles,
+    btcCandles1h,
+    allData,
+    CANDLE_REGIME_INTERVAL_MS,
+  };
+
+  // Run computation on worker thread to avoid blocking the event loop.
+  // Falls back to inline execution if worker fails (e.g. tsx dev mode).
+  try {
+    console.log(`[Backtest] Starting computation on worker thread...`);
+    const result = await runOnWorker(input);
+    console.log(`[Backtest] Worker completed: ${result.trades.length} trades, ROI: ${result.summary.totalPnlPct.toFixed(1)}%`);
+    return result;
+  } catch (workerError) {
+    console.warn(`[Backtest] Worker thread unavailable, running on main thread:`, workerError);
+    return runBacktestComputation(input);
+  }
 }
