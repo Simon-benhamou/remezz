@@ -44,14 +44,24 @@ npm run migrate             # Run migrations
 ### Core Components
 
 **Strategy Engine** (`src/strategies/`)
-- `simpleAgent.ts` - Main agent coordinator (~3660 lines). Capital pool, position management, trailing stops, NFS adaptive exits, 15m exit logic
+- `simpleAgent.ts` - **Barrel re-export file** (V5.108). Re-exports from capitalPool.ts and orchestrator.ts. All existing consumers import from here.
+  - `capitalPool.ts` - CapitalPool class (~540 lines). Shared capital management: reserve→commit→release lifecycle, live balance sync, skip-N-trades rule.
+  - `orchestrator.ts` - AgentOrchestrator class (~1830 lines, formerly SimpleAgent). Core lifecycle: tick, checkEntry, checkExit. Delegates close/sync/data to extracted modules.
+  - `agent/candleFetcher.ts` - CandleFetcher class (~250 lines). Candle data acquisition: symbol 15m, BTC 15m, BTC 1h. WebSocket-first with REST fallback.
+  - `agent/exchangeSync.ts` - ExchangeSync class (~570 lines). Position sync with Binance: 3-case mismatch handler, missing trade reconciliation. Callback injection pattern.
+  - `agent/positionCloser.ts` - PositionCloser class (~740 lines). Full close-position lifecycle: paper/live close, partial fill handling, exit slippage validation, additional position cleanup. Owns exitAttemptCount/lastExitAttemptTs internally.
+  - `agent/agentState.ts` - State types (PositionState, TrailingState, SignalState, etc.) + TradeEvent interface + AgentStateSnapshot/AgentStateResult + `buildAgentState()` pure function.
 - `positionOpener.ts` - Extracted `openPosition()` (~970 lines). Pre-entry filters, capital sizing, exchange order placement, multi-position support
 - `realtimeExitHandler.ts` - Extracted `checkRealtimeExit()` (~845 lines). Owns all RT exit state, NFS system, proactive limit tracking, trailing breach detection
-- `momentumSimple.ts` - Signal detection (BB breakout, ROC momentum, volume filters, BTC macro, cash mode regime detection)
+- `momentumSimple.ts` - **Barrel re-export file** (V5.108). Re-exports all 54 exports from 5 focused modules below. All existing consumers import from here.
+  - `config/momentumConfig.ts` - MomentumConfig object, all types (Candle, Position, SignalResult, ExitSignal, MarketConditions), CANDLE_15M_MS
+  - `indicators/technicalIndicators.ts` - All indicator functions (calcATR, calcBB, calcROC, calcADX, calcSMA, detectMarketRegime, etc.)
+  - `signals/momentumSignal.ts` - checkMomentumSignal, getMarketConditions, wick breakout functions
+  - `exits/exitLogic.ts` - shouldExitPosition (single exit logic source of truth)
+  - `risk/positionSizing.ts` - calculatePositionSize, calcDynamicStopLoss, liquidity config
 - `signalRanker.ts` - ML-powered signal scoring with XGBoost integration
 - `positionPersistence.ts` - Extracted DB operations (load/save/update positions, session KPIs)
 - `exchangeOrderManager.ts` - Extracted exchange order placement (SL, trailing stop, proactive limits)
-- `realtimeExitMonitor.ts` - RT exit state definitions and interfaces
 - `symbolEngine.ts` - Per-symbol signal computation (shared across users). Uses same `checkMomentumSignal()` as agents. **Must stay aligned with regime timeframe config** (V5.105 fix: was using 1h candles when config was 15m)
 - `cacheManager.ts` - Mutex-protected BTC 15m/1h candle caches and leverage cache (`globalCacheManager` singleton)
 
@@ -85,8 +95,6 @@ npm run migrate             # Run migrations
 
 **Middleware** (`src/middleware/`)
 - `auth.ts` - JWT token verification, user extraction from request
-- `requireApiKeys.ts` - Guards live endpoints requiring Binance API keys
-
 ### Data Flow
 
 1. WebSocket receives real-time klines/tickers
@@ -250,6 +258,59 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Future**: S/R has real signal value but needs smarter implementation (dynamic zones, breakout/bounce classification, multi-TF confluence) before re-enabling. See `docs/DRASH-SOD-PLAN.md`.
   - **Scripts preserved**: `scripts/compare-sr-filter.ts`, `scripts/grid-search-short-sr.ts`, `scripts/analyze-sr-proximity.ts` for future research.
 
+- V5.108: Architectural refactoring — split momentumSimple.ts into 5 focused modules:
+  - **Problem**: `momentumSimple.ts` was a 3,562-line monolith containing config, indicators, signal detection, exit logic, and position sizing. Logic changes in one domain could silently affect others. Config drift bugs (V5.102 regime timeframe, V5.105 SymbolEngine) were structural consequences of this coupling.
+  - **Solution**: Extracted into 5 focused modules with strict acyclic dependency graph:
+    - `config/momentumConfig.ts` (839 lines) — `MomentumConfig`, all types (`Candle`, `Position`, `SignalResult`, `ExitSignal`, `MarketConditions`), `CANDLE_15M_MS`, `calculateExitNowMs`
+    - `indicators/technicalIndicators.ts` (850 lines) — All indicator functions: `calcATR`, `calcBB`, `calcROC`, `calcADX`, `calcSMA`, `calcVolRatio`, `detectMarketRegime`, `determineVolatilityRegime`, `updatePositionWaterMarks`, S/R functions, pattern filters
+    - `signals/momentumSignal.ts` (897 lines) — `checkMomentumSignal`, `getMarketConditions`, wick breakout functions, `calcRSI`/`calcStochRSI` (private helpers)
+    - `exits/exitLogic.ts` (563 lines) — `shouldExitPosition`
+    - `risk/positionSizing.ts` (464 lines) — `calculatePositionSize`, `calcDynamicStopLoss`, `calcSafeLeverage`, liquidity config
+  - **Dependency graph**: `config/ → indicators/ → signals/, exits/, risk/` (no cycles, no sibling imports)
+  - **Backward compatibility**: `momentumSimple.ts` is now a 101-line barrel that re-exports all 54 exports. All 45+ consumers continue working with zero import changes.
+  - **Single source of truth**: Each function/config lives in exactly ONE file. Changing `BTC_REGIME_TIMEFRAME` propagates automatically to all code paths.
+  - **Zero behavioral changes**: No logic, values, or function signatures were modified.
+
+- V5.108 Phase 2: Architectural refactoring — split simpleAgent.ts into focused modules:
+  - **Problem**: `simpleAgent.ts` was a 3,793-line file containing both the agent orchestrator class AND the CapitalPool class — two completely independent concerns in one file. CapitalPool manages shared capital across agents; AgentOrchestrator manages a single agent's trading lifecycle.
+  - **Solution**: Extracted into 2 focused modules:
+    - `capitalPool.ts` (539 lines) — `CapitalPool` class, `getCapitalPool`, `resetCapitalPool`. Shared capital management with atomic reserve→commit→release, live balance sync, skip-N-trades rule.
+    - `orchestrator.ts` (3,276 lines) — `AgentOrchestrator` class (renamed from `SimpleAgent`), `SimpleAgentConfig`, event types, factory functions.
+  - **Backward compatibility**: `simpleAgent.ts` is now a 24-line barrel that re-exports everything. `AgentOrchestrator` is exported as `SimpleAgent` for all existing consumers. Zero import changes needed.
+  - **Circular dep fix**: `positionOpener.ts` now imports `CapitalPool` directly from `capitalPool.ts` instead of via the barrel (avoids orchestrator → positionOpener → simpleAgent → orchestrator cycle).
+  - **Zero behavioral changes**: No logic, values, or function signatures were modified.
+
+- V5.108 Phase 3: Further split orchestrator.ts — extract CandleFetcher + ExchangeSync:
+  - **Problem**: `orchestrator.ts` was still 3,276 lines after Phase 2, mixing core lifecycle logic with data acquisition and exchange synchronization.
+  - **Solution**: Extracted into 3 focused modules under `agent/` subdirectory:
+    - `agent/candleFetcher.ts` (253 lines) — `CandleFetcher` class: fetchCandles (symbol 15m), fetchBtcCandles (BTC 15m), fetchBtcCandles1h (BTC 1h). Owns per-symbol candle cache.
+    - `agent/exchangeSync.ts` (568 lines) — `ExchangeSync` class: loadExistingPosition, syncWithExchange (3-case position mismatch handler), checkMissingTrades. Uses callback injection pattern (same as RealtimeExitHandler, PositionOpener).
+    - `agent/agentState.ts` (97 lines) — State type interfaces: PositionState, TrailingState, SignalState, TimeKeeper, CooldownState, LifecycleState, ErrorState.
+  - **Result**: orchestrator.ts reduced from 3,276 → 2,553 lines (723 lines extracted).
+  - **Zero behavioral changes**: Callback injection pattern preserves all state access; all call sites updated mechanically.
+
+- V5.108 Phase 4: Extract closePosition + getAgentState from orchestrator.ts:
+  - **Problem**: `orchestrator.ts` still contained `closePosition()` (~600 lines of paper/live close, partial fill handling, exit slippage validation) and `getAgentState()` (~200 lines of state snapshot assembly). These were the two largest remaining extractable units.
+  - **Solution**: Extracted into 2 modules:
+    - `agent/positionCloser.ts` (740 lines) — `PositionCloser` class with `PositionCloserDeps` interface (18 callback fields). Split into: `closePaper()`, `closeLive()`, `handlePartialFills()`, `validateExitSlippage()`, `closeAdditionalPositionsLive()`. Owns `exitAttemptCount` and `lastExitAttemptTs` internally (previously orphaned in orchestrator).
+    - `agent/agentState.ts` updated (314 lines) — Added `TradeEvent` interface (moved from orchestrator to break circular dep), `AgentStateSnapshot` interface (12 fields), `AgentStateResult` interface, `buildAgentState()` pure function.
+  - **Result**: orchestrator.ts reduced from 2,553 → ~1,830 lines (723 lines extracted). Total reduction from original: 3,793 → 1,830 (52% smaller).
+  - **Circular dep fix**: `TradeEvent` moved from orchestrator.ts to agentState.ts. Both positionCloser and orchestrator import from agentState (no cycle). Orchestrator re-exports `TradeEvent` for backward compat.
+  - **Zero behavioral changes**: All 217 tests pass, build clean.
+
+- V5.108 Phase 4b: Dead code cleanup — 49 unused files deleted:
+  - **Problem**: Repository had accumulated 49 unused .ts files (analytics, broker, core, exec, infra, quantai modules) plus 3 root test scripts. These files were never imported by any active code path. Total noise: ~10,700 lines.
+  - **Audit method**: Mapped all 115 .ts files in `src/`, traced import graphs to find files with zero importers, then recursively found transitively dead files (only imported by other dead files).
+  - **Deleted**: 49 files from `src/` (entire directories eliminated: `analytics/`, `broker/`, `core/`, `exec/`, `infra/`, `quantai/`, `src/scripts/`), 3 root test scripts, 12 empty directories.
+  - **Result**: `src/` reduced from 115 → 66 .ts files (43% reduction). All 217 tests pass, build clean.
+  - **Near-miss**: `data/indicators.ts` was wrongly deleted (import from `data/market.ts` was missed in initial analysis). Restored immediately from git.
+
+- V5.108 Phase 4c: PARDES audit bug fix — resetTrailingState signal leak:
+  - **Problem**: `exchangeSync.ts`'s `resetTrailingState` callback (fired when exchange closes a position, e.g. SL hit) was missing `currentBias = null` and `lastSignal = null` resets. Only trailing flags were reset. This caused signal state from the old trade to leak into the next evaluation cycle after an exchange-side close.
+  - **Fix**: Added `this.currentBias = null; this.lastSignal = null;` to the `resetTrailingState` callback in orchestrator.ts constructor (exchangeSync deps wiring). Now matches the complete state reset done by positionCloser's `resetTrailingAndSignalState`.
+  - **Also fixed**: Removed orphaned `exitAttemptCount` and `lastExitAttemptTs` instance variable declarations from orchestrator.ts (now owned internally by PositionCloser).
+  - **Impact**: Prevents potential stale signal bias after exchange-side position closes. No test regression.
+
 - V5.107: Fix parity forced entry timestamp — V5.106 was one candle too LATE (not early):
   - **Problem**: V5.106 assumed `Trade.entryTs` = candle OPEN time (per V5.46), but V5.86 added `realEntryTime = Date.now()` which takes priority in `positionPersistence.ts:233` (`realEntryTime ?? entryTime ?? Date.now()`). So `Trade.entryTs` is actually **wall-clock** (~candle_close + 2s). V5.106's `+CANDLE_15M_MS` pushed `forcedEntryTimestamp` one candle too far → wrong entry price → systematic EXIT_MISMATCH and PNL_VARIANCE on every trade.
   - **Fix**: `forcedEntryTimestamp = floor(entryTs / 15min) * 15min` (NO offset). `floor(wallClock / 15min)` naturally gives the candle close boundary, which is exactly `btcCandle.timestamp` when the signal candle was just processed. Diagnostic confirmed: SUI SHORT trade went from EXIT_MISMATCH (SL @ -10.90%) to MATCH (TRAIL_NFS_MED @ +14.86%, 0% PnL diff).
@@ -352,14 +413,17 @@ System designed for 40+ users × 20 agents (800+ concurrent agents) with single 
 
 ## Refactoring (completed)
 
-Major codebase refactoring reducing `simpleAgent.ts` from ~5500 to ~3660 lines:
+Major codebase refactoring across multiple phases:
 
 1. **Centralized constants** (`config/constants.ts`): All magic numbers (cache TTLs, sync intervals, order queue config) extracted from `simpleAgent.ts` and `orderQueue.ts`
 2. **Typed exchange interfaces** (`types/exchange.ts`): Replaced inline `any` Exchange type with `CcxtOrder`, `CcxtPosition`, `CcxtTrade`, `CcxtBalance`, `Exchange` interfaces. Eliminated 30+ `as any` casts
 3. **Mutex caches** (`cacheManager.ts`): Promise-based mutex on global BTC 15m/1h candle caches and leverage cache. Prevents concurrent fetch races
-4. **Extracted modules (phase 1)**: `positionPersistence.ts` (DB ops), `exchangeOrderManager.ts` (SL/trailing/proactive limits), `realtimeExitMonitor.ts` (state definitions)
+4. **Extracted modules (phase 1)**: `positionPersistence.ts` (DB ops), `exchangeOrderManager.ts` (SL/trailing/proactive limits)
 5. **Walk-forward testing** (`walkForwardService.ts`): Sliding train+test window validation. Route: `POST /api/backtest/walk-forward`
 6. **Grid optimization** (`optimizationService.ts`): Parameter grid search ranked by OOS Sharpe. Route: `POST /api/backtest/optimize`
 7. **Cash mode** (`momentumSimple.ts`): ADX + ATR + SMA200 slope regime detection. Skips entries in CHOPPY/LOW_VOL markets
 8. **Error handling**: All `catch (error: any)` → `catch (error: unknown)` with `errMsg()` helper. `ExitReason` union extended for cleanup reasons
 9. **Extracted modules (phase 2)**: `positionOpener.ts` (openPosition ~970 lines with PositionOpener class + context interface), `realtimeExitHandler.ts` (checkRealtimeExit ~845 lines with RealtimeExitHandler class owning NFS system, proactive limits, trailing breach state)
+10. **V5.108 split momentumSimple.ts** into 5 focused modules (config, indicators, signals, exits, risk) with barrel re-export. 3,562 lines → 5 files totaling ~3,600 lines, zero import changes for consumers.
+11. **V5.108 split simpleAgent.ts** into orchestrator.ts + capitalPool.ts + 4 agent/ modules (candleFetcher, exchangeSync, positionCloser, agentState). 3,793 lines → ~1,830 lines orchestrator + ~2,100 lines in extracted modules.
+12. **Dead code cleanup**: 49 unused files deleted (10,700+ lines), reducing src/ from 115 → 66 .ts files (43% reduction).

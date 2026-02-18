@@ -36,7 +36,7 @@ import { isIpBanned } from '../exchange/ccxtClient.js';
 import { ipWeightTracker } from '../services/ipWeightTracker.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { Exchange } from '../types/exchange.js';
-import type { CapitalPool } from './simpleAgent.js';
+import type { CapitalPool } from './capitalPool.js';
 
 const logger = createLogger('position-opener');
 
