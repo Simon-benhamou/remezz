@@ -530,10 +530,18 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
 2. Pass 2: `postProcess1mTrailingExits()` on main thread — fetch 1m candles per trailing trade window, replay exhaustion + STOP_MARKET, adjust trade results, recalculate summary
 
 **Files:**
-- **`services/backtest/trailingReplay1m.ts`** (NEW ~340 lines): `Candle1mFetcher` (cached per-symbol, rate-limited via ipWeightTracker + globalRestCircuitBreaker), `replayTradeAt1m()` (stop_market mode with progressive trailing + exhaustion hysteresis + 15m boundary fallback), `postProcess1mTrailingExits()` (orchestrator), `recalculateSummary()` (rebuilds capital chain, equity/drawdown curves, monthly stats, all summary metrics)
-- **`backtestService.ts`**: `postProcess1m?: boolean` added to `BacktestParams` (default `true`). Called after worker via dynamic import. Graceful fallback on failure.
+- **`services/backtest/trailingReplay1m.ts`** (~450 lines): `Candle1mFetcher` (cached per-symbol, rate-limited via ipWeightTracker + globalRestCircuitBreaker), `replayTradeAt1m()` (stop_market mode with progressive trailing + exhaustion hysteresis + 15m boundary fallback), `postProcess1mTrailingExits()` (orchestrator), `recalculateSummaryIncremental()` (V5.114: delta-based capital chain adjustment)
+- **`backtestService.ts`**: `postProcess1m?: boolean` added to `BacktestParams` (default `false`). Called after worker via dynamic import. Graceful fallback on failure.
 - **`parityVerificationServiceV2.ts`**: No changes needed — benefits automatically via `runBacktest()`.
+- **`routes/backtest.ts`**: `stableParamsHash()` includes `postProcess1m` (V5.114 fix — was missing, caused cache collisions between 1m/non-1m runs)
 
 **API budget**: ~400 trailing trades × 1-2 CCXT requests = ~600 requests, ~5min. Cache per-symbol reduces to ~100-200 actual requests.
 **Config**: Uses `MomentumConfig.EXIT.EXHAUSTION_*` thresholds. Trailing tiers read from `MomentumConfig.EXIT.TRAILING_*`.
 **Disable**: Pass `postProcess1m: false` to `runBacktest()` params.
+
+- V5.114: Fix 1m post-processing capital chain corruption:
+  - **Problem**: `recalculateSummary()` rebuilt the capital chain linearly (`capitalAfter = capitalBefore + netPnlUsd`) after 1m replay modified trailing trades' PnL. This ignored concurrent positions (the 15m backtest uses `capital` + `capitalInUse` separately). When 1m replay worsened early trades, all subsequent trades had reduced capitalBefore but kept their original large marginUsd → positions oversized relative to capital → cascading losses → capital went negative → DD 165.8% (impossible in reality).
+  - **Fix**: Replaced `recalculateSummary()` with `recalculateSummaryIncremental()`. Saves original PnLs before replay, then applies cumulative PnL deltas to the original capital chain (which correctly models concurrency). Each replayed trade's delta shifts all subsequent trades' `capitalBefore`/`capitalAfter` without affecting position sizing.
+  - **Also fixed**: `stableParamsHash()` in `routes/backtest.ts` now includes `postProcess1m` in the hash. Previously, enabling/disabling 1m replay returned the same cached result (hash collision).
+  - **Validation** (Dec 2025, 1 month, $2K, 4.5x, 10 symbols): DD went from 165.8% → 20.7%. PnL: $1,419 (15m) vs $748 (with 1m replay) — 1m replay costs ~47% PnL because exhaustion detector on 1m candles exits trailing trades prematurely (fires on temporary dips that recover in 15m).
+  - **Files**: `services/backtest/trailingReplay1m.ts`, `routes/backtest.ts`
