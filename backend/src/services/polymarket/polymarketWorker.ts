@@ -1,5 +1,6 @@
 import type { PrismaClient } from '.prisma/client';
 import { getBinanceWebSocket, getKlinesWithMeta } from '../binanceWebSocket.js';
+import { createLogger } from '../../utils/logger.js';
 import { computeFiveMinScore } from './fiveMinScorer.js';
 import { buildSlug, fetchPolymarketOdds } from './polymarketClient.js';
 import type {
@@ -7,6 +8,8 @@ import type {
   PredictionStats,
   WindowState,
 } from './polymarketTypes.js';
+
+const log = createLogger('polymarket');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -79,8 +82,8 @@ async function tick(prisma: PrismaClient): Promise<void> {
       status: 'accumulating',
     };
 
-    console.log(
-      `[Polymarket] New window ${new Date(start).toISOString()} → ${new Date(end).toISOString()} | startPrice=${startPrice.toFixed(2)}`,
+    log.info(
+      `New window ${new Date(start).toISOString()} → ${new Date(end).toISOString()} | startPrice=${startPrice.toFixed(2)}`,
     );
   }
 
@@ -116,13 +119,13 @@ async function tick(prisma: PrismaClient): Promise<void> {
       currentWindow.entryOdds = entryOdds;
       currentWindow.status = 'predicted';
 
-      console.log(
-        `[Polymarket] Prediction: ${result.direction} (score=${result.score.total}, conf=${result.confidence}) | odds=${entryOdds.toFixed(3)} | slug=${slug}`,
+      log.info(
+        `Prediction: ${result.direction} (score=${result.score.total}, conf=${result.confidence}) | odds=${entryOdds.toFixed(3)} | slug=${slug}`,
       );
     } else {
       // Score below threshold — skip this window
       currentWindow.status = 'skipped';
-      console.log(`[Polymarket] Window skipped (score < 60)`);
+      log.info('Window skipped (score < 60)');
     }
 
     decisionMade = true;
@@ -170,7 +173,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[Polymarket] DB persist error: ${msg}`);
+      log.error(`DB persist error: ${msg}`);
     }
 
     currentWindow.status = 'resolved';
@@ -178,8 +181,8 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
     const pnlStr = simulatedPnl !== null ? simulatedPnl.toFixed(3) : 'N/A';
     const correctStr = isCorrect !== null ? (isCorrect ? 'WIN' : 'LOSS') : 'SKIP';
-    console.log(
-      `[Polymarket] Resolved: actual=${actualResult} | ${correctStr} | pnl=${pnlStr} | ${currentWindow.startPrice.toFixed(2)} → ${endPrice.toFixed(2)}`,
+    log.info(
+      `Resolved: actual=${actualResult} | ${correctStr} | pnl=${pnlStr} | ${currentWindow.startPrice.toFixed(2)} → ${endPrice.toFixed(2)}`,
     );
   }
 
@@ -207,7 +210,7 @@ export function getPolymarketLiveState(): {
  */
 export function startPolymarketWorker(prisma: PrismaClient): void {
   if (intervalHandle) {
-    console.warn('[Polymarket] Worker already running');
+    log.warn('Worker already running');
     return;
   }
 
@@ -217,12 +220,12 @@ export function startPolymarketWorker(prisma: PrismaClient): void {
   intervalHandle = setInterval(() => {
     tick(prisma).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[Polymarket] tick error: ${msg}`);
+      log.error(`tick error: ${msg}`);
     });
   }, POLL_INTERVAL_MS);
 
-  console.log(
-    `[Polymarket] Worker started — polling every ${POLL_INTERVAL_MS}ms, symbol=${SYMBOL}, window=${WINDOW_MS / 1000}s`,
+  log.info(
+    `Worker started — polling every ${POLL_INTERVAL_MS}ms, symbol=${SYMBOL}, window=${WINDOW_MS / 1000}s`,
   );
 }
 
@@ -233,7 +236,7 @@ export function stopPolymarketWorker(): void {
   if (intervalHandle) {
     clearInterval(intervalHandle);
     intervalHandle = null;
-    console.log('[Polymarket] Worker stopped');
+    log.info('Worker stopped');
   }
 }
 

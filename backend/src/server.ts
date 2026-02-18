@@ -4550,6 +4550,12 @@ async function runStartupSequence(): Promise<void> {
 
   logger.info('✅ Startup complete - BinanceRestQueue managing all REST calls');
   logger.info(`📊 Queue stats: ${JSON.stringify(binanceRestQueue.getStats())}`);
+  // Polymarket 5-min prediction experiment (must start after WS + markets are ready)
+  try {
+    startPolymarketWorker(prisma);
+  } catch (err: unknown) {
+    logger.error(`Polymarket worker failed to start: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // If we're using minimal markets, try to upgrade to full markets later when ban expires
   if (!marketsLoaded && isIpBanned()) {
@@ -4693,6 +4699,4 @@ server.listen(cfg.PORT, () => {
   // V5.79: Start Telegram reporter for periodic heartbeats and daily reports
   startTelegramReporter();
 
-  // Polymarket 5-min prediction experiment
-  startPolymarketWorker(prisma);
 });
