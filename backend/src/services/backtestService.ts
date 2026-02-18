@@ -1360,6 +1360,10 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
   // Regime candle cursor: advances monotonically for O(1) per-step filtering
   // Tracks the largest index i where btcCandles1h[i].timestamp + CANDLE_REGIME_INTERVAL_MS <= btcCandle.timestamp
   let regimeCursorForEntry = 0;
+  // V5.111: Cache btcCandles1h window — only recreate when cursor advances
+  // Previously sliced twice per symbol per iteration (exit + entry), growing up to ~500 elements
+  let cachedBtcCandles1hWindow: BacktestCandle[] = [];
+  let lastRegimeCursor = -1;
 
   // Main loop - iterate over BTC candles
   for (let btcIdx = startIdx; btcIdx < btcCandles.length; btcIdx++) {
@@ -1372,17 +1376,20 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
     ) {
       regimeCursorForEntry++;
     }
+
+    // Update cached 1h window only when cursor changes
+    if (regimeCursorForEntry !== lastRegimeCursor) {
+      cachedBtcCandles1hWindow = btcCandles1h.slice(0, regimeCursorForEntry);
+      lastRegimeCursor = regimeCursorForEntry;
+    }
     // regimeCursorForEntry is now the EXCLUSIVE end index (first candle that doesn't pass)
 
     if (btcCandle.timestamp < startTimestamp) continue;
     if (btcCandle.timestamp > endDate.getTime()) break;
 
-    // Prevent event-loop starvation: yield every 3 BTC candles (~every 1-2ms)
-    // to let WebSocket heartbeats, health checks, and agent ticks process.
-    // Previously every 25 → caused WS disconnects during backtests (code 1006).
-    if (btcIdx % 3 === 0) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    // V5.111: setImmediate yield REMOVED — runBacktestComputation always executes
+    // in a worker thread (backtestWorker.ts) or standalone scripts, never on the
+    // server main event loop. The ~50K yields added ~25s of overhead per run (37%).
 
     const day = new Date(btcCandle.timestamp).toISOString().slice(0, 10);
 
@@ -1396,6 +1403,11 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
       if (drawdownPct > maxDrawdown) maxDrawdown = drawdownPct;
       drawdownCurve.push({ date: day, drawdown: drawdownPct });
     }
+
+    // V5.111 PERF: Pre-compute BTC-only values once per BTC step (shared across all symbols)
+    // Previously computed 10x per BTC step (once per symbol).
+    const btcWindowForSignal = btcCandles.slice(Math.max(0, btcIdx - 201), btcIdx);
+    let cachedIsBullRegime: boolean | null = null;
 
     // ═══════════════════════════════════════════════════════════════════
     // V5.22: COLLECT SIGNALS FOR RANKING (Phase 1: Exits + Signal Detection)
@@ -1415,10 +1427,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
     // Process each symbol - handle exits and collect entry signals
     let symbolLoopIdx = 0;
     for (const symbol of symbols) {
-      // Yield inside symbol loop to prevent blocking during heavy per-symbol computation
-      if (symbolLoopIdx++ % 3 === 2) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
+      symbolLoopIdx++;
       const candles = allData[symbol];
       let idx = symbolIdx[symbol];
 
@@ -1501,7 +1510,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
 
         // V5.86: Compute regime candles window for exit
         // Use regimeCursorForEntry as upper bound (current.timestamp <= btcCandle.timestamp)
-        const btcCandles1hWindowForExit = btcCandles1h.slice(0, regimeCursorForEntry);
+        const btcCandles1hWindowForExit = cachedBtcCandles1hWindow;
 
         // ═══════════════════════════════════════════════════════════════════
         // V5.111: EXHAUSTION-BASED PROACTIVE STOP (before standard exit check)
@@ -1919,36 +1928,32 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           if (availableCapital < minAvailableCapital) continue;
         }
 
-        // BTC regime uses higher-TF SMA (configurable via regimeTimeframeMinutes)
-        // Fallback to 15m if data insufficient
-        const btcCandles1hWindow = btcCandles1h.slice(0, regimeCursorForEntry);
-        let isBullRegime: boolean;
-        const smaPeriod = MomentumConfig.ENTRY.BTC_SMA_PERIOD;
-        if (btcCandles1hWindow.length >= smaPeriod) {
-          const btcCloses1h = btcCandles1hWindow.map(c => c.close);
-          const btcSma200_1h = calcSMA(btcCloses1h, smaPeriod);
-          const btcNow1h = btcCloses1h[btcCloses1h.length - 1];
-          isBullRegime = btcNow1h > btcSma200_1h;
-        } else {
-          // Fallback to 15m
-          const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
-          const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
-          isBullRegime = btcPriceForRegime > btcSma200;
+        // V5.111 PERF: Use cached BTC regime (same for all 10 symbols in this BTC step)
+        if (cachedIsBullRegime === null) {
+          const btcCandles1hWindow = cachedBtcCandles1hWindow;
+          const smaPeriod = MomentumConfig.ENTRY.BTC_SMA_PERIOD;
+          if (btcCandles1hWindow.length >= smaPeriod) {
+            const btcCloses1h = btcCandles1hWindow.map(c => c.close);
+            const btcSma200_1h = calcSMA(btcCloses1h, smaPeriod);
+            const btcNow1h = btcCloses1h[btcCloses1h.length - 1];
+            cachedIsBullRegime = btcNow1h > btcSma200_1h;
+          } else {
+            const btcSma200 = calcSMA(btcCloses.slice(0, btcIdx), 200);
+            const btcPriceForRegime = btcIdx > 0 ? btcCloses[btcIdx - 1] : btcCloses[0];
+            cachedIsBullRegime = btcPriceForRegime > btcSma200;
+          }
         }
-
-        // V5.39 FIX: btcCandles1hWindow already computed above for regime + MTF filter
+        const isBullRegime = cachedIsBullRegime;
 
         // V5.36: Use shared checkMomentumSignal (includes MTF + BTC Vol filters)
         // This ensures 100% parity with production signal logic
         const signal = checkMomentumSignal(
           symbol,
           windowCandles,
-          btcCandles.slice(Math.max(0, btcIdx - 201), btcIdx), // V5.94 FIX: Exclude current BTC 15m candle (match live behavior)
-          // Live filters out isFinal=false candles, so it never sees the current forming candle.
-          // Previously btcIdx+1 included the current candle with its FINAL values (look-ahead bias).
+          btcWindowForSignal, // V5.111 PERF: pre-computed once per BTC step
           {
             nowMs: btcCandle.timestamp,
-            btcCandles1h: btcCandles1hWindow, // V5.36: Pass 1h candles for MTF filter
+            btcCandles1h: cachedBtcCandles1hWindow,
           }
         );
         if (!signal.valid || !signal.side) continue;
