@@ -165,8 +165,6 @@ export class AgentOrchestrator {
   private finalKlineUnsubscribe: (() => void) | null = null; // V5.50: Instant candle close detection
 
   private closingPosition = false;
-  private exitAttemptCount = 0;
-  private lastExitAttemptTs = 0;
 
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
@@ -265,6 +263,8 @@ export class AgentOrchestrator {
           this.trailingWidened = false;
           this.stagnantSlUpdated = false;
           this.rtExitHandler.resetState();
+          this.currentBias = null;
+          this.lastSignal = null;
         },
       },
       SYNC_INTERVALS.POSITION_MS,
