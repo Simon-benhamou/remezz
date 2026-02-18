@@ -4,7 +4,6 @@ import { computeFiveMinScore } from './fiveMinScorer.js';
 import { buildSlug, fetchPolymarketOdds } from './polymarketClient.js';
 import type {
   Candle1m,
-  PredictionResult,
   PredictionStats,
   WindowState,
 } from './polymarketTypes.js';
