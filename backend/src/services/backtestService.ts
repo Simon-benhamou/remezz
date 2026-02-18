@@ -292,6 +292,15 @@ export interface BacktestResult {
   }[];
 }
 
+// Worker thread input: pre-loaded candle data for pure computation
+export interface BacktestComputationInput {
+  params: BacktestParams;
+  btcCandles: BacktestCandle[];
+  btcCandles1h: BacktestCandle[];
+  allData: Record<string, BacktestCandle[]>;
+  CANDLE_REGIME_INTERVAL_MS: number;
+}
+
 // ============================================================================
 // CONFIG (synced with MomentumConfig) - V5.27: Uses getters for dynamic values
 // ============================================================================
@@ -1366,72 +1375,13 @@ function calculateRealisticHoldMinutes(
 }
 
 // ============================================================================
-// MAIN BACKTEST FUNCTION
+// BACKTEST COMPUTATION — Pure CPU simulation (can run on worker thread)
 // ============================================================================
 
-export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
-  const { startDate, endDate, initialCapital, symbols, leverage, signalOverrides, dataStartDate, parityMode, forcedEntry } = params;
-
-  console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
-
-  // V5.25: Check circuit breaker BEFORE starting backtest
-  if (!globalRestCircuitBreaker.canMakeRequest()) {
-    throw new Error('REST circuit breaker is OPEN - Binance rate limit active. Please wait before running backtest.');
-  }
-
-  // V5.25: Use cached exchange to avoid loadMarkets on every backtest
-  // getCachedExchange() loads markets ONCE and caches them globally
-  const exchange = await getCachedExchange();
-  
-  console.log(`[Backtest] Exchange ready (using cached markets - 0 API weight)`);
-
-  // V5.47: Use dataStartDate for loading data (indicator warmup) if provided, otherwise startDate
-  const dataLoadStart = dataStartDate || startDate;
-
-  // Fetch BTC for regime detection
-  const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
+export async function runBacktestComputation(input: BacktestComputationInput): Promise<BacktestResult> {
+  const { params, btcCandles, btcCandles1h, allData, CANDLE_REGIME_INTERVAL_MS } = input;
+  const { startDate, endDate, initialCapital, symbols, leverage, parityMode, forcedEntry } = params;
   const btcCloses = btcCandles.map((c) => c.close);
-  console.log(`[Backtest] BTC 15m: ${btcCandles.length} candles`);
-
-  // BTC candles for regime/MTF: derive default from config, or use param override
-  const configTfStr = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME; // e.g. '15m', '1h', '4h'
-  const configTfMin = parseInt(configTfStr) * (configTfStr.includes('h') ? 60 : 1);
-  const regimeTfMin = params.regimeTimeframeMinutes ?? configTfMin;
-  let btcCandles1h: Candle[];
-  if (regimeTfMin === 60) {
-    // Fetch native 1h candles (most accurate for 1h regime)
-    btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
-    console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles (native)`);
-  } else if (regimeTfMin <= 15) {
-    // V5.102: Use BTC 15m candles directly for regime (no aggregation needed)
-    btcCandles1h = btcCandles;
-    console.log(`[Backtest] BTC regime: using 15m candles directly (${btcCandles1h.length} candles)`);
-  } else {
-    // Aggregate 15m candles to desired timeframe
-    btcCandles1h = aggregate15mCandles(btcCandles, regimeTfMin);
-    console.log(`[Backtest] BTC ${regimeTfMin}m: ${btcCandles1h.length} candles (aggregated from 15m)`);
-  }
-
-  // Interval for regime candle filtering (dynamic based on regimeTimeframeMinutes)
-  const CANDLE_REGIME_INTERVAL_MS = regimeTfMin * 60 * 1000;
-
-  // Fetch symbol data — parallel batches of 3 to speed up production (no local files)
-  const allData: Record<string, Candle[]> = {};
-  const BATCH_SIZE = 3;
-  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
-    const batch = symbols.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(
-      batch.map(symbol => fetchCandles(exchange, symbol, dataLoadStart, endDate))
-    );
-    for (let j = 0; j < batch.length; j++) {
-      allData[batch[j]] = results[j];
-      console.log(`[Backtest] ${batch[j]}: ${results[j].length} candles`);
-    }
-    // Small delay between batches to avoid rate-limit bursts
-    if (i + BATCH_SIZE < symbols.length) {
-      await new Promise(r => setTimeout(r, 500));
-    }
-  }
 
   // Track per-symbol candle cursor (avoid O(n²) findIndex)
   const symbolIdx: Record<string, number> = {};
@@ -2454,4 +2404,132 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   );
 
   return result;
+}
+
+// ============================================================================
+// WORKER THREAD SPAWNING
+// ============================================================================
+
+import { Worker } from 'node:worker_threads';
+
+// Resolve worker path using eval() to avoid parse errors in Jest/CJS.
+// In ESM (production), eval has access to import.meta.url.
+// In CJS (Jest), this returns null and we fall back to inline execution.
+function resolveWorkerUrl(): URL | null {
+  try {
+    // eslint-disable-next-line no-eval
+    return eval('new URL("./backtestWorker.js", import.meta.url)') as URL;
+  } catch {
+    return null;
+  }
+}
+
+function runOnWorker(input: BacktestComputationInput): Promise<BacktestResult> {
+  const workerUrl = resolveWorkerUrl();
+  if (!workerUrl) return Promise.reject(new Error('Worker URL not available (CJS/test environment)'));
+
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerUrl);
+
+    const timeout = setTimeout(() => {
+      worker.terminate();
+      reject(new Error('Backtest worker timeout (15min)'));
+    }, 15 * 60 * 1000);
+
+    worker.on('message', (msg: { success: boolean; result?: BacktestResult; error?: string }) => {
+      clearTimeout(timeout);
+      worker.terminate();
+      if (msg.success) resolve(msg.result!);
+      else reject(new Error(msg.error || 'Worker error'));
+    });
+
+    worker.on('error', (err) => {
+      clearTimeout(timeout);
+      worker.terminate();
+      reject(err);
+    });
+
+    worker.postMessage(input);
+  });
+}
+
+// ============================================================================
+// MAIN BACKTEST FUNCTION — Loads data (main thread) then offloads computation
+// ============================================================================
+
+export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
+  const { startDate, endDate, symbols, dataStartDate } = params;
+
+  console.log(`[Backtest] Fetching data for ${symbols.length} symbols...`);
+
+  // V5.25: Check circuit breaker BEFORE starting backtest
+  if (!globalRestCircuitBreaker.canMakeRequest()) {
+    throw new Error('REST circuit breaker is OPEN - Binance rate limit active. Please wait before running backtest.');
+  }
+
+  // V5.25: Use cached exchange to avoid loadMarkets on every backtest
+  const exchange = await getCachedExchange();
+  console.log(`[Backtest] Exchange ready (using cached markets - 0 API weight)`);
+
+  // V5.47: Use dataStartDate for loading data (indicator warmup) if provided
+  const dataLoadStart = dataStartDate || startDate;
+
+  // Fetch BTC for regime detection
+  const btcCandles = await fetchCandles(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
+  console.log(`[Backtest] BTC 15m: ${btcCandles.length} candles`);
+
+  // BTC candles for regime/MTF: derive default from config, or use param override
+  const configTfStr = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME;
+  const configTfMin = parseInt(configTfStr) * (configTfStr.includes('h') ? 60 : 1);
+  const regimeTfMin = params.regimeTimeframeMinutes ?? configTfMin;
+  let btcCandles1h: BacktestCandle[];
+  if (regimeTfMin === 60) {
+    btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
+    console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles (native)`);
+  } else if (regimeTfMin <= 15) {
+    btcCandles1h = btcCandles;
+    console.log(`[Backtest] BTC regime: using 15m candles directly (${btcCandles1h.length} candles)`);
+  } else {
+    btcCandles1h = aggregate15mCandles(btcCandles, regimeTfMin) as BacktestCandle[];
+    console.log(`[Backtest] BTC ${regimeTfMin}m: ${btcCandles1h.length} candles (aggregated from 15m)`);
+  }
+
+  const CANDLE_REGIME_INTERVAL_MS = regimeTfMin * 60 * 1000;
+
+  // Fetch symbol data — parallel batches of 3
+  const allData: Record<string, BacktestCandle[]> = {};
+  const BATCH_SIZE = 3;
+  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+    const batch = symbols.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(symbol => fetchCandles(exchange, symbol, dataLoadStart, endDate))
+    );
+    for (let j = 0; j < batch.length; j++) {
+      allData[batch[j]] = results[j];
+      console.log(`[Backtest] ${batch[j]}: ${results[j].length} candles`);
+    }
+    if (i + BATCH_SIZE < symbols.length) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
+  const input: BacktestComputationInput = {
+    params,
+    btcCandles,
+    btcCandles1h,
+    allData,
+    CANDLE_REGIME_INTERVAL_MS,
+  };
+
+  // Run computation on worker thread to avoid blocking the event loop.
+  // Falls back to inline execution if worker fails (e.g. tsx dev mode).
+  try {
+    console.log(`[Backtest] Starting computation on worker thread...`);
+    const result = await runOnWorker(input);
+    console.log(`[Backtest] Worker completed: ${result.trades.length} trades, ROI: ${result.summary.totalPnlPct.toFixed(1)}%`);
+    return result;
+  } catch (workerError) {
+    console.warn(`[Backtest] Worker thread unavailable, running on main thread:`, workerError);
+    return runBacktestComputation(input);
+  }
 }
