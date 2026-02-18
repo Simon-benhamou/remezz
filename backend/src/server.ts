@@ -30,6 +30,8 @@ import { router as perfRouter } from "./routes/perf.js";
 import { router as marketRouter } from "./routes/market.js";
 import portfolioRouter from "./routes/portfolio.js";
 import { router as backtestRouter } from "./routes/backtest.js";
+import { createPolymarketRouter } from "./routes/polymarket.js";
+import { startPolymarketWorker } from "./services/polymarket/polymarketWorker.js";
 
 // Services
 import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket, seedKlinesFromWebSocket, toBinanceSymbolId } from "./services/binanceWebSocket.js";
@@ -307,6 +309,7 @@ app.use("/api/perf", perfRouter);
 app.use("/api/market", marketRouter);
 app.use("/api/portfolio", portfolioRouter);
 app.use("/api/backtest", backtestRouter);
+app.use("/api/polymarket", createPolymarketRouter(prisma));
 
 // ============================================
 // AGENT MANAGEMENT
@@ -4689,4 +4692,7 @@ server.listen(cfg.PORT, () => {
 
   // V5.79: Start Telegram reporter for periodic heartbeats and daily reports
   startTelegramReporter();
+
+  // Polymarket 5-min prediction experiment
+  startPolymarketWorker(prisma);
 });
