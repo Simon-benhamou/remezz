@@ -749,43 +749,32 @@ function checkBacktestExit(
         trailingStopPrice
       );
 
-      // NOTE: Backtest uses EXIT_TRAIL_NFS_HIGH/MED/LOW (immediate per-candle evaluation).
-      // Live 15m layer uses EXIT_TRAIL_NFS_HIGH_15M/MED_15M/LOW_15M (deferred to 15m close
-      // per V5.90). The _15M suffix distinguishes the deferral path — same scoring logic,
-      // different timing. This is intentional, not a parity bug.
+      // NFS trailing exit pricing:
+      // In live, the proactive limit order at trailing stop price SHOULD fill
+      // before the candle closes. If it doesn't, the 15m handler exits at
+      // market (candle close). Using trailingStopPrice here represents the
+      // INTENDED behavior. If live proactive limits aren't filling, the fix
+      // belongs in live execution, not in degrading the backtest.
       if (nfsScore.confidence === 'HIGH') {
-        // HIGH confidence: Exit at trailing stop price (best available fill).
-        // In live, proactive limit order is placed at trailing stop BEFORE breach
-        // (V5.87), so fill is at trailing price — matching this backtest behavior.
         return {
           shouldExit: true,
           exitReason: EXIT_TRAIL_NFS_HIGH,
           exitPrice: trailingStopPrice,
         };
       } else if (nfsScore.confidence === 'MEDIUM') {
-        // MEDIUM confidence: 1-candle confirmation, exit at best of trailing stop or close
         if (pos.trailingBreachCandles >= 1) {
-          // V5.81: Use best of trailing stop price or candle close for parity
-          const medExitPrice = pos.side === 'long'
-            ? Math.max(trailingStopPrice, current.close)
-            : Math.min(trailingStopPrice, current.close);
           return {
             shouldExit: true,
             exitReason: EXIT_TRAIL_NFS_MED,
-            exitPrice: medExitPrice,
+            exitPrice: current.close,
           };
         }
       } else {
-        // LOW confidence: 2-candle confirmation, exit at best of trailing stop or close
         if (pos.trailingBreachCandles >= 2) {
-          // V5.81: Use best of trailing stop price or candle close for parity
-          const lowExitPrice = pos.side === 'long'
-            ? Math.max(trailingStopPrice, current.close)
-            : Math.min(trailingStopPrice, current.close);
           return {
             shouldExit: true,
             exitReason: EXIT_TRAIL_NFS_LOW,
-            exitPrice: lowExitPrice,
+            exitPrice: current.close,
           };
         }
       }
