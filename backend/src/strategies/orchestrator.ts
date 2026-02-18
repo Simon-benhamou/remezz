@@ -19,7 +19,6 @@ import {
   shouldExitPosition,
   updatePositionWaterMarks,
   getMarketConditions,
-  getCooldownBars,  // V5.41: Shared cooldown logic
   calculateExitNowMs,  // V5.45: Shared exit time calculation for parity
   calcROC,             // Shared indicator
   calcATR,             // Shared indicator
@@ -36,12 +35,9 @@ import { globalSignalRanker } from './signalRanker.js';
 
 import {
   getBinanceWebSocket,
-  getPositionFromWebSocket,
   type BinanceKlineData,
 } from '../services/binanceWebSocket.js';
 import {
-  notifyTradeExit,
-  notifyOrderError,
   notifyTrailingActivated,
   notifyRegimeChange,
   notifyAgentStarted,
@@ -50,11 +46,9 @@ import {
   notifyLiquidationWarning,
   notifySignalDetected,
 } from '../services/notificationService.js';
-import { notifyPositionClosed, notifySystemAlert } from '../utils/notifications.js';
-import { trackRejectedSignal, recordTrade, updateAgentState } from '../services/telegramReporter.js';
-import { orderQueue, type OrderRequest } from '../services/orderQueue.js';
-import { calculateOrderPriority, type ExitReason } from '../services/orderPriority.js';
-import { v4 as uuidv4 } from 'uuid';
+import { notifySystemAlert } from '../utils/notifications.js';
+import { trackRejectedSignal, updateAgentState } from '../services/telegramReporter.js';
+import { type ExitReason } from '../services/orderPriority.js';
 import { CACHE_TTLS, SYNC_INTERVALS } from '../config/constants.js';
 import { PositionPersistence } from './positionPersistence.js';
 import {
@@ -90,6 +84,8 @@ import type { Exchange } from '../types/exchange.js';
 import { CapitalPool, getCapitalPool, resetCapitalPool } from './capitalPool.js';
 import { CandleFetcher } from './agent/candleFetcher.js';
 import { ExchangeSync } from './agent/exchangeSync.js';
+import { PositionCloser } from './agent/positionCloser.js';
+import { buildAgentState, type AgentStateResult, type TradeEvent } from './agent/agentState.js';
 
 // CapitalPool extracted to capitalPool.ts
 
@@ -145,14 +141,8 @@ export interface SignalEvent {
   timestamp: Date;
 }
 
-export interface TradeEvent {
-  symbol: string;
-  side: 'buy' | 'sell';
-  qty: number;
-  price: number;
-  orderId: string;
-  timestamp: Date;
-}
+// TradeEvent moved to agent/agentState.ts — re-exported for backward compatibility
+export type { TradeEvent };
 
 // ============================================================================
 // SIMPLE AGENT CLASS
@@ -234,6 +224,7 @@ export class AgentOrchestrator {
   // V5.108: Extracted modules
   private candleFetcher: CandleFetcher;
   private exchangeSync: ExchangeSync;
+  private positionCloser: PositionCloser;
 
   // Guard against concurrent tick execution (prevents re-entrancy/recursion)
   private tickInProgress = false;
@@ -314,6 +305,40 @@ export class AgentOrchestrator {
       startRealtimeExitMonitorIfNeeded: () => this.startRealtimeExitMonitorIfNeeded(),
       fetchBtcCandles: () => this.candleFetcher.fetchBtcCandles(),
       fetchBtcCandles1h: () => this.candleFetcher.fetchBtcCandles1h(),
+      onTrade: config.onTrade ? (trade) => config.onTrade!(trade) : undefined,
+    });
+
+    // V5.108 Phase 4: Initialize PositionCloser
+    this.positionCloser = new PositionCloser({
+      symbol: config.symbol,
+      mode: config.mode,
+      sessionId: config.sessionId,
+      userId: config.userId,
+      capitalPool: config.capitalPool,
+      entryCooldownBars: this.ENTRY_COOLDOWN_BARS,
+      getPosition: () => this.position,
+      setPosition: (pos: Position | null) => { this.position = pos; },
+      getAdditionalPositions: () => this.additionalPositions,
+      clearAdditionalPositions: () => { this.additionalPositions = []; },
+      isClosingPosition: () => this.closingPosition,
+      setClosingPosition: (val: boolean) => { this.closingPosition = val; },
+      setEntryCooldownBarsRemaining: (val: number) => { this.entryCooldownBarsRemaining = val; },
+      setLastExit: (exit) => { this.lastExit = exit; },
+      stopRealtimeExitMonitor: () => this.stopRealtimeExitMonitor(),
+      resetTrailingAndSignalState: () => {
+        this.trailingNotified = false;
+        this.trailingWidened = false;
+        this.stagnantSlUpdated = false;
+        this.rtExitHandler.resetState();
+        this.currentBias = null;
+        this.lastSignal = null;
+      },
+      syncWithExchange: () => this.exchangeSync.syncWithExchange(),
+      cancelStopLossOnExchange: () => this.cancelStopLossOnExchange(),
+      formatQtyForExchange: (sym, qty) => this.formatQtyForExchange(sym, qty),
+      saveExitToDb: (pos, price, reason, pnlPct, pnlUsd, orderId, fee) =>
+        this.saveExitToDb(pos, price, reason, pnlPct, pnlUsd, orderId, fee),
+      startRealtimeExitMonitorIfNeeded: () => this.startRealtimeExitMonitorIfNeeded(),
       onTrade: config.onTrade ? (trade) => config.onTrade!(trade) : undefined,
     });
   }
@@ -1539,602 +1564,16 @@ export class AgentOrchestrator {
     }
   }
   
+  
+  // Position close logic extracted to agent/positionCloser.ts (V5.108 Phase 4)
   private async closePosition(
     position: Position,
     currentPrice: number,
     reason: ExitReason | string
   ): Promise<void> {
-    const symbol = this.config.symbol;
-
-    // Prevent duplicate close attempts and stop realtime monitor before placing orders.
-    if (this.closingPosition) {
-      logger.debug(`⚠️ [${symbol}] Close already in progress, skipping duplicate close (${reason})`);
-      return;
-    }
-
-    // V5.105: Guard against exit loop — max 3 attempts per 30s, then force sync
-    const now = Date.now();
-    if (now - this.lastExitAttemptTs < 30_000) {
-      this.exitAttemptCount++;
-      if (this.exitAttemptCount > 3) {
-        logger.warn(`🔄 [${symbol}] Exceeded 3 exit attempts in 30s — forcing syncWithExchange instead of retrying`);
-        this.exitAttemptCount = 0;
-        this.lastExitAttemptTs = now;
-        await this.exchangeSync.syncWithExchange();
-        return;
-      }
-    } else {
-      this.exitAttemptCount = 1;
-      this.lastExitAttemptTs = now;
-    }
-
-    this.closingPosition = true;
-    this.stopRealtimeExitMonitor();
-
-    try {
-    
-    // Calculate PnL based on side
-    let pnlPct: number;
-    let pnlUsd: number;
-    
-    if (position.side === 'long') {
-      pnlPct = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
-      pnlUsd = position.qty * (currentPrice - position.entryPrice);
-    } else {
-      pnlPct = ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
-      pnlUsd = position.qty * (position.entryPrice - currentPrice);
-    }
-    
-    const notionalUsd = position.qty * position.entryPrice;
-    // V5.6: Use stored margin for capital release, fallback to notional/leverage or notional
-    const marginToRelease = position.marginUsd ?? (position.leverage ? notionalUsd / position.leverage : notionalUsd);
-    
-    logger.info(`🚪 [${symbol}] CLOSING ${position.side.toUpperCase()} | entry=$${position.entryPrice.toFixed(4)} | exit=$${currentPrice.toFixed(4)} | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}) | reason=${reason}`);
-    
-    // Reset trailing flags for next position
-    this.trailingNotified = false;
-    this.trailingWidened = false;
-    this.stagnantSlUpdated = false;
-
-    // Reset NFS + proactive limit + trailing tracking state (owned by rtExitHandler)
-    this.rtExitHandler.resetState();
-
-    // V5.41: Use shared cooldown logic from momentumSimple.ts
-    const cooldownBars = getCooldownBars(reason, this.ENTRY_COOLDOWN_BARS);
-    this.entryCooldownBarsRemaining = cooldownBars;
-    logger.info(`⏱️ [${symbol}] Cooldown: ${cooldownBars} bars (${cooldownBars * 15}min) - exit reason: ${reason}`);
-
-    // Store exit info for frontend display
-    this.lastExit = {
-      ts: Date.now(),
-      price: currentPrice,
-      reason,
-    };
-    this.currentBias = null;
-    this.lastSignal = null;
-
-    if (this.config.mode === 'paper') {
-      // Paper close — position nulled AFTER DB save (see below) to prevent orphans on DB failure.
-      // closingPosition flag prevents re-entry in the meantime.
-
-      // V5.30: Close additional positions too
-      let totalPnlUsd = pnlUsd;
-      let totalMarginReleased = marginToRelease;
-      
-      for (const addPos of this.additionalPositions) {
-        let addPnlUsd: number;
-        if (addPos.side === 'long') {
-          addPnlUsd = addPos.qty * (currentPrice - addPos.entryPrice);
-        } else {
-          addPnlUsd = addPos.qty * (addPos.entryPrice - currentPrice);
-        }
-        const addMargin = addPos.marginUsd ?? (addPos.leverage ? (addPos.qty * addPos.entryPrice) / addPos.leverage : addPos.qty * addPos.entryPrice);
-        const addPnlPct = addPos.side === 'long'
-          ? ((currentPrice - addPos.entryPrice) / addPos.entryPrice) * 100
-          : ((addPos.entryPrice - currentPrice) / addPos.entryPrice) * 100;
-        
-        this.config.capitalPool.release(`${this.config.sessionId}_multi_${addPos.entryIndex}`, addMargin, addPnlUsd);
-        totalPnlUsd += addPnlUsd;
-        totalMarginReleased += addMargin;
-        
-        // V5.30: Save additional position as separate trade in DB
-        const addNotional = addPos.qty * currentPrice;
-        const addFeeUsd = addNotional * 0.0004;
-        await this.saveExitToDb(addPos, currentPrice, `${reason}_MULTI${(addPos.entryIndex || 0) + 1}`, addPnlPct, addPnlUsd, undefined, addFeeUsd);
-        
-        logger.info(`📝 [${symbol}] PAPER MULTI-POS ${(addPos.entryIndex || 0) + 1} CLOSED | PnL=$${addPnlUsd.toFixed(2)}`);
-      }
-      this.additionalPositions = [];
-      
-      // Release MARGIN (not notional) with PnL
-      this.config.capitalPool.release(this.config.sessionId, marginToRelease, pnlUsd);
-      
-      // V5.41: Paper mode realistic costs (aligned with backtest for fair comparison)
-      // Backtest uses: 0.04% × 2 (entry+exit) + 0.05% × 2 (slippage) + 0.01%/8h (funding)
-      const exitNotionalUsd = position.qty * currentPrice;
-      const entryNotionalUsd = position.qty * position.entryPrice;
-      const tradingFeeEntry = entryNotionalUsd * 0.0004;  // 0.04% on entry
-      const tradingFeeExit = exitNotionalUsd * 0.0004;    // 0.04% on exit
-      const slippageEntry = entryNotionalUsd * 0.0005;    // 0.05% slippage on entry
-      const slippageExit = exitNotionalUsd * 0.0005;      // 0.05% slippage on exit
-      
-      // Calculate funding: 0.01% per 8h period held
-      const holdMinutes = (Date.now() - position.entryTime) / 60000;
-      const holdBars = Math.floor(holdMinutes / 15);
-      const fundingPeriods = Math.floor(holdBars / 32); // 32 bars = 8 hours
-      const fundingFee = fundingPeriods * (entryNotionalUsd * 0.0001); // 0.01% per period
-      
-      const paperFeeUsd = tradingFeeEntry + tradingFeeExit + slippageEntry + slippageExit + fundingFee;
-
-      // V5.78 FIX: Only send notifications if DB save succeeds
-      // This prevents false notifications when position is still open due to DB failure
-      const dbSaveSuccess = await this.saveExitToDb(position, currentPrice, reason, pnlPct, totalPnlUsd, undefined, paperFeeUsd);
-
-      if (!dbSaveSuccess) {
-        logger.error(`❌ [${symbol}] PAPER close DB save FAILED - position may still exist in DB. Skipping notifications.`);
-        // Don't send notification - position might still be open
-        return;
-      }
-
-      // V5.91: Null position AFTER DB save succeeds — prevents orphan if DB fails
-      this.position = null;
-
-      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${totalPnlUsd.toFixed(2)}) | margin released=$${totalMarginReleased.toFixed(2)} | costs=$${paperFeeUsd.toFixed(2)}`);
-
-      // 📢 Send Telegram notification for paper exit avec P&L et balance
-      // V5.78: Only sent AFTER successful DB save
-      const balanceAfterPaper = this.config.capitalPool.getTotalCapital();
-      void notifyPositionClosed({
-        agentId: this.config.sessionId,
-        symbol,
-        side: position.side,
-        quantity: position.qty,
-        entryPrice: position.entryPrice,
-        exitPrice: currentPrice,
-        pnl: totalPnlUsd,
-        pnlPct: pnlPct,
-        reason,
-        mode: 'paper',
-        balanceAfter: balanceAfterPaper,
-        feesUsd: paperFeeUsd,
-        userId: this.config.userId,
-      });
-
-      // Old notification system (kept for compatibility)
-      notifyTradeExit({
-        symbol,
-        side: position.side,
-        entryPrice: position.entryPrice,
-        exitPrice: currentPrice,
-        qty: position.qty,
-        notionalUsd,
-        pnlUsd,
-        pnlPct,
-        reason,
-        mode: 'paper',
-        userId: this.config.userId || undefined,
-      });
-
-      // V5.63: Record trade result for consecutive loser tracking
-      // Winner = positive net PnL after fees (use totalPnlUsd which includes multi-positions)
-      const isWinner = (totalPnlUsd - paperFeeUsd) > 0;
-      this.config.capitalPool.recordTradeResult(isWinner, symbol);
-
-      // V5.79: Record trade for daily Telegram report
-      recordTrade(totalPnlUsd - paperFeeUsd);
-
-    } else {
-      // Live close
-      try {
-        // V5.105: Removed circuit breaker check here (was double-gate bug).
-        // The order queue already handles circuit breaker + CRITICAL exit priority.
-        // Having both caused a timing bug: agent consumed the 5s rate-limit slot,
-        // then the queue's check failed for 5s, blocking all exits.
-
-        // FIRST: Cancel any open SL/TP orders to avoid orphaned orders
-        await this.cancelStopLossOnExchange();
-
-        // Format quantity to exchange precision
-        const formattedQty = this.formatQtyForExchange(symbol, position.qty);
-
-        // ========================================================================
-        // ORDER QUEUE INTEGRATION - Submit exit order via global queue
-        // ========================================================================
-
-        // Calculate PnL for priority calculation
-        const pnlPct = position.side === 'long'
-          ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
-          : ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
-
-        const holdTimeMs = Date.now() - position.entryTime;
-
-        const exitReason = reason as ExitReason;
-        const orderRequest: OrderRequest = {
-          id: uuidv4(),
-          agentId: this.config.sessionId,
-          userId: this.config.userId || 'unknown',
-          priority: calculateOrderPriority({
-            reason: exitReason,
-            isEntry: false,
-            positionPnlPct: pnlPct,
-            positionHoldTimeMs: holdTimeMs,
-            positionLeverage: position.leverage,
-          }),
-          symbol,
-          side: position.side === 'long' ? 'sell' : 'buy',
-          type: 'market',
-          quantity: formattedQty,
-          params: { reduceOnly: true },
-          isEntry: false,
-          reason,
-          priorityContext: {
-            isEntry: false,
-            reason: exitReason,
-            positionPnlPct: pnlPct,
-            positionHoldTimeMs: holdTimeMs,
-          },
-          submittedAt: Date.now(),
-          retries: 0,
-          timeoutMs: 30_000,
-        };
-
-        logger.info(
-          `[${symbol}] Submitting ${position.side} exit order to queue | ` +
-          `reason=${reason} | orderId=${orderRequest.id} | priority=${orderRequest.priority}`
-        );
-
-        const result = await orderQueue.submitOrder(orderRequest);
-
-        if (!result.success) {
-          // V5.105: Check if position is already closed on exchange (e.g. SL fired)
-          const errorStr = (result.error || '').toLowerCase();
-          const isAlreadyClosed = errorStr.includes('reduceonly') ||
-                                  errorStr.includes('reduce only') ||
-                                  errorStr.includes('position side does not match') ||
-                                  errorStr.includes('position does not exist');
-          if (isAlreadyClosed) {
-            logger.warn(`🔄 [${symbol}] Exit order rejected (position already closed on exchange) — triggering syncWithExchange`);
-            this.closingPosition = false;
-            await this.exchangeSync.syncWithExchange();
-            return;
-          }
-
-          // Also check WS position cache — if exchange shows no position, don't restart RT monitor
-          const wsPos = getPositionFromWebSocket(this.config.userId, symbol);
-          if (!wsPos || Math.abs(wsPos.positionAmt) === 0) {
-            logger.warn(`🔄 [${symbol}] Exit order failed but WS shows no position — triggering syncWithExchange`);
-            this.closingPosition = false;
-            await this.exchangeSync.syncWithExchange();
-            return;
-          }
-
-          logger.error(`[${symbol}] Exit order FAILED: ${result.error} (${result.errorCode})`);
-          this.closingPosition = false;
-          // Restart RT monitor — close failed, position still needs real-time SL protection
-          this.startRealtimeExitMonitorIfNeeded();
-          return;
-        }
-
-        const order = result.order!;
-        const closeSide = position.side === 'long' ? 'sell' : 'buy';
-        const exitPrice = order.average || order.price || currentPrice;
-
-        // ═══════════════════════════════════════════════════════════════════════════
-        // V5.80: PARTIAL FILL DETECTION AND RETRY (BUG FIX)
-        //
-        // Previous bug: Compared order.filled against position.qty, but we sent formattedQty.
-        // If formattedQty < position.qty (due to floor rounding), the check would pass even
-        // when a residual remains. Example:
-        //   - position.qty = 10.0025
-        //   - formattedQty = 10.002 (after floor)
-        //   - order.filled = 10.002 (100% of what we sent)
-        //   - Old ratio = 10.002 / 10.0025 = 99.97% > 99% → no retry triggered!
-        //   - But 0.0005 residual remains on exchange
-        //
-        // Fix: Compare against formattedQty AND check for formatting loss separately.
-        // ═══════════════════════════════════════════════════════════════════════════
-        const filledQty = order.filled ?? 0;
-
-        // Check 1: Did exchange fill what we actually requested?
-        const exchangeFillRatio = filledQty / formattedQty;
-
-        // Check 2: Did formatting lose any quantity? (floor rounding residual)
-        const formattingLoss = position.qty - formattedQty;
-        const hasFormattingResidual = formattingLoss > 0.000001; // Epsilon for float comparison
-
-        if (exchangeFillRatio < 0.99) {
-          // Exchange partial fill - retry for unfilled portion of what we sent
-          const remainingQty = formattedQty - filledQty;
-          logger.warn(
-            `⚠️ [${symbol}] EXCHANGE PARTIAL FILL! ` +
-            `Sent=${formattedQty} Filled=${filledQty} (${(exchangeFillRatio * 100).toFixed(1)}%) ` +
-            `Remaining=${remainingQty.toFixed(6)}`
-          );
-
-          // Retry close for remaining amount
-          try {
-            const retryFormattedQty = this.formatQtyForExchange(symbol, remainingQty);
-
-            // Only retry if remaining qty meets minimum order size
-            if (retryFormattedQty > 0) {
-              const retryOrderRequest: OrderRequest = {
-                id: uuidv4(),
-                agentId: this.config.sessionId,
-                userId: this.config.userId || 'unknown',
-                priority: 95, // CRITICAL priority for cleanup
-                symbol,
-                side: closeSide,
-                type: 'market',
-                quantity: retryFormattedQty,
-                params: { reduceOnly: true },
-                isEntry: false,
-                reason: 'partial_fill_cleanup',
-                priorityContext: { isEntry: false, reason: 'partial_fill_cleanup' },
-                submittedAt: Date.now(),
-                retries: 0,
-                timeoutMs: 30_000,
-              };
-
-              logger.info(`🔄 [${symbol}] Submitting RETRY order for remaining ${retryFormattedQty} qty`);
-              const retryResult = await orderQueue.submitOrder(retryOrderRequest);
-
-              if (retryResult.success) {
-                logger.info(`✅ [${symbol}] Partial fill cleanup SUCCESS | filled=${retryResult.order?.filled}`);
-              } else {
-                logger.error(`❌ [${symbol}] Partial fill cleanup FAILED: ${retryResult.error}`);
-                // Position may still be partially open - will be caught by syncWithExchange
-              }
-            } else {
-              logger.warn(`⚠️ [${symbol}] Remaining qty ${remainingQty} too small to close (below min order size)`);
-            }
-          } catch (retryError: any) {
-            logger.error(`❌ [${symbol}] Partial fill retry error: ${retryError.message}`);
-          }
-        }
-
-        // V5.81: Close formatting residual (floor rounding left dust on exchange)
-        // Previously this only warned; now we send a second reduceOnly order to fully close.
-        if (hasFormattingResidual && exchangeFillRatio >= 0.99) {
-          logger.warn(
-            `⚠️ [${symbol}] FORMATTING RESIDUAL: position.qty=${position.qty.toFixed(6)} but ` +
-            `only sent formattedQty=${formattedQty.toFixed(6)} (residual=${formattingLoss.toFixed(6)}). ` +
-            `Sending cleanup order...`
-          );
-
-          try {
-            const residualQty = this.formatQtyForExchange(symbol, formattingLoss);
-            if (residualQty > 0) {
-              const residualOrder: OrderRequest = {
-                id: uuidv4(),
-                agentId: this.config.sessionId,
-                userId: this.config.userId || 'unknown',
-                priority: 95, // CRITICAL priority for cleanup
-                symbol,
-                side: closeSide,
-                type: 'market',
-                quantity: residualQty,
-                params: { reduceOnly: true },
-                isEntry: false,
-                reason: 'formatting_residual_cleanup',
-                priorityContext: { isEntry: false, reason: 'formatting_residual_cleanup' },
-                submittedAt: Date.now(),
-                retries: 0,
-                timeoutMs: 30_000,
-              };
-
-              logger.info(`🧹 [${symbol}] Submitting residual cleanup order for ${residualQty} qty`);
-              const residualResult = await orderQueue.submitOrder(residualOrder);
-
-              if (residualResult.success) {
-                logger.info(`✅ [${symbol}] Residual cleanup SUCCESS | filled=${residualResult.order?.filled}`);
-              } else {
-                logger.error(`❌ [${symbol}] Residual cleanup FAILED: ${residualResult.error}`);
-              }
-            } else {
-              logger.warn(`⚠️ [${symbol}] Residual ${formattingLoss.toFixed(6)} too small to close (below step size)`);
-            }
-          } catch (residualError: any) {
-            logger.error(`❌ [${symbol}] Residual cleanup error: ${residualError.message}`);
-          }
-        }
-
-        // ═══════════════════════════════════════════════════════════════════════════
-        // V5.65: SLIPPAGE VALIDATION FOR EXIT ORDERS
-        // ═══════════════════════════════════════════════════════════════════════════
-        const expectedExitPrice = currentPrice;
-        const exitSlippage = position.side === 'long'
-          ? ((expectedExitPrice - exitPrice) / expectedExitPrice) * 100  // Positive = worse for long exit (sold lower)
-          : ((exitPrice - expectedExitPrice) / expectedExitPrice) * 100; // Positive = worse for short exit (bought higher)
-
-        const maxExitSlippage = MomentumConfig.EXIT.MAX_EXIT_SLIPPAGE_PCT ?? 2.0;
-        const slippageAlertEnabled = MomentumConfig.EXIT.SLIPPAGE_ALERT_ENABLED ?? true;
-
-        if (exitSlippage > maxExitSlippage) {
-          logger.warn(
-            `⚠️ [${symbol}] HIGH EXIT SLIPPAGE | ` +
-            `expected=$${expectedExitPrice.toFixed(4)} | filled=$${exitPrice.toFixed(4)} | ` +
-            `slippage=${exitSlippage.toFixed(2)}% (max=${maxExitSlippage}%)`
-          );
-          // Slippage alert removed from Telegram (V5.79) - log only
-        } else if (exitSlippage > 0.1) {
-          logger.info(`📊 [${symbol}] Exit slippage: ${exitSlippage.toFixed(3)}%`);
-        }
-
-        // Recalculate actual PnL
-        let actualPnlPct: number;
-        let actualPnlUsd: number;
-        if (position.side === 'long') {
-          actualPnlPct = ((exitPrice - position.entryPrice) / position.entryPrice) * 100;
-          actualPnlUsd = position.qty * (exitPrice - position.entryPrice);
-        } else {
-          actualPnlPct = ((position.entryPrice - exitPrice) / position.entryPrice) * 100;
-          actualPnlUsd = position.qty * (position.entryPrice - exitPrice);
-        }
-        
-        this.position = null;
-        
-        // V5.30: Close additional positions too (LIVE mode)
-        let totalPnlUsd = actualPnlUsd;
-        let totalMarginReleased = marginToRelease;
-        
-        for (const addPos of this.additionalPositions) {
-          try {
-            // Submit close order for each additional position
-            const addFormattedQty = this.formatQtyForExchange(symbol, addPos.qty);
-            
-            const addOrderRequest: OrderRequest = {
-              id: uuidv4(),
-              agentId: this.config.sessionId,
-              userId: this.config.userId || 'unknown',
-              priority: calculateOrderPriority({
-                reason: exitReason,
-                isEntry: false,
-                positionPnlPct: actualPnlPct,
-                positionHoldTimeMs: Date.now() - addPos.entryTime,
-              }),
-              symbol,
-              side: addPos.side === 'long' ? 'sell' : 'buy',
-              type: 'market',
-              quantity: addFormattedQty,
-              params: { reduceOnly: true },
-              isEntry: false,
-              reason: `multi_exit_${(addPos.entryIndex || 0) + 1}`,
-              priorityContext: { isEntry: false, reason: exitReason },
-              submittedAt: Date.now(),
-              retries: 0,
-              timeoutMs: 30_000,
-            };
-            
-            const addResult = await orderQueue.submitOrder(addOrderRequest);
-            
-            if (addResult.success && addResult.order) {
-              const addExitPrice = addResult.order.average || addResult.order.price || currentPrice;
-              let addPnlUsd: number;
-              if (addPos.side === 'long') {
-                addPnlUsd = addPos.qty * (addExitPrice - addPos.entryPrice);
-              } else {
-                addPnlUsd = addPos.qty * (addPos.entryPrice - addExitPrice);
-              }
-              const addPnlPct = addPos.side === 'long'
-                ? ((addExitPrice - addPos.entryPrice) / addPos.entryPrice) * 100
-                : ((addPos.entryPrice - addExitPrice) / addPos.entryPrice) * 100;
-              const addMargin = addPos.marginUsd ?? 0;
-              
-              this.config.capitalPool.release(`${this.config.sessionId}_multi_${addPos.entryIndex}`, addMargin, addPnlUsd);
-              totalPnlUsd += addPnlUsd;
-              totalMarginReleased += addMargin;
-              
-              // V5.30: Save additional position as separate trade in DB
-              const addNotional = addPos.qty * addExitPrice;
-              const addFeeUsd = addResult.order.fee?.cost ?? (addNotional * 0.0004);
-              await this.saveExitToDb(addPos, addExitPrice, `${reason}_MULTI${(addPos.entryIndex || 0) + 1}`, addPnlPct, addPnlUsd, addResult.order.id, addFeeUsd);
-              
-              logger.info(`🔴 [${symbol}] LIVE MULTI-POS ${(addPos.entryIndex || 0) + 1} CLOSED @ $${addExitPrice.toFixed(4)} | PnL=$${addPnlUsd.toFixed(2)}`);
-            } else {
-              logger.error(`❌ [${symbol}] Multi-pos ${(addPos.entryIndex || 0) + 1} close FAILED: ${addResult.error}`);
-            }
-          } catch (addErr: any) {
-            logger.error(`❌ [${symbol}] Multi-pos ${(addPos.entryIndex || 0) + 1} close error:`, addErr?.message);
-          }
-        }
-        this.additionalPositions = [];
-        
-        // Release margin from our tracking (PnL is passed for logging but NOT added to totalCapitalUsd in live mode)
-        this.config.capitalPool.release(this.config.sessionId, marginToRelease, actualPnlUsd);
-        
-        // 🔧 CRITICAL: Sync with exchange to get the real balance after position close
-        // This ensures totalCapitalUsd reflects the actual Binance balance (which includes realized PnL)
-        await this.config.capitalPool.syncAfterPositionClose();
-        
-        // Log the updated capital state
-        const newStatus = this.config.capitalPool.getStatus();
-        logger.info(`💰 [${symbol}] Capital after close: total=$${newStatus.totalUsd.toFixed(2)} | available=$${newStatus.availableUsd.toFixed(2)} | inPositions=$${newStatus.inPositionsUsd.toFixed(2)}`);
-        
-        // Extract fee from CCXT order response, fallback to 0.04% calculation
-        const exitNotionalUsd = position.qty * exitPrice;
-        const liveFeeUsd = order.fee?.cost ?? (exitNotionalUsd * 0.0004);
-
-        // V5.78 FIX: Only send notifications if DB save succeeds
-        // Pass the real exchange orderId and fee for proper tracking
-        const dbSaveSuccessLive = await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd, order.id, liveFeeUsd);
-
-        if (!dbSaveSuccessLive) {
-          logger.error(`❌ [${symbol}] LIVE close DB save FAILED - position may still exist in DB. Skipping notifications.`);
-          // Don't send notification but position IS closed on exchange
-          return;
-        }
-
-        logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | fee=$${liveFeeUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)} | orderId=${order.id}`)
-
-        // 📢 Send Telegram notification for live exit avec tous les détails
-        // V5.78: Only sent AFTER successful DB save
-        const balanceAfterLive = this.config.capitalPool.getTotalCapital();
-        void notifyPositionClosed({
-          agentId: this.config.sessionId,
-          symbol,
-          side: position.side,
-          quantity: position.qty,
-          entryPrice: position.entryPrice,
-          exitPrice,
-          pnl: actualPnlUsd,
-          pnlPct: actualPnlPct,
-          reason,
-          mode: 'live',
-          balanceAfter: balanceAfterLive,
-          feesUsd: liveFeeUsd,
-          userId: this.config.userId,
-        });
-
-        // Old notification system (kept for compatibility)
-        notifyTradeExit({
-          symbol,
-          side: position.side,
-          entryPrice: position.entryPrice,
-          exitPrice,
-          qty: position.qty,
-          notionalUsd,
-          pnlUsd: actualPnlUsd,
-          pnlPct: actualPnlPct,
-          reason,
-          mode: 'live',
-          userId: this.config.userId || undefined,
-        });
-
-        // V5.63: Record trade result for consecutive loser tracking
-        // Winner = positive net PnL after fees
-        const isWinnerLive = (actualPnlUsd - liveFeeUsd) > 0;
-        this.config.capitalPool.recordTradeResult(isWinnerLive, symbol);
-
-        // V5.79: Record trade for daily Telegram report
-        recordTrade(actualPnlUsd - liveFeeUsd);
-
-        this.config.onTrade?.({
-          symbol,
-          side: closeSide,
-          qty: position.qty,
-          price: exitPrice,
-          orderId: order.id,
-          timestamp: new Date(),
-        });
-        
-      } catch (error: unknown) {
-        logger.error(`❌ [${symbol}] Failed to close live position:`, error);
-        
-        // 📢 NOTIFICATION: Exit order error (CRITICAL)
-        notifyOrderError({
-          symbol,
-          side: position.side,
-          orderType: 'exit',
-          error: errMsg(error),
-          mode: 'live',
-          userId: this.config.userId || undefined,
-        });
-      }
-    }
-    } finally {
-      this.closingPosition = false;
-    }
+    return this.positionCloser.closePosition(position, currentPrice, reason);
   }
+  
   
   // ==========================================================================
   // EXCHANGE HELPERS
@@ -2285,183 +1724,21 @@ export class AgentOrchestrator {
   /**
    * Get detailed agent state for frontend display
    */
-  getAgentState(): {
-    pos: (Position & {
-      currentPrice?: number;
-      pnlPct?: number;
-      pnlUsd?: number;
-      notionalUsd?: number;
-      duration?: number;
-      trailDistance?: number;
-      // Frontend aliases
-      entry?: number;
-      leverage?: number;
-      openedAt?: number;
-      stopPrice?: number;
-      stop?: number;
-      targets?: number[];
-      // V5.72: Trailing state for frontend
-      trailingState?: {
-        active: boolean;
-        activatedAt: number | null;
-        updateCount: number;
-        currentStopPrice: number | undefined;
-        peakPrice: number;
-        distanceFromPeak: number;
-      };
-      // V5.72: Health status for frontend
-      healthStatus?: 'progressing' | 'watching' | 'stagnant' | 'at_risk';
-      healthReason?: string;
-      peakPrice?: number;
-      distanceFromPeak?: number;
-      stopDistancePct?: number;
-    }) | null;
-    plan: { 
-      bias?: 'long' | 'short' | null; 
-      zone?: { from: number; to: number; mid: number } | null;
-      stopDistance?: number;
-      rPrices?: Array<{ r: number; price: number; pct: number }>;
-    } | null;
-    exit: { ts: number; price: number; reason: string } | null;
-    profile: {
-      riskPerTradePct: number;
-      dailyLossLimitPct: number;
-      maxLeverage: number;
-      aggressiveness: string;
-      availableUsd: number;
-    };
-    balance: {
-      freeUsd: number;
-      totalUsd: number;
-    };
-    lastTickAt: number;
-    tickCount: number;
-  } {
-    // Calculate live position metrics
-    let posWithMetrics: any = null;
-    
-    if (this.position) {
-      const currentPrice = this.lastPrice || this.position.entryPrice;
-      const pnlPct = this.position.side === 'long'
-        ? ((currentPrice - this.position.entryPrice) / this.position.entryPrice) * 100
-        : ((this.position.entryPrice - currentPrice) / this.position.entryPrice) * 100;
-      const pnlUsd = this.position.side === 'long'
-        ? this.position.qty * (currentPrice - this.position.entryPrice)
-        : this.position.qty * (this.position.entryPrice - currentPrice);
-      const notionalUsd = this.position.qty * this.position.entryPrice;
-      const duration = Date.now() - this.position.entryTime;
-      
-      // Trail distance from current price to stop
-      const trailDistance = this.position.stopLoss
-        ? this.position.side === 'long'
-          ? ((currentPrice - this.position.stopLoss) / currentPrice) * 100
-          : ((this.position.stopLoss - currentPrice) / currentPrice) * 100
-        : 0;
-      
-      // V5.72: Calculate peak price and distance from peak
-      const peakPrice = this.position.side === 'long'
-        ? this.position.highWaterMark || this.position.entryPrice
-        : this.position.lowWaterMark || this.position.entryPrice;
-      const distanceFromPeak = this.position.side === 'long'
-        ? peakPrice > 0 ? ((peakPrice - currentPrice) / peakPrice) * 100 : 0
-        : peakPrice > 0 ? ((currentPrice - peakPrice) / peakPrice) * 100 : 0;
-
-      // V5.72: Calculate health status based on backend state
-      const holdMinutes = duration / 60000;
-      const minHoldForJudgment = 15; // 15 minutes minimum before judging
-      const stopDistancePct = trailDistance;
-      const isStagnant = this.position.stagnantState?.confirmed && !this.position.stagnantState?.cancelled;
-      const isAtRisk = stopDistancePct < 0.5; // Less than 0.5% from stop
-
-      let healthStatus: 'progressing' | 'watching' | 'stagnant' | 'at_risk' = 'progressing';
-      let healthReason = 'Price moving favorably';
-
-      if (holdMinutes < minHoldForJudgment) {
-        healthStatus = 'watching';
-        healthReason = `Monitoring (${Math.round(holdMinutes)}m / ${minHoldForJudgment}m min)`;
-      } else if (isAtRisk) {
-        healthStatus = 'at_risk';
-        healthReason = `Near stop loss (${stopDistancePct.toFixed(2)}% away)`;
-      } else if (isStagnant) {
-        healthStatus = 'stagnant';
-        healthReason = 'Trade stagnant - not progressing';
-      } else if (pnlPct > 0) {
-        healthStatus = 'progressing';
-        healthReason = `In profit (+${pnlPct.toFixed(2)}%)`;
-      }
-
-      // V5.72: Build trailing state object
-      const trailingState = {
-        active: this.position.trailingActive || false,
-        activatedAt: this.rtExitHandler.trailingActivatedAt,
-        updateCount: this.rtExitHandler.trailingUpdateCount,
-        currentStopPrice: this.position.appTrailingStop || this.position.stopLoss,
-        peakPrice,
-        distanceFromPeak,
-      };
-
-      posWithMetrics = {
-        ...this.position,
-        // Add entry as alias for frontend compatibility (PositionInfoCard expects 'entry')
-        entry: this.position.entryPrice,
-        // Add leverage for frontend display
-        leverage: MomentumConfig.LEVERAGE[this.position.symbol] || 5,
-        // Add openedAt for frontend time-held calculation
-        openedAt: this.position.entryTime,
-        // Add stopPrice as alias for frontend compatibility
-        stopPrice: this.position.appTrailingStop || this.position.stopLoss,
-        stop: this.position.appTrailingStop || this.position.stopLoss,
-        // Add targets from lastSignal
-        targets: this.lastSignal?.targets || [],
-        currentPrice,
-        pnlPct,
-        pnlUsd,
-        notionalUsd,
-        duration,
-        trailDistance,
-        // V5.72: Add trailing state for frontend
-        trailingState,
-        // V5.72: Add health status for frontend
-        healthStatus,
-        healthReason,
-        // V5.72: Add additional context
-        peakPrice,
-        distanceFromPeak,
-        stopDistancePct,
-      };
-    }
-    
-    return {
-      pos: posWithMetrics,
-      plan: this.currentBias ? {
-        bias: this.currentBias,
-        zone: this.lastSignal?.entryZone ? {
-          from: this.lastSignal.entryZone[0],
-          to: this.lastSignal.entryZone[1],
-          mid: (this.lastSignal.entryZone[0] + this.lastSignal.entryZone[1]) / 2,
-        } : null,
-        stopDistance: this.lastSignal?.stopDistance,
-        rPrices: this.lastSignal?.targets?.map((t, i) => ({
-          r: i + 1,
-          price: t,
-          pct: this.lastSignal?.targetPcts?.[i] || (i + 1) * 0.5,
-        })),
-      } : null,
-      exit: this.lastExit,
-      profile: {
-        riskPerTradePct: this.config.riskPerTradePct,
-        dailyLossLimitPct: 3, // Default
-        maxLeverage: MomentumConfig.LEVERAGE[this.config.symbol] || 4,
-        aggressiveness: 'reactive', // Default
-        availableUsd: this.config.capitalPool.getAvailableCapital(),
-      },
-      balance: {
-        freeUsd: this.config.capitalPool.getAvailableCapital(),
-        totalUsd: this.config.capitalPool.getStatus().totalUsd,
-      },
+  getAgentState(): AgentStateResult {
+    return buildAgentState({
+      position: this.position,
+      lastPrice: this.lastPrice,
+      lastSignal: this.lastSignal,
+      currentBias: this.currentBias,
+      lastExit: this.lastExit,
       lastTickAt: this.lastTickAt,
       tickCount: this.tickCount,
-    };
+      symbol: this.config.symbol,
+      riskPerTradePct: this.config.riskPerTradePct,
+      capitalPool: this.config.capitalPool,
+      trailingActivatedAt: this.rtExitHandler.trailingActivatedAt,
+      trailingUpdateCount: this.rtExitHandler.trailingUpdateCount,
+    });
   }
   
   async forceCheck(): Promise<void> {
