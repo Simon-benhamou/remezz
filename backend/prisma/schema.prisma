@@ -354,6 +354,29 @@ model TradeParityResult {
   @@index([symbol, verifiedAt])
 }
 
+model PolymarketPrediction {
+  id              Int      @id @default(autoincrement())
+  createdAt       DateTime @default(now())
+  symbol          String   @default("BTC")
+  windowStart     DateTime
+  windowEnd       DateTime
+  startPrice      Float
+  endPrice        Float?
+  prediction      String?
+  confidence      Int?
+  actualResult    String?
+  entryOdds       Float?
+  simulatedPnl    Float?
+  scoreBreakdown  Json?
+  isCorrect       Boolean?
+  skipped         Boolean  @default(false)
+  polymarketSlug  String?
+
+  @@index([windowStart])
+  @@index([createdAt])
+  @@index([symbol, createdAt])
+}
+
 enum AgentActionStatus {
   pending
   in_progress
