@@ -47,7 +47,12 @@ npm run migrate             # Run migrations
 - `simpleAgent.ts` - Main agent coordinator (~3660 lines). Capital pool, position management, trailing stops, NFS adaptive exits, 15m exit logic
 - `positionOpener.ts` - Extracted `openPosition()` (~970 lines). Pre-entry filters, capital sizing, exchange order placement, multi-position support
 - `realtimeExitHandler.ts` - Extracted `checkRealtimeExit()` (~845 lines). Owns all RT exit state, NFS system, proactive limit tracking, trailing breach detection
-- `momentumSimple.ts` - Signal detection (BB breakout, ROC momentum, volume filters, BTC macro, cash mode regime detection)
+- `momentumSimple.ts` - **Barrel re-export file** (V5.108). Re-exports all 54 exports from 5 focused modules below. All existing consumers import from here.
+  - `config/momentumConfig.ts` - MomentumConfig object, all types (Candle, Position, SignalResult, ExitSignal, MarketConditions), CANDLE_15M_MS
+  - `indicators/technicalIndicators.ts` - All indicator functions (calcATR, calcBB, calcROC, calcADX, calcSMA, detectMarketRegime, etc.)
+  - `signals/momentumSignal.ts` - checkMomentumSignal, getMarketConditions, wick breakout functions
+  - `exits/exitLogic.ts` - shouldExitPosition (single exit logic source of truth)
+  - `risk/positionSizing.ts` - calculatePositionSize, calcDynamicStopLoss, liquidity config
 - `signalRanker.ts` - ML-powered signal scoring with XGBoost integration
 - `positionPersistence.ts` - Extracted DB operations (load/save/update positions, session KPIs)
 - `exchangeOrderManager.ts` - Extracted exchange order placement (SL, trailing stop, proactive limits)
@@ -249,6 +254,19 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
     - LONG away from resistance: 67% WR (good)
   - **Future**: S/R has real signal value but needs smarter implementation (dynamic zones, breakout/bounce classification, multi-TF confluence) before re-enabling. See `docs/DRASH-SOD-PLAN.md`.
   - **Scripts preserved**: `scripts/compare-sr-filter.ts`, `scripts/grid-search-short-sr.ts`, `scripts/analyze-sr-proximity.ts` for future research.
+
+- V5.108: Architectural refactoring — split momentumSimple.ts into 5 focused modules:
+  - **Problem**: `momentumSimple.ts` was a 3,562-line monolith containing config, indicators, signal detection, exit logic, and position sizing. Logic changes in one domain could silently affect others. Config drift bugs (V5.102 regime timeframe, V5.105 SymbolEngine) were structural consequences of this coupling.
+  - **Solution**: Extracted into 5 focused modules with strict acyclic dependency graph:
+    - `config/momentumConfig.ts` (839 lines) — `MomentumConfig`, all types (`Candle`, `Position`, `SignalResult`, `ExitSignal`, `MarketConditions`), `CANDLE_15M_MS`, `calculateExitNowMs`
+    - `indicators/technicalIndicators.ts` (850 lines) — All indicator functions: `calcATR`, `calcBB`, `calcROC`, `calcADX`, `calcSMA`, `calcVolRatio`, `detectMarketRegime`, `determineVolatilityRegime`, `updatePositionWaterMarks`, S/R functions, pattern filters
+    - `signals/momentumSignal.ts` (897 lines) — `checkMomentumSignal`, `getMarketConditions`, wick breakout functions, `calcRSI`/`calcStochRSI` (private helpers)
+    - `exits/exitLogic.ts` (563 lines) — `shouldExitPosition`
+    - `risk/positionSizing.ts` (464 lines) — `calculatePositionSize`, `calcDynamicStopLoss`, `calcSafeLeverage`, liquidity config
+  - **Dependency graph**: `config/ → indicators/ → signals/, exits/, risk/` (no cycles, no sibling imports)
+  - **Backward compatibility**: `momentumSimple.ts` is now a 101-line barrel that re-exports all 54 exports. All 45+ consumers continue working with zero import changes.
+  - **Single source of truth**: Each function/config lives in exactly ONE file. Changing `BTC_REGIME_TIMEFRAME` propagates automatically to all code paths.
+  - **Zero behavioral changes**: No logic, values, or function signatures were modified.
 
 - V5.107: Fix parity forced entry timestamp — V5.106 was one candle too LATE (not early):
   - **Problem**: V5.106 assumed `Trade.entryTs` = candle OPEN time (per V5.46), but V5.86 added `realEntryTime = Date.now()` which takes priority in `positionPersistence.ts:233` (`realEntryTime ?? entryTime ?? Date.now()`). So `Trade.entryTs` is actually **wall-clock** (~candle_close + 2s). V5.106's `+CANDLE_15M_MS` pushed `forcedEntryTimestamp` one candle too far → wrong entry price → systematic EXIT_MISMATCH and PNL_VARIANCE on every trade.
