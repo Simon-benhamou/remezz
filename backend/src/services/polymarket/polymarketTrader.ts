@@ -34,6 +34,11 @@ const CHAIN_ID = 137; // Polygon
 // USDC has 6 decimals on Polygon
 const USDC_DECIMALS = 6;
 
+// Maximum slippage accepted vs the Gamma API (expected) price.
+// If CLOB best ask > expectedPrice × (1 + MAX_SLIPPAGE_PCT), the bet is skipped.
+// e.g. expectedPrice=0.495, tolerance=10% → reject if CLOB ask > 0.5445
+const MAX_SLIPPAGE_PCT = 0.10;
+
 // ─── Settings keys ──────────────────────────────────────────────────────────
 
 const SETTING_KEYS = {
@@ -402,12 +407,30 @@ export async function placePolymarketBet(
   try {
     const client = buildClient(creds);
 
-    // Do NOT pass price here — let the client fetch the best available price from the CLOB
-    // (/price?side=buy endpoint). The Gamma API price (e.g. 0.495) can differ significantly
-    // from the CLOB best ask (e.g. 0.55), causing FOK kills when using the Gamma price.
+    // Slippage check: compare CLOB best ask to Gamma API price before placing.
+    // The Gamma API price (e.g. 0.495) can differ significantly from the CLOB ask (e.g. 0.91).
+    // Buying at 0.91 on a ~50% probability market destroys EV (ROI 10% vs ~100%).
+    const clobPriceData = await client.getPrice(tokenId, 'BUY');
+    const clobAsk = parseFloat((clobPriceData as any)?.price ?? '0');
+    const maxAcceptablePrice = price * (1 + MAX_SLIPPAGE_PCT);
+
+    if (clobAsk === 0) {
+      return { success: false, error: 'CLOB price unavailable — skipping bet' };
+    }
+    if (clobAsk > maxAcceptablePrice) {
+      log.warn(
+        `Slippage too high: CLOB ask=${clobAsk.toFixed(3)} > Gamma price=${price.toFixed(3)} × ${1 + MAX_SLIPPAGE_PCT} (${maxAcceptablePrice.toFixed(3)}) — skipping`,
+      );
+      return { success: false, error: `Slippage too high (CLOB=${clobAsk.toFixed(3)} > limit=${maxAcceptablePrice.toFixed(3)})` };
+    }
+
+    log.info(`Slippage OK: CLOB ask=${clobAsk.toFixed(3)}, Gamma=${price.toFixed(3)}, limit=${maxAcceptablePrice.toFixed(3)}`);
+
+    // Pass the CLOB ask price as a limit so FOK fills at that price.
     const order: UserMarketOrder = {
       tokenID: tokenId,
       amount, // USDC amount to spend
+      price: clobAsk,
       side: Side.BUY,
     };
 
