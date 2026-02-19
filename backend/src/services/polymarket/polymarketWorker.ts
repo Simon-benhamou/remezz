@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -240,7 +240,12 @@ async function tick(prisma: PrismaClient): Promise<void> {
         if (activeLiveBetWindow !== null && activeLiveBetWindow !== start) {
           log.warn(`LIVE MODE: skipping bet — previous window ${activeLiveBetWindow} still has an active bet`);
         } else {
-          log.info(`LIVE MODE: placing $${liveConfig.amount} bet on ${result.direction}...`);
+          // Pre-order balance check — skip if insufficient funds
+          const { balance } = await getPolymarketBalance(prisma);
+          if (balance < liveConfig.amount) {
+            log.warn(`LIVE MODE: insufficient balance $${balance.toFixed(2)} < $${liveConfig.amount} — skipping bet`);
+          } else {
+          log.info(`LIVE MODE: placing $${liveConfig.amount} bet on ${result.direction} (balance=$${balance.toFixed(2)})...`);
           const betResult = await placePolymarketBet(
             prisma,
             result.direction,
@@ -254,6 +259,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
           } else {
             log.error(`LIVE BET FAILED: ${betResult.error}`);
           }
+          } // end balance-ok branch
         }
       } else if (liveConfig && !tokenId) {
         log.warn('Live mode active but no token ID available for this market');
