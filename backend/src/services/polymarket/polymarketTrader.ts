@@ -389,6 +389,9 @@ export async function savePolymarketCredentials(
   const { apiKey, secret, passphrase, authAddress } = await deriveApiCredentials(privateKey);
   log.info(`API credentials derived successfully for ${authAddress}`);
 
+  // Wait for key propagation across Polymarket's cluster (eventually consistent — ~3s)
+  await new Promise((r) => setTimeout(r, 3500));
+
   // Encrypt all 4 values (compute once so we can verify round-trip)
   const encryptedPk = encryptApiKey(privateKey);
   const encryptedApiKey = encryptApiKey(apiKey);
@@ -525,6 +528,8 @@ async function loadCredentials(
 
 /**
  * Validate Polymarket credentials by calling a lightweight authenticated endpoint.
+ * Retries up to 3 times with 2s backoff to handle Polymarket's eventual consistency
+ * (derived keys take ~3-5s to propagate across their cluster).
  */
 export async function validatePolymarketCredentials(
   prisma: PrismaClient,
@@ -532,14 +537,22 @@ export async function validatePolymarketCredentials(
   const creds = await loadCredentials(prisma);
   if (!creds) return { valid: false, error: 'No credentials configured' };
 
-  try {
-    // Test API auth by fetching orders (empty for new accounts but auth must pass)
-    await clobGet('/data/orders', creds);
-
-    return { valid: true, address: creds.address };
-  } catch (err: any) {
-    return { valid: false, error: err.message || 'Validation failed' };
+  let lastError = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      // Use balance endpoint (signature_type=1) — more stable than /data/orders across cluster nodes
+      await clobGet('/balance-allowance?asset_type=COLLATERAL&signature_type=1', creds);
+      return { valid: true, address: creds.proxyAddress ?? creds.address };
+    } catch (err: any) {
+      lastError = err.message || 'Validation failed';
+      if (attempt < 3) {
+        log.warn(`Credential validation attempt ${attempt}/3 failed — retrying in 2s (${lastError})`);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
   }
+
+  return { valid: false, error: lastError };
 }
 
 /**
