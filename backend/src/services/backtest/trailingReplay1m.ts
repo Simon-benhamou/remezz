@@ -14,6 +14,7 @@
  */
 
 import { MomentumConfig } from '../../strategies/momentumSimple.js';
+import { determineVolatilityRegime } from '../../strategies/indicators/technicalIndicators.js';
 import {
   MomentumExhaustionCalculator,
   type ExhaustionCandle,
@@ -151,15 +152,77 @@ class Candle1mFetcher {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TRAILING STOP HELPERS (mirrors live logic from MomentumConfig.EXIT)
+// V5.115: Added volatility adaptation to match shouldExitPosition() parity
 // ═══════════════════════════════════════════════════════════════════════════
 
 const CANDLE_15M_MS = 15 * 60 * 1000;
 
-function getTrailingConfig() {
+// Aggregate 1m candles into 15m buckets for volatility regime computation
+function aggregate1mTo15m(candles1m: Candle1m[]): { high: number; low: number; close: number }[] {
+  const buckets = new Map<number, Candle1m[]>();
+  for (const c of candles1m) {
+    const bucket = Math.floor(c.timestamp / CANDLE_15M_MS) * CANDLE_15M_MS;
+    const arr = buckets.get(bucket);
+    if (arr) arr.push(c); else buckets.set(bucket, [c]);
+  }
+  const result: { high: number; low: number; close: number }[] = [];
+  for (const [, cs] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+    if (cs.length < 10) continue; // skip incomplete buckets (need ~15 candles)
+    result.push({
+      high: Math.max(...cs.map(c => c.high)),
+      low: Math.min(...cs.map(c => c.low)),
+      close: cs[cs.length - 1].close,
+    });
+  }
+  return result;
+}
+
+// Compute volatility multiplier matching shouldExitPosition() (exitLogic.ts:405-421)
+function computeVolMultiplier(candles1m: Candle1m[]): { multiplier: number; baseDistance: number; activation: number } {
+  const EXIT = MomentumConfig.EXIT;
+  const volAdaptEnabled = (EXIT as any).TRAILING_VOL_ADAPT_ENABLED ?? false;
+
+  // Aggregate 1m → 15m for determineVolatilityRegime (needs ATR-14 on 15m)
+  const candles15m = aggregate1mTo15m(candles1m);
+  const volRegime = candles15m.length >= 14
+    ? determineVolatilityRegime(candles15m)
+    : { regime: 'MEDIUM' as const, trailingDistance: EXIT.TRAILING_DISTANCE_PCT, trailingActivation: EXIT.TRAILING_ACTIVATION_PCT, atrPct: null, reason: 'insufficient_data' };
+
+  let multiplier = 1.0;
+  if (volAdaptEnabled) {
+    const lowMult = (EXIT as any).TRAILING_VOL_LOW_MULT ?? 0.8;
+    const medMult = (EXIT as any).TRAILING_VOL_MED_MULT ?? 1.0;
+    const highMult = (EXIT as any).TRAILING_VOL_HIGH_MULT ?? 1.6;
+    if (volRegime.regime === 'HIGH') multiplier = highMult;
+    else if (volRegime.regime === 'LOW') multiplier = lowMult;
+    else multiplier = medMult;
+  }
+
+  return {
+    multiplier,
+    baseDistance: volRegime.trailingDistance,
+    activation: volRegime.trailingActivation,
+  };
+}
+
+interface TrailingConfig {
+  ACTIVATION_PCT: number;
+  DISTANCE_PCT: number;
+  WIDEN_AT_PCT: number;
+  WIDE_DISTANCE_PCT: number;
+  PROGRESSIVE_ENABLED: boolean;
+  TIER2_AT_PCT: number;
+  TIER2_DISTANCE_PCT: number;
+  TIER3_AT_PCT: number;
+  TIER3_DISTANCE_PCT: number;
+  VOL_MULTIPLIER: number;
+}
+
+function getTrailingConfig(vol?: { baseDistance: number; activation: number; multiplier: number }): TrailingConfig {
   const EXIT = MomentumConfig.EXIT;
   return {
-    ACTIVATION_PCT: EXIT.TRAILING_ACTIVATION_PCT,
-    DISTANCE_PCT: EXIT.TRAILING_DISTANCE_PCT,
+    ACTIVATION_PCT: vol?.activation ?? EXIT.TRAILING_ACTIVATION_PCT,
+    DISTANCE_PCT: vol?.baseDistance ?? EXIT.TRAILING_DISTANCE_PCT,
     WIDEN_AT_PCT: EXIT.TRAILING_WIDEN_AT_PCT,
     WIDE_DISTANCE_PCT: EXIT.TRAILING_WIDE_DISTANCE_PCT,
     PROGRESSIVE_ENABLED: (EXIT as any).TRAILING_PROGRESSIVE_ENABLED ?? true,
@@ -167,17 +230,20 @@ function getTrailingConfig() {
     TIER2_DISTANCE_PCT: (EXIT as any).TRAILING_TIER2_DISTANCE_PCT ?? 1.5,
     TIER3_AT_PCT: (EXIT as any).TRAILING_TIER3_AT_PCT ?? 6.0,
     TIER3_DISTANCE_PCT: (EXIT as any).TRAILING_TIER3_DISTANCE_PCT ?? 2.5,
+    VOL_MULTIPLIER: vol?.multiplier ?? 1.0,
   };
 }
 
-function getTrailingDistance(hwmPct: number, cfg: ReturnType<typeof getTrailingConfig>): number {
+function getTrailingDistance(hwmPct: number, cfg: TrailingConfig): number {
+  const m = cfg.VOL_MULTIPLIER;
   if (cfg.PROGRESSIVE_ENABLED) {
-    if (hwmPct >= cfg.TIER3_AT_PCT) return cfg.TIER3_DISTANCE_PCT;
-    if (hwmPct >= cfg.TIER2_AT_PCT) return cfg.TIER2_DISTANCE_PCT;
-    if (hwmPct >= cfg.WIDEN_AT_PCT) return cfg.WIDE_DISTANCE_PCT;
+    if (hwmPct >= cfg.TIER3_AT_PCT) return cfg.TIER3_DISTANCE_PCT * m;
+    if (hwmPct >= cfg.TIER2_AT_PCT) return cfg.TIER2_DISTANCE_PCT * m;
+    if (hwmPct >= cfg.WIDEN_AT_PCT) return cfg.WIDE_DISTANCE_PCT * m;
   } else {
-    if (hwmPct >= cfg.WIDEN_AT_PCT) return cfg.WIDE_DISTANCE_PCT;
+    if (hwmPct >= cfg.WIDEN_AT_PCT) return cfg.WIDE_DISTANCE_PCT * m;
   }
+  // Base distance already adapted by volatility regime — no additional multiplier
   return cfg.DISTANCE_PCT;
 }
 
@@ -185,7 +251,7 @@ function calcTrailingStop(
   side: 'long' | 'short',
   entryPrice: number,
   hwm: number,
-  cfg: ReturnType<typeof getTrailingConfig>,
+  cfg: TrailingConfig,
 ): { stopPrice: number } {
   const hwmPct = side === 'long'
     ? ((hwm - entryPrice) / entryPrice) * 100
@@ -255,7 +321,11 @@ function replayTradeAt1m(
   const side = trade.side;
   const entryPrice = trade.entryPrice;
   const entryTs = new Date(trade.entryTime).getTime();
-  const cfg = getTrailingConfig();
+
+  // V5.115: Compute volatility regime from 1m candles (aggregated to 15m)
+  // Mirrors shouldExitPosition() which uses determineVolatilityRegime + volMultiplier
+  const vol = computeVolMultiplier(candles1m);
+  const cfg = getTrailingConfig(vol);
 
   let hwm = entryPrice;
   let trailingActive = false;
@@ -446,6 +516,9 @@ export async function postProcess1mTrailingExits(
           t.netPnlPct = replay.netPnlPct;
           t.feesUsd = replay.feesUsd;
           t.exitReason = replay.exitReason;
+          // V5.115: Update month/day to match new exit time
+          t.month = t.exitTime.slice(0, 7);
+          t.day = t.exitTime.slice(0, 10);
           replayedCount++;
         }
       } catch (err: unknown) {
@@ -490,14 +563,12 @@ function recalculateSummaryIncremental(
   const trades = result.trades;
   const initialCapital = result.params.initialCapital;
 
-  // Apply cumulative PnL deltas to the original capital chain
+  // Apply cumulative PnL deltas to the original capital chain (for trade-level display)
   let cumDelta = 0;
   for (const t of trades) {
-    // Shift by cumulative delta from earlier replayed trades
     t.capitalBefore += cumDelta;
     t.capitalAfter += cumDelta;
 
-    // If this trade was replayed, account for its PnL change
     const orig = originalPnls.get(t.id);
     if (orig) {
       const pnlDelta = t.netPnlUsd - orig.netPnlUsd;
@@ -508,23 +579,32 @@ function recalculateSummaryIncremental(
     }
   }
 
-  const finalCapital = trades.length > 0 ? trades[trades.length - 1].capitalAfter : initialCapital;
+  // V5.115: Use cumulative realized PnL for equity/DD instead of capitalAfter.
+  // The incremental delta approach keeps original position sizes but shifts the
+  // capital chain — when total PnL delta is large relative to early capital,
+  // capitalAfter can go negative (impossible in reality). Cumulative PnL gives
+  // a robust equity curve: equity = initialCapital + sum(realized PnL to date).
+  const finalCapital = initialCapital + trades.reduce((sum, t) => sum + t.netPnlUsd, 0);
 
-  // Rebuild equity curve + drawdown from adjusted capital chain
+  // Rebuild equity curve from cumulative realized PnL (sorted by exit time)
   const equityCurve: { date: string; equity: number }[] = [];
   const drawdownCurve: { date: string; drawdown: number }[] = [];
   let peakCapital = initialCapital;
   let maxDrawdown = 0;
 
-  const tradesByDay = new Map<string, BacktestTrade[]>();
-  for (const t of trades) {
+  // Group PnL by exit day (using actual exit times, which may have changed)
+  const dailyPnl = new Map<string, number>();
+  const sortedTrades = [...trades].sort(
+    (a, b) => new Date(a.exitTime).getTime() - new Date(b.exitTime).getTime(),
+  );
+  for (const t of sortedTrades) {
     const day = new Date(t.exitTime).toISOString().slice(0, 10);
-    (tradesByDay.get(day) ?? (() => { const arr: BacktestTrade[] = []; tradesByDay.set(day, arr); return arr; })()).push(t);
+    dailyPnl.set(day, (dailyPnl.get(day) || 0) + t.netPnlUsd);
   }
 
-  for (const [day, dayTrades] of [...tradesByDay.entries()].sort()) {
-    const lastTrade = dayTrades[dayTrades.length - 1];
-    const equity = lastTrade.capitalAfter;
+  let equity = initialCapital;
+  for (const [day, pnl] of [...dailyPnl.entries()].sort()) {
+    equity += pnl;
     equityCurve.push({ date: day, equity });
 
     if (equity > peakCapital) peakCapital = equity;
@@ -533,7 +613,7 @@ function recalculateSummaryIncremental(
     drawdownCurve.push({ date: day, drawdown: drawdownPct });
   }
 
-  // Rebuild monthly stats
+  // Rebuild monthly stats using cumulative PnL for capitalEnd
   const monthlyMap = new Map<string, BacktestTrade[]>();
   for (const t of trades) {
     if (!monthlyMap.has(t.month)) monthlyMap.set(t.month, []);
@@ -549,7 +629,7 @@ function recalculateSummaryIncremental(
     const pnlUsd = monthTrades.reduce((sum, t) => sum + t.netPnlUsd, 0);
     const longTrades = monthTrades.filter(t => t.side === 'long').length;
     const shortTrades = monthTrades.filter(t => t.side === 'short').length;
-    const capitalEnd = monthTrades.length > 0 ? monthTrades[monthTrades.length - 1].capitalAfter : prevCap;
+    const capitalEnd = prevCap + pnlUsd;
 
     monthlyStats.push({
       month,
