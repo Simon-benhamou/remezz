@@ -650,11 +650,14 @@ export class RealtimeExitHandler {
           if (this.nfsStateMachine) {
             this.nfsStateMachine.reset();
           }
-          // V5.110: Cancel exhaustion STOP if breach cleared
-          if (this.proactiveLimitOrderId) {
-            logger.info(`🔋 [${symbol}] Trailing breach cleared — cancelling exhaustion STOP`);
-            await this.cancelProactiveLimit(symbol);
-          }
+          // V5.117c: Do NOT cancel exhaustion STOP here.
+          // The STOP_MARKET must persist on the exchange until exhaustion score
+          // drops below CANCEL_THRESHOLD (hysteresis at line ~628).
+          // Previously, the STOP was cancelled every 1m candle because the
+          // condition at line 643 always evaluates to true (shouldExitPosition
+          // returns shouldExit=false, reason='trailing_breach', not 'trailing').
+          // This made the STOP live for only ~1 minute before cancellation,
+          // defeating the purpose of catching wick fills intrabar.
           return;
         }
 
