@@ -33,7 +33,13 @@ let resolutionDone = false;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let pendingResolution: WindowState | null = null; // Previous window awaiting DB persist
 
-// Prevent placing a new live bet before the previous window's order is fully handled
+// Prevent concurrent tick() executions: setInterval fires every 1s but tick() can take 3-5s
+// (balance fetch, rederive, etc). Without this guard multiple ticks see decisionMade=false
+// simultaneously → multiple bets placed per window.
+let tickInProgress = false;
+
+// Prevent placing a new live bet before the previous window's order is fully handled.
+// Set to the windowStart when a bet is ATTEMPTED (not just on success) to prevent retry loops.
 let activeLiveBetWindow: number | null = null; // windowStart of the window with an active live bet
 
 /** Live state exposed to the frontend */
@@ -138,6 +144,12 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
 // ─── Core tick ────────────────────────────────────────────────────────────────
 
 async function tick(prisma: PrismaClient): Promise<void> {
+  // Guard against concurrent ticks: setInterval fires every 1s but tick() can take 3-5s.
+  // Without this, multiple ticks execute in parallel and all see decisionMade=false.
+  if (tickInProgress) return;
+  tickInProgress = true;
+
+  try {
   // Re-subscribe every tick to prevent TTL pruning (klineSubscriptionTtlMs = 10min).
   // subscribeToKline is idempotent — just refreshes lastRequestedAt.
   const ws = getBinanceWebSocket();
@@ -203,6 +215,8 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
   // ── Decision at T+2.5min ──────────────────────────────────────────────────
   if (elapsed >= DECISION_OFFSET_MS && !decisionMade) {
+    decisionMade = true; // Set IMMEDIATELY before any async work to prevent concurrent ticks from re-entering
+
     const windowCandles = klines.filter(
       (k) => k.isFinal && k.timestamp >= start,
     );
@@ -240,26 +254,30 @@ async function tick(prisma: PrismaClient): Promise<void> {
         if (activeLiveBetWindow !== null && activeLiveBetWindow !== start) {
           log.warn(`LIVE MODE: skipping bet — previous window ${activeLiveBetWindow} still has an active bet`);
         } else {
+          // Mark BEFORE placing (not after success) to prevent concurrent ticks from re-entering
+          activeLiveBetWindow = start;
+
           // Pre-order balance check — skip if insufficient funds
           const { balance } = await getPolymarketBalance(prisma);
           if (balance < liveConfig.amount) {
             log.warn(`LIVE MODE: insufficient balance $${balance.toFixed(2)} < $${liveConfig.amount} — skipping bet`);
+            activeLiveBetWindow = null; // Reset — no bet was placed
           } else {
-          log.info(`LIVE MODE: placing $${liveConfig.amount} bet on ${result.direction} (balance=$${balance.toFixed(2)})...`);
-          const betResult = await placePolymarketBet(
-            prisma,
-            result.direction,
-            tokenId,
-            liveConfig.amount,
-            entryOdds,
-          );
-          if (betResult.success) {
-            activeLiveBetWindow = start; // Mark this window as having an active live bet
-            log.info(`LIVE BET OK: orderId=${betResult.orderId}`);
-          } else {
-            log.error(`LIVE BET FAILED: ${betResult.error}`);
+            log.info(`LIVE MODE: placing $${liveConfig.amount} bet on ${result.direction} (balance=$${balance.toFixed(2)})...`);
+            const betResult = await placePolymarketBet(
+              prisma,
+              result.direction,
+              tokenId,
+              liveConfig.amount,
+              entryOdds,
+            );
+            if (betResult.success) {
+              log.info(`LIVE BET OK: orderId=${betResult.orderId}`);
+            } else {
+              log.error(`LIVE BET FAILED: ${betResult.error}`);
+              activeLiveBetWindow = null; // Reset on failure so next window can try
+            }
           }
-          } // end balance-ok branch
         }
       } else if (liveConfig && !tokenId) {
         log.warn('Live mode active but no token ID available for this market');
@@ -269,8 +287,6 @@ async function tick(prisma: PrismaClient): Promise<void> {
       currentWindow.status = 'skipped';
       log.info('Window skipped (score < 40)');
     }
-
-    decisionMade = true;
   }
 
   // ── Update live state ─────────────────────────────────────────────────────
@@ -278,6 +294,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
     window: currentWindow ? { ...currentWindow } : null,
     klines1m: klines,
   };
+  } finally {
+    tickInProgress = false;
+  }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -330,6 +349,7 @@ export function stopPolymarketWorker(): void {
   }
   stopChainlinkFeed();
   activeLiveBetWindow = null; // Reset so a restart can place bets immediately
+  tickInProgress = false; // Reset in case a tick was in progress when stopped
 }
 
 /**
