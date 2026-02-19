@@ -134,7 +134,8 @@ async function buildL1Headers(
   wallet: ethers.Wallet,
   authAddress?: string, // proxy address for Magic.link accounts, defaults to EOA
 ): Promise<Record<string, string>> {
-  const timestamp = Math.floor(Date.now() / 1000).toString();
+  // Subtract 10s to compensate for potential clock skew (common Polymarket 401 fix)
+  const timestamp = (Math.floor(Date.now() / 1000) - 10).toString();
   const nonce = 0;
   const addr = authAddress ?? wallet.address;
 
