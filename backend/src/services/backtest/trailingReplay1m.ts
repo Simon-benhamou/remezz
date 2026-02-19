@@ -9,13 +9,13 @@
  *   Pass 1: runBacktestComputation() on worker thread (15m, fast, 0 API)
  *   Pass 2: postProcess1mTrailingExits() on main thread
  *           → fetch 1m candles per trailing trade window
- *           → replay exhaustion STOP_MARKET + 2-candle close confirmation
+ *           → replay exhaustion STOP_MARKET (only improvement mechanism)
  *           → adjust exitPrice, exitTime, holdMinutes, PnL
  *           → recalculate summary/equity/drawdown
  *
- * V5.117: Full live-parity 1m replay with dynamic volatility adaptation:
+ * V5.117b: Full live-parity 1m replay — exhaustion STOP_MARKET only:
  * - Exhaust STOP_MARKET fills at trailing stop price (better than close)
- * - 2-candle 1m close confirmation as fallback (matching live RT handler)
+ * - NO 2-candle 1m close confirmation (V5.90: live defers NFS MED/LOW to 15m)
  * - Dynamic per-15m-boundary vol adaptation (aggregates 1m→15m on-the-fly,
  *   recomputes determineVolatilityRegime() at each boundary — matches live's
  *   shouldExitPosition() which gets fresh 15m candles every call)
@@ -310,25 +310,28 @@ function calculatePnl(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// B) replayTradeAt1m — V5.117: full live-parity with dynamic vol adaptation
+// B) replayTradeAt1m — V5.117b: exhaustion STOP_MARKET only
 //
-// Two exit mechanisms (whichever fires first):
+// ONLY exit mechanism: Exhaustion STOP_MARKET
+//   - Exhaustion scoring on every 1m candle after trailing activates
+//   - Score >= threshold → place STOP at trailing price
+//   - STOP fills on first wick touch → exit at trailing stop price (BETTER fill)
+//   - Score < cancel threshold → cancel STOP (hysteresis)
+//   - If exhaustion never fires → keep original 15m result (no change)
 //
-// 1. EXHAUST STOP_MARKET:
-//    - Exhaustion scoring on every 1m candle after trailing activates
-//    - Score >= threshold → place STOP at trailing price
-//    - STOP fills on first wick touch → exit at trailing stop price
-//    - Score < cancel threshold → cancel STOP (hysteresis)
+// V5.90 CRITICAL INSIGHT: In live, when NFS is enabled (current config):
+//   - NFS HIGH → exits immediately at trailing stop (excluded from replay)
+//   - NFS MED/LOW → DEFERRED to 15m layer (NOT exited on 1m!)
+//   - 2-candle 1m confirmation → ONLY runs when NFS is disabled (legacy)
 //
-// 2. 2-CANDLE CLOSE CONFIRMATION (fallback, matches live RT handler):
-//    - Check trailing breach on every 1m close
-//    - 2 consecutive closes below stop → exit at close price
+// The replay processes TRAIL, TRAIL_NFS_MED, TRAIL_NFS_LOW. Since live defers
+// MED/LOW to the 15m layer, the replay must NOT use 2-candle 1m confirmation.
+// The only valid 1m improvement is the exhaustion STOP_MARKET (fills at
+// trailing price on wick touch = better than the 15m close exit).
 //
 // Dynamic vol adaptation: aggregates 1m→15m incrementally, recomputes
 // determineVolatilityRegime() at each 15m boundary (matching live exactly).
 // ═══════════════════════════════════════════════════════════════════════════
-
-const CONFIRM_CANDLES = 2; // Matches live: REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES
 
 function replayTradeAt1m(
   trade: BacktestTrade,
@@ -350,7 +353,6 @@ function replayTradeAt1m(
 
   let hwm = entryPrice;
   let trailingActive = false;
-  let breachCount = 0;
 
   // Exhaustion state
   let exhaustionStopActive = false;
@@ -363,7 +365,6 @@ function replayTradeAt1m(
     // ── 15m boundary: aggregate bucket and recompute vol regime ──
     const bucketTs = Math.floor(c.timestamp / CANDLE_15M_MS) * CANDLE_15M_MS;
     if (bucketTs !== currentBucketTs) {
-      // Finalize previous 15m bucket
       if (currentBucket.length >= 10) {
         candles15m.push({
           high: Math.max(...currentBucket.map(x => x.high)),
@@ -433,32 +434,9 @@ function replayTradeAt1m(
       exhaustionStopActive = false;
       exhaustionStopPrice = 0;
     }
-
-    // STEP 6: 2-candle close confirmation (fallback when exhaust doesn't fire)
-    const closeBreached = side === 'long'
-      ? c.close <= stopPrice
-      : c.close >= stopPrice;
-
-    if (closeBreached) {
-      breachCount++;
-      if (breachCount >= CONFIRM_CANDLES) {
-        const holdMinutes = (c.timestamp - entryTs) / 60000;
-        const pnl = calculatePnl(entryPrice, c.close, side, trade.marginUsd, trade.leverage, holdMinutes);
-        return {
-          wasReplayed: true,
-          exitPrice: c.close,
-          exitTs: c.timestamp,
-          holdMinutes,
-          ...pnl,
-          exitReason: trade.exitReason,
-        };
-      }
-    } else {
-      breachCount = 0;
-    }
   }
 
-  // No 1m exit found → keep original 15m result
+  // No exhaustion STOP fired → keep original 15m result unchanged
   return {
     wasReplayed: false,
     exitPrice: trade.exitPrice,
