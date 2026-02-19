@@ -183,13 +183,24 @@ async function deriveApiCredentials(
 
 // ─── L2 HMAC Authentication ────────────────────────────────────────────────
 
+// Monotonic timestamp counter: Polymarket rejects requests with duplicate timestamps
+// (replay protection). If two calls happen within the same second they'd share the same
+// floor(Date.now()/1000) — we increment by 1 to guarantee uniqueness.
+let _lastHmacTimestamp = 0;
+
+function nextHmacTimestamp(): string {
+  const now = Math.floor(Date.now() / 1000);
+  _lastHmacTimestamp = now > _lastHmacTimestamp ? now : _lastHmacTimestamp + 1;
+  return _lastHmacTimestamp.toString();
+}
+
 function buildHmacHeaders(
   creds: ClobCredentials,
   method: string,
   path: string,
   body?: string,
 ): Record<string, string> {
-  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const timestamp = nextHmacTimestamp();
 
   // HMAC message: timestamp + method + path (no \n separators, matches py-clob-client)
   let message = `${timestamp}${method}${path}`;
