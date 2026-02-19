@@ -77,6 +77,7 @@ const ORDER_TYPES = {
 const SIDE_BUY = 0;
 // Signature type: EOA (0) or POLY_PROXY (1) or POLY_GNOSIS_SAFE (2)
 const SIG_TYPE_EOA = 0;
+const SIG_TYPE_POLY_PROXY = 1;
 
 // Default fee rate (Polymarket standard: 0 bps for taker)
 const FEE_RATE_BPS = 0;
@@ -123,6 +124,7 @@ export interface PolymarketConfig {
 interface ClobCredentials {
   privateKey: string;
   address: string; // EOA address (wallet.address derived from private key)
+  proxyAddress?: string; // Proxy wallet address (Magic.link accounts) — funds held here
   apiKey: string;
   apiSecret: string;
   apiPassphrase: string;
@@ -237,9 +239,11 @@ async function createSignedOrder(
   tokenId: string,
   usdcAmount: number,
   price: number, // price per outcome token (0-1)
+  proxyAddress?: string, // if set, order is placed as proxy wallet (maker=proxy, signer=EOA, signatureType=1)
 ): Promise<SignedOrder> {
   const salt = generateSalt();
-  const maker = wallet.address;
+  // For proxy wallets: maker = proxy (holds USDC), signer = EOA (signs the order)
+  const maker = proxyAddress ?? wallet.address;
   const signer = wallet.address;
   const taker = '0x0000000000000000000000000000000000000000';
   const expiration = '0'; // no expiration for market orders
@@ -262,7 +266,8 @@ async function createSignedOrder(
     nonce: '0',
     feeRateBps: FEE_RATE_BPS.toString(),
     side: SIDE_BUY,
-    signatureType: SIG_TYPE_EOA,
+    // POLY_PROXY (1) when funds are in a proxy wallet (Magic.link accounts), EOA (0) otherwise
+    signatureType: proxyAddress ? SIG_TYPE_POLY_PROXY : SIG_TYPE_EOA,
   };
 
   // Sign with EIP-712
@@ -497,11 +502,13 @@ async function loadCredentials(
 
     const wallet = new ethers.Wallet(pk);
     const authAddress = wallet.address; // always EOA
-    log.debug(`Credentials loaded OK — address=${authAddress}`);
+    const proxyAddress = map.get(SETTING_KEYS.PROXY_ADDRESS) || undefined;
+    log.debug(`Credentials loaded OK — address=${authAddress}${proxyAddress ? ` proxy=${proxyAddress}` : ''}`);
 
     return {
       privateKey: pk,
       address: authAddress,
+      proxyAddress,
       apiKey: decryptApiKey(encKey).trim(),
       apiSecret: decryptApiKey(encSecret).trim(),
       apiPassphrase: decryptApiKey(encPass).trim(),
@@ -541,8 +548,8 @@ export async function getPolymarketBalance(
   if (!creds) return { balance: 0, error: 'No credentials configured' };
 
   try {
-    // asset_type=COLLATERAL (not USDC), signature_type=0 (EOA)
-    const data = await clobGet('/balance-allowance?asset_type=COLLATERAL&signature_type=0', creds);
+    // asset_type=COLLATERAL, signature_type=1 (proxy wallet — maps EOA to its linked proxy account)
+    const data = await clobGet('/balance-allowance?asset_type=COLLATERAL&signature_type=1', creds);
     const balance = parseFloat(data?.balance ?? '0') / 10 ** USDC_DECIMALS;
     return { balance };
   } catch (err: any) {
@@ -571,7 +578,8 @@ export async function placePolymarketBet(
   try {
     // Wallet needed for EIP-712 order signing — already validated in loadCredentials
     const signingWallet = new ethers.Wallet(creds.privateKey);
-    const signedOrder = await createSignedOrder(signingWallet, tokenId, amount, price);
+    // Pass proxy address so maker=proxy, signer=EOA, signatureType=1 (funds are in proxy for Magic.link accounts)
+    const signedOrder = await createSignedOrder(signingWallet, tokenId, amount, price, creds.proxyAddress);
 
     const orderPayload = {
       order: {
@@ -589,7 +597,8 @@ export async function placePolymarketBet(
         signatureType: signedOrder.signatureType,
         signature: signedOrder.signature,
       },
-      owner: creds.address,
+      // owner should be the account that holds the funds (proxy if available)
+      owner: creds.proxyAddress ?? creds.address,
       orderType: 'FOK', // Fill-or-Kill for market orders
     };
 
