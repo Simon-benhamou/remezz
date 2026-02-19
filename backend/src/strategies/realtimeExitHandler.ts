@@ -640,7 +640,10 @@ export class RealtimeExitHandler {
         }
 
         // ONLY react to trailing exits in realtime
-        if (!(exitSignal.shouldExit && exitSignal.reason === 'trailing')) {
+        // V5.117c FIX: shouldExitPosition returns {shouldExit:false, reason:'trailing_breach'}
+        // for close breaches (caller handles confirmation). The old check for
+        // 'trailing' with shouldExit=true NEVER matched, so NFS logic below never ran.
+        if (exitSignal.reason !== 'trailing_breach') {
           if (this.rtTrailingBreachCandles > 0 || this.nfsBreachCount > 0) {
             logger.info(`✅ [${symbol}] Trailing breach CLEARED (was ${this.rtTrailingBreachCandles}/${confirmCandles}, nfs=${this.nfsBreachCount}) | close=${closePx.toFixed(4)} | stop=${(candidateStop as number | undefined)?.toFixed(4) || 'n/a'}`);
           }
@@ -650,14 +653,7 @@ export class RealtimeExitHandler {
           if (this.nfsStateMachine) {
             this.nfsStateMachine.reset();
           }
-          // V5.117c: Do NOT cancel exhaustion STOP here.
-          // The STOP_MARKET must persist on the exchange until exhaustion score
-          // drops below CANCEL_THRESHOLD (hysteresis at line ~628).
-          // Previously, the STOP was cancelled every 1m candle because the
-          // condition at line 643 always evaluates to true (shouldExitPosition
-          // returns shouldExit=false, reason='trailing_breach', not 'trailing').
-          // This made the STOP live for only ~1 minute before cancellation,
-          // defeating the purpose of catching wick fills intrabar.
+          // V5.117c: Exhaustion STOP persists — only cancelled by hysteresis (score < 20).
           return;
         }
 
