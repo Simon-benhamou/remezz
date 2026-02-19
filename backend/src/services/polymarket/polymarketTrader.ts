@@ -87,15 +87,26 @@ const USDC_DECIMALS = 6;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /**
- * Normalize a private key: trim whitespace, ensure 0x prefix, validate hex.
- * Throws if the result is not a valid 32-byte hex key.
+ * Normalize a private key: strip copy-paste artifacts, ensure 0x prefix, validate hex.
+ * Throws with a descriptive error if the result is not a valid 32-byte hex key.
  */
 function normalizePrivateKey(raw: string): string {
-  let key = raw.trim();
+  // Strip BOM, zero-width chars, surrounding quotes, all whitespace
+  let key = raw
+    .replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g, '') // zero-width / NBSP / BOM
+    .replace(/^[\s"'`]+|[\s"'`]+$/g, '');              // trim whitespace + quotes
+
   if (!key.startsWith('0x')) key = '0x' + key;
+
   // Must be 0x + 64 hex chars
   if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
-    throw new Error('Invalid private key format (expected 32-byte hex string)');
+    const hexOnly = key.replace(/^0x/, '');
+    const detail = `length=${hexOnly.length}, hasNonHex=${/[^0-9a-fA-F]/.test(hexOnly)}`;
+    log.error(`normalizePrivateKey failed: ${detail}`);
+    throw new Error(
+      `Invalid private key format (expected 64 hex chars, got ${detail}). ` +
+      'Make sure you paste the raw hex key from your Polymarket proxy wallet.',
+    );
   }
   return key;
 }
@@ -359,11 +370,30 @@ export async function savePolymarketConfig(
  */
 export async function savePolymarketCredentials(
   prisma: PrismaClient,
-  rawPrivateKey: string,
+  rawInput: string,
 ): Promise<{ address: string }> {
-  // Normalize & validate private key
-  const privateKey = normalizePrivateKey(rawPrivateKey);
-  const wallet = new ethers.Wallet(privateKey);
+  // Support both hex private key and mnemonic seed phrase
+  let wallet: ethers.Wallet;
+  let privateKey: string;
+
+  const cleaned = rawInput.trim();
+  const wordCount = cleaned.split(/\s+/).length;
+
+  if (wordCount >= 12) {
+    // Looks like a mnemonic seed phrase (12 or 24 words)
+    try {
+      const hdWallet = ethers.Wallet.fromPhrase(cleaned);
+      wallet = new ethers.Wallet(hdWallet.privateKey);
+      privateKey = hdWallet.privateKey;
+      log.info(`Mnemonic accepted — derived address ${wallet.address}`);
+    } catch (err: any) {
+      throw new Error(`Invalid mnemonic phrase: ${err.message}`);
+    }
+  } else {
+    // Hex private key
+    privateKey = normalizePrivateKey(cleaned);
+    wallet = new ethers.Wallet(privateKey);
+  }
 
   // Derive API creds from Polymarket CLOB
   log.info(`Deriving API credentials for address ${wallet.address}...`);

@@ -1134,11 +1134,11 @@ function PolymarketTab() {
           ) : (
             <div className="space-y-3">
               <div className="space-y-2">
-                <Label className="text-xs">Wallet Private Key</Label>
+                <Label className="text-xs">Wallet Private Key or Seed Phrase</Label>
                 <div className="flex gap-2">
                   <Input
                     type={showPrivateKey ? 'text' : 'password'}
-                    placeholder="0x..."
+                    placeholder="0x... or seed phrase"
                     value={privateKey}
                     onChange={(e) => setPrivateKey(e.target.value)}
                     className="font-mono text-xs"
@@ -1153,7 +1153,7 @@ function PolymarketTab() {
                   </Button>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  Your Polymarket proxy wallet private key. API key, secret, and passphrase will be derived automatically.
+                  Paste your hex private key (0x...) or 12/24-word seed phrase. API credentials are derived automatically.
                 </p>
               </div>
               <Button onClick={handleSaveCredentials} disabled={savingCreds}>
