@@ -106,6 +106,7 @@ const SETTING_KEYS = {
   MODE: 'polymarket_mode',
   AMOUNT: 'polymarket_amount',
   PRIVATE_KEY: 'polymarket_private_key',
+  PROXY_ADDRESS: 'polymarket_proxy_address', // proxy wallet shown in Polymarket UI (Magic.link accounts)
   API_KEY: 'polymarket_api_key',
   API_SECRET: 'polymarket_api_secret',
   API_PASSPHRASE: 'polymarket_api_passphrase',
@@ -121,7 +122,7 @@ export interface PolymarketConfig {
 
 interface ClobCredentials {
   privateKey: string;
-  address: string; // wallet address derived from privateKey (cached)
+  address: string; // auth address used in POLY-ADDRESS headers (proxy for Magic.link, EOA otherwise)
   apiKey: string;
   apiSecret: string;
   apiPassphrase: string;
@@ -131,34 +132,38 @@ interface ClobCredentials {
 
 async function buildL1Headers(
   wallet: ethers.Wallet,
+  authAddress?: string, // proxy address for Magic.link accounts, defaults to EOA
 ): Promise<Record<string, string>> {
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  const nonce = '0';
+  const nonce = 0;
+  const addr = authAddress ?? wallet.address;
 
   const signature = await wallet.signTypedData(L1_AUTH_DOMAIN, L1_AUTH_TYPES, {
-    address: wallet.address,
+    address: addr,
     timestamp,
     nonce,
     message: 'This message attests that I control the given wallet',
   });
 
   return {
-    'POLY-ADDRESS': wallet.address,
+    'POLY-ADDRESS': addr,
     'POLY-SIGNATURE': signature,
     'POLY-TIMESTAMP': timestamp,
-    'POLY-NONCE': nonce,
+    'POLY-NONCE': '0',
   };
 }
 
 /**
  * Derive API credentials (key, secret, passphrase) from wallet private key.
+ * For Magic.link proxy accounts, pass the proxy address shown in Polymarket UI.
  * This calls the CLOB /auth/derive-api-key endpoint with L1 auth.
  */
 async function deriveApiCredentials(
   privateKey: string,
-): Promise<{ apiKey: string; secret: string; passphrase: string }> {
+  proxyAddress?: string,
+): Promise<{ apiKey: string; secret: string; passphrase: string; authAddress: string }> {
   const wallet = new ethers.Wallet(privateKey);
-  const headers = await buildL1Headers(wallet);
+  const headers = await buildL1Headers(wallet, proxyAddress);
 
   const res = await fetch(`${CLOB_HOST}/auth/derive-api-key`, {
     method: 'GET',
@@ -176,7 +181,8 @@ async function deriveApiCredentials(
     throw new Error('Incomplete credentials returned from Polymarket');
   }
 
-  return { apiKey: data.apiKey, secret: data.secret, passphrase: data.passphrase };
+  const authAddress = proxyAddress ?? wallet.address;
+  return { apiKey: data.apiKey, secret: data.secret, passphrase: data.passphrase, authAddress };
 }
 
 // ─── L2 HMAC Authentication ────────────────────────────────────────────────
@@ -360,15 +366,26 @@ export async function savePolymarketConfig(
 export async function savePolymarketCredentials(
   prisma: PrismaClient,
   rawPrivateKey: string,
+  rawProxyAddress?: string, // optional: proxy wallet shown in Polymarket UI (Magic.link)
 ): Promise<{ address: string }> {
   // Normalize & validate private key
   const privateKey = normalizePrivateKey(rawPrivateKey);
   const wallet = new ethers.Wallet(privateKey);
 
+  // Validate proxy address format if provided
+  let proxyAddress: string | undefined;
+  if (rawProxyAddress?.trim()) {
+    const p = rawProxyAddress.trim();
+    if (!ethers.isAddress(p)) throw new Error('Invalid proxy address format');
+    proxyAddress = ethers.getAddress(p); // checksum
+  }
+
+  const authAddress = proxyAddress ?? wallet.address;
+
   // Derive API creds from Polymarket CLOB
-  log.info(`Deriving API credentials for address ${wallet.address}...`);
-  const { apiKey, secret, passphrase } = await deriveApiCredentials(privateKey);
-  log.info(`API credentials derived successfully for ${wallet.address}`);
+  log.info(`Deriving API credentials for address ${authAddress} (EOA: ${wallet.address})...`);
+  const { apiKey, secret, passphrase } = await deriveApiCredentials(privateKey, proxyAddress);
+  log.info(`API credentials derived successfully for ${authAddress}`);
 
   // Encrypt all 4 values (compute once so we can verify round-trip)
   const encryptedPk = encryptApiKey(privateKey);
@@ -383,8 +400,8 @@ export async function savePolymarketCredentials(
     throw new Error('Encryption round-trip verification failed — check ENCRYPTION_SALT config');
   }
 
-  // Store all 4 values encrypted
-  await Promise.all([
+  // Store all values (proxy address stored in plain — it's a public address)
+  const upserts: Promise<any>[] = [
     prisma.systemSetting.upsert({
       where: { key: SETTING_KEYS.PRIVATE_KEY },
       create: { key: SETTING_KEYS.PRIVATE_KEY, value: encryptedPk },
@@ -405,9 +422,25 @@ export async function savePolymarketCredentials(
       create: { key: SETTING_KEYS.API_PASSPHRASE, value: encryptedPassphrase },
       update: { value: encryptedPassphrase },
     }),
-  ]);
+  ];
 
-  return { address: wallet.address };
+  // Store proxy address if provided (Magic.link accounts)
+  if (proxyAddress) {
+    upserts.push(
+      prisma.systemSetting.upsert({
+        where: { key: SETTING_KEYS.PROXY_ADDRESS },
+        create: { key: SETTING_KEYS.PROXY_ADDRESS, value: proxyAddress },
+        update: { value: proxyAddress },
+      }),
+    );
+  } else {
+    // Clean up any stale proxy address
+    upserts.push(prisma.systemSetting.deleteMany({ where: { key: SETTING_KEYS.PROXY_ADDRESS } }));
+  }
+
+  await Promise.all(upserts);
+
+  return { address: authAddress };
 }
 
 /**
@@ -447,6 +480,7 @@ async function loadCredentials(
       key: {
         in: [
           SETTING_KEYS.PRIVATE_KEY,
+          SETTING_KEYS.PROXY_ADDRESS,
           SETTING_KEYS.API_KEY,
           SETTING_KEYS.API_SECRET,
           SETTING_KEYS.API_PASSPHRASE,
@@ -460,6 +494,7 @@ async function loadCredentials(
   const encKey = map.get(SETTING_KEYS.API_KEY);
   const encSecret = map.get(SETTING_KEYS.API_SECRET);
   const encPass = map.get(SETTING_KEYS.API_PASSPHRASE);
+  const proxyAddr = map.get(SETTING_KEYS.PROXY_ADDRESS); // may be undefined for EOA accounts
 
   if (!encPk || !encKey || !encSecret || !encPass) return null;
 
@@ -467,13 +502,14 @@ async function loadCredentials(
     const decryptedPk = decryptApiKey(encPk);
     const pk = normalizePrivateKey(decryptedPk);
 
-    // Verify private key actually works with ethers before returning
     const wallet = new ethers.Wallet(pk);
-    log.debug(`Credentials loaded OK — address=${wallet.address}`);
+    // For Magic.link proxy accounts, use the proxy address for CLOB auth
+    const authAddress = proxyAddr ?? wallet.address;
+    log.debug(`Credentials loaded OK — authAddress=${authAddress} EOA=${wallet.address}`);
 
     return {
       privateKey: pk,
-      address: wallet.address,
+      address: authAddress,
       apiKey: decryptApiKey(encKey).trim(),
       apiSecret: decryptApiKey(encSecret).trim(),
       apiPassphrase: decryptApiKey(encPass).trim(),

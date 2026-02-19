@@ -88,11 +88,15 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
   // PUT /credentials — save wallet private key (API creds are auto-derived)
   router.put('/credentials', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const { privateKey } = req.body;
+      const { privateKey, proxyAddress } = req.body;
       if (!privateKey || typeof privateKey !== 'string' || !privateKey.trim()) {
         return res.status(400).json({ error: 'Private key is required' });
       }
-      const result = await savePolymarketCredentials(prisma, privateKey.trim());
+      const result = await savePolymarketCredentials(
+        prisma,
+        privateKey.trim(),
+        proxyAddress?.trim() || undefined,
+      );
       res.json({ success: true, address: result.address });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Failed to save credentials' });
@@ -116,6 +120,16 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ valid: false, error: 'Validation failed' });
+    }
+  });
+
+  // DELETE /history — reset all predictions (clear stats)
+  router.delete('/history', authenticateUser, async (_req: AuthenticatedRequest, res) => {
+    try {
+      const { count } = await prisma.polymarketPrediction.deleteMany();
+      res.json({ success: true, deleted: count });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to reset predictions' });
     }
   });
 

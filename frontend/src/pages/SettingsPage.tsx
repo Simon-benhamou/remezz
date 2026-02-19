@@ -972,8 +972,9 @@ function PolymarketTab() {
   const [hasCredentials, setHasCredentials] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
-  // Credentials state — only private key needed, API creds are auto-derived
+  // Credentials state — private key + optional proxy address (Magic.link accounts)
   const [privateKey, setPrivateKey] = useState('');
+  const [proxyAddress, setProxyAddress] = useState('');
   const [savingCreds, setSavingCreds] = useState(false);
   const [showPrivateKey, setShowPrivateKey] = useState(false);
 
@@ -1004,9 +1005,10 @@ function PolymarketTab() {
     }
     setSavingCreds(true);
     try {
-      const result = await api.polymarket.saveCredentials(privateKey);
+      const result = await api.polymarket.saveCredentials(privateKey, proxyAddress.trim() || undefined);
       setHasCredentials(true);
       setPrivateKey('');
+      setProxyAddress('');
       if (result.address) {
         setValidationResult({ valid: true, address: result.address });
       }
@@ -1138,7 +1140,7 @@ function PolymarketTab() {
                 <div className="flex gap-2">
                   <Input
                     type={showPrivateKey ? 'text' : 'password'}
-                    placeholder="0x..."
+                    placeholder="0x... (64 hex chars)"
                     value={privateKey}
                     onChange={(e) => setPrivateKey(e.target.value)}
                     className="font-mono text-xs"
@@ -1152,8 +1154,18 @@ function PolymarketTab() {
                     {showPrivateKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Proxy Address <span className="text-muted-foreground font-normal">(Magic.link/Google seulement)</span></Label>
+                <Input
+                  type="text"
+                  placeholder="0xD6Af1A... — adresse affichée sur polymarket.com"
+                  value={proxyAddress}
+                  onChange={(e) => setProxyAddress(e.target.value)}
+                  className="font-mono text-xs"
+                />
                 <p className="text-[11px] text-muted-foreground">
-                  Your Polymarket proxy wallet private key. API key, secret, and passphrase will be derived automatically.
+                  Compte Google/Magic.link : entre la clé privée exportée + l'adresse proxy visible sur Polymarket. Compte MetaMask : clé privée seulement.
                 </p>
               </div>
               <Button onClick={handleSaveCredentials} disabled={savingCreds}>

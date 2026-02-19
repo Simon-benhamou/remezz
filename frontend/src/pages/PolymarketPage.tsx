@@ -11,6 +11,13 @@ import {
   Activity,
   Power,
   Wallet,
+  KeyRound,
+  CheckCircle,
+  XCircle,
+  Trash2,
+  Eye,
+  EyeOff,
+  RotateCcw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/api';
@@ -466,8 +473,19 @@ export default function PolymarketPage() {
   const [pmMode, setPmMode] = useState<'virtual' | 'live'>('virtual');
   const [pmAmount, setPmAmount] = useState(5);
   const [pmHasCreds, setPmHasCreds] = useState(false);
+  const [pmAddress, setPmAddress] = useState<string | null>(null);
   const [pmBalance, setPmBalance] = useState<number | null>(null);
   const [togglingMode, setTogglingMode] = useState(false);
+
+  // Wallet credentials form
+  const [showWalletForm, setShowWalletForm] = useState(false);
+  const [privateKeyInput, setPrivateKeyInput] = useState('');
+  const [proxyAddressInput, setProxyAddressInput] = useState('');
+  const [showPk, setShowPk] = useState(false);
+  const [savingCreds, setSavingCreds] = useState(false);
+  const [credsError, setCredsError] = useState<string | null>(null);
+  const [deletingCreds, setDeletingCreds] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -484,6 +502,7 @@ export default function PolymarketPage() {
         setPmMode(settingsRes.mode);
         setPmAmount(settingsRes.amount);
         setPmHasCreds(settingsRes.hasCredentials);
+        if (!settingsRes.hasCredentials) setPmAddress(null);
       }
       setError(null);
     } catch (err: any) {
@@ -500,6 +519,45 @@ export default function PolymarketPage() {
     return () => clearInterval(iv);
   }, [fetchAll]);
 
+  // Validate credentials on load to get the wallet address
+  useEffect(() => {
+    if (!pmHasCreds || pmAddress) return;
+    api.polymarket.validateCredentials()
+      .then((r) => { if (r.valid && r.address) setPmAddress(r.address); })
+      .catch(() => {});
+  }, [pmHasCreds, pmAddress]);
+
+  const handleSaveCredentials = async () => {
+    const key = privateKeyInput.trim();
+    if (!key) { setCredsError('Clé privée requise'); return; }
+    setSavingCreds(true);
+    setCredsError(null);
+    try {
+      const proxy = proxyAddressInput.trim() || undefined;
+      const res = await api.polymarket.saveCredentials(key, proxy);
+      if (res.address) setPmAddress(res.address);
+      setPmHasCreds(true);
+      setPrivateKeyInput('');
+      setShowWalletForm(false);
+    } catch (err: any) {
+      setCredsError(err?.response?.data?.error ?? err?.message ?? 'Erreur inconnue');
+    } finally {
+      setSavingCreds(false);
+    }
+  };
+
+  const handleDeleteCredentials = async () => {
+    setDeletingCreds(true);
+    try {
+      await api.polymarket.deleteCredentials();
+      setPmHasCreds(false);
+      setPmAddress(null);
+      setPmMode('virtual');
+      setShowWalletForm(false);
+    } catch { /* ignore */ }
+    setDeletingCreds(false);
+  };
+
   // Fetch balance when live mode is active (once + every 60s)
   useEffect(() => {
     if (pmMode !== 'live' || !pmHasCreds) {
@@ -513,6 +571,16 @@ export default function PolymarketPage() {
     const iv = setInterval(fetchBal, 60_000);
     return () => clearInterval(iv);
   }, [pmMode, pmHasCreds]);
+
+  const handleReset = async () => {
+    if (!confirm('Reset toutes les prédictions ? Cette action est irréversible.')) return;
+    setResetting(true);
+    try {
+      await api.polymarket.resetHistory();
+      await fetchAll();
+    } catch { /* ignore */ }
+    setResetting(false);
+  };
 
   if (loading && !stats) {
     return (
@@ -539,82 +607,201 @@ export default function PolymarketPage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
+      <div>
+        <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold text-foreground">Predictions</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            5-minute BTC price direction predictions (Polymarket experiment)
-          </p>
+          <button
+            onClick={handleReset}
+            disabled={resetting || (stats?.totalWindows ?? 0) === 0}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold',
+              'bg-muted text-muted-foreground border border-border',
+              'hover:bg-destructive/15 hover:text-destructive hover:border-destructive/30 transition-colors cursor-pointer',
+              'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-muted disabled:hover:text-muted-foreground disabled:hover:border-border',
+            )}
+          >
+            <RotateCcw className={cn('h-3 w-3', resetting && 'animate-spin')} />
+            {resetting ? 'Reset...' : 'Reset'}
+          </button>
         </div>
-        <div className="flex flex-col items-end gap-2 shrink-0">
-          <div className="flex items-center gap-2">
+        <p className="text-sm text-muted-foreground mt-1">
+          5-minute BTC price direction predictions (Polymarket experiment)
+        </p>
+      </div>
+
+      {/* Mode + Wallet — side by side */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Trading Mode Card */}
+        <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="flex items-center gap-2 text-muted-foreground mb-3">
+            <Power className="h-4 w-4" />
+            <span className="text-xs uppercase tracking-wider">Mode Trading</span>
+          </div>
+
+          <div className="flex items-center justify-between mb-3">
+            <span className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold',
+              pmMode === 'live'
+                ? 'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30'
+                : 'bg-muted text-muted-foreground border border-border',
+            )}>
+              <Activity className="h-3 w-3" />
+              {pmMode === 'live' ? `LIVE — $${pmAmount}/trade` : 'VIRTUAL'}
+            </span>
+
             {pmMode === 'live' ? (
-              <>
-                <span className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold',
-                  'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30',
-                )}>
-                  <Activity className="h-3 w-3" />
-                  LIVE — ${pmAmount}/trade
-                </span>
-                <button
-                  onClick={async () => {
-                    setTogglingMode(true);
-                    try {
-                      await api.polymarket.saveSettings('virtual', pmAmount);
-                      setPmMode('virtual');
-                    } catch { /* ignore */ }
-                    setTogglingMode(false);
-                  }}
-                  disabled={togglingMode}
-                  className={cn(
-                    'inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold',
-                    'bg-destructive/15 text-destructive border border-destructive/30',
-                    'hover:bg-destructive/25 transition-colors cursor-pointer',
-                  )}
-                >
-                  <Power className="h-3 w-3" />
-                  {togglingMode ? 'Stopping...' : 'Stop Live'}
-                </button>
-              </>
-            ) : (
-              <>
-                <span className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold',
-                  'bg-muted text-muted-foreground border border-border',
-                )}>
-                  <Activity className="h-3 w-3" />
-                  VIRTUAL
-                </span>
-                {pmHasCreds && (
-                  <button
-                    onClick={async () => {
-                      setTogglingMode(true);
-                      try {
-                        await api.polymarket.saveSettings('live', pmAmount);
-                        setPmMode('live');
-                      } catch { /* ignore */ }
-                      setTogglingMode(false);
-                    }}
-                    disabled={togglingMode}
-                    className={cn(
-                      'inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold',
-                      'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30',
-                      'hover:bg-emerald-500/25 transition-colors cursor-pointer',
-                    )}
-                  >
-                    <Power className="h-3 w-3" />
-                    {togglingMode ? 'Starting...' : 'Go Live'}
-                  </button>
+              <button
+                onClick={async () => {
+                  setTogglingMode(true);
+                  try {
+                    await api.polymarket.saveSettings('virtual', pmAmount);
+                    setPmMode('virtual');
+                  } catch { /* ignore */ }
+                  setTogglingMode(false);
+                }}
+                disabled={togglingMode}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold',
+                  'bg-destructive/15 text-destructive border border-destructive/30',
+                  'hover:bg-destructive/25 transition-colors cursor-pointer',
                 )}
-              </>
+              >
+                <Power className="h-3 w-3" />
+                {togglingMode ? 'Stopping...' : 'Stop Live'}
+              </button>
+            ) : pmHasCreds ? (
+              <button
+                onClick={async () => {
+                  setTogglingMode(true);
+                  try {
+                    await api.polymarket.saveSettings('live', pmAmount);
+                    setPmMode('live');
+                  } catch { /* ignore */ }
+                  setTogglingMode(false);
+                }}
+                disabled={togglingMode}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold',
+                  'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30',
+                  'hover:bg-emerald-500/25 transition-colors cursor-pointer',
+                )}
+              >
+                <Power className="h-3 w-3" />
+                {togglingMode ? 'Starting...' : 'Go Live'}
+              </button>
+            ) : (
+              <span className="text-[10px] text-muted-foreground">Connecter wallet pour live</span>
             )}
           </div>
+
+          {/* Amount input */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground whitespace-nowrap">Montant/trade:</label>
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-muted-foreground">$</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                value={pmAmount}
+                onChange={(e) => setPmAmount(Math.max(1, parseInt(e.target.value) || 1))}
+                onBlur={async () => {
+                  try { await api.polymarket.saveSettings(pmMode, pmAmount); } catch { /* ignore */ }
+                }}
+                className="w-16 rounded border border-border bg-background px-2 py-1 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+          </div>
+
+          {/* Balance when live */}
           {pmMode === 'live' && pmBalance !== null && (
-            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Wallet className="h-3 w-3" />
-              Balance: <span className="font-mono font-semibold text-foreground">${pmBalance.toFixed(2)}</span>
-            </span>
+            <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-border">
+              <Wallet className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Balance:</span>
+              <span className="text-sm font-mono font-semibold text-foreground">${pmBalance.toFixed(2)}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Wallet Connection Card */}
+        <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="flex items-center gap-2 text-muted-foreground mb-3">
+            <KeyRound className="h-4 w-4" />
+            <span className="text-xs uppercase tracking-wider">Wallet Polymarket</span>
+          </div>
+
+          {pmHasCreds ? (
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-4 w-4 text-success" />
+              <span className="text-xs font-mono text-muted-foreground truncate max-w-[180px]" title={pmAddress ?? ''}>
+                {pmAddress ? `${pmAddress.slice(0, 6)}…${pmAddress.slice(-4)}` : 'Connecté'}
+              </span>
+              <button
+                onClick={handleDeleteCredentials}
+                disabled={deletingCreds}
+                className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold bg-destructive/15 text-destructive border border-destructive/30 hover:bg-destructive/25 transition-colors cursor-pointer ml-auto"
+              >
+                <Trash2 className="h-3 w-3" />
+                {deletingCreds ? '...' : 'Déconnecter'}
+              </button>
+            </div>
+          ) : (
+            <>
+              <button
+                onClick={() => { setShowWalletForm((v) => !v); setCredsError(null); }}
+                className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 transition-colors cursor-pointer"
+              >
+                <XCircle className="h-3 w-3" />
+                Non connecté — Connecter
+              </button>
+
+              {/* Private key form */}
+              {showWalletForm && (
+                <div className="mt-4 space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Compte <span className="font-semibold text-foreground">Magic.link/Google</span> : entre la clé privée exportée + l'adresse proxy affichée sur Polymarket.
+                    Compte <span className="font-semibold text-foreground">MetaMask direct</span> : clé privée seulement.
+                  </p>
+                  {/* Private key */}
+                  <div className="relative">
+                    <input
+                      type={showPk ? 'text' : 'password'}
+                      value={privateKeyInput}
+                      onChange={(e) => setPrivateKeyInput(e.target.value)}
+                      placeholder="Clé privée (0x... 64 hex chars)"
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary pr-8"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPk((v) => !v)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showPk ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    </button>
+                  </div>
+                  {/* Proxy address (Magic.link only) */}
+                  <input
+                    type="text"
+                    value={proxyAddressInput}
+                    onChange={(e) => setProxyAddressInput(e.target.value)}
+                    placeholder="Adresse proxy Polymarket (0x... — Magic.link seulement)"
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <button
+                    onClick={handleSaveCredentials}
+                    disabled={savingCreds || !privateKeyInput.trim()}
+                    className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    {savingCreds ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
+                    {savingCreds ? 'Connexion...' : 'Connecter'}
+                  </button>
+                  {credsError && (
+                    <p className="text-xs text-destructive">{credsError}</p>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
