@@ -3,6 +3,11 @@ import { getBinanceWebSocket, getKlinesWithMeta } from '../binanceWebSocket.js';
 import { createLogger } from '../../utils/logger.js';
 import { computeFiveMinScore } from './fiveMinScorer.js';
 import { buildSlug, fetchPolymarketOdds } from './polymarketClient.js';
+import {
+  getChainlinkBtcPrice,
+  startChainlinkFeed,
+  stopChainlinkFeed,
+} from './chainlinkPriceFeed.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -54,9 +59,27 @@ function getKlines1m(): Candle1m[] {
   }));
 }
 
+/**
+ * Get BTC price from Chainlink (Polymarket's source), falling back to Binance WS.
+ */
+function getBtcPrice(klines: Candle1m[]): number {
+  const chainlink = getChainlinkBtcPrice();
+  if (chainlink) return chainlink.price;
+
+  // Fallback: use latest Binance 1m candle close
+  if (klines.length > 0) return klines[klines.length - 1].close;
+
+  return 0;
+}
+
 // ─── Core tick ────────────────────────────────────────────────────────────────
 
 async function tick(prisma: PrismaClient): Promise<void> {
+  // Re-subscribe every tick to prevent TTL pruning (klineSubscriptionTtlMs = 10min).
+  // subscribeToKline is idempotent — just refreshes lastRequestedAt.
+  const ws = getBinanceWebSocket();
+  ws.subscribeToKline(SYMBOL, '1m');
+
   const nowMs = Date.now();
   const { start, end } = getWindowBoundaries(nowMs);
   const elapsed = nowMs - start;
@@ -67,9 +90,8 @@ async function tick(prisma: PrismaClient): Promise<void> {
     decisionMade = false;
     resolutionDone = false;
 
-    // Find starting price: first kline at or after window start
-    const windowKline = klines.find((k) => k.timestamp >= start);
-    const startPrice = windowKline?.open ?? (klines.length > 0 ? klines[klines.length - 1].close : 0);
+    // Use Chainlink price as "price to beat" (same source as Polymarket resolution)
+    const startPrice = getBtcPrice(klines);
 
     currentWindow = {
       windowStart: start,
@@ -82,15 +104,14 @@ async function tick(prisma: PrismaClient): Promise<void> {
       status: 'accumulating',
     };
 
+    const source = getChainlinkBtcPrice() ? 'chainlink' : 'binance-fallback';
     log.info(
-      `New window ${new Date(start).toISOString()} → ${new Date(end).toISOString()} | startPrice=${startPrice.toFixed(2)}`,
+      `New window ${new Date(start).toISOString()} → ${new Date(end).toISOString()} | startPrice=${startPrice.toFixed(2)} (${source})`,
     );
   }
 
   // ── Update current price + elapsed ────────────────────────────────────────
-  if (klines.length > 0) {
-    currentWindow.currentPrice = klines[klines.length - 1].close;
-  }
+  currentWindow.currentPrice = getBtcPrice(klines);
   currentWindow.elapsed = elapsed;
 
   // ── Decision at T+2.5min ──────────────────────────────────────────────────
@@ -125,7 +146,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
     } else {
       // Score below threshold — skip this window
       currentWindow.status = 'skipped';
-      log.info('Window skipped (score < 60)');
+      log.info('Window skipped (score < 40)');
     }
 
     decisionMade = true;
@@ -214,6 +235,9 @@ export function startPolymarketWorker(prisma: PrismaClient): void {
     return;
   }
 
+  // Start Chainlink price feed (Polymarket's "price to beat" source)
+  startChainlinkFeed();
+
   const ws = getBinanceWebSocket();
   ws.subscribeToKline(SYMBOL, '1m');
 
@@ -238,6 +262,7 @@ export function stopPolymarketWorker(): void {
     intervalHandle = null;
     log.info('Worker stopped');
   }
+  stopChainlinkFeed();
 }
 
 /**
