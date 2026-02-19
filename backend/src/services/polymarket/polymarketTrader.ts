@@ -122,7 +122,7 @@ export interface PolymarketConfig {
 
 interface ClobCredentials {
   privateKey: string;
-  address: string; // auth address used in POLY-ADDRESS headers (proxy for Magic.link, EOA otherwise)
+  address: string; // EOA address (wallet.address derived from private key)
   apiKey: string;
   apiSecret: string;
   apiPassphrase: string;
@@ -130,14 +130,10 @@ interface ClobCredentials {
 
 // ─── L1 Authentication (wallet signature → derive API creds) ────────────────
 
-async function buildL1Headers(
-  wallet: ethers.Wallet,
-  authAddress?: string, // proxy address for Magic.link accounts, defaults to EOA
-): Promise<Record<string, string>> {
-  // Subtract 10s to compensate for potential clock skew (common Polymarket 401 fix)
-  const timestamp = (Math.floor(Date.now() / 1000) - 10).toString();
+async function buildL1Headers(wallet: ethers.Wallet): Promise<Record<string, string>> {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = 0;
-  const addr = authAddress ?? wallet.address;
+  const addr = wallet.address; // always EOA — proxy auth not supported via CLOB L1
 
   const signature = await wallet.signTypedData(L1_AUTH_DOMAIN, L1_AUTH_TYPES, {
     address: addr,
@@ -147,28 +143,26 @@ async function buildL1Headers(
   });
 
   return {
-    'POLY-ADDRESS': addr,
-    'POLY-SIGNATURE': signature,
-    'POLY-TIMESTAMP': timestamp,
-    'POLY-NONCE': '0',
+    POLY_ADDRESS: addr,
+    POLY_SIGNATURE: signature,
+    POLY_TIMESTAMP: timestamp,
+    POLY_NONCE: '0',
   };
 }
 
 /**
  * Derive API credentials (key, secret, passphrase) from wallet private key.
- * For Magic.link proxy accounts, pass the proxy address shown in Polymarket UI.
- * This calls the CLOB /auth/derive-api-key endpoint with L1 auth.
+ * Calls the CLOB /auth/derive-api-key endpoint with L1 auth (EIP-712).
  */
 async function deriveApiCredentials(
   privateKey: string,
-  proxyAddress?: string,
 ): Promise<{ apiKey: string; secret: string; passphrase: string; authAddress: string }> {
   const wallet = new ethers.Wallet(privateKey);
-  const headers = await buildL1Headers(wallet, proxyAddress);
+  const headers = await buildL1Headers(wallet);
 
   const res = await fetch(`${CLOB_HOST}/auth/derive-api-key`, {
     method: 'GET',
-    headers: { ...headers, 'Content-Type': 'application/json' },
+    headers,
     signal: AbortSignal.timeout(15_000),
   });
 
@@ -182,8 +176,7 @@ async function deriveApiCredentials(
     throw new Error('Incomplete credentials returned from Polymarket');
   }
 
-  const authAddress = proxyAddress ?? wallet.address;
-  return { apiKey: data.apiKey, secret: data.secret, passphrase: data.passphrase, authAddress };
+  return { apiKey: data.apiKey, secret: data.secret, passphrase: data.passphrase, authAddress: wallet.address };
 }
 
 // ─── L2 HMAC Authentication ────────────────────────────────────────────────
@@ -195,24 +188,24 @@ function buildHmacHeaders(
   body?: string,
 ): Record<string, string> {
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  const nonce = crypto.randomUUID();
 
-  // Message: timestamp + \n + method + \n + path + optional body
-  let message = `${timestamp}\n${method.toUpperCase()}\n${path}`;
-  if (body) message += `\n${body}`;
+  // HMAC message: timestamp + method + path (no \n separators, matches py-clob-client)
+  let message = `${timestamp}${method}${path}`;
+  if (body) message += body.replace(/'/g, '"');
 
+  // Standard base64 decode of secret (handles both standard and URL-safe chars)
   const secretBytes = Buffer.from(creds.apiSecret, 'base64');
   const hmac = crypto.createHmac('sha256', secretBytes);
   hmac.update(message);
+  // Standard base64 output with padding — Polymarket server requires this
   const signature = hmac.digest('base64');
 
   return {
-    'POLY-ADDRESS': creds.address,
-    'POLY-SIGNATURE': signature,
-    'POLY-TIMESTAMP': timestamp,
-    'POLY-NONCE': nonce,
-    'POLY-API-KEY': creds.apiKey,
-    'POLY-PASSPHRASE': creds.apiPassphrase,
+    POLY_ADDRESS: creds.address,
+    POLY_SIGNATURE: signature,
+    POLY_TIMESTAMP: timestamp,
+    POLY_API_KEY: creds.apiKey,
+    POLY_PASSPHRASE: creds.apiPassphrase,
   };
 }
 
@@ -284,7 +277,9 @@ async function clobGet(
   path: string,
   creds: ClobCredentials,
 ): Promise<any> {
-  const headers = buildHmacHeaders(creds, 'GET', path);
+  // HMAC is computed on the base path WITHOUT query params (Polymarket server strips query params before verification)
+  const hmacPath = path.split('?')[0];
+  const headers = buildHmacHeaders(creds, 'GET', hmacPath);
   const res = await fetch(`${CLOB_HOST}${path}`, {
     method: 'GET',
     headers: { ...headers, 'Content-Type': 'application/json' },
@@ -381,11 +376,9 @@ export async function savePolymarketCredentials(
     proxyAddress = ethers.getAddress(p); // checksum
   }
 
-  const authAddress = proxyAddress ?? wallet.address;
-
-  // Derive API creds from Polymarket CLOB
-  log.info(`Deriving API credentials for address ${authAddress} (EOA: ${wallet.address})...`);
-  const { apiKey, secret, passphrase } = await deriveApiCredentials(privateKey, proxyAddress);
+  // Derive API creds from Polymarket CLOB (always uses EOA address)
+  log.info(`Deriving API credentials for EOA: ${wallet.address}...`);
+  const { apiKey, secret, passphrase, authAddress } = await deriveApiCredentials(privateKey);
   log.info(`API credentials derived successfully for ${authAddress}`);
 
   // Encrypt all 4 values (compute once so we can verify round-trip)
@@ -495,7 +488,6 @@ async function loadCredentials(
   const encKey = map.get(SETTING_KEYS.API_KEY);
   const encSecret = map.get(SETTING_KEYS.API_SECRET);
   const encPass = map.get(SETTING_KEYS.API_PASSPHRASE);
-  const proxyAddr = map.get(SETTING_KEYS.PROXY_ADDRESS); // may be undefined for EOA accounts
 
   if (!encPk || !encKey || !encSecret || !encPass) return null;
 
@@ -504,9 +496,8 @@ async function loadCredentials(
     const pk = normalizePrivateKey(decryptedPk);
 
     const wallet = new ethers.Wallet(pk);
-    // For Magic.link proxy accounts, use the proxy address for CLOB auth
-    const authAddress = proxyAddr ?? wallet.address;
-    log.debug(`Credentials loaded OK — authAddress=${authAddress} EOA=${wallet.address}`);
+    const authAddress = wallet.address; // always EOA
+    log.debug(`Credentials loaded OK — address=${authAddress}`);
 
     return {
       privateKey: pk,
@@ -531,8 +522,8 @@ export async function validatePolymarketCredentials(
   if (!creds) return { valid: false, error: 'No credentials configured' };
 
   try {
-    // Test API auth by fetching API keys list
-    await clobGet('/auth/api-keys', creds);
+    // Test API auth by fetching orders (empty for new accounts but auth must pass)
+    await clobGet('/data/orders', creds);
 
     return { valid: true, address: creds.address };
   } catch (err: any) {
@@ -550,7 +541,8 @@ export async function getPolymarketBalance(
   if (!creds) return { balance: 0, error: 'No credentials configured' };
 
   try {
-    const data = await clobGet('/balance-allowance?asset_type=USDC', creds);
+    // asset_type=COLLATERAL (not USDC), signature_type=0 (EOA)
+    const data = await clobGet('/balance-allowance?asset_type=COLLATERAL&signature_type=0', creds);
     const balance = parseFloat(data?.balance ?? '0') / 10 ** USDC_DECIMALS;
     return { balance };
   } catch (err: any) {
