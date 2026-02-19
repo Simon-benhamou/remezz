@@ -24,6 +24,11 @@ import {
   Send,
   MessageCircle,
   CheckCircle2,
+  DollarSign,
+  Activity,
+  Wallet,
+  Power,
+  AlertTriangle,
 } from 'lucide-react';
 
 import { api } from '@/api';
@@ -957,6 +962,329 @@ function PreferencesTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Polymarket Tab
+// ---------------------------------------------------------------------------
+
+function PolymarketTab() {
+  // Config state
+  const [mode, setMode] = useState<'virtual' | 'live'>('virtual');
+  const [amount, setAmount] = useState('5');
+  const [hasCredentials, setHasCredentials] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  // Credentials state
+  const [privateKey, setPrivateKey] = useState('');
+  const [pmApiKey, setPmApiKey] = useState('');
+  const [pmApiSecret, setPmApiSecret] = useState('');
+  const [pmPassphrase, setPmPassphrase] = useState('');
+  const [savingCreds, setSavingCreds] = useState(false);
+  const [showPrivateKey, setShowPrivateKey] = useState(false);
+
+  // Validation & balance
+  const [validating, setValidating] = useState(false);
+  const [validationResult, setValidationResult] = useState<{ valid: boolean; address?: string; error?: string } | null>(null);
+  const [balance, setBalance] = useState<number | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+
+  // Load settings on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const config = await api.polymarket.getSettings();
+        setMode(config.mode);
+        setAmount(config.amount.toString());
+        setHasCredentials(config.hasCredentials);
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
+
+  const handleSaveCredentials = async () => {
+    if (!privateKey || !pmApiKey || !pmApiSecret || !pmPassphrase) {
+      toast.error('All 4 fields are required');
+      return;
+    }
+    setSavingCreds(true);
+    try {
+      await api.polymarket.saveCredentials({
+        privateKey,
+        apiKey: pmApiKey,
+        apiSecret: pmApiSecret,
+        apiPassphrase: pmPassphrase,
+      });
+      setHasCredentials(true);
+      setPrivateKey('');
+      setPmApiKey('');
+      setPmApiSecret('');
+      setPmPassphrase('');
+      toast.success('Polymarket credentials saved');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to save credentials');
+    } finally {
+      setSavingCreds(false);
+    }
+  };
+
+  const handleDeleteCredentials = async () => {
+    try {
+      await api.polymarket.deleteCredentials();
+      setHasCredentials(false);
+      setMode('virtual');
+      setValidationResult(null);
+      setBalance(null);
+      toast.success('Credentials removed, switched to virtual mode');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to delete credentials');
+    }
+  };
+
+  const handleValidate = async () => {
+    setValidating(true);
+    setValidationResult(null);
+    try {
+      const result = await api.polymarket.validateCredentials();
+      setValidationResult(result);
+      if (result.valid) {
+        toast.success('Credentials are valid!');
+        // Also fetch balance
+        setBalanceLoading(true);
+        const bal = await api.polymarket.getBalance();
+        setBalance(bal.balance);
+        setBalanceLoading(false);
+      } else {
+        toast.error(result.error || 'Credentials invalid');
+      }
+    } catch (error: any) {
+      toast.error('Validation failed');
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      await api.polymarket.saveSettings(mode, parseFloat(amount) || 5);
+      toast.success(`Polymarket mode: ${mode.toUpperCase()}, amount: $${amount}`);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to save settings');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const handleFetchBalance = async () => {
+    setBalanceLoading(true);
+    try {
+      const bal = await api.polymarket.getBalance();
+      setBalance(bal.balance);
+      if (bal.error) toast.error(bal.error);
+    } catch {
+      toast.error('Failed to fetch balance');
+    } finally {
+      setBalanceLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* API Credentials */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            Polymarket API Credentials
+          </CardTitle>
+          <CardDescription>
+            Enter your Polymarket CLOB API credentials for live trading.
+            Get them from your Polymarket account settings.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {hasCredentials ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                <span className="text-sm text-emerald-500 font-medium">Credentials configured</span>
+                {validationResult?.address && (
+                  <code className="text-xs text-muted-foreground font-mono ml-2">
+                    {validationResult.address.slice(0, 6)}...{validationResult.address.slice(-4)}
+                  </code>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={handleValidate} disabled={validating}>
+                  {validating ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <Shield className="mr-2 h-3 w-3" />}
+                  Validate
+                </Button>
+                <Button size="sm" variant="outline" onClick={handleFetchBalance} disabled={balanceLoading}>
+                  {balanceLoading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <Wallet className="mr-2 h-3 w-3" />}
+                  Balance
+                </Button>
+                <Button size="sm" variant="destructive" onClick={handleDeleteCredentials}>
+                  <Trash2 className="mr-2 h-3 w-3" />
+                  Remove
+                </Button>
+              </div>
+              {balance !== null && (
+                <div className="text-sm text-muted-foreground">
+                  USDC Balance: <span className="font-mono font-semibold text-foreground">${balance.toFixed(2)}</span>
+                </div>
+              )}
+              {validationResult && !validationResult.valid && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription className="text-xs">{validationResult.error}</AlertDescription>
+                </Alert>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label className="text-xs">Wallet Private Key</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type={showPrivateKey ? 'text' : 'password'}
+                    placeholder="0x..."
+                    value={privateKey}
+                    onChange={(e) => setPrivateKey(e.target.value)}
+                    className="font-mono text-xs"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
+                    onClick={() => setShowPrivateKey(!showPrivateKey)}
+                  >
+                    {showPrivateKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">API Key</Label>
+                <Input
+                  type="password"
+                  placeholder="API Key"
+                  value={pmApiKey}
+                  onChange={(e) => setPmApiKey(e.target.value)}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label className="text-xs">API Secret</Label>
+                  <Input
+                    type="password"
+                    placeholder="API Secret"
+                    value={pmApiSecret}
+                    onChange={(e) => setPmApiSecret(e.target.value)}
+                    className="font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Passphrase</Label>
+                  <Input
+                    type="password"
+                    placeholder="Passphrase"
+                    value={pmPassphrase}
+                    onChange={(e) => setPmPassphrase(e.target.value)}
+                    className="font-mono text-xs"
+                  />
+                </div>
+              </div>
+              <Button onClick={handleSaveCredentials} disabled={savingCreds}>
+                {savingCreds && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <Key className="mr-2 h-4 w-4" />
+                Save Credentials
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Trading Mode */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Activity className="h-5 w-5" />
+            Trading Mode
+          </CardTitle>
+          <CardDescription>
+            Choose between virtual (simulated) and live (real money) trading.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Mode</Label>
+            <Select
+              value={mode}
+              onValueChange={(v: string) => {
+                if (v === 'live' && !hasCredentials) {
+                  toast.error('Save valid API credentials first');
+                  return;
+                }
+                setMode(v as 'virtual' | 'live');
+              }}
+            >
+              <SelectTrigger className="w-[240px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="virtual">Virtual (Simulated)</SelectItem>
+                <SelectItem value="live">Live (Real Money)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Separator />
+
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Amount per Trade (USDC)</Label>
+            <Input
+              type="number"
+              min="1"
+              step="1"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-[240px] font-mono"
+              placeholder="e.g. 5"
+            />
+            <p className="text-xs text-muted-foreground">
+              How much USDC to wager on each prediction (min $1).
+            </p>
+          </div>
+
+          {mode === 'live' && (
+            <Alert className="border-amber-500/30 bg-amber-500/5">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              <AlertDescription className="text-xs">
+                <span className="font-medium">Live mode is active.</span> Real USDC will be wagered
+                on each prediction. Make sure you have sufficient balance. You can switch back to
+                virtual mode at any time.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <Button onClick={handleSaveSettings} disabled={savingSettings}>
+            {savingSettings && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Save Settings
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Alert>
+        <Shield className="h-4 w-4" />
+        <AlertDescription className="text-xs">
+          Your private key and API credentials are encrypted at rest using AES-256.
+          They are never exposed in logs or API responses.
+        </AlertDescription>
+      </Alert>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Danger Zone Tab
 // ---------------------------------------------------------------------------
 
@@ -1194,7 +1522,7 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="about" className="w-full">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="about" className="flex items-center gap-1.5">
             <Info className="h-4 w-4" />
             <span className="hidden sm:inline">About</span>
@@ -1207,13 +1535,17 @@ export default function SettingsPage() {
             <Key className="h-4 w-4" />
             <span className="hidden sm:inline">API Keys</span>
           </TabsTrigger>
+          <TabsTrigger value="polymarket" className="flex items-center gap-1.5">
+            <DollarSign className="h-4 w-4" />
+            <span className="hidden sm:inline">Polymarket</span>
+          </TabsTrigger>
           <TabsTrigger value="preferences" className="flex items-center gap-1.5">
             <Settings className="h-4 w-4" />
             <span className="hidden sm:inline">Preferences</span>
           </TabsTrigger>
           <TabsTrigger value="danger" className="flex items-center gap-1.5">
             <Trash2 className="h-4 w-4" />
-            <span className="hidden sm:inline">Danger Zone</span>
+            <span className="hidden sm:inline">Danger</span>
           </TabsTrigger>
         </TabsList>
 
@@ -1227,6 +1559,10 @@ export default function SettingsPage() {
 
         <TabsContent value="api-keys">
           <ApiKeysTab />
+        </TabsContent>
+
+        <TabsContent value="polymarket">
+          <PolymarketTab />
         </TabsContent>
 
         <TabsContent value="preferences">
