@@ -31,6 +31,8 @@ export interface PolymarketOdds {
   slug: string;
   upPrice: number;
   downPrice: number;
+  upTokenId: string | null;
+  downTokenId: string | null;
   found: boolean;
 }
 

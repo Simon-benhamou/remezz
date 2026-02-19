@@ -408,5 +408,33 @@ export const api = {
           skipped: boolean;
         }>;
       },
+    // Settings & live trading
+    getSettings: async () =>
+      (await client.get('/api/polymarket/settings')).data as {
+        mode: 'virtual' | 'live';
+        amount: number;
+        hasCredentials: boolean;
+      },
+    saveSettings: async (mode: 'virtual' | 'live', amount: number) =>
+      (await client.put('/api/polymarket/settings', { mode, amount })).data,
+    saveCredentials: async (privateKey: string) =>
+      (await client.put('/api/polymarket/credentials', { privateKey })).data as {
+        success: boolean;
+        address?: string;
+        error?: string;
+      },
+    deleteCredentials: async () =>
+      (await client.delete('/api/polymarket/credentials')).data,
+    validateCredentials: async () =>
+      (await client.post('/api/polymarket/validate-credentials')).data as {
+        valid: boolean;
+        address?: string;
+        error?: string;
+      },
+    getBalance: async () =>
+      (await client.get('/api/polymarket/balance')).data as {
+        balance: number;
+        error?: string;
+      },
   },
 };

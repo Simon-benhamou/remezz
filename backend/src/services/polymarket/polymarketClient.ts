@@ -16,7 +16,7 @@ export function buildSlug(symbol: string, windowStartMs: number): string {
  * Returns neutral 50/50 odds on any error or missing data.
  */
 export async function fetchPolymarketOdds(slug: string): Promise<PolymarketOdds> {
-  const neutral: PolymarketOdds = { slug, upPrice: 0.5, downPrice: 0.5, found: false };
+  const neutral: PolymarketOdds = { slug, upPrice: 0.5, downPrice: 0.5, upTokenId: null, downTokenId: null, found: false };
 
   try {
     const url = `${BASE_URL}/events?slug=${slug}`;
@@ -45,19 +45,31 @@ export async function fetchPolymarketOdds(slug: string): Promise<PolymarketOdds>
     const market = markets[0];
     const outcomes: string[] = JSON.parse(market.outcomes);
     const outcomePrices: string[] = JSON.parse(market.outcomePrices);
+    // clobTokenIds maps 1:1 with outcomes
+    const clobTokenIds: string[] = market.clobTokenIds
+      ? JSON.parse(market.clobTokenIds)
+      : [];
 
     let upPrice = 0.5;
     let downPrice = 0.5;
+    let upTokenId: string | null = null;
+    let downTokenId: string | null = null;
 
     for (let i = 0; i < outcomes.length; i++) {
       const label = outcomes[i].toLowerCase();
       const price = parseFloat(outcomePrices[i]);
+      const tokenId = clobTokenIds[i] ?? null;
 
-      if (label === 'up') upPrice = price;
-      else if (label === 'down') downPrice = price;
+      if (label === 'up') {
+        upPrice = price;
+        upTokenId = tokenId;
+      } else if (label === 'down') {
+        downPrice = price;
+        downTokenId = tokenId;
+      }
     }
 
-    return { slug, upPrice, downPrice, found: true };
+    return { slug, upPrice, downPrice, upTokenId, downTokenId, found: true };
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
     console.warn(`[Polymarket] Error fetching odds for slug=${slug}: ${msg}`);
