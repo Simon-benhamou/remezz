@@ -465,6 +465,7 @@ export default function PolymarketPage() {
   // Live mode state
   const [pmMode, setPmMode] = useState<'virtual' | 'live'>('virtual');
   const [pmAmount, setPmAmount] = useState(5);
+  const [pmHasCreds, setPmHasCreds] = useState(false);
   const [pmBalance, setPmBalance] = useState<number | null>(null);
   const [togglingMode, setTogglingMode] = useState(false);
 
@@ -482,6 +483,7 @@ export default function PolymarketPage() {
       if (settingsRes) {
         setPmMode(settingsRes.mode);
         setPmAmount(settingsRes.amount);
+        setPmHasCreds(settingsRes.hasCredentials);
       }
       setError(null);
     } catch (err: any) {
@@ -497,6 +499,20 @@ export default function PolymarketPage() {
     const iv = setInterval(() => void fetchAll(), 3000);
     return () => clearInterval(iv);
   }, [fetchAll]);
+
+  // Fetch balance when live mode is active (once + every 60s)
+  useEffect(() => {
+    if (pmMode !== 'live' || !pmHasCreds) {
+      setPmBalance(null);
+      return;
+    }
+    const fetchBal = () => {
+      api.polymarket.getBalance().then((r) => setPmBalance(r.balance)).catch(() => {});
+    };
+    fetchBal();
+    const iv = setInterval(fetchBal, 60_000);
+    return () => clearInterval(iv);
+  }, [pmMode, pmHasCreds]);
 
   if (loading && !stats) {
     return (
@@ -523,50 +539,81 @@ export default function PolymarketPage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-foreground">Predictions</h1>
           <p className="text-sm text-muted-foreground mt-1">
             5-minute BTC price direction predictions (Polymarket experiment)
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {pmMode === 'live' ? (
-            <>
-              <span className={cn(
-                'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold',
-                'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30',
-              )}>
-                <Activity className="h-3 w-3" />
-                LIVE — ${pmAmount}/trade
-              </span>
-              <button
-                onClick={async () => {
-                  setTogglingMode(true);
-                  try {
-                    await api.polymarket.saveSettings('virtual', pmAmount);
-                    setPmMode('virtual');
-                  } catch { /* ignore */ }
-                  setTogglingMode(false);
-                }}
-                disabled={togglingMode}
-                className={cn(
-                  'inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold',
-                  'bg-destructive/15 text-destructive border border-destructive/30',
-                  'hover:bg-destructive/25 transition-colors cursor-pointer',
+        <div className="flex flex-col items-end gap-2 shrink-0">
+          <div className="flex items-center gap-2">
+            {pmMode === 'live' ? (
+              <>
+                <span className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold',
+                  'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30',
+                )}>
+                  <Activity className="h-3 w-3" />
+                  LIVE — ${pmAmount}/trade
+                </span>
+                <button
+                  onClick={async () => {
+                    setTogglingMode(true);
+                    try {
+                      await api.polymarket.saveSettings('virtual', pmAmount);
+                      setPmMode('virtual');
+                    } catch { /* ignore */ }
+                    setTogglingMode(false);
+                  }}
+                  disabled={togglingMode}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold',
+                    'bg-destructive/15 text-destructive border border-destructive/30',
+                    'hover:bg-destructive/25 transition-colors cursor-pointer',
+                  )}
+                >
+                  <Power className="h-3 w-3" />
+                  {togglingMode ? 'Stopping...' : 'Stop Live'}
+                </button>
+              </>
+            ) : (
+              <>
+                <span className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold',
+                  'bg-muted text-muted-foreground border border-border',
+                )}>
+                  <Activity className="h-3 w-3" />
+                  VIRTUAL
+                </span>
+                {pmHasCreds && (
+                  <button
+                    onClick={async () => {
+                      setTogglingMode(true);
+                      try {
+                        await api.polymarket.saveSettings('live', pmAmount);
+                        setPmMode('live');
+                      } catch { /* ignore */ }
+                      setTogglingMode(false);
+                    }}
+                    disabled={togglingMode}
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold',
+                      'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30',
+                      'hover:bg-emerald-500/25 transition-colors cursor-pointer',
+                    )}
+                  >
+                    <Power className="h-3 w-3" />
+                    {togglingMode ? 'Starting...' : 'Go Live'}
+                  </button>
                 )}
-              >
-                <Power className="h-3 w-3" />
-                {togglingMode ? 'Stopping...' : 'Stop Live'}
-              </button>
-            </>
-          ) : (
-            <span className={cn(
-              'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold',
-              'bg-muted text-muted-foreground border border-border',
-            )}>
-              <Activity className="h-3 w-3" />
-              VIRTUAL
+              </>
+            )}
+          </div>
+          {pmMode === 'live' && pmBalance !== null && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Wallet className="h-3 w-3" />
+              Balance: <span className="font-mono font-semibold text-foreground">${pmBalance.toFixed(2)}</span>
             </span>
           )}
         </div>
