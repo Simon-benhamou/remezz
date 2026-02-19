@@ -2,23 +2,25 @@
  * V5.113: 1m Post-Processing for Backtest Trailing Exits
  *
  * The backtest runs on 15m candles, so all trailing exits snap to 15m boundaries.
- * In live, the exhaustion detector places STOP_MARKET orders that fill on any 1m wick.
+ * In live, the RT handler monitors 1m closes with 2-candle confirmation.
  *
  * This module replays trailing exits at 1m resolution AFTER the 15m backtest completes:
  *   Pass 1: runBacktestComputation() on worker thread (15m, fast, 0 API)
  *   Pass 2: postProcess1mTrailingExits() on main thread
  *           → fetch 1m candles per trailing trade window
- *           → replay exhaustion + STOP_MARKET simulation
+ *           → replay trailing with 2-candle 1m close confirmation (matches live)
  *           → adjust exitPrice, exitTime, holdMinutes, PnL
  *           → recalculate summary/equity/drawdown
+ *
+ * V5.116: Removed exhaustion STOP_MARKET from replay — the 15m backtest already
+ * handles exhaustion via MODE B on 15m candles. Running exhaust on 1m was too
+ * aggressive (1m noise → score 35 trivially reached → premature STOP fills that
+ * killed profit and caused 173% DD). Now uses 2-candle 1m close confirmation
+ * matching live's REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES: 2.
  */
 
 import { MomentumConfig } from '../../strategies/momentumSimple.js';
 import { determineVolatilityRegime } from '../../strategies/indicators/technicalIndicators.js';
-import {
-  MomentumExhaustionCalculator,
-  type ExhaustionCandle,
-} from '../momentumExhaustion.js';
 import { globalRestCircuitBreaker } from '../globalRestCircuitBreaker.js';
 import { ipWeightTracker } from '../ipWeightTracker.js';
 import type { BacktestResult, BacktestTrade, MonthlyStats } from '../backtestService.js';
@@ -263,10 +265,6 @@ function calcTrailingStop(
   return { stopPrice };
 }
 
-function is15mBoundary(candleTs: number): boolean {
-  return (candleTs + 60000) % CANDLE_15M_MS === 0;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // PNL CALCULATION (matches backtestService.ts CONFIG.COSTS)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -310,13 +308,26 @@ function calculatePnl(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// B) replayTradeAt1m — adapted from analyze-exhaustion-1m.ts:227-359
+// B) replayTradeAt1m — V5.116: 2-candle 1m close confirmation
+//
+// Matches live behavior (realtimeExitHandler.ts kline_1m_close path):
+//   1. Update HWM on every 1m candle (high/low)
+//   2. Check trailing activation on 1m close
+//   3. On close breach: increment breachCount
+//   4. On close recovery: reset breachCount to 0
+//   5. Exit when breachCount >= 2 (REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES)
+//
+// Exhaustion STOP_MARKET removed: the 15m backtest already handles exhaustion
+// via MODE B on 15m candles. Running exhaust on 1m data was too aggressive —
+// 1m noise (noisy ROC, volume spikes, small bodies) trivially reaches score 35,
+// causing premature STOP fills that destroyed profit.
 // ═══════════════════════════════════════════════════════════════════════════
+
+const CONFIRM_CANDLES = 2; // Matches live: REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES
 
 function replayTradeAt1m(
   trade: BacktestTrade,
   candles1m: Candle1m[],
-  exhaustionCalc: MomentumExhaustionCalculator,
 ): ReplayResult {
   const side = trade.side;
   const entryPrice = trade.entryPrice;
@@ -329,39 +340,15 @@ function replayTradeAt1m(
 
   let hwm = entryPrice;
   let trailingActive = false;
-
-  // Exhaustion state
-  let exhaustionStopActive = false;
-  let exhaustionStopPrice = 0;
-  const recentCandles: ExhaustionCandle[] = [];
+  let breachCount = 0; // V5.116: consecutive 1m closes below trailing stop
 
   const tradeCandles = candles1m.filter(c => c.timestamp >= entryTs);
 
   for (const c of tradeCandles) {
-    // STEP 1: Check STOP_MARKET fill
-    if (exhaustionStopActive && exhaustionStopPrice > 0) {
-      const stopHit = side === 'long'
-        ? c.low <= exhaustionStopPrice
-        : c.high >= exhaustionStopPrice;
-
-      if (stopHit) {
-        const holdMinutes = (c.timestamp - entryTs) / 60000;
-        const pnl = calculatePnl(entryPrice, exhaustionStopPrice, side, trade.marginUsd, trade.leverage, holdMinutes);
-        return {
-          wasReplayed: true,
-          exitPrice: exhaustionStopPrice,
-          exitTs: c.timestamp,
-          holdMinutes,
-          ...pnl,
-          exitReason: trade.exitReason, // Keep original family, 1m just refines timing
-        };
-      }
-    }
-
-    // STEP 2: Update HWM
+    // STEP 1: Update HWM from 1m candle extremes (matches live kline high/low updates)
     hwm = side === 'long' ? Math.max(hwm, c.high) : Math.min(hwm, c.low);
 
-    // STEP 3: Check trailing activation
+    // STEP 2: Check trailing activation on 1m close
     const pnlPct = side === 'long'
       ? ((c.close - entryPrice) / entryPrice) * 100
       : ((entryPrice - c.close) / entryPrice) * 100;
@@ -371,37 +358,20 @@ function replayTradeAt1m(
     }
     if (!trailingActive) continue;
 
-    // STEP 4: Compute trailing stop
+    // STEP 3: Compute trailing stop (progressive tiers + vol multiplier)
     const { stopPrice } = calcTrailingStop(side, entryPrice, hwm, cfg);
 
-    // STEP 5: Exhaustion scoring
-    if (exhaustionStopActive) {
-      exhaustionStopPrice = stopPrice; // Follow trailing as HWM advances
-    }
+    // STEP 4: Check 1m close breach with 2-candle confirmation
+    // Matches live: realtimeExitHandler checks every closed 1m kline,
+    // requires CONFIRM_CANDLES consecutive closes to exit.
+    const closeBreached = side === 'long'
+      ? c.close <= stopPrice
+      : c.close >= stopPrice;
 
-    recentCandles.push({
-      timestamp: c.timestamp, open: c.open, high: c.high,
-      low: c.low, close: c.close, volume: c.volume,
-    });
-    if (recentCandles.length > 25) recentCandles.shift();
-
-    const result = exhaustionCalc.calculate(recentCandles, side, stopPrice, c.close);
-
-    if (result.shouldPlaceStop && !exhaustionStopActive) {
-      exhaustionStopActive = true;
-      exhaustionStopPrice = stopPrice;
-    } else if (exhaustionStopActive && result.score < exhaustionCalc.getConfig().CANCEL_THRESHOLD) {
-      exhaustionStopActive = false;
-      exhaustionStopPrice = 0;
-    }
-
-    // STEP 6: 15m boundary exit fallback
-    if (is15mBoundary(c.timestamp)) {
-      const closeBreached = side === 'long'
-        ? c.close <= stopPrice
-        : c.close >= stopPrice;
-
-      if (closeBreached) {
+    if (closeBreached) {
+      breachCount++;
+      if (breachCount >= CONFIRM_CANDLES) {
+        // Confirmed trailing breach — exit at confirming candle's close
         const holdMinutes = (c.timestamp - entryTs) / 60000;
         const pnl = calculatePnl(entryPrice, c.close, side, trade.marginUsd, trade.leverage, holdMinutes);
         return {
@@ -410,9 +380,13 @@ function replayTradeAt1m(
           exitTs: c.timestamp,
           holdMinutes,
           ...pnl,
-          exitReason: trade.exitReason,
+          exitReason: trade.exitReason, // Keep original family, 1m just refines timing
         };
       }
+    } else {
+      // Close recovered above trailing stop — reset counter
+      // Matches live: trailingBreached: false → reset breach counter
+      breachCount = 0;
     }
   }
 
@@ -438,11 +412,15 @@ export async function postProcess1mTrailingExits(
   result: BacktestResult,
   exchange: any,
 ): Promise<BacktestResult> {
-  // Filter trailing trades (exclude TRAIL_RT and TRAIL_EXCHANGE — those are live-only)
+  // V5.116: Filter trailing trades for replay
+  // - Include: TRAIL, TRAIL_NFS_HIGH, TRAIL_NFS_MED, TRAIL_NFS_LOW (close-based, benefit from 1m refinement)
+  // - Exclude: TRAIL_RT, TRAIL_EXCHANGE (live-only mechanisms)
+  // - Exclude: TRAIL_PROACTIVE (already handled by 15m backtest MODE B exhaustion on 15m candles)
   const trailingTrades = result.trades.filter(t =>
     t.exitReason.startsWith('TRAIL') &&
     t.exitReason !== 'TRAIL_RT' &&
-    t.exitReason !== 'TRAIL_EXCHANGE'
+    t.exitReason !== 'TRAIL_EXCHANGE' &&
+    t.exitReason !== 'TRAIL_PROACTIVE'
   );
 
   if (trailingTrades.length === 0) {
@@ -453,11 +431,6 @@ export async function postProcess1mTrailingExits(
   console.log(`[Backtest] 1m post-processing: ${trailingTrades.length} trailing trades to replay...`);
 
   const fetcher = new Candle1mFetcher(exchange);
-  const exhaustionCalc = new MomentumExhaustionCalculator({
-    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 35,
-    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 20,
-    MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
-  });
 
   // Group by symbol, sort by entryTime (cache-friendly fetching)
   const bySymbol: Record<string, BacktestTrade[]> = {};
@@ -500,7 +473,7 @@ export async function postProcess1mTrailingExits(
 
         if (candles1m.length === 0) continue;
 
-        const replay = replayTradeAt1m(trade, candles1m, exhaustionCalc);
+        const replay = replayTradeAt1m(trade, candles1m);
 
         if (replay.wasReplayed) {
           const idx = tradeIndex.get(trade.id);
