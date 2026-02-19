@@ -161,6 +161,13 @@ async function tick(prisma: PrismaClient): Promise<void> {
     // Use Chainlink price as "price to beat" (same source as Polymarket resolution)
     const startPrice = getBtcPrice(klines);
 
+    // Skip window if no price available (e.g. right after restart before feeds are ready)
+    if (startPrice === 0) {
+      log.warn('No price available yet (Chainlink + Binance both offline) — skipping window');
+      currentWindow = null as any;
+      return;
+    }
+
     currentWindow = {
       windowStart: start,
       windowEnd: end,
@@ -177,6 +184,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
       `New window ${new Date(start).toISOString()} → ${new Date(end).toISOString()} | startPrice=${startPrice.toFixed(2)} (${source})`,
     );
   }
+
+  // ── Guard: no window (price unavailable at startup) ──────────────────────
+  if (!currentWindow) return;
 
   // ── Update current price + elapsed ────────────────────────────────────────
   currentWindow.currentPrice = getBtcPrice(klines);
