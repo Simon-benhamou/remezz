@@ -89,10 +89,10 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
   router.put('/credentials', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
       const { privateKey } = req.body;
-      if (!privateKey) {
+      if (!privateKey || typeof privateKey !== 'string' || !privateKey.trim()) {
         return res.status(400).json({ error: 'Private key is required' });
       }
-      const result = await savePolymarketCredentials(prisma, privateKey);
+      const result = await savePolymarketCredentials(prisma, privateKey.trim());
       res.json({ success: true, address: result.address });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Failed to save credentials' });

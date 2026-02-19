@@ -84,6 +84,22 @@ const FEE_RATE_BPS = 0;
 // USDC has 6 decimals on Polygon
 const USDC_DECIMALS = 6;
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Normalize a private key: trim whitespace, ensure 0x prefix, validate hex.
+ * Throws if the result is not a valid 32-byte hex key.
+ */
+function normalizePrivateKey(raw: string): string {
+  let key = raw.trim();
+  if (!key.startsWith('0x')) key = '0x' + key;
+  // Must be 0x + 64 hex chars
+  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
+    throw new Error('Invalid private key format (expected 32-byte hex string)');
+  }
+  return key;
+}
+
 // ─── Settings keys ──────────────────────────────────────────────────────────
 
 const SETTING_KEYS = {
@@ -344,9 +360,10 @@ export async function savePolymarketConfig(
  */
 export async function savePolymarketCredentials(
   prisma: PrismaClient,
-  privateKey: string,
+  rawPrivateKey: string,
 ): Promise<{ address: string }> {
-  // Validate private key
+  // Normalize & validate private key
+  const privateKey = normalizePrivateKey(rawPrivateKey);
   const wallet = new ethers.Wallet(privateKey);
 
   // Derive API creds from Polymarket CLOB
@@ -436,10 +453,10 @@ async function loadCredentials(
 
   try {
     return {
-      privateKey: decryptApiKey(encPk),
-      apiKey: decryptApiKey(encKey),
-      apiSecret: decryptApiKey(encSecret),
-      apiPassphrase: decryptApiKey(encPass),
+      privateKey: normalizePrivateKey(decryptApiKey(encPk)),
+      apiKey: decryptApiKey(encKey).trim(),
+      apiSecret: decryptApiKey(encSecret).trim(),
+      apiPassphrase: decryptApiKey(encPass).trim(),
     };
   } catch (err) {
     log.error(`Failed to decrypt Polymarket credentials: ${err}`);
