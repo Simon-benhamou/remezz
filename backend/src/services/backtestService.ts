@@ -1329,8 +1329,8 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
   // V5.110: Exhaustion calculator for proactive trailing stop simulation
   const exhaustionEnabled = (MomentumConfig.EXIT as any).EXHAUSTION_STOP_ENABLED ?? true;
   const exhaustionCalc = exhaustionEnabled ? new MomentumExhaustionCalculator({
-    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 65,
-    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 45,
+    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 35,
+    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 20,
     MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
   }) : null;
 

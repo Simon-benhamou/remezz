@@ -28,6 +28,7 @@
 import * as ccxt from 'ccxt';
 import { runBacktestComputation } from '../src/services/backtestService.js';
 import { MomentumConfig } from '../src/strategies/momentumSimple.js';
+import { determineVolatilityRegime } from '../src/strategies/indicators/technicalIndicators.js';
 import {
   loadLocalJsonCandles,
   sliceCandlesByTime,
@@ -57,10 +58,8 @@ const PARAMS = {
 
 const CANDLE_15M_MS = 15 * 60 * 1000;
 
-// Trailing stop config (mirrors MomentumConfig.EXIT)
-const TRAILING = {
-  ACTIVATION_PCT: MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT,
-  DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_DISTANCE_PCT,
+// Progressive tier thresholds (fixed — don't change with vol)
+const TIERS = {
   WIDEN_AT_PCT: MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT,
   WIDE_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT,
   PROGRESSIVE_ENABLED: (MomentumConfig.EXIT as any).TRAILING_PROGRESSIVE_ENABLED ?? true,
@@ -69,6 +68,53 @@ const TRAILING = {
   TIER3_AT_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER3_AT_PCT ?? 6.0,
   TIER3_DISTANCE_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER3_DISTANCE_PCT ?? 2.5,
 };
+
+// V5.117: Dynamic vol adaptation matching live's shouldExitPosition()
+interface VolState {
+  regime: 'LOW' | 'MEDIUM' | 'HIGH';
+  baseDistance: number;
+  activation: number;
+  volMultiplier: number;
+}
+
+function computeVolState(candles15m: { high: number; low: number; close: number }[]): VolState {
+  const volAdaptEnabled = (MomentumConfig.EXIT as any).TRAILING_VOL_ADAPT_ENABLED ?? false;
+  const volRegime = candles15m.length >= 14
+    ? determineVolatilityRegime(candles15m)
+    : { regime: 'MEDIUM' as const, trailingDistance: MomentumConfig.EXIT.TRAILING_DISTANCE_PCT,
+        trailingActivation: MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT, atrPct: null, reason: 'insufficient_data' };
+
+  let volMultiplier = 1.0;
+  if (volAdaptEnabled) {
+    const lowMult = (MomentumConfig.EXIT as any).TRAILING_VOL_LOW_MULT ?? 0.8;
+    const medMult = (MomentumConfig.EXIT as any).TRAILING_VOL_MED_MULT ?? 1.0;
+    const highMult = (MomentumConfig.EXIT as any).TRAILING_VOL_HIGH_MULT ?? 1.6;
+    if (volRegime.regime === 'HIGH') volMultiplier = highMult;
+    else if (volRegime.regime === 'LOW') volMultiplier = lowMult;
+    else volMultiplier = medMult;
+  }
+
+  return { regime: volRegime.regime, baseDistance: volRegime.trailingDistance, activation: volRegime.trailingActivation, volMultiplier };
+}
+
+function aggregate1mTo15m(candles1m: Candle1m[]): { high: number; low: number; close: number }[] {
+  const buckets = new Map<number, Candle1m[]>();
+  for (const c of candles1m) {
+    const bucket = Math.floor(c.timestamp / CANDLE_15M_MS) * CANDLE_15M_MS;
+    const arr = buckets.get(bucket);
+    if (arr) arr.push(c); else buckets.set(bucket, [c]);
+  }
+  const result: { high: number; low: number; close: number }[] = [];
+  for (const [, cs] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+    if (cs.length < 10) continue;
+    result.push({
+      high: Math.max(...cs.map(c => c.high)),
+      low: Math.min(...cs.map(c => c.low)),
+      close: cs[cs.length - 1].close,
+    });
+  }
+  return result;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 1m CANDLE FETCHER WITH CACHING
@@ -153,24 +199,24 @@ function needAfter(endTs: number, cachedEnd: number) { return endTs > cachedEnd;
 // TRAILING STOP CALCULATOR (matches live logic)
 // ═══════════════════════════════════════════════════════════════════════════
 
-function getTrailingDistance(hwmPct: number): number {
-  if (TRAILING.PROGRESSIVE_ENABLED) {
-    if (hwmPct >= TRAILING.TIER3_AT_PCT) return TRAILING.TIER3_DISTANCE_PCT;
-    if (hwmPct >= TRAILING.TIER2_AT_PCT) return TRAILING.TIER2_DISTANCE_PCT;
-    if (hwmPct >= TRAILING.WIDEN_AT_PCT) return TRAILING.WIDE_DISTANCE_PCT;
+function getTrailingDistance(hwmPct: number, vol: VolState): number {
+  if (TIERS.PROGRESSIVE_ENABLED) {
+    if (hwmPct >= TIERS.TIER3_AT_PCT) return TIERS.TIER3_DISTANCE_PCT * vol.volMultiplier;
+    if (hwmPct >= TIERS.TIER2_AT_PCT) return TIERS.TIER2_DISTANCE_PCT * vol.volMultiplier;
+    if (hwmPct >= TIERS.WIDEN_AT_PCT) return TIERS.WIDE_DISTANCE_PCT * vol.volMultiplier;
   } else {
-    if (hwmPct >= TRAILING.WIDEN_AT_PCT) return TRAILING.WIDE_DISTANCE_PCT;
+    if (hwmPct >= TIERS.WIDEN_AT_PCT) return TIERS.WIDE_DISTANCE_PCT * vol.volMultiplier;
   }
-  return TRAILING.DISTANCE_PCT;
+  return vol.baseDistance;
 }
 
 function calcTrailingStop(
-  side: 'long' | 'short', entryPrice: number, hwm: number,
+  side: 'long' | 'short', entryPrice: number, hwm: number, vol: VolState,
 ): { stopPrice: number; distancePct: number; hwmPct: number } {
   const hwmPct = side === 'long'
     ? ((hwm - entryPrice) / entryPrice) * 100
     : ((entryPrice - hwm) / entryPrice) * 100;
-  const distancePct = getTrailingDistance(hwmPct);
+  const distancePct = getTrailingDistance(hwmPct, vol);
   const stopPrice = side === 'long'
     ? hwm * (1 - distancePct / 100)
     : hwm * (1 + distancePct / 100);
@@ -237,6 +283,13 @@ function replayTrade(
   const marginUsd = trade.marginUsd;
   const useExhaustion = mode !== '15m_exit';
 
+  // V5.117: Dynamic vol adaptation — aggregate 1m→15m, recompute at boundaries
+  const warmupCandles = candles1m.filter(c => c.timestamp < entryTs);
+  const candles15m = aggregate1mTo15m(warmupCandles);
+  let vol = computeVolState(candles15m);
+  let currentBucketTs = 0;
+  let currentBucket: Candle1m[] = [];
+
   let hwm = entryPrice;
   let trailingActive = false;
 
@@ -249,6 +302,22 @@ function replayTrade(
   const tradeCandles = candles1m.filter(c => c.timestamp >= entryTs);
 
   for (const c of tradeCandles) {
+    // ── 15m boundary: aggregate bucket and recompute vol regime ──
+    const bucketTs = Math.floor(c.timestamp / CANDLE_15M_MS) * CANDLE_15M_MS;
+    if (bucketTs !== currentBucketTs) {
+      if (currentBucket.length >= 10) {
+        candles15m.push({
+          high: Math.max(...currentBucket.map(x => x.high)),
+          low: Math.min(...currentBucket.map(x => x.low)),
+          close: currentBucket[currentBucket.length - 1].close,
+        });
+        vol = computeVolState(candles15m);
+      }
+      currentBucket = [];
+      currentBucketTs = bucketTs;
+    }
+    currentBucket.push(c);
+
     // ── STEP 1: Check STOP_MARKET fill (stop_market mode only) ──
     // Exchange-level check: triggers on wick, BEFORE candle closes
     if (mode === 'stop_market' && exhaustionStopActive && exhaustionStopPrice > 0) {
@@ -272,18 +341,18 @@ function replayTrade(
     // ── STEP 2: Update HWM ──
     hwm = side === 'long' ? Math.max(hwm, c.high) : Math.min(hwm, c.low);
 
-    // ── STEP 3: Check trailing activation ──
+    // ── STEP 3: Check trailing activation (vol-adapted threshold) ──
     const pnlPct = side === 'long'
       ? ((c.close - entryPrice) / entryPrice) * 100
       : ((entryPrice - c.close) / entryPrice) * 100;
 
-    if (!trailingActive && pnlPct >= TRAILING.ACTIVATION_PCT) {
+    if (!trailingActive && pnlPct >= vol.activation) {
       trailingActive = true;
     }
     if (!trailingActive) continue;
 
-    // ── STEP 4: Compute trailing stop ──
-    const { stopPrice } = calcTrailingStop(side, entryPrice, hwm);
+    // ── STEP 4: Compute trailing stop (vol-adapted distances) ──
+    const { stopPrice } = calcTrailingStop(side, entryPrice, hwm, vol);
 
     // ── STEP 5: Exhaustion scoring (stop_market & market_exit modes) ──
     if (useExhaustion && exhaustionCalc) {
@@ -414,7 +483,9 @@ async function main() {
 
   // ── Step 2: Identify trailing exit trades ──
   const trailingExits = baseline.trades.filter((t: any) =>
-    t.exitReason.startsWith('TRAIL') && !t.exitReason.includes('PROACTIVE')
+    t.exitReason.startsWith('TRAIL') &&
+    !t.exitReason.includes('PROACTIVE') &&
+    t.exitReason !== 'TRAIL_NFS_HIGH'  // Already exits at trailing stop price — replay can only worsen
   );
   console.log(`${trailingExits.length} trailing exits to replay at 1m resolution`);
 
@@ -435,11 +506,11 @@ async function main() {
       fetchCount++;
       const entryTs = new Date(trade.entryTime).getTime();
       const exitTs = new Date(trade.exitTime).getTime();
-      // Fetch with warmup before entry + 30min extension after exit
-      // (15m exit might happen slightly later than backtest exit)
+      // Fetch with 4h warmup before entry (for ATR-14 on 15m vol regime)
+      // + 30min extension after exit (15m exit might happen slightly later)
       const candles = await fetcher.getCandles(
         symbol,
-        entryTs - 25 * 60000,
+        entryTs - 240 * 60000,
         exitTs + 30 * 60000,
       );
       tradeCandles.set(trade.id, candles);

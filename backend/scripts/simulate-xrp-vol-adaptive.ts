@@ -24,7 +24,7 @@ console.log(`Actual Low:   $${secondLow.toFixed(4)}`);
 const exitConfig = MomentumConfig.EXIT as any;
 const tier2At = exitConfig.TRAILING_TIER2_AT_PCT ?? 4.0;
 const tier2Dist = exitConfig.TRAILING_TIER2_DISTANCE_PCT ?? 1.5;
-const highMult = exitConfig.TRAILING_VOL_HIGH_MULT ?? 1.5;
+const highMult = exitConfig.TRAILING_VOL_HIGH_MULT ?? 1.6;
 
 console.log('\n─── CONFIG (V5.88) ───');
 console.log(`Tier 2 threshold: ${tier2At}%`);
@@ -35,7 +35,7 @@ console.log(`HIGH volatility multiplier: ${highMult}x`);
 const regimes = [
   { name: 'LOW', mult: exitConfig.TRAILING_VOL_LOW_MULT ?? 0.8 },
   { name: 'MEDIUM', mult: exitConfig.TRAILING_VOL_MED_MULT ?? 1.0 },
-  { name: 'HIGH', mult: exitConfig.TRAILING_VOL_HIGH_MULT ?? 1.5 },
+  { name: 'HIGH', mult: exitConfig.TRAILING_VOL_HIGH_MULT ?? 1.6 },
 ];
 
 console.log('\n─── SIMULATION BY VOLATILITY REGIME ───\n');
