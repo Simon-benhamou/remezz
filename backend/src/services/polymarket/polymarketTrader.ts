@@ -214,8 +214,11 @@ function buildHmacHeaders(
 // ─── Order Signing ──────────────────────────────────────────────────────────
 
 function generateSalt(): string {
-  const bytes = crypto.randomBytes(16);
-  return BigInt('0x' + bytes.toString('hex')).toString();
+  // 6 bytes = 48 bits, max value 281474976710655 which is < Number.MAX_SAFE_INTEGER (2^53-1).
+  // Using 16 bytes (128 bits) caused parseInt() truncation when building the JSON payload,
+  // making the CLOB-received salt differ from the EIP-712-signed salt → order rejected.
+  const bytes = crypto.randomBytes(6);
+  return (parseInt(bytes.toString('hex'), 16) + 1).toString();
 }
 
 interface SignedOrder {
@@ -453,6 +456,7 @@ export async function deletePolymarketCredentials(
       key: {
         in: [
           SETTING_KEYS.PRIVATE_KEY,
+          SETTING_KEYS.PROXY_ADDRESS,
           SETTING_KEYS.API_KEY,
           SETTING_KEYS.API_SECRET,
           SETTING_KEYS.API_PASSPHRASE,

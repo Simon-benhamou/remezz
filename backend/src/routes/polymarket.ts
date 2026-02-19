@@ -1,7 +1,13 @@
 import { Router } from 'express';
 import type { PrismaClient } from '.prisma/client';
 import { authenticateUser, type AuthenticatedRequest } from '../middleware/auth.js';
-import { getPolymarketLiveState, getPolymarketStats } from '../services/polymarket/polymarketWorker.js';
+import {
+  getPolymarketLiveState,
+  getPolymarketStats,
+  startPolymarketWorker,
+  stopPolymarketWorker,
+  isPolymarketWorkerRunning,
+} from '../services/polymarket/polymarketWorker.js';
 import {
   getPolymarketConfig,
   savePolymarketConfig,
@@ -141,6 +147,31 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
     } catch (err) {
       res.status(500).json({ balance: 0, error: 'Failed to fetch balance' });
     }
+  });
+
+  // ── Worker control ────────────────────────────────────────────────────────
+
+  // GET /worker — worker status
+  router.get('/worker', authenticateUser, (_req: AuthenticatedRequest, res) => {
+    res.json({ running: isPolymarketWorkerRunning() });
+  });
+
+  // POST /worker/start — start worker
+  router.post('/worker/start', authenticateUser, (_req: AuthenticatedRequest, res) => {
+    if (isPolymarketWorkerRunning()) {
+      return res.json({ running: true, message: 'Already running' });
+    }
+    startPolymarketWorker(prisma);
+    res.json({ running: true, message: 'Worker started' });
+  });
+
+  // POST /worker/stop — stop worker (bouton STOP)
+  router.post('/worker/stop', authenticateUser, (_req: AuthenticatedRequest, res) => {
+    if (!isPolymarketWorkerRunning()) {
+      return res.json({ running: false, message: 'Already stopped' });
+    }
+    stopPolymarketWorker();
+    res.json({ running: false, message: 'Worker stopped' });
   });
 
   return router;

@@ -33,6 +33,9 @@ let resolutionDone = false;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let pendingResolution: WindowState | null = null; // Previous window awaiting DB persist
 
+// Prevent placing a new live bet before the previous window's order is fully handled
+let activeLiveBetWindow: number | null = null; // windowStart of the window with an active live bet
+
 /** Live state exposed to the frontend */
 let liveState: { window: WindowState | null; klines1m: Candle1m[] } = {
   window: null,
@@ -88,6 +91,11 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
     simulatedPnl = isCorrect
       ? 1 - w.entryOdds
       : -w.entryOdds;
+  }
+
+  // Release the active-bet guard so the next window can place a new order
+  if (activeLiveBetWindow === w.windowStart) {
+    activeLiveBetWindow = null;
   }
 
   const skipped = w.status === 'skipped';
@@ -228,18 +236,24 @@ async function tick(prisma: PrismaClient): Promise<void> {
       // ── Live trading: place real bet if enabled ──────────────────────
       const liveConfig = await getLiveTradingConfig(prisma);
       if (liveConfig && tokenId) {
-        log.info(`LIVE MODE: placing $${liveConfig.amount} bet on ${result.direction}...`);
-        const betResult = await placePolymarketBet(
-          prisma,
-          result.direction,
-          tokenId,
-          liveConfig.amount,
-          entryOdds,
-        );
-        if (betResult.success) {
-          log.info(`LIVE BET OK: orderId=${betResult.orderId}`);
+        // Guard: 1 order at a time — skip if a bet is still active from a previous window
+        if (activeLiveBetWindow !== null && activeLiveBetWindow !== start) {
+          log.warn(`LIVE MODE: skipping bet — previous window ${activeLiveBetWindow} still has an active bet`);
         } else {
-          log.error(`LIVE BET FAILED: ${betResult.error}`);
+          log.info(`LIVE MODE: placing $${liveConfig.amount} bet on ${result.direction}...`);
+          const betResult = await placePolymarketBet(
+            prisma,
+            result.direction,
+            tokenId,
+            liveConfig.amount,
+            entryOdds,
+          );
+          if (betResult.success) {
+            activeLiveBetWindow = start; // Mark this window as having an active live bet
+            log.info(`LIVE BET OK: orderId=${betResult.orderId}`);
+          } else {
+            log.error(`LIVE BET FAILED: ${betResult.error}`);
+          }
         }
       } else if (liveConfig && !tokenId) {
         log.warn('Live mode active but no token ID available for this market');
@@ -309,6 +323,14 @@ export function stopPolymarketWorker(): void {
     log.info('Worker stopped');
   }
   stopChainlinkFeed();
+  activeLiveBetWindow = null; // Reset so a restart can place bets immediately
+}
+
+/**
+ * Returns whether the worker is currently running.
+ */
+export function isPolymarketWorkerRunning(): boolean {
+  return intervalHandle !== null;
 }
 
 /**
