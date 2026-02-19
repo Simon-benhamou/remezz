@@ -1,22 +1,25 @@
 /**
  * Polymarket CLOB trading service.
  *
- * Handles:
- *  - L1 auth (EIP-712 wallet signature) to derive API credentials
- *  - L2 auth (HMAC) for authenticated CLOB requests
- *  - EIP-712 order signing (CTF Exchange on Polygon)
- *  - Market buy order creation & submission
- *  - Balance checking
+ * Uses the official @polymarket/clob-client package for all auth, signing, and order placement.
+ * The wallet private key is stored encrypted in DB; API credentials are derived automatically
+ * and cached in memory.
  *
- * User only provides their wallet private key — the API key, secret, and
- * passphrase are derived automatically via the CLOB /auth/derive-api-key
- * endpoint.
- *
- * Uses ethers v6 + native fetch — no @polymarket/clob-client dependency.
+ * Proxy wallet (Magic.link): if a proxyAddress is configured, signatureType=POLY_PROXY and
+ * funderAddress=proxyAddress are passed to ClobClient so all requests use the proxy account.
  */
 
-import crypto from 'crypto';
-import { ethers } from 'ethers';
+import { ethers as ethers6 } from 'ethers'; // v6, used only for address validation
+import { Wallet } from 'ethers5'; // v5 alias, required by @polymarket/clob-client
+import {
+  ClobClient,
+  type ApiKeyCreds,
+  type UserMarketOrder,
+  AssetType,
+  Side,
+  OrderType,
+} from '@polymarket/clob-client';
+import { SignatureType } from '@polymarket/order-utils';
 import type { PrismaClient } from '.prisma/client';
 import { encryptApiKey, decryptApiKey } from '../../utils/crypto.js';
 import { createLogger } from '../../utils/logger.js';
@@ -28,78 +31,8 @@ const log = createLogger('polymarket-trader');
 const CLOB_HOST = 'https://clob.polymarket.com';
 const CHAIN_ID = 137; // Polygon
 
-// CTF Exchange contract (Neg-Risk variant used by 5-min crypto markets)
-const NEG_RISK_CTF_EXCHANGE = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
-
-// EIP-712 domain for L1 authentication (derive API keys)
-const L1_AUTH_DOMAIN = {
-  name: 'ClobAuthDomain',
-  version: '1',
-  chainId: CHAIN_ID,
-};
-
-const L1_AUTH_TYPES = {
-  ClobAuth: [
-    { name: 'address', type: 'address' },
-    { name: 'timestamp', type: 'string' },
-    { name: 'nonce', type: 'uint256' },
-    { name: 'message', type: 'string' },
-  ],
-};
-
-// EIP-712 domain for order signing
-const ORDER_DOMAIN = {
-  name: 'ClobExchange',
-  version: '1',
-  chainId: CHAIN_ID,
-  verifyingContract: NEG_RISK_CTF_EXCHANGE,
-};
-
-// EIP-712 types for CTF Exchange orders
-const ORDER_TYPES = {
-  Order: [
-    { name: 'salt', type: 'uint256' },
-    { name: 'maker', type: 'address' },
-    { name: 'signer', type: 'address' },
-    { name: 'taker', type: 'address' },
-    { name: 'tokenId', type: 'uint256' },
-    { name: 'makerAmount', type: 'uint256' },
-    { name: 'takerAmount', type: 'uint256' },
-    { name: 'expiration', type: 'uint256' },
-    { name: 'nonce', type: 'uint256' },
-    { name: 'feeRateBps', type: 'uint256' },
-    { name: 'side', type: 'uint8' },
-    { name: 'signatureType', type: 'uint8' },
-  ],
-};
-
-// Side enum
-const SIDE_BUY = 0;
-// Signature type: EOA (0) or POLY_PROXY (1) or POLY_GNOSIS_SAFE (2)
-const SIG_TYPE_EOA = 0;
-const SIG_TYPE_POLY_PROXY = 1;
-
-// Default fee rate (Polymarket standard: 0 bps for taker)
-const FEE_RATE_BPS = 0;
-
 // USDC has 6 decimals on Polygon
 const USDC_DECIMALS = 6;
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * Normalize a private key: trim whitespace, ensure 0x prefix, validate hex.
- * Throws if the result is not a valid 32-byte hex key.
- */
-function normalizePrivateKey(raw: string): string {
-  let key = raw.trim();
-  if (!key.startsWith('0x')) key = '0x' + key;
-  // Must be 0x + 64 hex chars
-  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
-    throw new Error('Invalid private key format (expected 32-byte hex string)');
-  }
-  return key;
-}
 
 // ─── Settings keys ──────────────────────────────────────────────────────────
 
@@ -107,7 +40,7 @@ const SETTING_KEYS = {
   MODE: 'polymarket_mode',
   AMOUNT: 'polymarket_amount',
   PRIVATE_KEY: 'polymarket_private_key',
-  PROXY_ADDRESS: 'polymarket_proxy_address', // proxy wallet shown in Polymarket UI (Magic.link accounts)
+  PROXY_ADDRESS: 'polymarket_proxy_address', // proxy wallet shown in Polymarket UI (Magic.link)
   API_KEY: 'polymarket_api_key',
   API_SECRET: 'polymarket_api_secret',
   API_PASSPHRASE: 'polymarket_api_passphrase',
@@ -121,21 +54,16 @@ export interface PolymarketConfig {
   hasCredentials: boolean;
 }
 
-interface ClobCredentials {
+interface StoredCreds {
   privateKey: string;
-  address: string; // EOA address (wallet.address derived from private key)
-  proxyAddress?: string; // Proxy wallet address (Magic.link accounts) — funds held here
-  apiKey: string;
-  apiSecret: string;
-  apiPassphrase: string;
+  address: string; // EOA address derived from private key
+  proxyAddress?: string; // Magic.link proxy wallet (holds USDC)
+  apiCreds: ApiKeyCreds; // { key, secret, passphrase } for L2 HMAC auth
 }
 
 // ─── In-memory credential cache ──────────────────────────────────────────────
-// Polymarket's cluster is eventually consistent: the same derived credentials work
-// on all nodes after ~5s but re-deriving on every request causes fresh 401s.
-// Cache keeps creds live in memory; cleared on 401 to force a fresh derivation.
 
-let _credCache: ClobCredentials | null = null;
+let _credCache: StoredCreds | null = null;
 
 function clearCredCache(): void {
   _credCache = null;
@@ -146,263 +74,34 @@ function clearCredCache(): void {
 
 let _lastGoodBalance: number | null = null;
 let _lastGoodBalanceAt = 0;
-const BALANCE_CACHE_TTL_MS = 60_000; // 60s — return cached value rather than stale $0
+const BALANCE_CACHE_TTL_MS = 60_000;
 
-// ─── L1 Authentication (wallet signature → derive API creds) ────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-async function buildL1Headers(wallet: ethers.Wallet): Promise<Record<string, string>> {
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const nonce = 0;
-  const addr = wallet.address; // always EOA — proxy auth not supported via CLOB L1
-
-  const signature = await wallet.signTypedData(L1_AUTH_DOMAIN, L1_AUTH_TYPES, {
-    address: addr,
-    timestamp,
-    nonce,
-    message: 'This message attests that I control the given wallet',
-  });
-
-  return {
-    POLY_ADDRESS: addr,
-    POLY_SIGNATURE: signature,
-    POLY_TIMESTAMP: timestamp,
-    POLY_NONCE: '0',
-  };
+function normalizePrivateKey(raw: string): string {
+  let key = raw.trim();
+  if (!key.startsWith('0x')) key = '0x' + key;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
+    throw new Error('Invalid private key format (expected 32-byte hex string)');
+  }
+  return key;
 }
 
 /**
- * Derive API credentials (key, secret, passphrase) from wallet private key.
- * Calls the CLOB /auth/derive-api-key endpoint with L1 auth (EIP-712).
+ * Build a ClobClient instance for the given credentials.
+ * The client handles L1 (EIP-712) and L2 (HMAC) auth internally.
  */
-async function deriveApiCredentials(
-  privateKey: string,
-): Promise<{ apiKey: string; secret: string; passphrase: string; authAddress: string }> {
-  const wallet = new ethers.Wallet(privateKey);
-  const headers = await buildL1Headers(wallet);
-
-  const res = await fetch(`${CLOB_HOST}/auth/derive-api-key`, {
-    method: 'GET',
-    headers,
-    signal: AbortSignal.timeout(15_000),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Failed to derive API key (${res.status}): ${text}`);
-  }
-
-  const data = await res.json();
-  if (!data.apiKey || !data.secret || !data.passphrase) {
-    throw new Error('Incomplete credentials returned from Polymarket');
-  }
-
-  return { apiKey: data.apiKey, secret: data.secret, passphrase: data.passphrase, authAddress: wallet.address };
-}
-
-// ─── L2 HMAC Authentication ────────────────────────────────────────────────
-
-// Monotonic timestamp counter: Polymarket rejects requests with duplicate timestamps
-// (replay protection). If two calls happen within the same second they'd share the same
-// floor(Date.now()/1000) — we increment by 1 to guarantee uniqueness.
-let _lastHmacTimestamp = 0;
-
-function nextHmacTimestamp(): string {
-  const now = Math.floor(Date.now() / 1000);
-  _lastHmacTimestamp = now > _lastHmacTimestamp ? now : _lastHmacTimestamp + 1;
-  return _lastHmacTimestamp.toString();
-}
-
-function buildHmacHeaders(
-  creds: ClobCredentials,
-  method: string,
-  path: string,
-  body?: string,
-): Record<string, string> {
-  const timestamp = nextHmacTimestamp();
-
-  // HMAC message: timestamp + method + path (no \n separators, matches py-clob-client)
-  let message = `${timestamp}${method}${path}`;
-  if (body) message += body.replace(/'/g, '"');
-
-  // Standard base64 decode of secret (handles both standard and URL-safe chars)
-  const secretBytes = Buffer.from(creds.apiSecret, 'base64');
-  const hmac = crypto.createHmac('sha256', secretBytes);
-  hmac.update(message);
-  // Standard base64 output with padding — Polymarket server requires this
-  const signature = hmac.digest('base64');
-
-  return {
-    POLY_ADDRESS: creds.address,
-    POLY_SIGNATURE: signature,
-    POLY_TIMESTAMP: timestamp,
-    POLY_API_KEY: creds.apiKey,
-    POLY_PASSPHRASE: creds.apiPassphrase,
-  };
-}
-
-// ─── Order Signing ──────────────────────────────────────────────────────────
-
-function generateSalt(): string {
-  // 6 bytes = 48 bits, max value 281474976710655 which is < Number.MAX_SAFE_INTEGER (2^53-1).
-  // Using 16 bytes (128 bits) caused parseInt() truncation when building the JSON payload,
-  // making the CLOB-received salt differ from the EIP-712-signed salt → order rejected.
-  const bytes = crypto.randomBytes(6);
-  return (parseInt(bytes.toString('hex'), 16) + 1).toString();
-}
-
-interface SignedOrder {
-  salt: string;
-  maker: string;
-  signer: string;
-  taker: string;
-  tokenId: string;
-  makerAmount: string;
-  takerAmount: string;
-  expiration: string;
-  nonce: string;
-  feeRateBps: string;
-  side: number;
-  signatureType: number;
-  signature: string;
-}
-
-async function createSignedOrder(
-  wallet: ethers.Wallet,
-  tokenId: string,
-  usdcAmount: number,
-  price: number, // price per outcome token (0-1)
-  proxyAddress?: string, // if set, order is placed as proxy wallet (maker=proxy, signer=EOA, signatureType=1)
-): Promise<SignedOrder> {
-  const salt = generateSalt();
-  // For proxy wallets: maker = proxy (holds USDC), signer = EOA (signs the order)
-  const maker = proxyAddress ?? wallet.address;
-  const signer = wallet.address;
-  const taker = '0x0000000000000000000000000000000000000000';
-  const expiration = '0'; // no expiration for market orders
-
-  // makerAmount = USDC to spend (6 decimals)
-  const makerAmount = Math.floor(usdcAmount * 10 ** USDC_DECIMALS).toString();
-  // takerAmount = outcome tokens to receive (6 decimals, based on price)
-  const tokensReceived = usdcAmount / price;
-  const takerAmount = Math.floor(tokensReceived * 10 ** USDC_DECIMALS).toString();
-
-  const orderValues = {
-    salt,
-    maker,
-    signer,
-    taker,
-    tokenId,
-    makerAmount,
-    takerAmount,
-    expiration,
-    nonce: '0',
-    feeRateBps: FEE_RATE_BPS.toString(),
-    side: SIDE_BUY,
-    // POLY_PROXY (1) when funds are in a proxy wallet (Magic.link accounts), EOA (0) otherwise
-    signatureType: proxyAddress ? SIG_TYPE_POLY_PROXY : SIG_TYPE_EOA,
-  };
-
-  // Sign with EIP-712
-  const signature = await wallet.signTypedData(ORDER_DOMAIN, ORDER_TYPES, orderValues);
-
-  return { ...orderValues, signature };
-}
-
-// ─── CLOB API Calls ─────────────────────────────────────────────────────────
-
-// Re-derivation mutex: prevents concurrent re-derives when multiple requests fail simultaneously
-let _rederiveInProgress = false;
-
-async function rederiveAndUpdateCache(prisma: PrismaClient, oldCreds: ClobCredentials): Promise<ClobCredentials | null> {
-  if (_rederiveInProgress) {
-    // Another call is already re-deriving — wait for it to complete then return cache
-    await new Promise((r) => setTimeout(r, 4000));
-    return _credCache;
-  }
-  _rederiveInProgress = true;
-  try {
-    log.warn('Got 401 — re-deriving API credentials (cluster key propagation issue)');
-    const { apiKey, secret, passphrase } = await deriveApiCredentials(oldCreds.privateKey);
-    await new Promise((r) => setTimeout(r, 3500)); // wait for propagation
-    _credCache = { ...oldCreds, apiKey, apiSecret: secret, apiPassphrase: passphrase };
-    return _credCache;
-  } catch (err) {
-    log.error(`Re-derivation failed: ${err}`);
-    return null;
-  } finally {
-    _rederiveInProgress = false;
-  }
-}
-
-async function clobGet(
-  path: string,
-  creds: ClobCredentials,
-  prisma?: PrismaClient, // if provided, auto-re-derives on 401
-): Promise<any> {
-  // HMAC is computed on the base path WITHOUT query params (Polymarket server strips query params before verification)
-  const hmacPath = path.split('?')[0];
-  const headers = buildHmacHeaders(creds, 'GET', hmacPath);
-  const res = await fetch(`${CLOB_HOST}${path}`, {
-    method: 'GET',
-    headers: { ...headers, 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    // On 401: if prisma is available, re-derive credentials and retry once
-    if (res.status === 401 && prisma) {
-      const fresh = await rederiveAndUpdateCache(prisma, creds);
-      if (fresh) {
-        const retryHeaders = buildHmacHeaders(fresh, 'GET', hmacPath);
-        const retryRes = await fetch(`${CLOB_HOST}${path}`, {
-          method: 'GET',
-          headers: { ...retryHeaders, 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (retryRes.ok) return retryRes.json();
-        const retryText = await retryRes.text();
-        throw new Error(`CLOB GET ${path} → ${retryRes.status}: ${retryText}`);
-      }
-    }
-    throw new Error(`CLOB GET ${path} → ${res.status}: ${text}`);
-  }
-  return res.json();
-}
-
-async function clobPost(
-  path: string,
-  body: any,
-  creds: ClobCredentials,
-  prisma?: PrismaClient,
-): Promise<any> {
-  const bodyStr = JSON.stringify(body);
-  const headers = buildHmacHeaders(creds, 'POST', path, bodyStr);
-  const res = await fetch(`${CLOB_HOST}${path}`, {
-    method: 'POST',
-    headers: { ...headers, 'Content-Type': 'application/json' },
-    body: bodyStr,
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    if (res.status === 401 && prisma) {
-      const fresh = await rederiveAndUpdateCache(prisma, creds);
-      if (fresh) {
-        const retryHeaders = buildHmacHeaders(fresh, 'POST', path, bodyStr);
-        const retryRes = await fetch(`${CLOB_HOST}${path}`, {
-          method: 'POST',
-          headers: { ...retryHeaders, 'Content-Type': 'application/json' },
-          body: bodyStr,
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (retryRes.ok) return retryRes.json();
-        const retryText = await retryRes.text();
-        throw new Error(`CLOB POST ${path} → ${retryRes.status}: ${retryText}`);
-      }
-    }
-    throw new Error(`CLOB POST ${path} → ${res.status}: ${text}`);
-  }
-  return res.json();
+function buildClient(creds: StoredCreds, withApiKey = true): ClobClient {
+  const wallet = new Wallet(creds.privateKey);
+  const signatureType = creds.proxyAddress ? SignatureType.POLY_PROXY : SignatureType.EOA;
+  return new ClobClient(
+    CLOB_HOST,
+    CHAIN_ID,
+    wallet,
+    withApiKey ? creds.apiCreds : undefined,
+    signatureType,
+    creds.proxyAddress,
+  );
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -416,9 +115,7 @@ export async function getPolymarketConfig(
   const settings = await prisma.systemSetting.findMany({
     where: { key: { in: [SETTING_KEYS.MODE, SETTING_KEYS.AMOUNT, SETTING_KEYS.API_KEY] } },
   });
-
   const map = new Map(settings.map((s) => [s.key, s.value]));
-
   return {
     mode: (map.get(SETTING_KEYS.MODE) as 'virtual' | 'live') || 'virtual',
     amount: parseFloat(map.get(SETTING_KEYS.AMOUNT) || '5'),
@@ -455,42 +152,41 @@ export async function savePolymarketConfig(
 export async function savePolymarketCredentials(
   prisma: PrismaClient,
   rawPrivateKey: string,
-  rawProxyAddress?: string, // optional: proxy wallet shown in Polymarket UI (Magic.link)
+  rawProxyAddress?: string,
 ): Promise<{ address: string }> {
-  // Normalize & validate private key
   const privateKey = normalizePrivateKey(rawPrivateKey);
-  const wallet = new ethers.Wallet(privateKey);
+  const wallet6 = new ethers6.Wallet(privateKey);
 
   // Validate proxy address format if provided
   let proxyAddress: string | undefined;
   if (rawProxyAddress?.trim()) {
     const p = rawProxyAddress.trim();
-    if (!ethers.isAddress(p)) throw new Error('Invalid proxy address format');
-    proxyAddress = ethers.getAddress(p); // checksum
+    if (!ethers6.isAddress(p)) throw new Error('Invalid proxy address format');
+    proxyAddress = ethers6.getAddress(p); // checksum
   }
 
-  // Derive API creds from Polymarket CLOB (always uses EOA address)
-  log.info(`Deriving API credentials for EOA: ${wallet.address}...`);
-  const { apiKey, secret, passphrase, authAddress } = await deriveApiCredentials(privateKey);
-  log.info(`API credentials derived successfully for ${authAddress}`);
+  // Derive API credentials via ClobClient (handles L1 EIP-712 auth internally)
+  log.info(`Deriving API credentials for EOA: ${wallet6.address}...`);
+  const signatureType = proxyAddress ? SignatureType.POLY_PROXY : SignatureType.EOA;
+  const tempClient = new ClobClient(CLOB_HOST, CHAIN_ID, new Wallet(privateKey), undefined, signatureType, proxyAddress);
+  const apiCreds = await tempClient.createOrDeriveApiKey();
+  log.info(`API credentials derived successfully for ${wallet6.address}`);
 
-  // Wait for key propagation across Polymarket's cluster (eventually consistent — ~3s)
+  // Wait for key propagation across Polymarket's cluster (~3s)
   await new Promise((r) => setTimeout(r, 3500));
 
-  // Encrypt all 4 values (compute once so we can verify round-trip)
+  // Encrypt sensitive values before storing
   const encryptedPk = encryptApiKey(privateKey);
-  const encryptedApiKey = encryptApiKey(apiKey);
-  const encryptedSecret = encryptApiKey(secret);
-  const encryptedPassphrase = encryptApiKey(passphrase);
+  const encryptedApiKey = encryptApiKey(apiCreds.key);
+  const encryptedSecret = encryptApiKey(apiCreds.secret);
+  const encryptedPassphrase = encryptApiKey(apiCreds.passphrase);
 
-  // Verify encryption round-trip before storing
+  // Verify encryption round-trip
   const roundTrip = decryptApiKey(encryptedPk);
   if (roundTrip !== privateKey) {
-    log.error(`Encryption round-trip FAILED: input length=${privateKey.length}, output length=${roundTrip.length}`);
     throw new Error('Encryption round-trip verification failed — check ENCRYPTION_SALT config');
   }
 
-  // Store all values (proxy address stored in plain — it's a public address)
   const upserts: Promise<any>[] = [
     prisma.systemSetting.upsert({
       where: { key: SETTING_KEYS.PRIVATE_KEY },
@@ -514,7 +210,6 @@ export async function savePolymarketCredentials(
     }),
   ];
 
-  // Store proxy address if provided (Magic.link accounts)
   if (proxyAddress) {
     upserts.push(
       prisma.systemSetting.upsert({
@@ -524,25 +219,21 @@ export async function savePolymarketCredentials(
       }),
     );
   } else {
-    // Clean up any stale proxy address
     upserts.push(prisma.systemSetting.deleteMany({ where: { key: SETTING_KEYS.PROXY_ADDRESS } }));
   }
 
   await Promise.all(upserts);
 
-  // Invalidate in-memory cache so next call reloads from DB (new creds)
   clearCredCache();
   _lastGoodBalance = null;
 
-  return { address: authAddress };
+  return { address: wallet6.address };
 }
 
 /**
  * Delete all Polymarket credentials and reset mode to virtual.
  */
-export async function deletePolymarketCredentials(
-  prisma: PrismaClient,
-): Promise<void> {
+export async function deletePolymarketCredentials(prisma: PrismaClient): Promise<void> {
   await prisma.systemSetting.deleteMany({
     where: {
       key: {
@@ -556,7 +247,6 @@ export async function deletePolymarketCredentials(
       },
     },
   });
-  // Reset to virtual mode
   await prisma.systemSetting.upsert({
     where: { key: SETTING_KEYS.MODE },
     create: { key: SETTING_KEYS.MODE, value: 'virtual' },
@@ -567,12 +257,9 @@ export async function deletePolymarketCredentials(
 }
 
 /**
- * Load decrypted credentials from DB. Returns null if not configured.
+ * Load decrypted credentials from DB (with in-memory cache).
  */
-async function loadCredentials(
-  prisma: PrismaClient,
-): Promise<ClobCredentials | null> {
-  // Return in-memory cache if available (avoids DB round-trip and keeps key stable across calls)
+async function loadCredentials(prisma: PrismaClient): Promise<StoredCreds | null> {
   if (_credCache) return _credCache;
 
   const settings = await prisma.systemSetting.findMany({
@@ -598,21 +285,21 @@ async function loadCredentials(
   if (!encPk || !encKey || !encSecret || !encPass) return null;
 
   try {
-    const decryptedPk = decryptApiKey(encPk);
-    const pk = normalizePrivateKey(decryptedPk);
-
-    const wallet = new ethers.Wallet(pk);
-    const authAddress = wallet.address; // always EOA
+    const privateKey = normalizePrivateKey(decryptApiKey(encPk));
+    const wallet = new ethers6.Wallet(privateKey);
     const proxyAddress = map.get(SETTING_KEYS.PROXY_ADDRESS) || undefined;
-    log.debug(`Credentials loaded OK — address=${authAddress}${proxyAddress ? ` proxy=${proxyAddress}` : ''}`);
+
+    log.debug(`Credentials loaded — address=${wallet.address}${proxyAddress ? ` proxy=${proxyAddress}` : ''}`);
 
     _credCache = {
-      privateKey: pk,
-      address: authAddress,
+      privateKey,
+      address: wallet.address,
       proxyAddress,
-      apiKey: decryptApiKey(encKey).trim(),
-      apiSecret: decryptApiKey(encSecret).trim(),
-      apiPassphrase: decryptApiKey(encPass).trim(),
+      apiCreds: {
+        key: decryptApiKey(encKey).trim(),
+        secret: decryptApiKey(encSecret).trim(),
+        passphrase: decryptApiKey(encPass).trim(),
+      },
     };
     return _credCache;
   } catch (err) {
@@ -622,9 +309,8 @@ async function loadCredentials(
 }
 
 /**
- * Validate Polymarket credentials by calling a lightweight authenticated endpoint.
- * Retries up to 3 times with 2s backoff to handle Polymarket's eventual consistency
- * (derived keys take ~3-5s to propagate across their cluster).
+ * Validate credentials by calling a lightweight authenticated endpoint.
+ * Retries up to 3x with 2s backoff for Polymarket's eventual consistency.
  */
 export async function validatePolymarketCredentials(
   prisma: PrismaClient,
@@ -632,14 +318,15 @@ export async function validatePolymarketCredentials(
   const creds = await loadCredentials(prisma);
   if (!creds) return { valid: false, error: 'No credentials configured' };
 
+  const client = buildClient(creds);
   let lastError = '';
+
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      // Use balance endpoint (signature_type=1) — more stable than /data/orders across cluster nodes
-      await clobGet('/balance-allowance?asset_type=COLLATERAL&signature_type=1', creds, prisma);
+      await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
       return { valid: true, address: creds.proxyAddress ?? creds.address };
     } catch (err: any) {
-      lastError = err.message || 'Validation failed';
+      lastError = err?.message ?? 'Validation failed';
       if (attempt < 3) {
         log.warn(`Credential validation attempt ${attempt}/3 failed — retrying in 2s (${lastError})`);
         await new Promise((r) => setTimeout(r, 2000));
@@ -652,8 +339,8 @@ export async function validatePolymarketCredentials(
 
 /**
  * Get USDC balance from Polymarket.
- * Uses signature_type=1 to read proxy wallet balance (Magic.link accounts).
- * Falls back to in-memory cache if the cluster returns $0 or 401 (eventual consistency).
+ * The client automatically uses the correct signature_type for proxy wallets.
+ * Falls back to in-memory cache if the cluster returns $0 (eventual consistency).
  */
 export async function getPolymarketBalance(
   prisma: PrismaClient,
@@ -661,15 +348,15 @@ export async function getPolymarketBalance(
   const creds = await loadCredentials(prisma);
   if (!creds) return { balance: 0, error: 'No credentials configured' };
 
-  const BALANCE_PATH = '/balance-allowance?asset_type=COLLATERAL&signature_type=1';
+  const client = buildClient(creds);
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const data = await clobGet(BALANCE_PATH, creds, prisma);
+      const data = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
       const balance = parseFloat(data?.balance ?? '0') / 10 ** USDC_DECIMALS;
 
       // If we get $0 but have a proxy configured AND previously had a non-zero balance,
-      // the cluster node silently ignored signature_type=1 — retry
+      // the cluster node may have silently ignored signature_type=1 — retry
       if (balance === 0 && creds.proxyAddress && _lastGoodBalance !== null && _lastGoodBalance > 0 && attempt < 3) {
         log.warn(`Balance returned $0 with proxy configured (attempt ${attempt}/3) — retrying`);
         await new Promise((r) => setTimeout(r, 1500));
@@ -682,10 +369,8 @@ export async function getPolymarketBalance(
       }
       return { balance };
     } catch (err: any) {
-      log.warn(`Balance fetch failed (attempt ${attempt}/3): ${err.message}`);
-      if (attempt < 3) {
-        await new Promise((r) => setTimeout(r, 1500));
-      }
+      log.warn(`Balance fetch failed (attempt ${attempt}/3): ${err?.message}`);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 1500));
     }
   }
 
@@ -700,11 +385,7 @@ export async function getPolymarketBalance(
 
 /**
  * Place a market buy order on Polymarket.
- *
- * @param direction - "UP" or "DOWN"
- * @param tokenId - The CLOB token ID for the chosen outcome
- * @param amount - USDC amount to wager
- * @param price - Current price of the outcome token (0-1)
+ * The official client handles EIP-712 order signing, HMAC auth, and salt generation.
  */
 export async function placePolymarketBet(
   prisma: PrismaClient,
@@ -717,42 +398,23 @@ export async function placePolymarketBet(
   if (!creds) return { success: false, error: 'No credentials' };
 
   try {
-    // Wallet needed for EIP-712 order signing — already validated in loadCredentials
-    const signingWallet = new ethers.Wallet(creds.privateKey);
-    // Pass proxy address so maker=proxy, signer=EOA, signatureType=1 (funds are in proxy for Magic.link accounts)
-    const signedOrder = await createSignedOrder(signingWallet, tokenId, amount, price, creds.proxyAddress);
+    const client = buildClient(creds);
 
-    const orderPayload = {
-      order: {
-        salt: parseInt(signedOrder.salt),
-        maker: signedOrder.maker,
-        signer: signedOrder.signer,
-        taker: signedOrder.taker,
-        tokenId: signedOrder.tokenId,
-        makerAmount: signedOrder.makerAmount,
-        takerAmount: signedOrder.takerAmount,
-        expiration: signedOrder.expiration,
-        nonce: signedOrder.nonce,
-        feeRateBps: signedOrder.feeRateBps,
-        side: signedOrder.side,
-        signatureType: signedOrder.signatureType,
-        signature: signedOrder.signature,
-      },
-      // owner should be the account that holds the funds (proxy if available)
-      owner: creds.proxyAddress ?? creds.address,
-      orderType: 'FOK', // Fill-or-Kill for market orders
+    const order: UserMarketOrder = {
+      tokenID: tokenId,
+      amount, // USDC amount to spend (the client handles conversion)
+      price,  // price per outcome token (0-1)
+      side: Side.BUY,
     };
 
-    const result = await clobPost('/order', orderPayload, creds, prisma);
+    const result = await client.createAndPostMarketOrder(order, undefined, OrderType.FOK);
 
-    log.info(
-      `Live bet placed: ${direction} $${amount} @ ${price.toFixed(3)} | orderId=${result?.orderID ?? 'unknown'}`,
-    );
-
-    return { success: true, orderId: result?.orderID };
+    const orderId = result?.orderID ?? result?.id ?? 'unknown';
+    log.info(`Live bet placed: ${direction} $${amount} @ ${price.toFixed(3)} | orderId=${orderId}`);
+    return { success: true, orderId };
   } catch (err: any) {
-    log.error(`Failed to place bet: ${err.message}`);
-    return { success: false, error: err.message };
+    log.error(`Failed to place bet: ${err?.message}`);
+    return { success: false, error: err?.message };
   }
 }
 
