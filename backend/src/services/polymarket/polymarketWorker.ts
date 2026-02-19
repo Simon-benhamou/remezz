@@ -8,6 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
+import { getLiveTradingConfig, placePolymarketBet } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -161,6 +162,13 @@ async function tick(prisma: PrismaClient): Promise<void> {
     // Use Chainlink price as "price to beat" (same source as Polymarket resolution)
     const startPrice = getBtcPrice(klines);
 
+    // Skip window if no price available (e.g. right after restart before feeds are ready)
+    if (startPrice === 0) {
+      log.warn('No price available yet (Chainlink + Binance both offline) — skipping window');
+      currentWindow = null as any;
+      return;
+    }
+
     currentWindow = {
       windowStart: start,
       windowEnd: end,
@@ -177,6 +185,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
       `New window ${new Date(start).toISOString()} → ${new Date(end).toISOString()} | startPrice=${startPrice.toFixed(2)} (${source})`,
     );
   }
+
+  // ── Guard: no window (price unavailable at startup) ──────────────────────
+  if (!currentWindow) return;
 
   // ── Update current price + elapsed ────────────────────────────────────────
   currentWindow.currentPrice = getBtcPrice(klines);
@@ -198,11 +209,13 @@ async function tick(prisma: PrismaClient): Promise<void> {
     );
 
     if (result) {
-      // Prediction meets threshold — fetch odds
+      // Prediction meets threshold — fetch odds + token IDs
       const slug = buildSlug(SYMBOL_SHORT, start);
       const odds = await fetchPolymarketOdds(slug);
       const entryOdds =
         result.direction === 'UP' ? odds.upPrice : odds.downPrice;
+      const tokenId =
+        result.direction === 'UP' ? odds.upTokenId : odds.downTokenId;
 
       currentWindow.prediction = result;
       currentWindow.entryOdds = entryOdds;
@@ -211,6 +224,26 @@ async function tick(prisma: PrismaClient): Promise<void> {
       log.info(
         `Prediction: ${result.direction} (score=${result.score.total}, conf=${result.confidence}) | odds=${entryOdds.toFixed(3)} | slug=${slug}`,
       );
+
+      // ── Live trading: place real bet if enabled ──────────────────────
+      const liveConfig = await getLiveTradingConfig(prisma);
+      if (liveConfig && tokenId) {
+        log.info(`LIVE MODE: placing $${liveConfig.amount} bet on ${result.direction}...`);
+        const betResult = await placePolymarketBet(
+          prisma,
+          result.direction,
+          tokenId,
+          liveConfig.amount,
+          entryOdds,
+        );
+        if (betResult.success) {
+          log.info(`LIVE BET OK: orderId=${betResult.orderId}`);
+        } else {
+          log.error(`LIVE BET FAILED: ${betResult.error}`);
+        }
+      } else if (liveConfig && !tokenId) {
+        log.warn('Live mode active but no token ID available for this market');
+      }
     } else {
       // Score below threshold — skip this window
       currentWindow.status = 'skipped';
