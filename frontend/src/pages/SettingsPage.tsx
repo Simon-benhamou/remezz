@@ -972,11 +972,8 @@ function PolymarketTab() {
   const [hasCredentials, setHasCredentials] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
-  // Credentials state
+  // Credentials state — only private key needed, API creds are auto-derived
   const [privateKey, setPrivateKey] = useState('');
-  const [pmApiKey, setPmApiKey] = useState('');
-  const [pmApiSecret, setPmApiSecret] = useState('');
-  const [pmPassphrase, setPmPassphrase] = useState('');
   const [savingCreds, setSavingCreds] = useState(false);
   const [showPrivateKey, setShowPrivateKey] = useState(false);
 
@@ -1001,24 +998,19 @@ function PolymarketTab() {
   }, []);
 
   const handleSaveCredentials = async () => {
-    if (!privateKey || !pmApiKey || !pmApiSecret || !pmPassphrase) {
-      toast.error('All 4 fields are required');
+    if (!privateKey) {
+      toast.error('Private key is required');
       return;
     }
     setSavingCreds(true);
     try {
-      await api.polymarket.saveCredentials({
-        privateKey,
-        apiKey: pmApiKey,
-        apiSecret: pmApiSecret,
-        apiPassphrase: pmPassphrase,
-      });
+      const result = await api.polymarket.saveCredentials(privateKey);
       setHasCredentials(true);
       setPrivateKey('');
-      setPmApiKey('');
-      setPmApiSecret('');
-      setPmPassphrase('');
-      toast.success('Polymarket credentials saved');
+      if (result.address) {
+        setValidationResult({ valid: true, address: result.address });
+      }
+      toast.success('Wallet connected — API credentials derived automatically');
     } catch (error: any) {
       toast.error(error?.response?.data?.error || 'Failed to save credentials');
     } finally {
@@ -1097,8 +1089,8 @@ function PolymarketTab() {
             Polymarket API Credentials
           </CardTitle>
           <CardDescription>
-            Enter your Polymarket CLOB API credentials for live trading.
-            Get them from your Polymarket account settings.
+            Enter your Polymarket wallet private key. The API credentials
+            (key, secret, passphrase) are derived automatically.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1160,43 +1152,13 @@ function PolymarketTab() {
                     {showPrivateKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs">API Key</Label>
-                <Input
-                  type="password"
-                  placeholder="API Key"
-                  value={pmApiKey}
-                  onChange={(e) => setPmApiKey(e.target.value)}
-                  className="font-mono text-xs"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label className="text-xs">API Secret</Label>
-                  <Input
-                    type="password"
-                    placeholder="API Secret"
-                    value={pmApiSecret}
-                    onChange={(e) => setPmApiSecret(e.target.value)}
-                    className="font-mono text-xs"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Passphrase</Label>
-                  <Input
-                    type="password"
-                    placeholder="Passphrase"
-                    value={pmPassphrase}
-                    onChange={(e) => setPmPassphrase(e.target.value)}
-                    className="font-mono text-xs"
-                  />
-                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Your Polymarket proxy wallet private key. API key, secret, and passphrase will be derived automatically.
+                </p>
               </div>
               <Button onClick={handleSaveCredentials} disabled={savingCreds}>
-                {savingCreds && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                <Key className="mr-2 h-4 w-4" />
-                Save Credentials
+                {savingCreds ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Key className="mr-2 h-4 w-4" />}
+                {savingCreds ? 'Deriving credentials...' : 'Connect Wallet'}
               </Button>
             </div>
           )}

@@ -85,17 +85,17 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
     }
   });
 
-  // PUT /credentials — save encrypted API credentials
+  // PUT /credentials — save wallet private key (API creds are auto-derived)
   router.put('/credentials', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const { privateKey, apiKey, apiSecret, apiPassphrase } = req.body;
-      if (!privateKey || !apiKey || !apiSecret || !apiPassphrase) {
-        return res.status(400).json({ error: 'All 4 fields required (privateKey, apiKey, apiSecret, apiPassphrase)' });
+      const { privateKey } = req.body;
+      if (!privateKey) {
+        return res.status(400).json({ error: 'Private key is required' });
       }
-      await savePolymarketCredentials(prisma, privateKey, apiKey, apiSecret, apiPassphrase);
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: 'Failed to save credentials' });
+      const result = await savePolymarketCredentials(prisma, privateKey);
+      res.json({ success: true, address: result.address });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to save credentials' });
     }
   });
 
