@@ -417,8 +417,12 @@ export const api = {
       },
     saveSettings: async (mode: 'virtual' | 'live', amount: number) =>
       (await client.put('/api/polymarket/settings', { mode, amount })).data,
-    saveCredentials: async (creds: { privateKey: string; apiKey: string; apiSecret: string; apiPassphrase: string }) =>
-      (await client.put('/api/polymarket/credentials', creds)).data,
+    saveCredentials: async (privateKey: string) =>
+      (await client.put('/api/polymarket/credentials', { privateKey })).data as {
+        success: boolean;
+        address?: string;
+        error?: string;
+      },
     deleteCredentials: async () =>
       (await client.delete('/api/polymarket/credentials')).data,
     validateCredentials: async () =>

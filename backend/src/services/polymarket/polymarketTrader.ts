@@ -2,11 +2,15 @@
  * Polymarket CLOB trading service.
  *
  * Handles:
- *  - HMAC L2 authentication headers
+ *  - L1 auth (EIP-712 wallet signature) to derive API credentials
+ *  - L2 auth (HMAC) for authenticated CLOB requests
  *  - EIP-712 order signing (CTF Exchange on Polygon)
  *  - Market buy order creation & submission
  *  - Balance checking
- *  - Credential validation
+ *
+ * User only provides their wallet private key — the API key, secret, and
+ * passphrase are derived automatically via the CLOB /auth/derive-api-key
+ * endpoint.
  *
  * Uses ethers v6 + native fetch — no @polymarket/clob-client dependency.
  */
@@ -26,6 +30,22 @@ const CHAIN_ID = 137; // Polygon
 
 // CTF Exchange contract (Neg-Risk variant used by 5-min crypto markets)
 const NEG_RISK_CTF_EXCHANGE = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
+
+// EIP-712 domain for L1 authentication (derive API keys)
+const L1_AUTH_DOMAIN = {
+  name: 'ClobAuthDomain',
+  version: '1',
+  chainId: CHAIN_ID,
+};
+
+const L1_AUTH_TYPES = {
+  ClobAuth: [
+    { name: 'address', type: 'address' },
+    { name: 'timestamp', type: 'string' },
+    { name: 'nonce', type: 'uint256' },
+    { name: 'message', type: 'string' },
+  ],
+};
 
 // EIP-712 domain for order signing
 const ORDER_DOMAIN = {
@@ -90,7 +110,59 @@ interface ClobCredentials {
   apiPassphrase: string;
 }
 
-// ─── HMAC Authentication ────────────────────────────────────────────────────
+// ─── L1 Authentication (wallet signature → derive API creds) ────────────────
+
+async function buildL1Headers(
+  wallet: ethers.Wallet,
+): Promise<Record<string, string>> {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = '0';
+
+  const signature = await wallet.signTypedData(L1_AUTH_DOMAIN, L1_AUTH_TYPES, {
+    address: wallet.address,
+    timestamp,
+    nonce,
+    message: 'This message attests that I control the given wallet',
+  });
+
+  return {
+    'POLY-ADDRESS': wallet.address,
+    'POLY-SIGNATURE': signature,
+    'POLY-TIMESTAMP': timestamp,
+    'POLY-NONCE': nonce,
+  };
+}
+
+/**
+ * Derive API credentials (key, secret, passphrase) from wallet private key.
+ * This calls the CLOB /auth/derive-api-key endpoint with L1 auth.
+ */
+async function deriveApiCredentials(
+  privateKey: string,
+): Promise<{ apiKey: string; secret: string; passphrase: string }> {
+  const wallet = new ethers.Wallet(privateKey);
+  const headers = await buildL1Headers(wallet);
+
+  const res = await fetch(`${CLOB_HOST}/auth/derive-api-key`, {
+    method: 'GET',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to derive API key (${res.status}): ${text}`);
+  }
+
+  const data = await res.json();
+  if (!data.apiKey || !data.secret || !data.passphrase) {
+    throw new Error('Incomplete credentials returned from Polymarket');
+  }
+
+  return { apiKey: data.apiKey, secret: data.secret, passphrase: data.passphrase };
+}
+
+// ─── L2 HMAC Authentication ────────────────────────────────────────────────
 
 function buildHmacHeaders(
   creds: ClobCredentials,
@@ -267,15 +339,22 @@ export async function savePolymarketConfig(
 }
 
 /**
- * Save encrypted Polymarket API credentials.
+ * Save private key and auto-derive API credentials from the CLOB API.
+ * The user only provides the wallet private key — everything else is derived.
  */
 export async function savePolymarketCredentials(
   prisma: PrismaClient,
   privateKey: string,
-  apiKey: string,
-  apiSecret: string,
-  apiPassphrase: string,
-): Promise<void> {
+): Promise<{ address: string }> {
+  // Validate private key
+  const wallet = new ethers.Wallet(privateKey);
+
+  // Derive API creds from Polymarket CLOB
+  log.info(`Deriving API credentials for address ${wallet.address}...`);
+  const { apiKey, secret, passphrase } = await deriveApiCredentials(privateKey);
+  log.info(`API credentials derived successfully for ${wallet.address}`);
+
+  // Store all 4 values encrypted
   await Promise.all([
     prisma.systemSetting.upsert({
       where: { key: SETTING_KEYS.PRIVATE_KEY },
@@ -289,15 +368,17 @@ export async function savePolymarketCredentials(
     }),
     prisma.systemSetting.upsert({
       where: { key: SETTING_KEYS.API_SECRET },
-      create: { key: SETTING_KEYS.API_SECRET, value: encryptApiKey(apiSecret) },
-      update: { value: encryptApiKey(apiSecret) },
+      create: { key: SETTING_KEYS.API_SECRET, value: encryptApiKey(secret) },
+      update: { value: encryptApiKey(secret) },
     }),
     prisma.systemSetting.upsert({
       where: { key: SETTING_KEYS.API_PASSPHRASE },
-      create: { key: SETTING_KEYS.API_PASSPHRASE, value: encryptApiKey(apiPassphrase) },
-      update: { value: encryptApiKey(apiPassphrase) },
+      create: { key: SETTING_KEYS.API_PASSPHRASE, value: encryptApiKey(passphrase) },
+      update: { value: encryptApiKey(passphrase) },
     }),
   ]);
+
+  return { address: wallet.address };
 }
 
 /**
