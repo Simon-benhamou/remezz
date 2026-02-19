@@ -2,7 +2,7 @@ import type { PrismaClient } from '.prisma/client';
 import { getBinanceWebSocket, getKlinesWithMeta } from '../binanceWebSocket.js';
 import { createLogger } from '../../utils/logger.js';
 import { computeFiveMinScore } from './fiveMinScorer.js';
-import { buildSlug, fetchPolymarketOdds } from './polymarketClient.js';
+import { buildSlug, fetchPolymarketOdds, fetchPolymarketResult } from './polymarketClient.js';
 import {
   getChainlinkBtcPrice,
   startChainlinkFeed,
@@ -41,6 +41,22 @@ let tickInProgress = false;
 // Prevent placing a new live bet before the previous window's order is fully handled.
 // Set to the windowStart when a bet is ATTEMPTED (not just on success) to prevent retry loops.
 let activeLiveBetWindow: number | null = null; // windowStart of the window with an active live bet
+
+// ─── Polymarket resolution verification ───────────────────────────────────────
+// Our preliminary resolution uses BTC price (start vs end). But Polymarket's oracle
+// (Chainlink) may give a different result. We verify against the Gamma API ~3min
+// after the window closes and correct the DB record if needed.
+
+interface PendingVerification {
+  windowStart: number;         // ms timestamp — DB key
+  slug: string;                // Polymarket slug for Gamma API lookup
+  predictionDirection: 'UP' | 'DOWN' | null; // what we predicted
+  entryOdds: number | null;    // needed to recompute simulatedPnl on correction
+  verifyAfterMs: number;       // don't check until this time (wait for oracle)
+  giveUpAfterMs: number;       // stop retrying after this time
+}
+
+const pendingVerifications: PendingVerification[] = [];
 
 /** Live state exposed to the frontend */
 let liveState: { window: WindowState | null; klines1m: Candle1m[] } = {
@@ -87,13 +103,14 @@ function getBtcPrice(klines: Candle1m[]): number {
 
 async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void> {
   const endPrice = w.currentPrice;
-  const actualResult: 'UP' | 'DOWN' = endPrice >= w.startPrice ? 'UP' : 'DOWN';
+  // Preliminary result from our own price sampling — will be verified against Polymarket oracle
+  const preliminaryResult: 'UP' | 'DOWN' = endPrice >= w.startPrice ? 'UP' : 'DOWN';
 
   let isCorrect: boolean | null = null;
   let simulatedPnl: number | null = null;
 
   if (w.prediction && w.entryOdds !== null) {
-    isCorrect = w.prediction.direction === actualResult;
+    isCorrect = w.prediction.direction === preliminaryResult;
     simulatedPnl = isCorrect
       ? 1 - w.entryOdds
       : -w.entryOdds;
@@ -105,6 +122,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
   }
 
   const skipped = w.status === 'skipped';
+  const slug = buildSlug(SYMBOL_SHORT, w.windowStart);
 
   try {
     await prisma.polymarketPrediction.create({
@@ -116,7 +134,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
         endPrice,
         prediction: w.prediction?.direction ?? null,
         confidence: w.prediction?.confidence ?? null,
-        actualResult,
+        actualResult: preliminaryResult,
         entryOdds: w.entryOdds,
         simulatedPnl,
         scoreBreakdown: w.prediction?.score
@@ -124,9 +142,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
           : undefined,
         isCorrect,
         skipped,
-        polymarketSlug: w.prediction
-          ? buildSlug(SYMBOL_SHORT, w.windowStart)
-          : null,
+        polymarketSlug: w.prediction ? slug : null,
       },
     });
   } catch (err: unknown) {
@@ -135,10 +151,99 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
   }
 
   const pnlStr = simulatedPnl !== null ? simulatedPnl.toFixed(3) : 'N/A';
-  const correctStr = isCorrect !== null ? (isCorrect ? 'WIN' : 'LOSS') : 'SKIP';
+  const correctStr = isCorrect !== null ? (isCorrect ? 'WIN (preliminary)' : 'LOSS (preliminary)') : 'SKIP';
   log.info(
-    `Resolved: actual=${actualResult} | ${correctStr} | pnl=${pnlStr} | ${w.startPrice.toFixed(2)} → ${endPrice.toFixed(2)}`,
+    `Resolved (preliminary): actual=${preliminaryResult} | ${correctStr} | pnl=${pnlStr} | ${w.startPrice.toFixed(2)} → ${endPrice.toFixed(2)}`,
   );
+
+  // Schedule Polymarket oracle verification in 3 minutes (time for Chainlink to publish)
+  // Skipped windows have no slug and don't need verification
+  if (!skipped) {
+    pendingVerifications.push({
+      windowStart: w.windowStart,
+      slug,
+      predictionDirection: w.prediction?.direction ?? null,
+      entryOdds: w.entryOdds,
+      verifyAfterMs: Date.now() + 3 * 60 * 1000,   // check after 3 min
+      giveUpAfterMs: Date.now() + 15 * 60 * 1000,  // give up after 15 min
+    });
+  }
+}
+
+// ─── Polymarket oracle verification ─────────────────────────────────────────
+
+/**
+ * Checks pending windows against the Polymarket Gamma API.
+ * Corrects the DB record if the real oracle result differs from our preliminary price comparison.
+ * Called on every tick — skips silently if nothing is due yet.
+ */
+async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
+  const now = Date.now();
+  const toRemove: number[] = [];
+
+  for (let i = 0; i < pendingVerifications.length; i++) {
+    const v = pendingVerifications[i];
+
+    // Not ready yet
+    if (now < v.verifyAfterMs) continue;
+
+    // Timed out — give up
+    if (now > v.giveUpAfterMs) {
+      log.warn(`Polymarket verification timed out for ${v.slug} — keeping preliminary result`);
+      toRemove.push(i);
+      continue;
+    }
+
+    try {
+      const oracleResult = await fetchPolymarketResult(v.slug);
+
+      if (oracleResult === null) {
+        // Not yet resolved — retry on next tick
+        continue;
+      }
+
+      // Compare to what we have in DB
+      const existing = await prisma.polymarketPrediction.findFirst({
+        where: { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT },
+        select: { actualResult: true, isCorrect: true },
+      });
+
+      if (!existing) {
+        toRemove.push(i);
+        continue;
+      }
+
+      if (existing.actualResult !== oracleResult) {
+        // Mismatch — update with Polymarket's real result
+        const isCorrect = v.predictionDirection ? v.predictionDirection === oracleResult : null;
+        const simulatedPnl =
+          isCorrect !== null && v.entryOdds !== null
+            ? isCorrect ? 1 - v.entryOdds : -v.entryOdds
+            : null;
+
+        await prisma.polymarketPrediction.updateMany({
+          where: { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT },
+          data: { actualResult: oracleResult, isCorrect, simulatedPnl },
+        });
+
+        log.warn(
+          `Oracle correction: ${v.slug} | preliminary=${existing.actualResult} → oracle=${oracleResult} | wasCorrect=${existing.isCorrect} → isCorrect=${isCorrect}`,
+        );
+      } else {
+        log.info(`Oracle confirmed: ${v.slug} → ${oracleResult} (matches preliminary)`);
+      }
+
+      toRemove.push(i);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`Oracle verification error for ${v.slug}: ${msg} — retrying`);
+    }
+  }
+
+  // Remove resolved/timed-out entries (iterate backwards to keep indices valid)
+  for (let i = toRemove.length - 1; i >= 0; i--) {
+    pendingVerifications.splice(toRemove[i], 1);
+  }
 }
 
 // ─── Core tick ────────────────────────────────────────────────────────────────
@@ -161,12 +266,14 @@ async function tick(prisma: PrismaClient): Promise<void> {
   const klines = getKlines1m();
 
   // ── Resolve previous window on new-window boundary ──────────────────────
-  // The old approach (resolve at WINDOW_MS - 500ms) had a race condition:
-  // with 1000ms poll interval, ~50% of ticks skip the 500ms resolution window.
-  // Fix: snapshot the previous window and resolve it when we detect a new one.
   if (pendingResolution) {
     await resolveWindow(pendingResolution, prisma);
     pendingResolution = null;
+  }
+
+  // ── Verify pending Polymarket oracle resolutions ─────────────────────────
+  if (pendingVerifications.length > 0) {
+    await verifyPendingResolutions(prisma);
   }
 
   // ── New window detection ──────────────────────────────────────────────────

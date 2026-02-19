@@ -12,6 +12,41 @@ export function buildSlug(symbol: string, windowStartMs: number): string {
 }
 
 /**
+ * Fetch the actual resolution result from Polymarket's oracle.
+ * Returns 'UP' or 'DOWN' when the market is resolved, null if still pending.
+ * A market is resolved when one outcome price = 1.0 and the other = 0.0.
+ */
+export async function fetchPolymarketResult(slug: string): Promise<'UP' | 'DOWN' | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/events?slug=${slug}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+
+    const events: unknown = await res.json();
+    if (!Array.isArray(events) || events.length === 0) return null;
+
+    const market = events[0]?.markets?.[0];
+    if (!market) return null;
+
+    const outcomes: string[] = JSON.parse(market.outcomes || '[]');
+    const prices: string[] = JSON.parse(market.outcomePrices || '[]');
+
+    // Resolved when one price rounds to 1.0 and the other to 0.0
+    for (let i = 0; i < outcomes.length; i++) {
+      const price = parseFloat(prices[i] ?? '0.5');
+      if (price >= 0.99) {
+        return outcomes[i].toLowerCase() === 'up' ? 'UP' : 'DOWN';
+      }
+    }
+
+    return null; // still live / not yet resolved
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fetch current odds from the Polymarket Gamma API for a given slug.
  * Returns neutral 50/50 odds on any error or missing data.
  */
