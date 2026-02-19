@@ -528,8 +528,8 @@ export default function PolymarketPage() {
         <KpiCard
           icon={DollarSign}
           label="Simulated P&L (today)"
-          value={`${todayPnl >= 0 ? '+' : ''}${todayPnl.toFixed(2)}`}
-          sub={`Cumulative: ${(stats?.cumulativePnl ?? 0) >= 0 ? '+' : ''}${(stats?.cumulativePnl ?? 0).toFixed(2)}`}
+          value={`${todayPnl >= 0 ? '+' : ''}${(todayPnl * 100).toFixed(1)}%`}
+          sub={`Cumulative: ${(stats?.cumulativePnl ?? 0) >= 0 ? '+' : ''}${((stats?.cumulativePnl ?? 0) * 100).toFixed(1)}%`}
           color={todayPnl >= 0 ? 'success' : 'destructive'}
         />
         <KpiCard
@@ -562,8 +562,8 @@ export default function PolymarketPage() {
         )}
       </div>
 
-      {/* History Table */}
-      <HistoryTable predictions={history?.predictions ?? []} />
+      {/* History Table — only show actual predictions, not skipped windows */}
+      <HistoryTable predictions={(history?.predictions ?? []).filter((p) => !p.skipped)} />
     </div>
   );
 }
