@@ -21,6 +21,11 @@
  *   shouldExitPosition() which gets fresh 15m candles every call)
  * - Exclude TRAIL_NFS_HIGH (already exits at trailing stop price — can only worsen)
  * - Exclude TRAIL_PROACTIVE (already handled by 15m MODE B)
+ *
+ * V5.117c: Only-improve guard:
+ * - Added only-improve guard: if replay PnL < original 15m PnL, keep original.
+ *   Prevents the replay from ever worsening a trade.
+ * - Thresholds remain 35/20 (matching live config in momentumConfig.ts).
  */
 
 import { MomentumConfig } from '../../strategies/momentumSimple.js';
@@ -501,6 +506,7 @@ export async function postProcess1mTrailingExits(
   }
 
   let replayedCount = 0;
+  let skippedWorse = 0;
 
   // V5.114: Save original PnLs BEFORE replaying — needed for incremental delta approach.
   // recalculateSummary must NOT rebuild the capital chain from scratch because trades
@@ -530,6 +536,14 @@ export async function postProcess1mTrailingExits(
         const replay = replayTradeAt1m(trade, candles1m, exhaustionCalc);
 
         if (replay.wasReplayed) {
+          // V5.117c: Only-improve guard — if replay gives worse PnL, keep original.
+          // The replay is meant to get BETTER fills via STOP_MARKET at trailing price.
+          // If the exhaustion fires too early on a temporary dip, the result is worse.
+          if (replay.netPnlUsd < trade.netPnlUsd) {
+            skippedWorse++;
+            continue;
+          }
+
           const idx = tradeIndex.get(trade.id);
           if (idx === undefined) continue;
 
@@ -556,7 +570,7 @@ export async function postProcess1mTrailingExits(
     }
   }
 
-  console.log(`[Backtest] 1m post-processing: ${replayedCount} trades replayed, ${fetcher.requestCount} API requests`);
+  console.log(`[Backtest] 1m post-processing: ${replayedCount} trades replayed, ${skippedWorse} skipped (worse PnL), ${fetcher.requestCount} API requests`);
 
   if (replayedCount === 0) {
     return result;
