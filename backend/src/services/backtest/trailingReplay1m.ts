@@ -2,25 +2,32 @@
  * V5.113: 1m Post-Processing for Backtest Trailing Exits
  *
  * The backtest runs on 15m candles, so all trailing exits snap to 15m boundaries.
- * In live, the RT handler monitors 1m closes with 2-candle confirmation.
+ * In live, the RT handler monitors 1m closes and the exhaustion detector places
+ * STOP_MARKET orders that fill on any wick touch at the trailing price.
  *
  * This module replays trailing exits at 1m resolution AFTER the 15m backtest completes:
  *   Pass 1: runBacktestComputation() on worker thread (15m, fast, 0 API)
  *   Pass 2: postProcess1mTrailingExits() on main thread
  *           → fetch 1m candles per trailing trade window
- *           → replay trailing with 2-candle 1m close confirmation (matches live)
+ *           → replay exhaustion STOP_MARKET + 2-candle close confirmation
  *           → adjust exitPrice, exitTime, holdMinutes, PnL
  *           → recalculate summary/equity/drawdown
  *
- * V5.116: Removed exhaustion STOP_MARKET from replay — the 15m backtest already
- * handles exhaustion via MODE B on 15m candles. Running exhaust on 1m was too
- * aggressive (1m noise → score 35 trivially reached → premature STOP fills that
- * killed profit and caused 173% DD). Now uses 2-candle 1m close confirmation
- * matching live's REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES: 2.
+ * V5.116b: Matching the validated analyze-exhaustion-1m.ts test logic exactly:
+ * - Exhaust STOP_MARKET fills at trailing stop price (better than close)
+ * - 2-candle 1m close confirmation as fallback (matching live RT handler)
+ * - Fixed trailing config (NO volatility adaptation — matches the test that
+ *   validated +$33K improvement. Vol adaptation caused divergence from 15m
+ *   backtest's per-candle dynamic regime, leading to wrong trailing stops.)
+ * - Exclude TRAIL_NFS_HIGH (already exits at trailing stop price — can only worsen)
+ * - Exclude TRAIL_PROACTIVE (already handled by 15m MODE B)
  */
 
 import { MomentumConfig } from '../../strategies/momentumSimple.js';
-import { determineVolatilityRegime } from '../../strategies/indicators/technicalIndicators.js';
+import {
+  MomentumExhaustionCalculator,
+  type ExhaustionCandle,
+} from '../momentumExhaustion.js';
 import { globalRestCircuitBreaker } from '../globalRestCircuitBreaker.js';
 import { ipWeightTracker } from '../ipWeightTracker.js';
 import type { BacktestResult, BacktestTrade, MonthlyStats } from '../backtestService.js';
@@ -153,112 +160,49 @@ class Candle1mFetcher {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TRAILING STOP HELPERS (mirrors live logic from MomentumConfig.EXIT)
-// V5.115: Added volatility adaptation to match shouldExitPosition() parity
+// TRAILING STOP HELPERS — matches analyze-exhaustion-1m.ts (validated test)
+//
+// V5.116b: Uses FIXED trailing config from MomentumConfig.EXIT (no volatility
+// adaptation). The validated test script uses fixed distances and showed +$33K
+// improvement. Adding vol adaptation caused divergence: the replay computed a
+// single static regime from all 1m candles, while the 15m backtest uses a
+// dynamic per-candle regime via shouldExitPosition(). This mismatch made the
+// replay's trailing stops wrong, causing premature exits.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const CANDLE_15M_MS = 15 * 60 * 1000;
+// Fixed trailing config from MomentumConfig.EXIT (matches analyze-exhaustion-1m.ts)
+const TRAILING = {
+  ACTIVATION_PCT: MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT,
+  DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_DISTANCE_PCT,
+  WIDEN_AT_PCT: MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT,
+  WIDE_DISTANCE_PCT: MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT,
+  PROGRESSIVE_ENABLED: (MomentumConfig.EXIT as any).TRAILING_PROGRESSIVE_ENABLED ?? true,
+  TIER2_AT_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER2_AT_PCT ?? 4.0,
+  TIER2_DISTANCE_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER2_DISTANCE_PCT ?? 1.5,
+  TIER3_AT_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER3_AT_PCT ?? 6.0,
+  TIER3_DISTANCE_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER3_DISTANCE_PCT ?? 2.5,
+};
 
-// Aggregate 1m candles into 15m buckets for volatility regime computation
-function aggregate1mTo15m(candles1m: Candle1m[]): { high: number; low: number; close: number }[] {
-  const buckets = new Map<number, Candle1m[]>();
-  for (const c of candles1m) {
-    const bucket = Math.floor(c.timestamp / CANDLE_15M_MS) * CANDLE_15M_MS;
-    const arr = buckets.get(bucket);
-    if (arr) arr.push(c); else buckets.set(bucket, [c]);
-  }
-  const result: { high: number; low: number; close: number }[] = [];
-  for (const [, cs] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
-    if (cs.length < 10) continue; // skip incomplete buckets (need ~15 candles)
-    result.push({
-      high: Math.max(...cs.map(c => c.high)),
-      low: Math.min(...cs.map(c => c.low)),
-      close: cs[cs.length - 1].close,
-    });
-  }
-  return result;
-}
-
-// Compute volatility multiplier matching shouldExitPosition() (exitLogic.ts:405-421)
-function computeVolMultiplier(candles1m: Candle1m[]): { multiplier: number; baseDistance: number; activation: number } {
-  const EXIT = MomentumConfig.EXIT;
-  const volAdaptEnabled = (EXIT as any).TRAILING_VOL_ADAPT_ENABLED ?? false;
-
-  // Aggregate 1m → 15m for determineVolatilityRegime (needs ATR-14 on 15m)
-  const candles15m = aggregate1mTo15m(candles1m);
-  const volRegime = candles15m.length >= 14
-    ? determineVolatilityRegime(candles15m)
-    : { regime: 'MEDIUM' as const, trailingDistance: EXIT.TRAILING_DISTANCE_PCT, trailingActivation: EXIT.TRAILING_ACTIVATION_PCT, atrPct: null, reason: 'insufficient_data' };
-
-  let multiplier = 1.0;
-  if (volAdaptEnabled) {
-    const lowMult = (EXIT as any).TRAILING_VOL_LOW_MULT ?? 0.8;
-    const medMult = (EXIT as any).TRAILING_VOL_MED_MULT ?? 1.0;
-    const highMult = (EXIT as any).TRAILING_VOL_HIGH_MULT ?? 1.6;
-    if (volRegime.regime === 'HIGH') multiplier = highMult;
-    else if (volRegime.regime === 'LOW') multiplier = lowMult;
-    else multiplier = medMult;
-  }
-
-  return {
-    multiplier,
-    baseDistance: volRegime.trailingDistance,
-    activation: volRegime.trailingActivation,
-  };
-}
-
-interface TrailingConfig {
-  ACTIVATION_PCT: number;
-  DISTANCE_PCT: number;
-  WIDEN_AT_PCT: number;
-  WIDE_DISTANCE_PCT: number;
-  PROGRESSIVE_ENABLED: boolean;
-  TIER2_AT_PCT: number;
-  TIER2_DISTANCE_PCT: number;
-  TIER3_AT_PCT: number;
-  TIER3_DISTANCE_PCT: number;
-  VOL_MULTIPLIER: number;
-}
-
-function getTrailingConfig(vol?: { baseDistance: number; activation: number; multiplier: number }): TrailingConfig {
-  const EXIT = MomentumConfig.EXIT;
-  return {
-    ACTIVATION_PCT: vol?.activation ?? EXIT.TRAILING_ACTIVATION_PCT,
-    DISTANCE_PCT: vol?.baseDistance ?? EXIT.TRAILING_DISTANCE_PCT,
-    WIDEN_AT_PCT: EXIT.TRAILING_WIDEN_AT_PCT,
-    WIDE_DISTANCE_PCT: EXIT.TRAILING_WIDE_DISTANCE_PCT,
-    PROGRESSIVE_ENABLED: (EXIT as any).TRAILING_PROGRESSIVE_ENABLED ?? true,
-    TIER2_AT_PCT: (EXIT as any).TRAILING_TIER2_AT_PCT ?? 4.0,
-    TIER2_DISTANCE_PCT: (EXIT as any).TRAILING_TIER2_DISTANCE_PCT ?? 1.5,
-    TIER3_AT_PCT: (EXIT as any).TRAILING_TIER3_AT_PCT ?? 6.0,
-    TIER3_DISTANCE_PCT: (EXIT as any).TRAILING_TIER3_DISTANCE_PCT ?? 2.5,
-    VOL_MULTIPLIER: vol?.multiplier ?? 1.0,
-  };
-}
-
-function getTrailingDistance(hwmPct: number, cfg: TrailingConfig): number {
-  const m = cfg.VOL_MULTIPLIER;
-  if (cfg.PROGRESSIVE_ENABLED) {
-    if (hwmPct >= cfg.TIER3_AT_PCT) return cfg.TIER3_DISTANCE_PCT * m;
-    if (hwmPct >= cfg.TIER2_AT_PCT) return cfg.TIER2_DISTANCE_PCT * m;
-    if (hwmPct >= cfg.WIDEN_AT_PCT) return cfg.WIDE_DISTANCE_PCT * m;
+function getTrailingDistance(hwmPct: number): number {
+  if (TRAILING.PROGRESSIVE_ENABLED) {
+    if (hwmPct >= TRAILING.TIER3_AT_PCT) return TRAILING.TIER3_DISTANCE_PCT;
+    if (hwmPct >= TRAILING.TIER2_AT_PCT) return TRAILING.TIER2_DISTANCE_PCT;
+    if (hwmPct >= TRAILING.WIDEN_AT_PCT) return TRAILING.WIDE_DISTANCE_PCT;
   } else {
-    if (hwmPct >= cfg.WIDEN_AT_PCT) return cfg.WIDE_DISTANCE_PCT * m;
+    if (hwmPct >= TRAILING.WIDEN_AT_PCT) return TRAILING.WIDE_DISTANCE_PCT;
   }
-  // Base distance already adapted by volatility regime — no additional multiplier
-  return cfg.DISTANCE_PCT;
+  return TRAILING.DISTANCE_PCT;
 }
 
 function calcTrailingStop(
   side: 'long' | 'short',
   entryPrice: number,
   hwm: number,
-  cfg: TrailingConfig,
 ): { stopPrice: number } {
   const hwmPct = side === 'long'
     ? ((hwm - entryPrice) / entryPrice) * 100
     : ((entryPrice - hwm) / entryPrice) * 100;
-  const distancePct = getTrailingDistance(hwmPct, cfg);
+  const distancePct = getTrailingDistance(hwmPct);
   const stopPrice = side === 'long'
     ? hwm * (1 - distancePct / 100)
     : hwm * (1 + distancePct / 100);
@@ -308,19 +252,24 @@ function calculatePnl(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// B) replayTradeAt1m — V5.116: 2-candle 1m close confirmation
+// B) replayTradeAt1m — V5.116b: matches analyze-exhaustion-1m.ts exactly
 //
-// Matches live behavior (realtimeExitHandler.ts kline_1m_close path):
-//   1. Update HWM on every 1m candle (high/low)
-//   2. Check trailing activation on 1m close
-//   3. On close breach: increment breachCount
-//   4. On close recovery: reset breachCount to 0
-//   5. Exit when breachCount >= 2 (REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES)
+// Two exit mechanisms (whichever fires first):
 //
-// Exhaustion STOP_MARKET removed: the 15m backtest already handles exhaustion
-// via MODE B on 15m candles. Running exhaust on 1m data was too aggressive —
-// 1m noise (noisy ROC, volume spikes, small bodies) trivially reaches score 35,
-// causing premature STOP fills that destroyed profit.
+// 1. EXHAUST STOP_MARKET (Approach A from the test):
+//    - Exhaustion scoring on every 1m candle after trailing activates
+//    - Score >= threshold → place STOP at trailing price
+//    - STOP fills on first wick touch → exit at trailing stop price
+//    - This gives BETTER fill than close (trailing > close at breach)
+//    - Score < cancel threshold → cancel STOP (hysteresis)
+//
+// 2. 2-CANDLE CLOSE CONFIRMATION (fallback, matches live RT handler):
+//    - Check trailing breach on every 1m close
+//    - 2 consecutive closes below stop → exit at close price
+//    - Also check at 15m boundaries (same as 15m backtest)
+//
+// The exhaust STOP gives better fills (+$33K validated in test). The 2-candle
+// confirmation is the safety net when exhaust never triggers.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const CONFIRM_CANDLES = 2; // Matches live: REALTIME_APP_EXIT_KLINE_CONFIRM_CANDLES
@@ -328,42 +277,82 @@ const CONFIRM_CANDLES = 2; // Matches live: REALTIME_APP_EXIT_KLINE_CONFIRM_CAND
 function replayTradeAt1m(
   trade: BacktestTrade,
   candles1m: Candle1m[],
+  exhaustionCalc: MomentumExhaustionCalculator,
 ): ReplayResult {
   const side = trade.side;
   const entryPrice = trade.entryPrice;
   const entryTs = new Date(trade.entryTime).getTime();
 
-  // V5.115: Compute volatility regime from 1m candles (aggregated to 15m)
-  // Mirrors shouldExitPosition() which uses determineVolatilityRegime + volMultiplier
-  const vol = computeVolMultiplier(candles1m);
-  const cfg = getTrailingConfig(vol);
-
   let hwm = entryPrice;
   let trailingActive = false;
-  let breachCount = 0; // V5.116: consecutive 1m closes below trailing stop
+  let breachCount = 0;
+
+  // Exhaustion state (matches test script exactly)
+  let exhaustionStopActive = false;
+  let exhaustionStopPrice = 0;
+  const recentCandles: ExhaustionCandle[] = [];
 
   const tradeCandles = candles1m.filter(c => c.timestamp >= entryTs);
 
   for (const c of tradeCandles) {
-    // STEP 1: Update HWM from 1m candle extremes (matches live kline high/low updates)
+    // STEP 1: Check STOP_MARKET fill (exchange-level: triggers on wick)
+    if (exhaustionStopActive && exhaustionStopPrice > 0) {
+      const stopHit = side === 'long'
+        ? c.low <= exhaustionStopPrice
+        : c.high >= exhaustionStopPrice;
+
+      if (stopHit) {
+        const holdMinutes = (c.timestamp - entryTs) / 60000;
+        const pnl = calculatePnl(entryPrice, exhaustionStopPrice, side, trade.marginUsd, trade.leverage, holdMinutes);
+        return {
+          wasReplayed: true,
+          exitPrice: exhaustionStopPrice,
+          exitTs: c.timestamp,
+          holdMinutes,
+          ...pnl,
+          exitReason: trade.exitReason, // Keep original family, 1m just refines timing
+        };
+      }
+    }
+
+    // STEP 2: Update HWM
     hwm = side === 'long' ? Math.max(hwm, c.high) : Math.min(hwm, c.low);
 
-    // STEP 2: Check trailing activation on 1m close
+    // STEP 3: Check trailing activation
     const pnlPct = side === 'long'
       ? ((c.close - entryPrice) / entryPrice) * 100
       : ((entryPrice - c.close) / entryPrice) * 100;
 
-    if (!trailingActive && pnlPct >= cfg.ACTIVATION_PCT) {
+    if (!trailingActive && pnlPct >= TRAILING.ACTIVATION_PCT) {
       trailingActive = true;
     }
     if (!trailingActive) continue;
 
-    // STEP 3: Compute trailing stop (progressive tiers + vol multiplier)
-    const { stopPrice } = calcTrailingStop(side, entryPrice, hwm, cfg);
+    // STEP 4: Compute trailing stop (fixed config, no vol adaptation)
+    const { stopPrice } = calcTrailingStop(side, entryPrice, hwm);
 
-    // STEP 4: Check 1m close breach with 2-candle confirmation
-    // Matches live: realtimeExitHandler checks every closed 1m kline,
-    // requires CONFIRM_CANDLES consecutive closes to exit.
+    // STEP 5: Exhaustion scoring + STOP_MARKET placement/cancel
+    if (exhaustionStopActive) {
+      exhaustionStopPrice = stopPrice; // Follow trailing as HWM advances
+    }
+
+    recentCandles.push({
+      timestamp: c.timestamp, open: c.open, high: c.high,
+      low: c.low, close: c.close, volume: c.volume,
+    });
+    if (recentCandles.length > 25) recentCandles.shift();
+
+    const result = exhaustionCalc.calculate(recentCandles, side, stopPrice, c.close);
+
+    if (result.shouldPlaceStop && !exhaustionStopActive) {
+      exhaustionStopActive = true;
+      exhaustionStopPrice = stopPrice;
+    } else if (exhaustionStopActive && result.score < exhaustionCalc.getConfig().CANCEL_THRESHOLD) {
+      exhaustionStopActive = false;
+      exhaustionStopPrice = 0;
+    }
+
+    // STEP 6: 2-candle close confirmation (fallback when exhaust doesn't fire)
     const closeBreached = side === 'long'
       ? c.close <= stopPrice
       : c.close >= stopPrice;
@@ -371,7 +360,6 @@ function replayTradeAt1m(
     if (closeBreached) {
       breachCount++;
       if (breachCount >= CONFIRM_CANDLES) {
-        // Confirmed trailing breach — exit at confirming candle's close
         const holdMinutes = (c.timestamp - entryTs) / 60000;
         const pnl = calculatePnl(entryPrice, c.close, side, trade.marginUsd, trade.leverage, holdMinutes);
         return {
@@ -380,12 +368,10 @@ function replayTradeAt1m(
           exitTs: c.timestamp,
           holdMinutes,
           ...pnl,
-          exitReason: trade.exitReason, // Keep original family, 1m just refines timing
+          exitReason: trade.exitReason,
         };
       }
     } else {
-      // Close recovered above trailing stop — reset counter
-      // Matches live: trailingBreached: false → reset breach counter
       breachCount = 0;
     }
   }
@@ -412,15 +398,17 @@ export async function postProcess1mTrailingExits(
   result: BacktestResult,
   exchange: any,
 ): Promise<BacktestResult> {
-  // V5.116: Filter trailing trades for replay
-  // - Include: TRAIL, TRAIL_NFS_HIGH, TRAIL_NFS_MED, TRAIL_NFS_LOW (close-based, benefit from 1m refinement)
+  // V5.116b: Filter trailing trades for replay
+  // - Include: TRAIL, TRAIL_NFS_MED, TRAIL_NFS_LOW (exit at close → can improve with STOP at trailing price)
   // - Exclude: TRAIL_RT, TRAIL_EXCHANGE (live-only mechanisms)
-  // - Exclude: TRAIL_PROACTIVE (already handled by 15m backtest MODE B exhaustion on 15m candles)
+  // - Exclude: TRAIL_PROACTIVE (already handled by 15m backtest MODE B)
+  // - Exclude: TRAIL_NFS_HIGH (already exits at trailing stop price — replay can only worsen)
   const trailingTrades = result.trades.filter(t =>
     t.exitReason.startsWith('TRAIL') &&
     t.exitReason !== 'TRAIL_RT' &&
     t.exitReason !== 'TRAIL_EXCHANGE' &&
-    t.exitReason !== 'TRAIL_PROACTIVE'
+    t.exitReason !== 'TRAIL_PROACTIVE' &&
+    t.exitReason !== 'TRAIL_NFS_HIGH'
   );
 
   if (trailingTrades.length === 0) {
@@ -431,6 +419,11 @@ export async function postProcess1mTrailingExits(
   console.log(`[Backtest] 1m post-processing: ${trailingTrades.length} trailing trades to replay...`);
 
   const fetcher = new Candle1mFetcher(exchange);
+  const exhaustionCalc = new MomentumExhaustionCalculator({
+    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 35,
+    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 20,
+    MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
+  });
 
   // Group by symbol, sort by entryTime (cache-friendly fetching)
   const bySymbol: Record<string, BacktestTrade[]> = {};
@@ -473,7 +466,7 @@ export async function postProcess1mTrailingExits(
 
         if (candles1m.length === 0) continue;
 
-        const replay = replayTradeAt1m(trade, candles1m);
+        const replay = replayTradeAt1m(trade, candles1m, exhaustionCalc);
 
         if (replay.wasReplayed) {
           const idx = tradeIndex.get(trade.id);
