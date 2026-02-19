@@ -84,6 +84,22 @@ const FEE_RATE_BPS = 0;
 // USDC has 6 decimals on Polygon
 const USDC_DECIMALS = 6;
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Normalize a private key: trim whitespace, ensure 0x prefix, validate hex.
+ * Throws if the result is not a valid 32-byte hex key.
+ */
+function normalizePrivateKey(raw: string): string {
+  let key = raw.trim();
+  if (!key.startsWith('0x')) key = '0x' + key;
+  // Must be 0x + 64 hex chars
+  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
+    throw new Error('Invalid private key format (expected 32-byte hex string)');
+  }
+  return key;
+}
+
 // ─── Settings keys ──────────────────────────────────────────────────────────
 
 const SETTING_KEYS = {
@@ -105,6 +121,7 @@ export interface PolymarketConfig {
 
 interface ClobCredentials {
   privateKey: string;
+  address: string; // wallet address derived from privateKey (cached)
   apiKey: string;
   apiSecret: string;
   apiPassphrase: string;
@@ -182,10 +199,8 @@ function buildHmacHeaders(
   hmac.update(message);
   const signature = hmac.digest('base64');
 
-  const wallet = new ethers.Wallet(creds.privateKey);
-
   return {
-    'POLY-ADDRESS': wallet.address,
+    'POLY-ADDRESS': creds.address,
     'POLY-SIGNATURE': signature,
     'POLY-TIMESTAMP': timestamp,
     'POLY-NONCE': nonce,
@@ -344,9 +359,10 @@ export async function savePolymarketConfig(
  */
 export async function savePolymarketCredentials(
   prisma: PrismaClient,
-  privateKey: string,
+  rawPrivateKey: string,
 ): Promise<{ address: string }> {
-  // Validate private key
+  // Normalize & validate private key
+  const privateKey = normalizePrivateKey(rawPrivateKey);
   const wallet = new ethers.Wallet(privateKey);
 
   // Derive API creds from Polymarket CLOB
@@ -354,27 +370,40 @@ export async function savePolymarketCredentials(
   const { apiKey, secret, passphrase } = await deriveApiCredentials(privateKey);
   log.info(`API credentials derived successfully for ${wallet.address}`);
 
+  // Encrypt all 4 values (compute once so we can verify round-trip)
+  const encryptedPk = encryptApiKey(privateKey);
+  const encryptedApiKey = encryptApiKey(apiKey);
+  const encryptedSecret = encryptApiKey(secret);
+  const encryptedPassphrase = encryptApiKey(passphrase);
+
+  // Verify encryption round-trip before storing
+  const roundTrip = decryptApiKey(encryptedPk);
+  if (roundTrip !== privateKey) {
+    log.error(`Encryption round-trip FAILED: input length=${privateKey.length}, output length=${roundTrip.length}`);
+    throw new Error('Encryption round-trip verification failed — check ENCRYPTION_SALT config');
+  }
+
   // Store all 4 values encrypted
   await Promise.all([
     prisma.systemSetting.upsert({
       where: { key: SETTING_KEYS.PRIVATE_KEY },
-      create: { key: SETTING_KEYS.PRIVATE_KEY, value: encryptApiKey(privateKey) },
-      update: { value: encryptApiKey(privateKey) },
+      create: { key: SETTING_KEYS.PRIVATE_KEY, value: encryptedPk },
+      update: { value: encryptedPk },
     }),
     prisma.systemSetting.upsert({
       where: { key: SETTING_KEYS.API_KEY },
-      create: { key: SETTING_KEYS.API_KEY, value: encryptApiKey(apiKey) },
-      update: { value: encryptApiKey(apiKey) },
+      create: { key: SETTING_KEYS.API_KEY, value: encryptedApiKey },
+      update: { value: encryptedApiKey },
     }),
     prisma.systemSetting.upsert({
       where: { key: SETTING_KEYS.API_SECRET },
-      create: { key: SETTING_KEYS.API_SECRET, value: encryptApiKey(secret) },
-      update: { value: encryptApiKey(secret) },
+      create: { key: SETTING_KEYS.API_SECRET, value: encryptedSecret },
+      update: { value: encryptedSecret },
     }),
     prisma.systemSetting.upsert({
       where: { key: SETTING_KEYS.API_PASSPHRASE },
-      create: { key: SETTING_KEYS.API_PASSPHRASE, value: encryptApiKey(passphrase) },
-      update: { value: encryptApiKey(passphrase) },
+      create: { key: SETTING_KEYS.API_PASSPHRASE, value: encryptedPassphrase },
+      update: { value: encryptedPassphrase },
     }),
   ]);
 
@@ -435,14 +464,22 @@ async function loadCredentials(
   if (!encPk || !encKey || !encSecret || !encPass) return null;
 
   try {
+    const decryptedPk = decryptApiKey(encPk);
+    const pk = normalizePrivateKey(decryptedPk);
+
+    // Verify private key actually works with ethers before returning
+    const wallet = new ethers.Wallet(pk);
+    log.debug(`Credentials loaded OK — address=${wallet.address}`);
+
     return {
-      privateKey: decryptApiKey(encPk),
-      apiKey: decryptApiKey(encKey),
-      apiSecret: decryptApiKey(encSecret),
-      apiPassphrase: decryptApiKey(encPass),
+      privateKey: pk,
+      address: wallet.address,
+      apiKey: decryptApiKey(encKey).trim(),
+      apiSecret: decryptApiKey(encSecret).trim(),
+      apiPassphrase: decryptApiKey(encPass).trim(),
     };
   } catch (err) {
-    log.error(`Failed to decrypt Polymarket credentials: ${err}`);
+    log.error(`Failed to load Polymarket credentials: ${err}`);
     return null;
   }
 }
@@ -457,13 +494,10 @@ export async function validatePolymarketCredentials(
   if (!creds) return { valid: false, error: 'No credentials configured' };
 
   try {
-    // Validate the private key produces a valid address
-    const wallet = new ethers.Wallet(creds.privateKey);
-
     // Test API auth by fetching API keys list
     await clobGet('/auth/api-keys', creds);
 
-    return { valid: true, address: wallet.address };
+    return { valid: true, address: creds.address };
   } catch (err: any) {
     return { valid: false, error: err.message || 'Validation failed' };
   }
@@ -506,8 +540,9 @@ export async function placePolymarketBet(
   if (!creds) return { success: false, error: 'No credentials' };
 
   try {
-    const wallet = new ethers.Wallet(creds.privateKey);
-    const signedOrder = await createSignedOrder(wallet, tokenId, amount, price);
+    // Wallet needed for EIP-712 order signing — already validated in loadCredentials
+    const signingWallet = new ethers.Wallet(creds.privateKey);
+    const signedOrder = await createSignedOrder(signingWallet, tokenId, amount, price);
 
     const orderPayload = {
       order: {
@@ -525,7 +560,7 @@ export async function placePolymarketBet(
         signatureType: signedOrder.signatureType,
         signature: signedOrder.signature,
       },
-      owner: wallet.address,
+      owner: creds.address,
       orderType: 'FOK', // Fill-or-Kill for market orders
     };
 
