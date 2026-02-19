@@ -553,3 +553,15 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Fix 2**: Added `aggregate1mTo15m()` to bucket 1m candles into 15m for `determineVolatilityRegime()`. `computeVolMultiplier()` computes regime + multiplier. `getTrailingConfig()` accepts vol params. `getTrailingDistance()` applies `VOL_MULTIPLIER` to progressive tiers (matching exitLogic.ts:423-446). Falls back to MEDIUM regime if < 14 15m candles available.
   - **Also fixed**: Replayed trades now update `t.month` and `t.day` fields when exitTime changes (were stale).
   - **Files**: `services/backtest/trailingReplay1m.ts`
+
+- V5.117: Full live-parity 1m replay + parity audit fixes:
+  - **Problem 1 (Vol adaptation was static)**: V5.115 computed a SINGLE static vol regime from ALL 1m candles aggregated to 15m. Live's `shouldExitPosition()` recomputes `determineVolatilityRegime()` dynamically every call with the latest 15m candles. This mismatch caused wrong trailing stops (single regime ≠ dynamic regime), leading to 173% DD.
+  - **Fix 1**: Replay now aggregates 1m→15m incrementally. At each 15m boundary, completes the current bucket, adds to 15m buffer, recomputes vol regime. Matches live's dynamic per-call behavior. Extended warmup from 25min to 4h for ATR-14 (14×15m). Zero extra API cost (cache + pure computation).
+  - **Problem 2 (Test didn't match live)**: `analyze-exhaustion-1m.ts` used fixed trailing config with no vol adaptation. Results (+$33K) were based on tighter stops than live would use in HIGH vol markets. Also excluded TRAIL_NFS_HIGH and added 2-candle close confirmation to match live RT handler.
+  - **Fix 2**: Test updated with same dynamic vol adaptation, TRAIL_NFS_HIGH exclusion, 4h warmup.
+  - **Problem 3 (Parity audit: inconsistent fallback defaults)**: Exhaustion threshold fallbacks were 65/45 in `backtestService.ts` and `realtimeExitHandler.ts` but config defines 35/20. `TRAILING_VOL_HIGH_MULT` fallback was 1.5 in exitLogic.ts but config defines 1.6. Never reached at runtime (config IS defined), but dangerous if config fields are ever removed.
+  - **Fix 3**: All fallback defaults now match config: exhaustion 35/20 everywhere, vol high mult 1.6 everywhere.
+  - **Replay mechanisms** (2 exit paths, whichever fires first): (1) Exhaustion STOP_MARKET at trailing price on wick touch, (2) 2-candle 1m close confirmation as fallback.
+  - **Excluded from replay**: TRAIL_NFS_HIGH (already at optimal trailing stop price), TRAIL_PROACTIVE (already handled by 15m MODE B).
+  - **Files**: `services/backtest/trailingReplay1m.ts`, `scripts/analyze-exhaustion-1m.ts`, `strategies/exits/exitLogic.ts`, `strategies/realtimeExitHandler.ts`, `services/backtestService.ts`, `scripts/simulate-xrp-vol-adaptive.ts`
+  - **Parity impact**: Closes vol adaptation gap between replay and live. Closes fallback default inconsistencies across all code paths.

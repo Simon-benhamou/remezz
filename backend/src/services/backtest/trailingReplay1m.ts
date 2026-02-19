@@ -204,7 +204,7 @@ function computeVolState(candles15m: { high: number; low: number; close: number 
   if (volAdaptEnabled) {
     const lowMult = (MomentumConfig.EXIT as any).TRAILING_VOL_LOW_MULT ?? 0.8;
     const medMult = (MomentumConfig.EXIT as any).TRAILING_VOL_MED_MULT ?? 1.0;
-    const highMult = (MomentumConfig.EXIT as any).TRAILING_VOL_HIGH_MULT ?? 1.5;
+    const highMult = (MomentumConfig.EXIT as any).TRAILING_VOL_HIGH_MULT ?? 1.6;
     if (volRegime.regime === 'HIGH') volMultiplier = highMult;
     else if (volRegime.regime === 'LOW') volMultiplier = lowMult;
     else volMultiplier = medMult;
