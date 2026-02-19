@@ -521,9 +521,9 @@ export default function PolymarketPage() {
         <KpiCard
           icon={Trophy}
           label="Win Rate (today)"
-          value={`${(todayWinRate * 100).toFixed(1)}%`}
+          value={`${todayWinRate.toFixed(1)}%`}
           sub={`${stats?.todayWins ?? 0}W / ${stats?.todayLosses ?? 0}L`}
-          color={todayWinRate >= 0.5 ? 'success' : todayWinRate > 0 ? 'destructive' : 'default'}
+          color={todayWinRate >= 50 ? 'success' : todayWinRate > 0 ? 'destructive' : 'default'}
         />
         <KpiCard
           icon={DollarSign}

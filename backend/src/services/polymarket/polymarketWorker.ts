@@ -30,6 +30,7 @@ let currentWindow: WindowState | null = null;
 let decisionMade = false;
 let resolutionDone = false;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
+let pendingResolution: WindowState | null = null; // Previous window awaiting DB persist
 
 /** Live state exposed to the frontend */
 let liveState: { window: WindowState | null; klines1m: Candle1m[] } = {
@@ -72,6 +73,59 @@ function getBtcPrice(klines: Candle1m[]): number {
   return 0;
 }
 
+// ─── Resolution ──────────────────────────────────────────────────────────────
+
+async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void> {
+  const endPrice = w.currentPrice;
+  const actualResult: 'UP' | 'DOWN' = endPrice >= w.startPrice ? 'UP' : 'DOWN';
+
+  let isCorrect: boolean | null = null;
+  let simulatedPnl: number | null = null;
+
+  if (w.prediction && w.entryOdds !== null) {
+    isCorrect = w.prediction.direction === actualResult;
+    simulatedPnl = isCorrect
+      ? 1 - w.entryOdds
+      : -w.entryOdds;
+  }
+
+  const skipped = w.status === 'skipped';
+
+  try {
+    await prisma.polymarketPrediction.create({
+      data: {
+        symbol: SYMBOL_SHORT,
+        windowStart: new Date(w.windowStart),
+        windowEnd: new Date(w.windowEnd),
+        startPrice: w.startPrice,
+        endPrice,
+        prediction: w.prediction?.direction ?? null,
+        confidence: w.prediction?.confidence ?? null,
+        actualResult,
+        entryOdds: w.entryOdds,
+        simulatedPnl,
+        scoreBreakdown: w.prediction?.score
+          ? JSON.parse(JSON.stringify(w.prediction.score))
+          : undefined,
+        isCorrect,
+        skipped,
+        polymarketSlug: w.prediction
+          ? buildSlug(SYMBOL_SHORT, w.windowStart)
+          : null,
+      },
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error(`DB persist error: ${msg}`);
+  }
+
+  const pnlStr = simulatedPnl !== null ? simulatedPnl.toFixed(3) : 'N/A';
+  const correctStr = isCorrect !== null ? (isCorrect ? 'WIN' : 'LOSS') : 'SKIP';
+  log.info(
+    `Resolved: actual=${actualResult} | ${correctStr} | pnl=${pnlStr} | ${w.startPrice.toFixed(2)} → ${endPrice.toFixed(2)}`,
+  );
+}
+
 // ─── Core tick ────────────────────────────────────────────────────────────────
 
 async function tick(prisma: PrismaClient): Promise<void> {
@@ -85,8 +139,22 @@ async function tick(prisma: PrismaClient): Promise<void> {
   const elapsed = nowMs - start;
   const klines = getKlines1m();
 
+  // ── Resolve previous window on new-window boundary ──────────────────────
+  // The old approach (resolve at WINDOW_MS - 500ms) had a race condition:
+  // with 1000ms poll interval, ~50% of ticks skip the 500ms resolution window.
+  // Fix: snapshot the previous window and resolve it when we detect a new one.
+  if (pendingResolution) {
+    await resolveWindow(pendingResolution, prisma);
+    pendingResolution = null;
+  }
+
   // ── New window detection ──────────────────────────────────────────────────
   if (!currentWindow || currentWindow.windowStart !== start) {
+    // Snapshot previous window for resolution (uses final currentPrice)
+    if (currentWindow && !resolutionDone) {
+      pendingResolution = { ...currentWindow };
+    }
+
     decisionMade = false;
     resolutionDone = false;
 
@@ -150,61 +218,6 @@ async function tick(prisma: PrismaClient): Promise<void> {
     }
 
     decisionMade = true;
-  }
-
-  // ── Resolution at T+4min30s (just before window ends) ─────────────────────
-  if (elapsed >= WINDOW_MS - 500 && !resolutionDone) {
-    const endPrice = currentWindow.currentPrice;
-    const actualResult: 'UP' | 'DOWN' = endPrice >= currentWindow.startPrice ? 'UP' : 'DOWN';
-
-    let isCorrect: boolean | null = null;
-    let simulatedPnl: number | null = null;
-
-    if (currentWindow.prediction && currentWindow.entryOdds !== null) {
-      isCorrect = currentWindow.prediction.direction === actualResult;
-      simulatedPnl = isCorrect
-        ? 1 - currentWindow.entryOdds
-        : -currentWindow.entryOdds;
-    }
-
-    const skipped = currentWindow.status === 'skipped';
-
-    try {
-      await prisma.polymarketPrediction.create({
-        data: {
-          symbol: SYMBOL_SHORT,
-          windowStart: new Date(currentWindow.windowStart),
-          windowEnd: new Date(currentWindow.windowEnd),
-          startPrice: currentWindow.startPrice,
-          endPrice,
-          prediction: currentWindow.prediction?.direction ?? null,
-          confidence: currentWindow.prediction?.confidence ?? null,
-          actualResult,
-          entryOdds: currentWindow.entryOdds,
-          simulatedPnl,
-          scoreBreakdown: currentWindow.prediction?.score
-            ? JSON.parse(JSON.stringify(currentWindow.prediction.score))
-            : undefined,
-          isCorrect,
-          skipped,
-          polymarketSlug: currentWindow.prediction
-            ? buildSlug(SYMBOL_SHORT, currentWindow.windowStart)
-            : null,
-        },
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(`DB persist error: ${msg}`);
-    }
-
-    currentWindow.status = 'resolved';
-    resolutionDone = true;
-
-    const pnlStr = simulatedPnl !== null ? simulatedPnl.toFixed(3) : 'N/A';
-    const correctStr = isCorrect !== null ? (isCorrect ? 'WIN' : 'LOSS') : 'SKIP';
-    log.info(
-      `Resolved: actual=${actualResult} | ${correctStr} | pnl=${pnlStr} | ${currentWindow.startPrice.toFixed(2)} → ${endPrice.toFixed(2)}`,
-    );
   }
 
   // ── Update live state ─────────────────────────────────────────────────────
