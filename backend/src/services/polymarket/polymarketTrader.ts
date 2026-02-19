@@ -323,7 +323,8 @@ export async function validatePolymarketCredentials(
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+      const result = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+      if ((result as any)?.error) throw new Error(String((result as any).error));
       return { valid: true, address: creds.proxyAddress ?? creds.address };
     } catch (err: any) {
       lastError = err?.message ?? 'Validation failed';
@@ -353,6 +354,7 @@ export async function getPolymarketBalance(
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const data = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+      if ((data as any)?.error) throw new Error(String((data as any).error));
       const balance = parseFloat(data?.balance ?? '0') / 10 ** USDC_DECIMALS;
 
       // If we get $0 but have a proxy configured AND previously had a non-zero balance,
@@ -400,14 +402,23 @@ export async function placePolymarketBet(
   try {
     const client = buildClient(creds);
 
+    // Do NOT pass price here — let the client fetch the best available price from the CLOB
+    // (/price?side=buy endpoint). The Gamma API price (e.g. 0.495) can differ significantly
+    // from the CLOB best ask (e.g. 0.55), causing FOK kills when using the Gamma price.
     const order: UserMarketOrder = {
       tokenID: tokenId,
-      amount, // USDC amount to spend (the client handles conversion)
-      price,  // price per outcome token (0-1)
+      amount, // USDC amount to spend
       side: Side.BUY,
     };
 
     const result = await client.createAndPostMarketOrder(order, undefined, OrderType.FOK);
+
+    // The clob-client does NOT throw on HTTP errors — it returns { error: "...", status: 4xx }.
+    // Must check explicitly before treating as success.
+    if (result?.error) {
+      const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
+      throw new Error(`Order rejected (${result.status ?? '?'}): ${errMsg}`);
+    }
 
     const orderId = result?.orderID ?? result?.id ?? 'unknown';
     log.info(`Live bet placed: ${direction} $${amount} @ ${price.toFixed(3)} | orderId=${orderId}`);
