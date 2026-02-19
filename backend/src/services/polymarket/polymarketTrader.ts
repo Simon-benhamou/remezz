@@ -130,6 +130,24 @@ interface ClobCredentials {
   apiPassphrase: string;
 }
 
+// ─── In-memory credential cache ──────────────────────────────────────────────
+// Polymarket's cluster is eventually consistent: the same derived credentials work
+// on all nodes after ~5s but re-deriving on every request causes fresh 401s.
+// Cache keeps creds live in memory; cleared on 401 to force a fresh derivation.
+
+let _credCache: ClobCredentials | null = null;
+
+function clearCredCache(): void {
+  _credCache = null;
+}
+
+// ─── In-memory balance cache ──────────────────────────────────────────────────
+// Guard against cluster nodes that silently return $0 instead of proxy balance.
+
+let _lastGoodBalance: number | null = null;
+let _lastGoodBalanceAt = 0;
+const BALANCE_CACHE_TTL_MS = 60_000; // 60s — return cached value rather than stale $0
+
 // ─── L1 Authentication (wallet signature → derive API creds) ────────────────
 
 async function buildL1Headers(wallet: ethers.Wallet): Promise<Record<string, string>> {
@@ -292,9 +310,34 @@ async function createSignedOrder(
 
 // ─── CLOB API Calls ─────────────────────────────────────────────────────────
 
+// Re-derivation mutex: prevents concurrent re-derives when multiple requests fail simultaneously
+let _rederiveInProgress = false;
+
+async function rederiveAndUpdateCache(prisma: PrismaClient, oldCreds: ClobCredentials): Promise<ClobCredentials | null> {
+  if (_rederiveInProgress) {
+    // Another call is already re-deriving — wait for it to complete then return cache
+    await new Promise((r) => setTimeout(r, 4000));
+    return _credCache;
+  }
+  _rederiveInProgress = true;
+  try {
+    log.warn('Got 401 — re-deriving API credentials (cluster key propagation issue)');
+    const { apiKey, secret, passphrase } = await deriveApiCredentials(oldCreds.privateKey);
+    await new Promise((r) => setTimeout(r, 3500)); // wait for propagation
+    _credCache = { ...oldCreds, apiKey, apiSecret: secret, apiPassphrase: passphrase };
+    return _credCache;
+  } catch (err) {
+    log.error(`Re-derivation failed: ${err}`);
+    return null;
+  } finally {
+    _rederiveInProgress = false;
+  }
+}
+
 async function clobGet(
   path: string,
   creds: ClobCredentials,
+  prisma?: PrismaClient, // if provided, auto-re-derives on 401
 ): Promise<any> {
   // HMAC is computed on the base path WITHOUT query params (Polymarket server strips query params before verification)
   const hmacPath = path.split('?')[0];
@@ -306,6 +349,21 @@ async function clobGet(
   });
   if (!res.ok) {
     const text = await res.text();
+    // On 401: if prisma is available, re-derive credentials and retry once
+    if (res.status === 401 && prisma) {
+      const fresh = await rederiveAndUpdateCache(prisma, creds);
+      if (fresh) {
+        const retryHeaders = buildHmacHeaders(fresh, 'GET', hmacPath);
+        const retryRes = await fetch(`${CLOB_HOST}${path}`, {
+          method: 'GET',
+          headers: { ...retryHeaders, 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (retryRes.ok) return retryRes.json();
+        const retryText = await retryRes.text();
+        throw new Error(`CLOB GET ${path} → ${retryRes.status}: ${retryText}`);
+      }
+    }
     throw new Error(`CLOB GET ${path} → ${res.status}: ${text}`);
   }
   return res.json();
@@ -315,6 +373,7 @@ async function clobPost(
   path: string,
   body: any,
   creds: ClobCredentials,
+  prisma?: PrismaClient,
 ): Promise<any> {
   const bodyStr = JSON.stringify(body);
   const headers = buildHmacHeaders(creds, 'POST', path, bodyStr);
@@ -326,6 +385,21 @@ async function clobPost(
   });
   if (!res.ok) {
     const text = await res.text();
+    if (res.status === 401 && prisma) {
+      const fresh = await rederiveAndUpdateCache(prisma, creds);
+      if (fresh) {
+        const retryHeaders = buildHmacHeaders(fresh, 'POST', path, bodyStr);
+        const retryRes = await fetch(`${CLOB_HOST}${path}`, {
+          method: 'POST',
+          headers: { ...retryHeaders, 'Content-Type': 'application/json' },
+          body: bodyStr,
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (retryRes.ok) return retryRes.json();
+        const retryText = await retryRes.text();
+        throw new Error(`CLOB POST ${path} → ${retryRes.status}: ${retryText}`);
+      }
+    }
     throw new Error(`CLOB POST ${path} → ${res.status}: ${text}`);
   }
   return res.json();
@@ -456,6 +530,10 @@ export async function savePolymarketCredentials(
 
   await Promise.all(upserts);
 
+  // Invalidate in-memory cache so next call reloads from DB (new creds)
+  clearCredCache();
+  _lastGoodBalance = null;
+
   return { address: authAddress };
 }
 
@@ -484,6 +562,8 @@ export async function deletePolymarketCredentials(
     create: { key: SETTING_KEYS.MODE, value: 'virtual' },
     update: { value: 'virtual' },
   });
+  clearCredCache();
+  _lastGoodBalance = null;
 }
 
 /**
@@ -492,6 +572,9 @@ export async function deletePolymarketCredentials(
 async function loadCredentials(
   prisma: PrismaClient,
 ): Promise<ClobCredentials | null> {
+  // Return in-memory cache if available (avoids DB round-trip and keeps key stable across calls)
+  if (_credCache) return _credCache;
+
   const settings = await prisma.systemSetting.findMany({
     where: {
       key: {
@@ -523,7 +606,7 @@ async function loadCredentials(
     const proxyAddress = map.get(SETTING_KEYS.PROXY_ADDRESS) || undefined;
     log.debug(`Credentials loaded OK — address=${authAddress}${proxyAddress ? ` proxy=${proxyAddress}` : ''}`);
 
-    return {
+    _credCache = {
       privateKey: pk,
       address: authAddress,
       proxyAddress,
@@ -531,6 +614,7 @@ async function loadCredentials(
       apiSecret: decryptApiKey(encSecret).trim(),
       apiPassphrase: decryptApiKey(encPass).trim(),
     };
+    return _credCache;
   } catch (err) {
     log.error(`Failed to load Polymarket credentials: ${err}`);
     return null;
@@ -552,7 +636,7 @@ export async function validatePolymarketCredentials(
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       // Use balance endpoint (signature_type=1) — more stable than /data/orders across cluster nodes
-      await clobGet('/balance-allowance?asset_type=COLLATERAL&signature_type=1', creds);
+      await clobGet('/balance-allowance?asset_type=COLLATERAL&signature_type=1', creds, prisma);
       return { valid: true, address: creds.proxyAddress ?? creds.address };
     } catch (err: any) {
       lastError = err.message || 'Validation failed';
@@ -568,21 +652,50 @@ export async function validatePolymarketCredentials(
 
 /**
  * Get USDC balance from Polymarket.
+ * Uses signature_type=1 to read proxy wallet balance (Magic.link accounts).
+ * Falls back to in-memory cache if the cluster returns $0 or 401 (eventual consistency).
  */
 export async function getPolymarketBalance(
   prisma: PrismaClient,
-): Promise<{ balance: number; error?: string }> {
+): Promise<{ balance: number; cached?: boolean; error?: string }> {
   const creds = await loadCredentials(prisma);
   if (!creds) return { balance: 0, error: 'No credentials configured' };
 
-  try {
-    // asset_type=COLLATERAL, signature_type=1 (proxy wallet — maps EOA to its linked proxy account)
-    const data = await clobGet('/balance-allowance?asset_type=COLLATERAL&signature_type=1', creds);
-    const balance = parseFloat(data?.balance ?? '0') / 10 ** USDC_DECIMALS;
-    return { balance };
-  } catch (err: any) {
-    return { balance: 0, error: err.message || 'Failed to fetch balance' };
+  const BALANCE_PATH = '/balance-allowance?asset_type=COLLATERAL&signature_type=1';
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const data = await clobGet(BALANCE_PATH, creds, prisma);
+      const balance = parseFloat(data?.balance ?? '0') / 10 ** USDC_DECIMALS;
+
+      // If we get $0 but have a proxy configured AND previously had a non-zero balance,
+      // the cluster node silently ignored signature_type=1 — retry
+      if (balance === 0 && creds.proxyAddress && _lastGoodBalance !== null && _lastGoodBalance > 0 && attempt < 3) {
+        log.warn(`Balance returned $0 with proxy configured (attempt ${attempt}/3) — retrying`);
+        await new Promise((r) => setTimeout(r, 1500));
+        continue;
+      }
+
+      if (balance > 0 || !creds.proxyAddress) {
+        _lastGoodBalance = balance;
+        _lastGoodBalanceAt = Date.now();
+      }
+      return { balance };
+    } catch (err: any) {
+      log.warn(`Balance fetch failed (attempt ${attempt}/3): ${err.message}`);
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
   }
+
+  // All attempts failed — return cached balance if recent enough
+  if (_lastGoodBalance !== null && Date.now() - _lastGoodBalanceAt < BALANCE_CACHE_TTL_MS) {
+    log.warn(`Returning cached balance $${_lastGoodBalance.toFixed(2)} (API temporarily inconsistent)`);
+    return { balance: _lastGoodBalance, cached: true };
+  }
+
+  return { balance: 0, error: 'Failed to fetch balance (cluster inconsistency)' };
 }
 
 /**
@@ -630,7 +743,7 @@ export async function placePolymarketBet(
       orderType: 'FOK', // Fill-or-Kill for market orders
     };
 
-    const result = await clobPost('/order', orderPayload, creds);
+    const result = await clobPost('/order', orderPayload, creds, prisma);
 
     log.info(
       `Live bet placed: ${direction} $${amount} @ ${price.toFixed(3)} | orderId=${result?.orderID ?? 'unknown'}`,
