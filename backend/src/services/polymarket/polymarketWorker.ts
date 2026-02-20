@@ -51,7 +51,8 @@ interface PendingVerification {
   windowStart: number;         // ms timestamp — DB key
   slug: string;                // Polymarket slug for Gamma API lookup
   predictionDirection: 'UP' | 'DOWN' | null; // what we predicted
-  entryOdds: number | null;    // needed to recompute simulatedPnl on correction
+  entryOdds: number | null;    // Gamma API odds (for display)
+  executionPrice: number | null; // Actual CLOB price paid (for PnL)
   betAmount: number | null;    // USDC amount for dollar PnL
   verifyAfterMs: number;       // don't check until this time (wait for oracle)
   giveUpAfterMs: number;       // stop retrying after this time
@@ -128,6 +129,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
         confidence: w.prediction?.confidence ?? null,
         actualResult: preliminaryResult,
         entryOdds: w.entryOdds,
+        executionPrice: w.executionPrice,  // Actual CLOB price (null for virtual mode)
         betAmount: w.betAmount,
         simulatedPnl: null,       // Set by oracle verification only
         scoreBreakdown: w.prediction?.score
@@ -158,6 +160,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
       slug,
       predictionDirection: w.prediction?.direction ?? null,
       entryOdds: w.entryOdds,
+      executionPrice: w.executionPrice,
       betAmount: w.betAmount,
       verifyAfterMs: Date.now() + 3 * 60 * 1000,   // check after 3 min
       giveUpAfterMs: Date.now() + 60 * 60 * 1000,  // give up after 60 min (was 15 — too short)
@@ -199,13 +202,15 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
 
       // Oracle resolved — always update DB with authoritative result + compute isCorrect
       const isCorrect = v.predictionDirection ? v.predictionDirection === oracleResult : null;
-      // Dollar PnL: buy N tokens at price P with $A → N = A/P tokens
-      //   WIN: N × $1 = $A/P → profit = A/P - A = A × (1-P)/P
-      //   LOSE: N × $0 → loss = -A (entire stake lost)
-      const amt = v.betAmount ?? 5; // fallback $5 for old predictions without betAmount
+      // Dollar PnL using ACTUAL execution price (CLOB), not Gamma odds
+      //   Buy N = amt/price tokens at price P
+      //   WIN: N × $1 → profit = amt × (1-P)/P
+      //   LOSE: N × $0 → loss = -amt (entire stake)
+      const amt = v.betAmount ?? 5;
+      const price = v.executionPrice ?? v.entryOdds; // CLOB price if available, Gamma fallback
       const simulatedPnl =
-        isCorrect !== null && v.entryOdds !== null
-          ? isCorrect ? amt * (1 - v.entryOdds) / v.entryOdds : -amt
+        isCorrect !== null && price !== null
+          ? isCorrect ? amt * (1 - price) / price : -amt
           : null;
 
       const existing = await prisma.polymarketPrediction.findFirst({
@@ -299,6 +304,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
       elapsed,
       prediction: null,
       entryOdds: null,
+      executionPrice: null,
       betAmount: null,
       status: 'accumulating',
     };
@@ -379,7 +385,11 @@ async function tick(prisma: PrismaClient): Promise<void> {
               entryOdds,
             );
             if (betResult.success) {
-              log.info(`LIVE BET OK: orderId=${betResult.orderId}`);
+              log.info(`LIVE BET OK: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
+              // Store actual CLOB execution price for accurate PnL
+              if (betResult.executionPrice) {
+                currentWindow.executionPrice = betResult.executionPrice;
+              }
             } else {
               log.error(`LIVE BET FAILED: ${betResult.error}`);
               activeLiveBetWindow = null; // Reset on failure so next window can try
@@ -470,6 +480,7 @@ async function recoverPendingVerifications(prisma: PrismaClient): Promise<void> 
       polymarketSlug: true,
       prediction: true,
       entryOdds: true,
+      executionPrice: true,
       betAmount: true,
     },
   });
@@ -482,6 +493,7 @@ async function recoverPendingVerifications(prisma: PrismaClient): Promise<void> 
       slug: p.polymarketSlug!,
       predictionDirection: p.prediction as 'UP' | 'DOWN',
       entryOdds: p.entryOdds,
+      executionPrice: p.executionPrice,
       betAmount: p.betAmount,
       verifyAfterMs: Date.now(),               // check immediately
       giveUpAfterMs: Date.now() + 60 * 60 * 1000, // 60 min from now

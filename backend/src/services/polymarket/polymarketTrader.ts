@@ -404,7 +404,7 @@ export async function placePolymarketBet(
   tokenId: string,
   amount: number,
   price: number,
-): Promise<{ success: boolean; orderId?: string; error?: string }> {
+): Promise<{ success: boolean; orderId?: string; executionPrice?: number; error?: string }> {
   const creds = await loadCredentials(prisma);
   if (!creds) return { success: false, error: 'No credentials' };
 
@@ -451,8 +451,8 @@ export async function placePolymarketBet(
     }
 
     const orderId = result?.orderID ?? result?.id ?? 'unknown';
-    log.info(`Live bet placed: ${direction} $${amount} @ ${price.toFixed(3)} | orderId=${orderId}`);
-    return { success: true, orderId };
+    log.info(`Live bet placed: ${direction} $${amount} @ CLOB ${clobAsk.toFixed(3)} (Gamma ${price.toFixed(3)}) | orderId=${orderId}`);
+    return { success: true, orderId, executionPrice: clobAsk };
   } catch (err: any) {
     log.error(`Failed to place bet: ${err?.message}`);
     return { success: false, error: err?.message };

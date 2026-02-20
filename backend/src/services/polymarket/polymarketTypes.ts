@@ -44,6 +44,7 @@ export interface WindowState {
   elapsed: number;
   prediction: PredictionResult | null;
   entryOdds: number | null;
+  executionPrice: number | null;  // Actual CLOB price paid (differs from Gamma entryOdds)
   betAmount: number | null;
   status: 'accumulating' | 'predicted' | 'resolved' | 'skipped';
 }
