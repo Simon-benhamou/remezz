@@ -511,6 +511,28 @@ export async function sellWinningTokens(
 }
 
 /**
+ * Get current CLOB ask price for a token (lightweight, no order placement).
+ * Used by the observation phase to poll price every tick.
+ */
+export async function getClobAskPrice(
+  prisma: PrismaClient,
+  tokenId: string,
+): Promise<number | null> {
+  const creds = await loadCredentials(prisma);
+  if (!creds) return null;
+
+  try {
+    const client = buildClient(creds);
+    const data = await client.getPrice(tokenId, 'BUY');
+    const price = parseFloat((data as any)?.price ?? '0');
+    return price > 0 ? price : null;
+  } catch (err: any) {
+    log.warn(`getClobAskPrice failed: ${err?.message}`);
+    return null;
+  }
+}
+
+/**
  * Check if live mode is active and return config for the worker.
  */
 export async function getLiveTradingConfig(

@@ -40,6 +40,11 @@ interface WindowData {
   } | null;
   entryOdds: number | null;
   status: string;
+  // Observation phase
+  observationStatus: string | null;
+  observationInitialAsk: number | null;
+  observationBestAsk: number | null;
+  observationTrigger: string | null;
 }
 
 interface Kline1m {
@@ -190,6 +195,35 @@ function WindowProgress({ window: w }: WindowProgressProps) {
           </span>
         )}
       </div>
+
+      {/* Observation phase */}
+      {w.observationStatus === 'observing' && w.observationInitialAsk != null && (
+        <div className="flex items-center gap-2 mb-3 px-2 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+          <Eye className="h-3.5 w-3.5 text-amber-500 animate-pulse" />
+          <span className="text-[11px] text-amber-500 font-medium">
+            Observing CLOB
+          </span>
+          <span className="text-[10px] text-muted-foreground font-mono ml-auto">
+            init: {(w.observationInitialAsk * 100).toFixed(1)}c
+            {w.observationBestAsk != null && w.observationBestAsk < w.observationInitialAsk && (
+              <> · best: <span className="text-success">{(w.observationBestAsk * 100).toFixed(1)}c</span></>
+            )}
+          </span>
+        </div>
+      )}
+      {w.observationStatus === 'filled' && w.observationTrigger && w.observationInitialAsk != null && (
+        <div className="flex items-center gap-2 mb-3 px-2 py-1.5 rounded-lg bg-success/10 border border-success/20">
+          <CheckCircle className="h-3.5 w-3.5 text-success" />
+          <span className="text-[11px] text-success font-medium">
+            Bought ({w.observationTrigger})
+          </span>
+          {w.observationBestAsk != null && (
+            <span className="text-[10px] text-muted-foreground font-mono ml-auto">
+              {((w.observationInitialAsk - w.observationBestAsk) * 100).toFixed(1)}c saved
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Price */}
       <div className="flex items-center justify-between text-xs mb-3">
