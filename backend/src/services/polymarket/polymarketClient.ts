@@ -111,3 +111,25 @@ export async function fetchPolymarketOdds(slug: string): Promise<PolymarketOdds>
     return neutral;
   }
 }
+
+/**
+ * Fetch the conditionId for a market from the Gamma API.
+ * Required for on-chain CTF redemption after market resolution.
+ * Returns null if the market is not found or has no conditionId.
+ */
+export async function fetchConditionId(slug: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/events?slug=${slug}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+
+    const events: unknown = await res.json();
+    if (!Array.isArray(events) || events.length === 0) return null;
+
+    const market = events[0]?.markets?.[0];
+    return market?.conditionId ?? null;
+  } catch {
+    return null;
+  }
+}

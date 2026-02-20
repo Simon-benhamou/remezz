@@ -10,7 +10,7 @@
  */
 
 import { ethers as ethers6 } from 'ethers'; // v6, used only for address validation
-import { Wallet } from 'ethers5'; // v5 alias, required by @polymarket/clob-client
+import { Wallet, Contract, providers, constants } from 'ethers5'; // v5 alias, required by @polymarket/clob-client
 import {
   ClobClient,
   type ApiKeyCreds,
@@ -33,6 +33,18 @@ const CHAIN_ID = 137; // Polygon
 
 // USDC has 6 decimals on Polygon
 const USDC_DECIMALS = 6;
+
+// ─── On-chain CTF redemption constants ──────────────────────────────────────
+// After market resolution, the CLOB orderbook is removed. Winning tokens must
+// be redeemed on-chain via the Conditional Token Framework (CTF) contract.
+const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
+const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+
+const CTF_ABI = [
+  'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)',
+  'function balanceOf(address owner, uint256 id) view returns (uint256)',
+];
 
 // Maximum acceptable CLOB price (absolute cap).
 // Buying above this has poor EV: paying 80¢ for $1 potential = 25% ROI max.
@@ -600,4 +612,53 @@ export async function getLiveTradingConfig(
   const config = await getPolymarketConfig(prisma);
   if (config.mode !== 'live' || !config.hasCredentials) return null;
   return { live: true, amount: config.amount };
+}
+
+/**
+ * Redeem winning tokens on-chain via CTF contract after market resolution.
+ * This is the proper way to convert winning tokens to USDC — each token = exactly $1.00.
+ * Called as fallback when CLOB sell fails (orderbook removed after resolution).
+ *
+ * Requires: conditionId from Gamma API, tiny MATIC for gas (~$0.001).
+ * Burns ALL winning tokens for this condition — no partial redemption.
+ */
+export async function redeemWinningTokens(
+  prisma: PrismaClient,
+  conditionId: string,
+  betAmount: number,
+  executionPrice: number,
+): Promise<{ success: boolean; usdcReceived?: number; error?: string }> {
+  const creds = await loadCredentials(prisma);
+  if (!creds) return { success: false, error: 'No credentials' };
+
+  try {
+    const provider = new providers.JsonRpcProvider(POLYGON_RPC_URL);
+    const wallet = new Wallet(creds.privateKey, provider);
+    const ctf = new Contract(CTF_ADDRESS, CTF_ABI, wallet);
+
+    // Binary markets: indexSets [1, 2] = both YES and NO outcomes
+    // redeemPositions burns all winning tokens and returns USDC
+    const tx = await ctf.redeemPositions(
+      USDC_ADDRESS,
+      constants.HashZero,   // parentCollectionId (always zero for Polymarket)
+      conditionId,
+      [1, 2],               // both outcomes for binary market
+    );
+
+    const receipt = await tx.wait();
+    const gasUsed = receipt.gasUsed?.toString() ?? '?';
+    const expectedUsdc = betAmount / executionPrice; // tokens held × $1.00
+
+    log.info(`CTF redeem OK: conditionId=${conditionId.slice(0, 12)}… | gas=${gasUsed} | ~$${expectedUsdc.toFixed(2)} USDC`);
+    return { success: true, usdcReceived: expectedUsdc };
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
+    // Common issues: no MATIC for gas, already redeemed, wrong conditionId
+    if (msg.includes('insufficient funds')) {
+      log.error(`CTF redeem failed: no MATIC for gas — add ~0.01 MATIC to wallet`);
+      return { success: false, error: 'No MATIC for gas — add ~0.01 MATIC to wallet' };
+    }
+    log.error(`CTF redeem failed: ${msg}`);
+    return { success: false, error: msg };
+  }
 }

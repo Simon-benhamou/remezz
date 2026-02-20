@@ -2,13 +2,13 @@ import type { PrismaClient } from '.prisma/client';
 import { getBinanceWebSocket, getKlinesWithMeta } from '../binanceWebSocket.js';
 import { createLogger } from '../../utils/logger.js';
 import { computeFiveMinScore } from './fiveMinScorer.js';
-import { buildSlug, fetchPolymarketOdds, fetchPolymarketResult } from './polymarketClient.js';
+import { buildSlug, fetchPolymarketOdds, fetchPolymarketResult, fetchConditionId } from './polymarketClient.js';
 import {
   getChainlinkBtcPrice,
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, getClobAskPrice, MAX_CLOB_PRICE } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, MAX_CLOB_PRICE } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -331,7 +331,19 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
           if (sellResult.success) {
             log.info(`HEDGE auto-sell OK: $${sellResult.usdcReceived?.toFixed(2)} USDC recovered from ${v.slug}`);
           } else {
-            log.info(`HEDGE auto-sell skipped for ${v.slug}: ${sellResult.error} (likely pre-sold at T+4:50 or market closed)`);
+            // CLOB failed — try on-chain CTF redeem
+            log.info(`HEDGE CLOB sell failed (${sellResult.error}) — trying CTF redeem`);
+            const conditionId = await fetchConditionId(v.slug);
+            if (conditionId) {
+              const redeemResult = await redeemWinningTokens(prisma, conditionId, v.betAmount, v.executionPrice);
+              if (redeemResult.success) {
+                log.info(`HEDGE CTF redeem OK: ~$${redeemResult.usdcReceived?.toFixed(2)} USDC from ${v.slug}`);
+              } else {
+                log.warn(`HEDGE CTF redeem failed: ${redeemResult.error}`);
+              }
+            } else {
+              log.warn(`HEDGE cannot redeem ${v.slug}: conditionId not found`);
+            }
           }
         }
 
@@ -360,18 +372,29 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
         );
       }
 
-      // ── Auto-sell winning tokens on CLOB ──────────────────────────
-      // After oracle confirms WIN, sell tokens back to USDC immediately.
-      // Only attempt if we have a real bet (tokenId + betAmount + executionPrice).
-      // Note: for 5-min markets, tokens are usually pre-sold at T+4:50 (before
-      // orderbook closes). This is a fallback for cases where pre-sell missed.
+      // ── Recover USDC from winning tokens ──────────────────────────
+      // Strategy: 1) Try CLOB sell (fast, works if book still open)
+      //           2) Fallback: on-chain CTF redeem (1 token = $1.00 exactly)
+      // For 5-min markets, tokens are usually pre-sold at T+4:50.
+      // This fires ~3min after resolution as a safety net.
       if (isCorrect && v.tokenId && v.betAmount && v.executionPrice) {
         const sellResult = await sellWinningTokens(prisma, v.tokenId, v.betAmount, v.executionPrice);
         if (sellResult.success) {
           log.info(`Auto-sell OK: $${sellResult.usdcReceived?.toFixed(2)} USDC recovered from ${v.slug}`);
         } else {
-          // Orderbook gone (resolved market) or tokens already pre-sold — expected for 5-min markets
-          log.info(`Auto-sell skipped for ${v.slug}: ${sellResult.error} (likely pre-sold at T+4:50 or market closed)`);
+          // CLOB failed (orderbook removed) — try on-chain CTF redeem
+          log.info(`CLOB sell failed (${sellResult.error}) — trying CTF redeem for ${v.slug}`);
+          const conditionId = await fetchConditionId(v.slug);
+          if (conditionId) {
+            const redeemResult = await redeemWinningTokens(prisma, conditionId, v.betAmount, v.executionPrice);
+            if (redeemResult.success) {
+              log.info(`CTF redeem OK: ~$${redeemResult.usdcReceived?.toFixed(2)} USDC from ${v.slug}`);
+            } else {
+              log.warn(`CTF redeem failed for ${v.slug}: ${redeemResult.error}`);
+            }
+          } else {
+            log.warn(`Cannot redeem ${v.slug}: conditionId not found in Gamma API`);
+          }
         }
       }
 
