@@ -526,11 +526,21 @@ export async function sellWinningTokens(
     const client = buildClient(creds);
 
     // Check current bid price — only sell if price is good (>= 0.90)
-    const clobPriceData = await client.getPrice(tokenId, 'SELL');
-    const clobBid = parseFloat((clobPriceData as any)?.price ?? '0');
+    let clobBid: number;
+    try {
+      const clobPriceData = await client.getPrice(tokenId, 'SELL');
+      clobBid = parseFloat((clobPriceData as any)?.price ?? '0');
+    } catch (priceErr: any) {
+      // Market resolved → orderbook removed (404). Expected for 5-min markets.
+      const msg = priceErr?.message ?? '';
+      if (msg.includes('404') || msg.includes('orderbook')) {
+        return { success: false, error: 'Market closed (orderbook removed after resolution)' };
+      }
+      throw priceErr;
+    }
 
     if (clobBid < 0.90) {
-      return { success: false, error: `Bid too low (${clobBid.toFixed(3)}) — wait for resolution or higher price` };
+      return { success: false, error: `Bid too low (${clobBid.toFixed(3)})` };
     }
 
     // Calculate token amount we hold: betAmount / executionPrice

@@ -36,11 +36,17 @@ const REVERSAL_OFFSET_MS = 4 * 60 * 1000;  // T+4:00 — check for last-second r
 const REVERSAL_MAX_TOKEN_PRICE = 0.20;      // Only buy tokens below 20¢
 const REVERSAL_MIN_ROC_PCT = 0.08;          // Minimum 2-candle reversal strength (%) — lottery only
 
+// ─── Pre-sell constants ──────────────────────────────────────────────────────
+// Sell winning tokens BEFORE the market closes (orderbook removed at resolution).
+// At T+4:50, winning tokens trade at ~$0.99. After T+5:00, the orderbook is gone.
+const PRE_SELL_OFFSET_MS = 4 * 60 * 1000 + 50 * 1000; // T+4:50
+
 // ─── Module state ─────────────────────────────────────────────────────────────
 
 let currentWindow: WindowState | null = null;
 let decisionMade = false;
 let reversalChecked = false;
+let preSellChecked = false;
 let resolutionDone = false;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let pendingResolution: WindowState | null = null; // Previous window awaiting DB persist
@@ -53,6 +59,17 @@ let tickInProgress = false;
 // Prevent placing a new live bet before the previous window's order is fully handled.
 // Set to the windowStart when a bet is ATTEMPTED (not just on success) to prevent retry loops.
 let activeLiveBetWindow: number | null = null; // windowStart of the window with an active live bet
+
+// ─── Pre-sell tracking ──────────────────────────────────────────────────────
+// Tracks live bets placed this window so we can sell winning tokens at T+4:50.
+interface PendingAutoSell {
+  tokenId: string;
+  betAmount: number;
+  executionPrice: number;
+  direction: 'UP' | 'DOWN';
+  isHedge: boolean;
+}
+let pendingAutoSells: PendingAutoSell[] = [];
 
 // ─── Observation phase state ─────────────────────────────────────────────────
 let observationActive = false;
@@ -105,6 +122,17 @@ async function executeObservationBuy(
       currentWindow.executionPrice = betResult.executionPrice;
     }
     currentWindow.observationStatus = 'filled';
+
+    // Track for pre-sell at T+4:50
+    if (betResult.executionPrice && observationDirection && observationTokenId) {
+      pendingAutoSells.push({
+        tokenId: observationTokenId,
+        betAmount: observationAmount,
+        executionPrice: betResult.executionPrice,
+        direction: observationDirection,
+        isHedge: false,
+      });
+    }
   } else {
     log.error(`LIVE BET FAILED: ${betResult.error}`);
     currentWindow.observationStatus = 'idle';
@@ -129,6 +157,7 @@ interface PendingVerification {
   tokenId: string | null;      // CLOB token ID (needed for auto-sell)
   verifyAfterMs: number;       // don't check until this time (wait for oracle)
   giveUpAfterMs: number;       // stop retrying after this time
+  isHedge?: boolean;           // true = hedge bet (skip DB update, only auto-sell)
 }
 
 const pendingVerifications: PendingVerification[] = [];
@@ -275,7 +304,7 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
         continue;
       }
 
-      // Oracle resolved — always update DB with authoritative result + compute isCorrect
+      // Oracle resolved — compute isCorrect for this bet's direction
       const isCorrect = v.predictionDirection ? v.predictionDirection === oracleResult : null;
       // Dollar PnL using ACTUAL execution price (CLOB), not Gamma odds
       //   Buy N = amt/price tokens at price P
@@ -288,6 +317,29 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
           ? isCorrect ? amt * (1 - price) / price : -amt
           : null;
 
+      // ── Hedge bets: skip DB update, only auto-sell ────────────────
+      if (v.isHedge) {
+        const hedgeLabel = `HEDGE ${v.predictionDirection} $${amt}`;
+        if (isCorrect) {
+          log.info(`Oracle: ${hedgeLabel} → WIN (PnL +$${simulatedPnl?.toFixed(2)}) | ${v.slug}`);
+        } else {
+          log.info(`Oracle: ${hedgeLabel} → LOSS (PnL $${simulatedPnl?.toFixed(2)}) | ${v.slug}`);
+        }
+
+        if (isCorrect && v.tokenId && v.betAmount && v.executionPrice) {
+          const sellResult = await sellWinningTokens(prisma, v.tokenId, v.betAmount, v.executionPrice);
+          if (sellResult.success) {
+            log.info(`HEDGE auto-sell OK: $${sellResult.usdcReceived?.toFixed(2)} USDC recovered from ${v.slug}`);
+          } else {
+            log.info(`HEDGE auto-sell skipped for ${v.slug}: ${sellResult.error} (likely pre-sold at T+4:50 or market closed)`);
+          }
+        }
+
+        toRemove.push(i);
+        continue;
+      }
+
+      // ── Main bet: update DB with authoritative oracle result ──────
       const existing = await prisma.polymarketPrediction.findFirst({
         where: { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT },
         select: { actualResult: true },
@@ -311,12 +363,15 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
       // ── Auto-sell winning tokens on CLOB ──────────────────────────
       // After oracle confirms WIN, sell tokens back to USDC immediately.
       // Only attempt if we have a real bet (tokenId + betAmount + executionPrice).
+      // Note: for 5-min markets, tokens are usually pre-sold at T+4:50 (before
+      // orderbook closes). This is a fallback for cases where pre-sell missed.
       if (isCorrect && v.tokenId && v.betAmount && v.executionPrice) {
         const sellResult = await sellWinningTokens(prisma, v.tokenId, v.betAmount, v.executionPrice);
         if (sellResult.success) {
           log.info(`Auto-sell OK: $${sellResult.usdcReceived?.toFixed(2)} USDC recovered from ${v.slug}`);
         } else {
-          log.warn(`Auto-sell failed for ${v.slug}: ${sellResult.error} — tokens remain in wallet`);
+          // Orderbook gone (resolved market) or tokens already pre-sold — expected for 5-min markets
+          log.info(`Auto-sell skipped for ${v.slug}: ${sellResult.error} (likely pre-sold at T+4:50 or market closed)`);
         }
       }
 
@@ -378,7 +433,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
     decisionMade = false;
     reversalChecked = false;
+    preSellChecked = false;
     resolutionDone = false;
+    pendingAutoSells = [];
 
     // Use Chainlink price as "price to beat" (same source as Polymarket resolution)
     const startPrice = getBtcPrice(klines);
@@ -480,7 +537,16 @@ async function tick(prisma: PrismaClient): Promise<void> {
               const betResult = await placePolymarketBet(prisma, result.direction, tokenId, liveConfig.amount, entryOdds);
               if (betResult.success) {
                 log.info(`LIVE BET OK (immediate): orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
-                if (betResult.executionPrice) currentWindow.executionPrice = betResult.executionPrice;
+                if (betResult.executionPrice) {
+                  currentWindow.executionPrice = betResult.executionPrice;
+                  pendingAutoSells.push({
+                    tokenId,
+                    betAmount: liveConfig.amount,
+                    executionPrice: betResult.executionPrice,
+                    direction: result.direction,
+                    isHedge: false,
+                  });
+                }
               } else {
                 log.error(`LIVE BET FAILED: ${betResult.error}`);
                 activeLiveBetWindow = null;
@@ -651,6 +717,33 @@ async function tick(prisma: PrismaClient): Promise<void> {
                 if (!hasEarlyBird && betResult.executionPrice) {
                   currentWindow.executionPrice = betResult.executionPrice;
                 }
+
+                // Track for pre-sell at T+4:50
+                if (betResult.executionPrice) {
+                  pendingAutoSells.push({
+                    tokenId,
+                    betAmount,
+                    executionPrice: betResult.executionPrice,
+                    direction: reverseDir,
+                    isHedge: hasEarlyBird,
+                  });
+                }
+
+                // Track hedge bet for oracle verification (DB update skip + fallback auto-sell)
+                if (hasEarlyBird) {
+                  pendingVerifications.push({
+                    windowStart: start,
+                    slug,
+                    predictionDirection: reverseDir,
+                    entryOdds,
+                    executionPrice: betResult.executionPrice ?? null,
+                    betAmount,
+                    tokenId,
+                    verifyAfterMs: Date.now() + 3 * 60 * 1000,
+                    giveUpAfterMs: Date.now() + 60 * 60 * 1000,
+                    isHedge: true,
+                  });
+                }
               } else {
                 log.error(`${mode} FAILED: ${betResult.error}`);
                 if (!hasEarlyBird) activeLiveBetWindow = null;
@@ -662,6 +755,29 @@ async function tick(prisma: PrismaClient): Promise<void> {
             );
           }
         }
+      }
+    }
+  }
+
+  // ── Pre-sell winning tokens at T+4:50 (before orderbook closes at T+5:00) ──
+  // After market resolution, orderbooks are removed (404). Selling at T+4:50
+  // while the book is still open recovers USDC at ~$0.99 per winning token.
+  if (elapsed >= PRE_SELL_OFFSET_MS && !preSellChecked && currentWindow && pendingAutoSells.length > 0) {
+    preSellChecked = true;
+
+    for (const sell of pendingAutoSells) {
+      try {
+        const sellResult = await sellWinningTokens(prisma, sell.tokenId, sell.betAmount, sell.executionPrice);
+        if (sellResult.success) {
+          log.info(
+            `PRE-SELL OK: ${sell.isHedge ? 'HEDGE' : 'Early Bird'} ${sell.direction} — ` +
+            `$${sellResult.usdcReceived?.toFixed(2)} USDC recovered`,
+          );
+        }
+        // If sell fails (bid < 0.90), the token is likely losing — no action needed
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`PRE-SELL error for ${sell.direction}: ${msg}`);
       }
     }
   }
@@ -777,6 +893,8 @@ export function stopPolymarketWorker(): void {
   stopChainlinkFeed();
   activeLiveBetWindow = null; // Reset so a restart can place bets immediately
   tickInProgress = false; // Reset in case a tick was in progress when stopped
+  pendingAutoSells = [];
+  preSellChecked = false;
   resetObservation();
 }
 
