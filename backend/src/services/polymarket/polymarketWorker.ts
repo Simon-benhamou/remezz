@@ -31,10 +31,16 @@ const OBS_BOUNCE_THRESHOLD = 0.02;        // Buy when price bounces 2 cents from
 const OBS_RISING_THRESHOLD = 0.05;        // Buy if price runs 5 cents above initial
 const OBS_DEADLINE_OFFSET_MS = 2 * 60 * 1000; // T+2:00 deadline (60s observation window)
 
+// ─── Last-second reversal constants ─────────────────────────────────────────
+const REVERSAL_OFFSET_MS = 4 * 60 * 1000;  // T+4:00 — check for last-second reversal
+const REVERSAL_MAX_TOKEN_PRICE = 0.20;      // Only buy "lottery tickets" below 20¢
+const REVERSAL_MIN_ROC_PCT = 0.08;          // Minimum 2-candle reversal strength (%)
+
 // ─── Module state ─────────────────────────────────────────────────────────────
 
 let currentWindow: WindowState | null = null;
 let decisionMade = false;
+let reversalChecked = false;
 let resolutionDone = false;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let pendingResolution: WindowState | null = null; // Previous window awaiting DB persist
@@ -371,6 +377,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
     }
 
     decisionMade = false;
+    reversalChecked = false;
     resolutionDone = false;
 
     // Use Chainlink price as "price to beat" (same source as Polymarket resolution)
@@ -547,6 +554,101 @@ async function tick(prisma: PrismaClient): Promise<void> {
       if (Date.now() >= observationDeadlineMs) {
         log.warn('OBSERVATION: CLOB price unavailable at deadline — buying at initial ask');
         await executeObservationBuy(prisma, 'deadline', observationInitialAsk);
+      }
+    }
+  }
+
+  // ── Last-second reversal bet (T+4:00) ───────────────────────────────────
+  // If no Early Bird bet on this window, check for a strong counter-trend move.
+  // Buy the "losing" token at dirt-cheap price (< 20¢) = lottery ticket.
+  if (elapsed >= REVERSAL_OFFSET_MS && !reversalChecked && currentWindow && !observationActive) {
+    reversalChecked = true;
+
+    // Only if no active bet on this window
+    if (activeLiveBetWindow === null) {
+      const liveConfig = await getLiveTradingConfig(prisma);
+      if (liveConfig) {
+        // Window trend based on price movement so far
+        const trend: 'UP' | 'DOWN' = currentWindow.currentPrice >= currentWindow.startPrice ? 'UP' : 'DOWN';
+        const reverseDir: 'UP' | 'DOWN' = trend === 'UP' ? 'DOWN' : 'UP';
+
+        // Check last 2 closed 1m candles for strong counter-trend move
+        const recentCandles = klines
+          .filter((k) => k.isFinal && k.timestamp >= start)
+          .slice(-2);
+
+        if (recentCandles.length >= 2) {
+          // Both candles must go against the trend
+          const allReversed = recentCandles.every((c) =>
+            reverseDir === 'UP' ? c.close > c.open : c.close < c.open,
+          );
+          // Both candles must have strong bodies (not dojis)
+          const bodiesStrong = recentCandles.every((c) => {
+            const range = c.high - c.low;
+            return range > 0 && Math.abs(c.close - c.open) / range > 0.5;
+          });
+          // Combined move must be significant
+          const moveStart = recentCandles[0].open;
+          const moveEnd = recentCandles[recentCandles.length - 1].close;
+          const moveRocPct = Math.abs((moveEnd - moveStart) / moveStart) * 100;
+
+          if (allReversed && bodiesStrong && moveRocPct >= REVERSAL_MIN_ROC_PCT) {
+            log.info(
+              `REVERSAL signal: trend=${trend}, reverse=${reverseDir}, 2-candle ROC=${moveRocPct.toFixed(3)}%`,
+            );
+
+            // Fetch token for reverse direction
+            const slug = buildSlug(SYMBOL_SHORT, start);
+            const odds = await fetchPolymarketOdds(slug);
+            const tokenId = reverseDir === 'UP' ? odds.upTokenId : odds.downTokenId;
+            const entryOdds = reverseDir === 'UP' ? odds.upPrice : odds.downPrice;
+
+            if (tokenId) {
+              const clobAsk = await getClobAskPrice(prisma, tokenId);
+
+              if (clobAsk !== null && clobAsk > 0 && clobAsk <= REVERSAL_MAX_TOKEN_PRICE) {
+                const potentialWin = liveConfig.amount / clobAsk;
+                log.info(
+                  `REVERSAL BET: ${reverseDir} @ CLOB ${clobAsk.toFixed(3)} ` +
+                  `($${liveConfig.amount} → potential $${potentialWin.toFixed(0)} if WIN)`,
+                );
+
+                // Balance check
+                const { balance } = await getPolymarketBalance(prisma);
+                if (balance < liveConfig.amount) {
+                  log.warn(`REVERSAL: insufficient balance $${balance.toFixed(2)} — skipping`);
+                } else {
+                  activeLiveBetWindow = start;
+
+                  // Update window to track the reversal bet
+                  currentWindow.prediction = {
+                    direction: reverseDir,
+                    confidence: 0,
+                    score: { volumeSpike: 0, microRoc: 0, bodyRatio: 0, wickRejection: 0, candleAlignment: 0, preWindowMomentum: 0, total: 0 },
+                    microRocPct: moveRocPct * (reverseDir === 'UP' ? 1 : -1),
+                  };
+                  currentWindow.entryOdds = entryOdds;
+                  currentWindow.tokenId = tokenId;
+                  currentWindow.betAmount = liveConfig.amount;
+                  currentWindow.status = 'predicted';
+
+                  const betResult = await placePolymarketBet(prisma, reverseDir, tokenId, liveConfig.amount, entryOdds);
+                  if (betResult.success) {
+                    log.info(`REVERSAL BET OK: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
+                    if (betResult.executionPrice) currentWindow.executionPrice = betResult.executionPrice;
+                  } else {
+                    log.error(`REVERSAL BET FAILED: ${betResult.error}`);
+                    activeLiveBetWindow = null;
+                  }
+                }
+              } else if (clobAsk !== null) {
+                log.info(
+                  `REVERSAL: ${reverseDir} token too expensive (CLOB=${clobAsk.toFixed(3)} > ${REVERSAL_MAX_TOKEN_PRICE}) — no lottery`,
+                );
+              }
+            }
+          }
+        }
       }
     }
   }
