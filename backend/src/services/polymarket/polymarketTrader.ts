@@ -426,6 +426,7 @@ export async function placePolymarketBet(
   tokenId: string,
   amount: number,
   price: number,
+  skipEvCheck = false,
 ): Promise<{ success: boolean; orderId?: string; executionPrice?: number; error?: string }> {
   const creds = await loadCredentials(prisma);
   if (!creds) return { success: false, error: 'No credentials' };
@@ -442,7 +443,8 @@ export async function placePolymarketBet(
     }
 
     // 1. Absolute EV cap: don't buy above MAX_CLOB_PRICE (poor risk/reward)
-    if (clobAsk > MAX_CLOB_PRICE) {
+    //    skipEvCheck: used by hedge bets (small insurance, EV cap doesn't apply)
+    if (!skipEvCheck && clobAsk > MAX_CLOB_PRICE) {
       log.warn(`EV too low: CLOB ask=${clobAsk.toFixed(3)} > cap=${MAX_CLOB_PRICE} — skipping`);
       return { success: false, error: `EV too low (CLOB=${clobAsk.toFixed(3)} > cap=${MAX_CLOB_PRICE})` };
     }

@@ -706,11 +706,15 @@ async function tick(prisma: PrismaClient): Promise<void> {
         if (tokenId) {
           const clobAsk = await getClobAskPrice(prisma, tokenId);
 
-          if (clobAsk !== null && clobAsk > 0 && clobAsk <= REVERSAL_MAX_TOKEN_PRICE) {
+          // HEDGE: accept up to MAX_CLOB_PRICE (insurance, even at poor odds)
+          // LOTTERY: only buy below 20¢ (need massive asymmetry to justify)
+          const maxPrice = hasEarlyBird ? MAX_CLOB_PRICE : REVERSAL_MAX_TOKEN_PRICE;
+
+          if (clobAsk !== null && clobAsk > 0 && clobAsk <= maxPrice) {
             const potentialWin = betAmount / clobAsk;
             log.info(
               `${mode}: ${reverseDir} @ CLOB ${clobAsk.toFixed(3)} ` +
-              `($${betAmount} → potential $${potentialWin.toFixed(0)} if WIN)`,
+              `($${betAmount} → potential $${potentialWin.toFixed(2)} if WIN)`,
             );
 
             // Balance check
@@ -734,7 +738,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
                 currentWindow.status = 'predicted';
               }
 
-              const betResult = await placePolymarketBet(prisma, reverseDir, tokenId, betAmount, entryOdds);
+              const betResult = await placePolymarketBet(prisma, reverseDir, tokenId, betAmount, entryOdds, hasEarlyBird);
               if (betResult.success) {
                 log.info(`${mode} OK: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
                 if (!hasEarlyBird && betResult.executionPrice) {
@@ -774,7 +778,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
             }
           } else if (clobAsk !== null) {
             log.info(
-              `${mode}: ${reverseDir} token @ ${clobAsk.toFixed(3)} > ${REVERSAL_MAX_TOKEN_PRICE} — too expensive`,
+              `${mode}: ${reverseDir} token @ ${clobAsk.toFixed(3)} > ${maxPrice} — too expensive`,
             );
           }
         }
