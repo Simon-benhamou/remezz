@@ -413,10 +413,11 @@ export const api = {
       (await client.get('/api/polymarket/settings')).data as {
         mode: 'virtual' | 'live';
         amount: number;
+        hedgeAmount: number;
         hasCredentials: boolean;
       },
-    saveSettings: async (mode: 'virtual' | 'live', amount: number) =>
-      (await client.put('/api/polymarket/settings', { mode, amount })).data,
+    saveSettings: async (mode: 'virtual' | 'live', amount: number, hedgeAmount?: number) =>
+      (await client.put('/api/polymarket/settings', { mode, amount, hedgeAmount: hedgeAmount ?? 1 })).data,
     saveCredentials: async (privateKey: string, proxyAddress?: string) =>
       (await client.put('/api/polymarket/credentials', { privateKey, proxyAddress })).data as {
         success: boolean;

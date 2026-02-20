@@ -64,16 +64,20 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
     }
   });
 
-  // PUT /settings — save mode + amount
+  // PUT /settings — save mode + amount + hedgeAmount
   router.put('/settings', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const { mode, amount } = req.body;
+      const { mode, amount, hedgeAmount } = req.body;
       if (!mode || !['virtual', 'live'].includes(mode)) {
         return res.status(400).json({ error: 'Invalid mode (virtual or live)' });
       }
       const parsedAmount = parseFloat(amount);
       if (isNaN(parsedAmount) || parsedAmount < 1) {
         return res.status(400).json({ error: 'Amount must be at least $1' });
+      }
+      const parsedHedge = parseFloat(hedgeAmount ?? '1');
+      if (isNaN(parsedHedge) || parsedHedge < 0) {
+        return res.status(400).json({ error: 'Hedge amount must be >= $0' });
       }
 
       // If switching to live, validate credentials exist
@@ -84,7 +88,7 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
         }
       }
 
-      await savePolymarketConfig(prisma, mode, parsedAmount);
+      await savePolymarketConfig(prisma, mode, parsedAmount, parsedHedge);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Failed to save settings' });

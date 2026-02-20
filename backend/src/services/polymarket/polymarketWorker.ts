@@ -35,7 +35,6 @@ const OBS_DEADLINE_OFFSET_MS = 2 * 60 * 1000; // T+2:00 deadline (60s observatio
 const REVERSAL_OFFSET_MS = 4 * 60 * 1000;  // T+4:00 — check for last-second reversal/hedge
 const REVERSAL_MAX_TOKEN_PRICE = 0.20;      // Only buy tokens below 20¢
 const REVERSAL_MIN_ROC_PCT = 0.08;          // Minimum 2-candle reversal strength (%) — lottery only
-const HEDGE_AMOUNT = 1;                     // $1 insurance when Early Bird is active
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -606,7 +605,8 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
       if (signalOk) {
         const mode = hasEarlyBird ? 'HEDGE' : 'LOTTERY';
-        const betAmount = hasEarlyBird ? HEDGE_AMOUNT : liveConfig.amount;
+        const pmConfig = await getPolymarketConfig(prisma);
+        const betAmount = hasEarlyBird ? pmConfig.hedgeAmount : liveConfig.amount;
 
         // Fetch token for reverse direction
         const slug = buildSlug(SYMBOL_SHORT, start);

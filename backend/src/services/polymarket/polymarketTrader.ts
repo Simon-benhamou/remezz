@@ -49,6 +49,7 @@ const MAX_GAMMA_DIVERGENCE_PCT = 0.50;
 const SETTING_KEYS = {
   MODE: 'polymarket_mode',
   AMOUNT: 'polymarket_amount',
+  HEDGE_AMOUNT: 'polymarket_hedge_amount',
   PRIVATE_KEY: 'polymarket_private_key',
   PROXY_ADDRESS: 'polymarket_proxy_address', // proxy wallet shown in Polymarket UI (Magic.link)
   API_KEY: 'polymarket_api_key',
@@ -60,7 +61,8 @@ const SETTING_KEYS = {
 
 export interface PolymarketConfig {
   mode: 'virtual' | 'live';
-  amount: number; // USDC per trade
+  amount: number; // USDC per Early Bird trade
+  hedgeAmount: number; // USDC for T+4:00 hedge bet
   hasCredentials: boolean;
 }
 
@@ -123,23 +125,25 @@ export async function getPolymarketConfig(
   prisma: PrismaClient,
 ): Promise<PolymarketConfig> {
   const settings = await prisma.systemSetting.findMany({
-    where: { key: { in: [SETTING_KEYS.MODE, SETTING_KEYS.AMOUNT, SETTING_KEYS.API_KEY] } },
+    where: { key: { in: [SETTING_KEYS.MODE, SETTING_KEYS.AMOUNT, SETTING_KEYS.HEDGE_AMOUNT, SETTING_KEYS.API_KEY] } },
   });
   const map = new Map(settings.map((s) => [s.key, s.value]));
   return {
     mode: (map.get(SETTING_KEYS.MODE) as 'virtual' | 'live') || 'virtual',
     amount: parseFloat(map.get(SETTING_KEYS.AMOUNT) || '5'),
+    hedgeAmount: parseFloat(map.get(SETTING_KEYS.HEDGE_AMOUNT) || '1'),
     hasCredentials: !!map.get(SETTING_KEYS.API_KEY),
   };
 }
 
 /**
- * Save polymarket trading config (mode + amount).
+ * Save polymarket trading config (mode + amount + hedgeAmount).
  */
 export async function savePolymarketConfig(
   prisma: PrismaClient,
   mode: 'virtual' | 'live',
   amount: number,
+  hedgeAmount: number,
 ): Promise<void> {
   await Promise.all([
     prisma.systemSetting.upsert({
@@ -151,6 +155,11 @@ export async function savePolymarketConfig(
       where: { key: SETTING_KEYS.AMOUNT },
       create: { key: SETTING_KEYS.AMOUNT, value: amount.toString() },
       update: { value: amount.toString() },
+    }),
+    prisma.systemSetting.upsert({
+      where: { key: SETTING_KEYS.HEDGE_AMOUNT },
+      create: { key: SETTING_KEYS.HEDGE_AMOUNT, value: hedgeAmount.toString() },
+      update: { value: hedgeAmount.toString() },
     }),
   ]);
 }

@@ -507,6 +507,7 @@ export default function PolymarketPage() {
   // Live mode state
   const [pmMode, setPmMode] = useState<'virtual' | 'live'>('virtual');
   const [pmAmount, setPmAmount] = useState(5);
+  const [pmHedge, setPmHedge] = useState(1);
   const [pmHasCreds, setPmHasCreds] = useState(false);
   const [pmAddress, setPmAddress] = useState<string | null>(null);
   const [pmBalance, setPmBalance] = useState<number | null>(null);
@@ -536,6 +537,7 @@ export default function PolymarketPage() {
       if (settingsRes) {
         setPmMode(settingsRes.mode);
         setPmAmount(settingsRes.amount);
+        setPmHedge(settingsRes.hedgeAmount ?? 1);
         setPmHasCreds(settingsRes.hasCredentials);
         if (!settingsRes.hasCredentials) setPmAddress(null);
       }
@@ -681,7 +683,7 @@ export default function PolymarketPage() {
                 : 'bg-muted text-muted-foreground border border-border',
             )}>
               <Activity className="h-3 w-3" />
-              {pmMode === 'live' ? `LIVE — $${pmAmount}/trade` : 'VIRTUAL'}
+              {pmMode === 'live' ? `LIVE — $${pmAmount}+$${pmHedge}` : 'VIRTUAL'}
             </span>
 
             {pmMode === 'live' ? (
@@ -689,7 +691,7 @@ export default function PolymarketPage() {
                 onClick={async () => {
                   setTogglingMode(true);
                   try {
-                    await api.polymarket.saveSettings('virtual', pmAmount);
+                    await api.polymarket.saveSettings('virtual', pmAmount, pmHedge);
                     setPmMode('virtual');
                   } catch { /* ignore */ }
                   setTogglingMode(false);
@@ -709,7 +711,7 @@ export default function PolymarketPage() {
                 onClick={async () => {
                   setTogglingMode(true);
                   try {
-                    await api.polymarket.saveSettings('live', pmAmount);
+                    await api.polymarket.saveSettings('live', pmAmount, pmHedge);
                     setPmMode('live');
                   } catch { /* ignore */ }
                   setTogglingMode(false);
@@ -729,10 +731,10 @@ export default function PolymarketPage() {
             )}
           </div>
 
-          {/* Amount input */}
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-muted-foreground whitespace-nowrap">Montant/trade:</label>
+          {/* Amount inputs */}
+          <div className="flex items-center gap-3">
             <div className="flex items-center gap-1">
+              <label className="text-xs text-muted-foreground whitespace-nowrap">Early Bird:</label>
               <span className="text-xs text-muted-foreground">$</span>
               <input
                 type="number"
@@ -742,9 +744,25 @@ export default function PolymarketPage() {
                 value={pmAmount}
                 onChange={(e) => setPmAmount(Math.max(1, parseInt(e.target.value) || 1))}
                 onBlur={async () => {
-                  try { await api.polymarket.saveSettings(pmMode, pmAmount); } catch { /* ignore */ }
+                  try { await api.polymarket.saveSettings(pmMode, pmAmount, pmHedge); } catch { /* ignore */ }
                 }}
-                className="w-16 rounded border border-border bg-background px-2 py-1 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-14 rounded border border-border bg-background px-2 py-1 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              <label className="text-xs text-muted-foreground whitespace-nowrap">Hedge:</label>
+              <span className="text-xs text-muted-foreground">$</span>
+              <input
+                type="number"
+                min={0}
+                max={50}
+                step={0.5}
+                value={pmHedge}
+                onChange={(e) => setPmHedge(Math.max(0, parseFloat(e.target.value) || 0))}
+                onBlur={async () => {
+                  try { await api.polymarket.saveSettings(pmMode, pmAmount, pmHedge); } catch { /* ignore */ }
+                }}
+                className="w-14 rounded border border-border bg-background px-2 py-1 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
           </div>
