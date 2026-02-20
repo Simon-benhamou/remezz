@@ -35,9 +35,9 @@ const CHAIN_ID = 137; // Polygon
 const USDC_DECIMALS = 6;
 
 // Maximum acceptable CLOB price (absolute cap).
-// Buying above this has poor EV: paying 85¢ for $1 potential = 17.6% ROI max.
-// Below this threshold, EV is reasonable for 5-min up/down markets.
-const MAX_CLOB_PRICE = 0.85;
+// Buying above this has poor EV: paying 70¢ for $1 potential = 42.8% ROI max.
+// 5-min BTC markets have thin liquidity above 70¢ — FOK failures common.
+const MAX_CLOB_PRICE = 0.70;
 
 // Maximum divergence allowed between CLOB and Gamma prices.
 // If CLOB is more than 50% above Gamma, something is likely wrong (stale Gamma, wrong market).
@@ -433,26 +433,65 @@ export async function placePolymarketBet(
 
     log.info(`Price OK: CLOB ask=${clobAsk.toFixed(3)}, Gamma=${price.toFixed(3)}, cap=${MAX_CLOB_PRICE}`);
 
-    // Pass the CLOB ask price as a limit so FOK fills at that price.
-    const order: UserMarketOrder = {
+    // Place GTC limit order (not FOK) — 5-min BTC markets have thin liquidity,
+    // FOK fails when the order book can't fill $10 at the ask price in one shot.
+    // GTC sits in the book and fills as liquidity comes in.
+    // Note: createAndPostOrder uses UserOrder (size in tokens), not UserMarketOrder (amount in USDC).
+    const tokenSize = amount / clobAsk; // Convert USDC amount to token quantity
+    const order = {
       tokenID: tokenId,
-      amount, // USDC amount to spend
       price: clobAsk,
+      size: tokenSize,
       side: Side.BUY,
     };
 
-    const result = await client.createAndPostMarketOrder(order, undefined, OrderType.FOK);
+    const result = await client.createAndPostOrder(order, undefined, OrderType.GTC);
 
-    // The clob-client does NOT throw on HTTP errors — it returns { error: "...", status: 4xx }.
-    // Must check explicitly before treating as success.
     if (result?.error) {
       const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
       throw new Error(`Order rejected (${result.status ?? '?'}): ${errMsg}`);
     }
 
     const orderId = result?.orderID ?? result?.id ?? 'unknown';
-    log.info(`Live bet placed: ${direction} $${amount} @ CLOB ${clobAsk.toFixed(3)} (Gamma ${price.toFixed(3)}) | orderId=${orderId}`);
-    return { success: true, orderId, executionPrice: clobAsk };
+    log.info(`GTC order placed: ${direction} $${amount} @ ${clobAsk.toFixed(3)} | orderId=${orderId} — polling for fill...`);
+
+    // Poll for fill status — wait up to 30s, check every 2s
+    const GTC_POLL_INTERVAL_MS = 2000;
+    const GTC_MAX_WAIT_MS = 30_000;
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < GTC_MAX_WAIT_MS) {
+      await new Promise((r) => setTimeout(r, GTC_POLL_INTERVAL_MS));
+
+      try {
+        const orderStatus = await client.getOrder(orderId);
+        const status = (orderStatus as any)?.status ?? (orderStatus as any)?.order?.status;
+
+        if (status === 'MATCHED' || status === 'FILLED') {
+          log.info(`GTC order FILLED: ${direction} $${amount} @ CLOB ${clobAsk.toFixed(3)} (${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
+          return { success: true, orderId, executionPrice: clobAsk };
+        }
+
+        if (status === 'CANCELED' || status === 'CANCELLED' || status === 'EXPIRED') {
+          log.warn(`GTC order ${status}: ${orderId}`);
+          return { success: false, error: `Order ${status} by exchange` };
+        }
+        // Still LIVE/OPEN — continue polling
+      } catch (pollErr: any) {
+        log.warn(`GTC poll error: ${pollErr?.message} — retrying`);
+      }
+    }
+
+    // Timed out — cancel the unfilled order
+    log.warn(`GTC order not filled after ${GTC_MAX_WAIT_MS / 1000}s — cancelling orderId=${orderId}`);
+    try {
+      await client.cancelOrder({ orderID: orderId });
+      log.info(`GTC order cancelled: ${orderId}`);
+    } catch (cancelErr: any) {
+      log.warn(`Failed to cancel GTC order: ${cancelErr?.message}`);
+    }
+
+    return { success: false, error: `GTC order not filled within ${GTC_MAX_WAIT_MS / 1000}s (liquidity too thin)` };
   } catch (err: any) {
     log.error(`Failed to place bet: ${err?.message}`);
     return { success: false, error: err?.message };
