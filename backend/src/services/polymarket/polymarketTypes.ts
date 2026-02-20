@@ -44,6 +44,7 @@ export interface WindowState {
   elapsed: number;
   prediction: PredictionResult | null;
   entryOdds: number | null;
+  betAmount: number | null;
   status: 'accumulating' | 'predicted' | 'resolved' | 'skipped';
 }
 

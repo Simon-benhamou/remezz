@@ -443,7 +443,7 @@ function HistoryTable({ predictions }: HistoryTableProps) {
                 'font-mono font-semibold',
                 isSkipped ? 'text-muted-foreground' : pnl > 0 ? 'text-success' : pnl < 0 ? 'text-destructive' : 'text-muted-foreground',
               )}>
-                {isSkipped ? '\u2014' : pnl !== 0 ? `${pnl > 0 ? '+' : ''}${pnl.toFixed(2)}` : '\u2014'}
+                {isSkipped ? '\u2014' : pnl !== 0 ? `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}` : '\u2014'}
               </span>
 
               {/* Price */}
@@ -819,8 +819,8 @@ export default function PolymarketPage() {
         <KpiCard
           icon={DollarSign}
           label="Simulated P&L (today)"
-          value={`${todayPnl >= 0 ? '+' : ''}${(todayPnl * 100).toFixed(1)}%`}
-          sub={`Cumulative: ${(stats?.cumulativePnl ?? 0) >= 0 ? '+' : ''}${((stats?.cumulativePnl ?? 0) * 100).toFixed(1)}%`}
+          value={`${todayPnl >= 0 ? '+' : ''}$${todayPnl.toFixed(2)}`}
+          sub={`Cumulative: ${(stats?.cumulativePnl ?? 0) >= 0 ? '+' : ''}$${(stats?.cumulativePnl ?? 0).toFixed(2)}`}
           color={todayPnl >= 0 ? 'success' : 'destructive'}
         />
         <KpiCard

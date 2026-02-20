@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -52,6 +52,7 @@ interface PendingVerification {
   slug: string;                // Polymarket slug for Gamma API lookup
   predictionDirection: 'UP' | 'DOWN' | null; // what we predicted
   entryOdds: number | null;    // needed to recompute simulatedPnl on correction
+  betAmount: number | null;    // USDC amount for dollar PnL
   verifyAfterMs: number;       // don't check until this time (wait for oracle)
   giveUpAfterMs: number;       // stop retrying after this time
 }
@@ -127,6 +128,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
         confidence: w.prediction?.confidence ?? null,
         actualResult: preliminaryResult,
         entryOdds: w.entryOdds,
+        betAmount: w.betAmount,
         simulatedPnl: null,       // Set by oracle verification only
         scoreBreakdown: w.prediction?.score
           ? JSON.parse(JSON.stringify(w.prediction.score))
@@ -156,6 +158,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
       slug,
       predictionDirection: w.prediction?.direction ?? null,
       entryOdds: w.entryOdds,
+      betAmount: w.betAmount,
       verifyAfterMs: Date.now() + 3 * 60 * 1000,   // check after 3 min
       giveUpAfterMs: Date.now() + 60 * 60 * 1000,  // give up after 60 min (was 15 — too short)
     });
@@ -196,9 +199,13 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
 
       // Oracle resolved — always update DB with authoritative result + compute isCorrect
       const isCorrect = v.predictionDirection ? v.predictionDirection === oracleResult : null;
+      // Dollar PnL: buy N tokens at price P with $A → N = A/P tokens
+      //   WIN: N × $1 = $A/P → profit = A/P - A = A × (1-P)/P
+      //   LOSE: N × $0 → loss = -A (entire stake lost)
+      const amt = v.betAmount ?? 5; // fallback $5 for old predictions without betAmount
       const simulatedPnl =
         isCorrect !== null && v.entryOdds !== null
-          ? isCorrect ? 1 - v.entryOdds : -v.entryOdds
+          ? isCorrect ? amt * (1 - v.entryOdds) / v.entryOdds : -amt
           : null;
 
       const existing = await prisma.polymarketPrediction.findFirst({
@@ -292,6 +299,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
       elapsed,
       prediction: null,
       entryOdds: null,
+      betAmount: null,
       status: 'accumulating',
     };
 
@@ -338,8 +346,12 @@ async function tick(prisma: PrismaClient): Promise<void> {
       currentWindow.entryOdds = entryOdds;
       currentWindow.status = 'predicted';
 
+      // Store bet amount for dollar PnL calculation (from config, same for virtual + live)
+      const pmConfig = await getPolymarketConfig(prisma);
+      currentWindow.betAmount = pmConfig.amount;
+
       log.info(
-        `Prediction: ${result.direction} (score=${result.score.total}, conf=${result.confidence}) | odds=${entryOdds.toFixed(3)} | slug=${slug}`,
+        `Prediction: ${result.direction} (score=${result.score.total}, conf=${result.confidence}) | odds=${entryOdds.toFixed(3)} | amount=$${pmConfig.amount} | slug=${slug}`,
       );
 
       // ── Live trading: place real bet if enabled ──────────────────────
@@ -458,6 +470,7 @@ async function recoverPendingVerifications(prisma: PrismaClient): Promise<void> 
       polymarketSlug: true,
       prediction: true,
       entryOdds: true,
+      betAmount: true,
     },
   });
 
@@ -469,6 +482,7 @@ async function recoverPendingVerifications(prisma: PrismaClient): Promise<void> 
       slug: p.polymarketSlug!,
       predictionDirection: p.prediction as 'UP' | 'DOWN',
       entryOdds: p.entryOdds,
+      betAmount: p.betAmount,
       verifyAfterMs: Date.now(),               // check immediately
       giveUpAfterMs: Date.now() + 60 * 60 * 1000, // 60 min from now
     });

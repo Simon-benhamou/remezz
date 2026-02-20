@@ -149,7 +149,13 @@ This is a standalone 5-minute BTC up/down prediction system that bets on Polymar
 - History table with oracle verification status (hourglass = pending, checkmark = win, X = loss)
 - Live mode controls: toggle virtual/live, set amount, wallet connection
 
-**Prisma Model**: `PolymarketPrediction` with `isCorrect Boolean?` (null = awaiting oracle), `simulatedPnl Float?`, `polymarketSlug String?`, `scoreBreakdown Json?`
+**PnL Calculation** (critical — reflects real Polymarket binary mechanics):
+- Buy N = amount/price tokens at price P with $amount USDC
+- WIN: N tokens × $1 = $amount/P → profit = `amount × (1-P)/P` (e.g., $5 at 0.55 → +$4.09)
+- LOSE: N tokens × $0 → loss = `-amount` (100% of stake, e.g., -$5.00)
+- `simulatedPnl` stored in dollars, `betAmount` stored per prediction for accuracy
+
+**Prisma Model**: `PolymarketPrediction` with `isCorrect Boolean?` (null = awaiting oracle), `simulatedPnl Float?` (dollar PnL), `betAmount Float?` (USDC per bet), `polymarketSlug String?`, `scoreBreakdown Json?`
 
 **Middleware** (`src/middleware/`)
 - `auth.ts` - JWT token verification, user extraction from request

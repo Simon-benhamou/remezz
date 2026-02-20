@@ -366,6 +366,7 @@ model PolymarketPrediction {
   confidence      Int?
   actualResult    String?
   entryOdds       Float?
+  betAmount       Float?            // USDC amount bet (for dollar PnL calculation)
   simulatedPnl    Float?
   scoreBreakdown  Json?
   isCorrect       Boolean?
