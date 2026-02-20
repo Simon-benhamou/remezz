@@ -421,23 +421,44 @@ export function shouldExitPosition(
     }
 
     if (progressiveEnabled) {
-      const tier3At = (MomentumConfig.EXIT as any).TRAILING_TIER3_AT_PCT ?? 6.0;
-      const tier2At = (MomentumConfig.EXIT as any).TRAILING_TIER2_AT_PCT ?? 4.0;
-      const tier1At = MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT;
+      // V5.118: ATR-scaled progressive trailing — adapt tiers per-asset using entry ATR
+      const atrScaledEnabled = (MomentumConfig.EXIT as any).TRAILING_ATR_SCALED_ENABLED ?? false;
+      const entryAtrPct = position.entryAtrPct;
 
-      if (hwmPct >= tier3At) {
-        // Tier 3: Very big winner (6%+) - widest trailing × vol multiplier
-        const baseDist = (MomentumConfig.EXIT as any).TRAILING_TIER3_DISTANCE_PCT ?? 2.5;
-        trailingDistance = baseDist * volMultiplier;
-      } else if (hwmPct >= tier2At) {
-        // Tier 2: Big winner (4-6%) - wide trailing × vol multiplier
-        const baseDist = (MomentumConfig.EXIT as any).TRAILING_TIER2_DISTANCE_PCT ?? 1.5;
-        trailingDistance = baseDist * volMultiplier;
-      } else if (hwmPct >= tier1At) {
-        // Tier 1: Good winner (3-4%) - normal wide trailing × vol multiplier
-        trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT * volMultiplier;
+      if (atrScaledEnabled && entryAtrPct && entryAtrPct > 0) {
+        // ATR-scaled tiers: thresholds and distances scale with asset's ATR at entry
+        const tier3AtMult = (MomentumConfig.EXIT as any).TRAILING_TIER3_ATR_MULT ?? 4.5;
+        const tier2AtMult = (MomentumConfig.EXIT as any).TRAILING_TIER2_ATR_MULT ?? 3.0;
+        const tier1AtMult = (MomentumConfig.EXIT as any).TRAILING_TIER1_ATR_MULT ?? 2.0;
+
+        const tier3DistMult = (MomentumConfig.EXIT as any).TRAILING_TIER3_DIST_ATR_MULT ?? 1.5;
+        const tier2DistMult = (MomentumConfig.EXIT as any).TRAILING_TIER2_DIST_ATR_MULT ?? 1.0;
+        const tier1DistMult = (MomentumConfig.EXIT as any).TRAILING_TIER1_DIST_ATR_MULT ?? 0.5;
+
+        if (hwmPct >= tier3AtMult * entryAtrPct) {
+          trailingDistance = tier3DistMult * entryAtrPct * volMultiplier;
+        } else if (hwmPct >= tier2AtMult * entryAtrPct) {
+          trailingDistance = tier2DistMult * entryAtrPct * volMultiplier;
+        } else if (hwmPct >= tier1AtMult * entryAtrPct) {
+          trailingDistance = tier1DistMult * entryAtrPct * volMultiplier;
+        }
+        // Below tier1: use baseTrailingDistance (from volatility regime)
+      } else {
+        // Fallback: fixed % tiers (legacy behavior, or entryAtrPct unavailable)
+        const tier3At = (MomentumConfig.EXIT as any).TRAILING_TIER3_AT_PCT ?? 6.0;
+        const tier2At = (MomentumConfig.EXIT as any).TRAILING_TIER2_AT_PCT ?? 4.0;
+        const tier1At = MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT;
+
+        if (hwmPct >= tier3At) {
+          const baseDist = (MomentumConfig.EXIT as any).TRAILING_TIER3_DISTANCE_PCT ?? 2.5;
+          trailingDistance = baseDist * volMultiplier;
+        } else if (hwmPct >= tier2At) {
+          const baseDist = (MomentumConfig.EXIT as any).TRAILING_TIER2_DISTANCE_PCT ?? 1.5;
+          trailingDistance = baseDist * volMultiplier;
+        } else if (hwmPct >= tier1At) {
+          trailingDistance = MomentumConfig.EXIT.TRAILING_WIDE_DISTANCE_PCT * volMultiplier;
+        }
       }
-      // Below tier1At: use baseTrailingDistance (already set, from volatility regime)
     } else {
       // Legacy behavior: single widen threshold
       if (hwmPct >= MomentumConfig.EXIT.TRAILING_WIDEN_AT_PCT) {

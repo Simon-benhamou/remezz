@@ -189,6 +189,14 @@ const TIERS = {
   TIER2_DISTANCE_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER2_DISTANCE_PCT ?? 1.5,
   TIER3_AT_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER3_AT_PCT ?? 6.0,
   TIER3_DISTANCE_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER3_DISTANCE_PCT ?? 2.5,
+  // V5.118: ATR-scaled progressive trailing
+  ATR_SCALED_ENABLED: (MomentumConfig.EXIT as any).TRAILING_ATR_SCALED_ENABLED ?? false,
+  TIER1_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER1_ATR_MULT ?? 2.0,
+  TIER2_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER2_ATR_MULT ?? 3.0,
+  TIER3_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER3_ATR_MULT ?? 4.5,
+  TIER1_DIST_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER1_DIST_ATR_MULT ?? 0.5,
+  TIER2_DIST_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER2_DIST_ATR_MULT ?? 1.0,
+  TIER3_DIST_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER3_DIST_ATR_MULT ?? 1.5,
 };
 
 interface VolState {
@@ -243,12 +251,20 @@ function aggregate1mTo15m(candles1m: Candle1m[]): { high: number; low: number; c
   return result;
 }
 
-// Matches exitLogic.ts:388-446 exactly
-function getTrailingDistance(hwmPct: number, vol: VolState): number {
+// Matches exitLogic.ts:423-460 exactly
+function getTrailingDistance(hwmPct: number, vol: VolState, entryAtrPct?: number): number {
   if (TIERS.PROGRESSIVE_ENABLED) {
-    if (hwmPct >= TIERS.TIER3_AT_PCT) return TIERS.TIER3_DISTANCE_PCT * vol.volMultiplier;
-    if (hwmPct >= TIERS.TIER2_AT_PCT) return TIERS.TIER2_DISTANCE_PCT * vol.volMultiplier;
-    if (hwmPct >= TIERS.WIDEN_AT_PCT) return TIERS.WIDE_DISTANCE_PCT * vol.volMultiplier;
+    // V5.118: ATR-scaled progressive trailing — adapt tiers per-asset using entry ATR
+    if (TIERS.ATR_SCALED_ENABLED && entryAtrPct && entryAtrPct > 0) {
+      if (hwmPct >= TIERS.TIER3_ATR_MULT * entryAtrPct) return TIERS.TIER3_DIST_ATR_MULT * entryAtrPct * vol.volMultiplier;
+      if (hwmPct >= TIERS.TIER2_ATR_MULT * entryAtrPct) return TIERS.TIER2_DIST_ATR_MULT * entryAtrPct * vol.volMultiplier;
+      if (hwmPct >= TIERS.TIER1_ATR_MULT * entryAtrPct) return TIERS.TIER1_DIST_ATR_MULT * entryAtrPct * vol.volMultiplier;
+    } else {
+      // Fallback: fixed % tiers (legacy behavior)
+      if (hwmPct >= TIERS.TIER3_AT_PCT) return TIERS.TIER3_DISTANCE_PCT * vol.volMultiplier;
+      if (hwmPct >= TIERS.TIER2_AT_PCT) return TIERS.TIER2_DISTANCE_PCT * vol.volMultiplier;
+      if (hwmPct >= TIERS.WIDEN_AT_PCT) return TIERS.WIDE_DISTANCE_PCT * vol.volMultiplier;
+    }
   } else {
     if (hwmPct >= TIERS.WIDEN_AT_PCT) return TIERS.WIDE_DISTANCE_PCT * vol.volMultiplier;
   }
@@ -261,11 +277,12 @@ function calcTrailingStop(
   entryPrice: number,
   hwm: number,
   vol: VolState,
+  entryAtrPct?: number,
 ): { stopPrice: number } {
   const hwmPct = side === 'long'
     ? ((hwm - entryPrice) / entryPrice) * 100
     : ((entryPrice - hwm) / entryPrice) * 100;
-  const distancePct = getTrailingDistance(hwmPct, vol);
+  const distancePct = getTrailingDistance(hwmPct, vol, entryAtrPct);
   const stopPrice = side === 'long'
     ? hwm * (1 - distancePct / 100)
     : hwm * (1 + distancePct / 100);
@@ -276,12 +293,8 @@ function calcTrailingStop(
 // PNL CALCULATION (matches backtestService.ts CONFIG.COSTS)
 // ═══════════════════════════════════════════════════════════════════════════
 
-const COSTS = {
-  TRADING_FEE_PCT: 0.04,
-  SLIPPAGE_PCT: 0.05,
-  FUNDING_RATE_PCT: 0.01,
-  FUNDING_INTERVAL_BARS: 32, // 32 × 15min = 8h
-};
+// V5.118: Use centralized COSTS from MomentumConfig
+const COSTS = MomentumConfig.COSTS;
 
 function calculatePnl(
   entryPrice: number,
@@ -416,8 +429,8 @@ function replayTradeAt1m(
     }
     if (!trailingActive) continue;
 
-    // STEP 4: Compute trailing stop (vol-adapted distances)
-    const { stopPrice } = calcTrailingStop(side, entryPrice, hwm, vol);
+    // STEP 4: Compute trailing stop (vol-adapted distances, ATR-scaled if available)
+    const { stopPrice } = calcTrailingStop(side, entryPrice, hwm, vol, trade.entryAtrPct);
 
     // STEP 5: Exhaustion scoring + STOP_MARKET placement/cancel
     if (exhaustionStopActive) {

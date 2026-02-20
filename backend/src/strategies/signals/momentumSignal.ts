@@ -899,6 +899,25 @@ export function checkMomentumSignal(
           features
         };
       }
+
+      // V5.118: SHORT choppiness filter — skip if market alternates heavily
+      // Same logic as LONG alternation5: count direction changes in last 5 candles
+      if (closes.length >= 6) {
+        const shortMaxAlt5 = patternConfigShort.SHORT_MAX_ALT5 ?? 2;
+        let altCount = 0;
+        for (let i = closes.length - 5; i < closes.length; i++) {
+          if ((closes[i] > closes[i - 1]) !== (closes[i - 1] > closes[i - 2])) {
+            altCount++;
+          }
+        }
+        if (altCount > shortMaxAlt5) {
+          return {
+            valid: false,
+            reason: `v5.118_short_choppy(alt5=${altCount}>${shortMaxAlt5})`,
+            features
+          };
+        }
+      }
     }
 
     // V5.101: S/R proximity filter

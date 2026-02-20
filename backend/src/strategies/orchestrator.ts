@@ -548,10 +548,16 @@ export class AgentOrchestrator {
       // Update market conditions: prefer SymbolEngine cache, fallback to self-computation
       const engineForConditions = symbolEngineManager.getEngine(this.config.symbol);
       const engineConditions = engineForConditions?.getMarketConditions();
-      const newConditions = engineConditions || getMarketConditions(
-        (await this.candleFetcher.fetchBtcCandles()),
-        (await this.candleFetcher.fetchBtcCandles1h()).filter(c => c.isFinal !== false)
-      );
+      let newConditions: typeof engineConditions;
+      if (engineConditions) {
+        newConditions = engineConditions;
+      } else {
+        const btc15m = await this.candleFetcher.fetchBtcCandles();
+        const btcForRegime = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME === '15m'
+          ? btc15m
+          : (await this.candleFetcher.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
+        newConditions = getMarketConditions(btc15m, btcForRegime);
+      }
       this.lastMarketConditions = {
         ...newConditions,
         // Preserve marketQuality from checkEntry() if already set
@@ -818,8 +824,15 @@ export class AgentOrchestrator {
         }
         btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
 
-        // V5.102: Use BTC 15m candles for regime (was 1h) — faster regime switches for momentum breakout
-        const btcCandlesForRegime = btcCandles;
+        // V5.102: Use BTC candles matching config regime timeframe
+        let btcCandlesForRegime: typeof btcCandles;
+        if (MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME === '15m') {
+          btcCandlesForRegime = btcCandles; // Use same 15m candles
+        } else {
+          // Fetch real 1h candles for regime when configured
+          const btc1h = (await this.candleFetcher.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
+          btcCandlesForRegime = btc1h.length >= 201 ? btc1h : btcCandles;
+        }
         const MIN_BTC_REGIME_CANDLES = 201; // Need 200 for SMA200 + 1
         if (btcCandlesForRegime.length < MIN_BTC_REGIME_CANDLES) {
           if (this.tickCount % 10 === 1) {
@@ -1132,8 +1145,14 @@ export class AgentOrchestrator {
       }
       const btcCandles = lastClosedBtcIdx >= 0 ? allBtcCandles.slice(0, lastClosedBtcIdx + 1) : [];
 
-      // V5.102: Use BTC 15m candles for regime (was 1h — faster regime for momentum breakout)
-      const btcCandles1h = btcCandles; // 15m candles used for regime/MTF
+      // V5.102: Use BTC candles matching config regime timeframe
+      let btcCandles1h: typeof btcCandles;
+      if (MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME === '15m') {
+        btcCandles1h = btcCandles;
+      } else {
+        const btc1h = (await this.candleFetcher.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
+        btcCandles1h = btc1h.length >= 201 ? btc1h : btcCandles;
+      }
 
       // Only process exit once per newly-closed candle.
       if (latestClosedCandle.timestamp === this.lastProcessedExitCandleTs) {

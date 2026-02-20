@@ -10,6 +10,7 @@ import {
   calcSafeLeverage,
   calcDynamicStopLoss,
   calcBollingerBands,
+  calcATR,
   checkWickBreakout,
   getLiquidityTier,
   LIQUIDATION_CONFIG,
@@ -342,10 +343,19 @@ export class PositionOpener {
       logger.info(`📊 [${symbol}] WICK BREAKOUT DETECTED (not used) | side=${side.toUpperCase()} | close=$${currentPrice.toFixed(4)} | theoreticalWickEntry=$${wickBreakout.entryPrice?.toFixed(4)} | potentialImprovement=+${(wickBreakout.improvement * 100).toFixed(2)}%`);
     }
 
+    // V5.118: Snapshot ATR% at entry for ATR-scaled trailing stops
+    let entryAtrPct: number | undefined;
+    if (candles.length > 0) {
+      const atr = calcATR(candles, 14);
+      if (atr) {
+        entryAtrPct = (atr / candles[candles.length - 1].close) * 100;
+      }
+    }
+
     if (this.ctx.mode === 'paper') {
-      return this.openPaper(side, symbol, entryPrice, lastCandle, sizing, slPct, multiPlan, wickBreakout);
+      return this.openPaper(side, symbol, entryPrice, lastCandle, sizing, slPct, multiPlan, wickBreakout, entryAtrPct);
     } else {
-      return this.openLive(side, symbol, entryPrice, currentPrice, lastCandle, candles, sizing, slPct, multiPlan, wickBreakout);
+      return this.openLive(side, symbol, entryPrice, currentPrice, lastCandle, candles, sizing, slPct, multiPlan, wickBreakout, entryAtrPct);
     }
   }
 
@@ -362,6 +372,7 @@ export class PositionOpener {
     slPct: number,
     multiPlan: ReturnType<typeof calculatePositionSize>['multiPositionPlan'],
     wickBreakout: ReturnType<typeof checkWickBreakout>,
+    entryAtrPct?: number,
   ): Promise<OpenPositionResult> {
     // Paper trade
     // V5.46 FIX: Use candle.timestamp for entryTime (same as backtest)
@@ -378,6 +389,7 @@ export class PositionOpener {
         ? entryPrice * (1 - slPct / 100)
         : entryPrice * (1 + slPct / 100),
       stopLossPct: slPct,
+      entryAtrPct,  // V5.118: ATR% at entry for ATR-scaled trailing
       highWaterMark: side === 'long' ? entryPrice : undefined,
       lowWaterMark: side === 'short' ? entryPrice : undefined,
       positionId: multiPlan?.enabled ? `${this.ctx.sessionId}_0` : undefined,
@@ -386,7 +398,7 @@ export class PositionOpener {
     };
 
     // Calculate entry fee: 0.04% taker on entry notional
-    const paperEntryFee = sizing.notionalUsd * 0.0004;
+    const paperEntryFee = sizing.notionalUsd * MomentumConfig.COSTS.PAPER_FEE_RATE;
 
     // V5.44 FIX: Save to DB FIRST, before committing capital
     // If DB save fails, cancel reservation and don't send notification
@@ -431,6 +443,7 @@ export class PositionOpener {
             ? addEntryPrice * (1 - slPct / 100)
             : addEntryPrice * (1 + slPct / 100),
           stopLossPct: slPct,
+          entryAtrPct,  // V5.118: same ATR% as primary position
           highWaterMark: side === 'long' ? addEntryPrice : undefined,
           lowWaterMark: side === 'short' ? addEntryPrice : undefined,
           positionId: `${this.ctx.sessionId}_${i}`,
@@ -510,6 +523,7 @@ export class PositionOpener {
     slPct: number,
     multiPlan: ReturnType<typeof calculatePositionSize>['multiPositionPlan'],
     wickBreakout: ReturnType<typeof checkWickBreakout>,
+    entryAtrPct?: number,
   ): Promise<OpenPositionResult> {
     try {
       // 🚫 Check circuit breaker FIRST - don't attempt REST calls if IP is banned
@@ -761,6 +775,7 @@ export class PositionOpener {
           ? filledPrice! * (1 - slPct / 100)
           : filledPrice! * (1 + slPct / 100),
         stopLossPct: slPct,
+        entryAtrPct,  // V5.118: ATR% at entry for ATR-scaled trailing
         orderId: orderId,
         highWaterMark: side === 'long' ? filledPrice! : undefined,
         lowWaterMark: side === 'short' ? filledPrice! : undefined,
@@ -843,6 +858,7 @@ export class PositionOpener {
               ? addFilledPrice * (1 - slPct / 100)
               : addFilledPrice * (1 + slPct / 100),
             stopLossPct: slPct,
+            entryAtrPct,  // V5.118: same ATR% as primary position
             orderId: addOrder.id,
             highWaterMark: side === 'long' ? addFilledPrice : undefined,
             lowWaterMark: side === 'short' ? addFilledPrice : undefined,
@@ -873,7 +889,7 @@ export class PositionOpener {
 
       // Extract entry fee from CCXT order, fallback to 0.04% calculation
       const liveEntryNotional = filledQty! * filledPrice!;
-      const liveEntryFee = liveEntryNotional * 0.0004;
+      const liveEntryFee = liveEntryNotional * MomentumConfig.COSTS.PAPER_FEE_RATE;
 
       // Exchange-side protection: EMERGENCY STOP ONLY (wide, crash protection)
       // V5.113: Tier-aware — emergency = baseSlPct + buffer, never tighter than app SL

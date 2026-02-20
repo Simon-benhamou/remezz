@@ -61,6 +61,7 @@ export class PositionPersistence {
           maxPnlPct: (dbPosition.maxPnlPct as number | null) ?? undefined,
           trailingActive: (dbPosition.trailingActive as boolean) ?? false,
           trailingBreachCandles: (dbPosition.trailingBreachCandles as number | null) ?? 0,
+          entryAtrPct: (dbPosition as any).entryAtrPct ?? undefined,
           stagnantState: (() => {
             try {
               if (!dbPosition.stagnantState) return undefined;
@@ -106,7 +107,7 @@ export class PositionPersistence {
       const clientOrderId = position.orderId || `${isLive ? 'live' : 'paper'}_entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const entrySide = position.side === 'long' ? 'buy' : 'sell';
       const entryNotionalUsd = position.qty * position.entryPrice;
-      const calculatedFee = entryFeeUsd ?? (entryNotionalUsd * 0.0004);
+      const calculatedFee = entryFeeUsd ?? (entryNotionalUsd * MomentumConfig.COSTS.PAPER_FEE_RATE);
 
       await (prisma as any).$transaction(async (tx: any) => {
         const order = await tx.order.create({
@@ -151,6 +152,7 @@ export class PositionPersistence {
             leverage: MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] || 3,
             stopPrice: position.stopLoss,
             openedAt: new Date(position.entryTime),
+            entryAtrPct: position.entryAtrPct ?? null,
             highWaterMark: position.side === 'long' ? position.entryPrice : null,
             lowWaterMark: position.side === 'short' ? position.entryPrice : null,
             maxPnlPct: 0,
@@ -227,7 +229,7 @@ export class PositionPersistence {
       }
 
       const notionalUsd = position.qty * exitPrice;
-      const calculatedFee = feeUsd ?? (notionalUsd * 0.0004);
+      const calculatedFee = feeUsd ?? (notionalUsd * MomentumConfig.COSTS.PAPER_FEE_RATE);
 
       const exitTs = new Date();
       // V5.107 NOTE: realEntryTime (Date.now()) takes priority for Trade.entryTs.
@@ -281,7 +283,7 @@ export class PositionPersistence {
             exitPrice,
             entryNotional,
             realizedPnlUsd: pnlUsd,
-            feesUsd: calculatedFee * 2,
+            feesUsd: feeUsd != null ? calculatedFee : calculatedFee * 2,
             pctChange,
             roiPct,
             leverage,

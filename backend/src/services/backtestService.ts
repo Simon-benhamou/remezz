@@ -53,6 +53,7 @@ import {
   checkWickBreakout,
   calcBollingerBands,
   calcDynamicStopLoss,
+  calcSafeLeverage,
   // V5.46 PARITY: Both backtest and live now use the same time calculation:
   // - entryTime = candle.timestamp (candle START/OPEN time)
   // - nowMs = entryTime + holdBars * 15 * 60000 (backtest) 
@@ -150,6 +151,7 @@ interface BacktestSimPosition {
   exhaustionStopActive?: boolean; // V5.110: Exhaustion-based STOP_MARKET was placed
   exhaustionStopPrice?: number;   // V5.110: Price of the exhaustion stop
   maxPnlPct?: number;  // V5.28: Track max raw PnL % for stagnant trade detection
+  entryAtrPct?: number;  // V5.118: ATR% at entry time (for ATR-scaled trailing)
   entryReason?: string;  // V5.32: Track entry reason (anticipatory vs classic)
   // V5.30: Multi-position tracking
   positionIndex?: number;     // 0 = primary, 1+ = additional positions
@@ -246,6 +248,7 @@ export interface BacktestTrade {
   day: string;
   wasCapped: boolean;
   slippagePct: number;
+  entryAtrPct?: number;  // V5.118: ATR% at entry (for ATR-scaled trailing in 1m replay)
 }
 
 export interface MonthlyStats {
@@ -342,11 +345,8 @@ const CONFIG = {
   get REGIME_CHANGE_EXIT() {
     return MomentumConfig.REGIME_CHANGE_EXIT;
   },
-  COSTS: {
-    TRADING_FEE_PCT: 0.04, // Binance taker fee
-    SLIPPAGE_PCT: 0.05, // Realistic slippage
-    FUNDING_RATE_PCT: 0.01, // 8h funding
-    FUNDING_INTERVAL_BARS: 32, // 32 × 15min = 8h
+  get COSTS() {
+    return MomentumConfig.COSTS;
   },
   // V5.18: Fine-tuned capital utilization for consistent ROI scaling
   SIZING: {
@@ -711,6 +711,7 @@ function checkBacktestExit(
     trailingActive: pos.trailingActive,
     trailingBreachCandles: pos.trailingBreachCandles,
     maxPnlPct: pos.maxPnlPct,
+    entryAtrPct: pos.entryAtrPct,
     stagnantState: pos.stagnantState,
   };
   
@@ -1611,6 +1612,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
                       day: exitDay,
                       wasCapped: pos.wasCapped,
                       slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+                      entryAtrPct: pos.entryAtrPct,
                     });
 
                     if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
@@ -1723,6 +1725,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
                   day: exitDay,
                   wasCapped: pos.wasCapped,
                   slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+                  entryAtrPct: pos.entryAtrPct,
                 });
 
                 if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
@@ -1833,6 +1836,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
             day: exitDay,
             wasCapped: pos.wasCapped,
             slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+            entryAtrPct: pos.entryAtrPct,
           });
 
           // V5.30: Close and record multi-positions as separate trades
@@ -1884,6 +1888,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
               day: exitDay,
               wasCapped: multiPos.wasCapped,
               slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+              entryAtrPct: multiPos.entryAtrPct,
             });
           }
           multiPositions[symbol] = []; // Clear multi-positions
@@ -2195,8 +2200,10 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
             if (availableCapital < minAvailableCapital) break;
           }
 
-          // V5.18: Keep leverage high for all accounts
-          const posLev = leverage || 5;
+          // V5.118: Apply calcSafeLeverage to match live behavior (reduce leverage in high-vol)
+          const baseLev = leverage || 5;
+          const safeLev = calcSafeLeverage(windowCandles, baseLev);
+          const posLev = safeLev.leverage;
 
           // V5.18: Dynamic position sizing - moderate boost for bigger accounts
           const positionSizePct = Math.min(
@@ -2315,6 +2322,10 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
                   capitalBefore: capital + perPosMargin,
                   wasCapped: true,
                   stopLossPct: calcDynamicStopLoss(windowCandles, symbol).slPct,
+                  entryAtrPct: (() => {
+                    const atr = calcATR(windowCandles, 14);
+                    return atr && windowCandles.length > 0 ? (atr / windowCandles[windowCandles.length - 1].close) * 100 : undefined;
+                  })(),
                   highWaterMark: signal.side === 'long' ? multiEntryPrice : undefined,
                   lowWaterMark: signal.side === 'short' ? multiEntryPrice : undefined,
                   entryReason: `${signal.reason}_MULTI${posIdx}${wickBreakout.triggered ? '|wick_entry' : ''}`,
@@ -2358,6 +2369,10 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
             capitalBefore: capital + marginUsd,
             wasCapped,
             stopLossPct: slPct,
+            entryAtrPct: (() => {
+              const atr = calcATR(windowCandles, 14);
+              return atr && windowCandles.length > 0 ? (atr / windowCandles[windowCandles.length - 1].close) * 100 : undefined;
+            })(),
             highWaterMark: signal.side === 'long' ? entryPrice : undefined,
             lowWaterMark: signal.side === 'short' ? entryPrice : undefined,
             entryReason,  // V5.64: Track entry reason with wick breakout info
@@ -2372,7 +2387,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
               obsPeakPct: 0
             }
           };
-          
+
           // V5.30: Log multi-position if activated
           if (totalPositions > 1) {
             console.log(`📊 [BT] ${symbol} MULTI-POS: ${totalPositions}x positions | totalNotional=$${notionalUsd.toFixed(0)} | totalMargin=$${marginUsd.toFixed(0)}`);
@@ -2436,6 +2451,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
         day: new Date(endTiming.exitTimestamp).toISOString().slice(0, 10),
         wasCapped: pos.wasCapped,
         slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+        entryAtrPct: pos.entryAtrPct,
       });
 
       // V5.30: Close and record remaining multi-positions
@@ -2487,6 +2503,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           day: new Date(multiEndTiming.exitTimestamp).toISOString().slice(0, 10),
           wasCapped: multiPos.wasCapped,
           slippagePct: CONFIG.COSTS.SLIPPAGE_PCT * 2,
+          entryAtrPct: multiPos.entryAtrPct,
         });
       }
       multiPositions[symbol] = [];

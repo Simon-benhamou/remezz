@@ -262,6 +262,7 @@ model Position {
   marginUsd             Float?
   maxPnlPct             Float?
   stagnantState         Json?
+  entryAtrPct           Float?
   trailingActive        Boolean       @default(false)
   trailingBreachCandles Int           @default(0)
   session               AgentSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)

@@ -135,14 +135,14 @@ export const MomentumConfig = {
     REQUIRE_VOLUME_CONFIRMATION: true, // V5.27: Require volume spike to confirm regime change
     MIN_VOLUME_MULTIPLIER: 1.5,       // V5.27: Need 1.5x avg volume to confirm
     REQUIRE_MOMENTUM_CONFIRMATION: false, // NO momentum confirmation (reduces PnL)
-    MIN_ROC5_BULL: 0.015,             // (unused)
-    MIN_ROC5_BEAR: -0.015,            // (unused)
+    MIN_ROC5_BULL: 0.015,             // DEAD — REQUIRE_MOMENTUM_CONFIRMATION is false
+    MIN_ROC5_BEAR: -0.015,            // DEAD — REQUIRE_MOMENTUM_CONFIRMATION is false
   },
 
   // Signal d'entrée LONG (Bull Market: BTC > SMA200)
   // V5.13: Lower thresholds for earlier entries (+25% ROI validated on 2024)
   ENTRY_LONG: {
-    // Bollinger Bands
+    // Bollinger Bands — DEAD: code uses ENTRY.BB_PERIOD/BB_STD instead
     BB_PERIOD: 20,
     BB_STD: 2,
 
@@ -169,6 +169,7 @@ export const MomentumConfig = {
   // Test showed: 4943 trades → 2051 trades but same 55% WR
   // Better to keep all trades and rely on V5.34 optimized stagnant exit
   // ═══════════════════════════════════════════════════════════════════════════
+  // DEAD CONFIG — V5.34 disabled, kept for reference only
   BREAKOUT_CONFIRMATION: {
     ENABLED: false,                     // V5.34: DISABLED - let stagnant exit handle filtering
 
@@ -192,6 +193,7 @@ export const MomentumConfig = {
   // CONCLUSION: Classic breakout outperforms anticipatory by 27x per trade
   // DISABLED pending further optimization of squeeze detection
   // ═══════════════════════════════════════════════════════════════════════════
+  // DEAD CONFIG — V5.32 disabled, proven counterproductive
   ANTICIPATORY_ENTRY: {
     ENABLED: false,                    // DISABLED - underperforms classic breakout
 
@@ -279,10 +281,10 @@ export const MomentumConfig = {
     BTC_SMA_PERIOD: 200,         // SMA 200 (on 15m = 50h = ~2 days — fast regime for momentum breakout)
     BTC_REGIME_TIMEFRAME: '15m' as const,  // V5.102: Use 15m for regime SMA200 (validated: +2325% ROI, +0.19 Sharpe on 9 symbols)
     BTC_REGIME_TOLERANCE_PCT: 0.2, // V5.113: Dead zone ±0.2% around SMA200 — when price is in band, use SMA slope to determine regime (prevents whipsaw). Validated: +$4.4K PnL, -2.7pp DD, +0.09 Sharpe
-    BTC_MOMENTUM_MIN: 0,         // Désactivé (utilise SMA200 à la place)
-    BTC_MOMENTUM_PERIOD: 24,     // Gardé pour compatibilité
+    BTC_MOMENTUM_MIN: 0,         // DEAD — superseded by SMA200 regime
+    BTC_MOMENTUM_PERIOD: 24,     // DEAD — kept for type compatibility
 
-    ALLOWED_DAYS: [0, 1, 2, 3, 4, 5, 6],  // All days
+    ALLOWED_DAYS: [0, 1, 2, 3, 4, 5, 6],  // DEAD — never checked in checkMomentumSignal
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -312,8 +314,8 @@ export const MomentumConfig = {
     MIN_BTC_ROC_LONG: 0.0,            // LONG: Require BTC 15m ROC > 0% (bullish)
     MAX_BTC_ROC_SHORT: 0.0,           // SHORT: Require BTC 15m ROC < 0% (bearish)
     LOOKBACK_CANDLES: 40,             // V5.102: 40 × 15m = 10h (was 10 × 1h = 10h — same window)
-    CACHE_1H_CANDLES: true,           // Cache candles to reduce API calls
-    CACHE_REFRESH_MINUTES: 15,        // Refresh cache every 15 minutes
+    CACHE_1H_CANDLES: true,           // DEAD — vestige from 1h regime, no longer used
+    CACHE_REFRESH_MINUTES: 15,        // DEAD — vestige from 1h regime
   },
 
   BTC_VOLATILITY_FILTER: {
@@ -362,6 +364,10 @@ export const MomentumConfig = {
     SHORT_MAX_ROC_ACCEL: 0.0,
     ROC_ACCEL_FAST_PERIOD: 5,       // ROC of last 5 candles
     ROC_ACCEL_SLOW_PERIOD: 5,       // compared to ROC of 5 candles before that
+
+    // V5.118: SHORT choppiness filter — skip SHORT if market is alternating (choppy)
+    // Mirrors LONG's alternation5 filter. Choppy markets = breakdowns fail
+    SHORT_MAX_ALT5: 2,              // alt5 >= 3 = choppy → skip SHORT
   },
 
   // Exit V5.14 - ADAPTIVE TRAILING ONLY
@@ -443,6 +449,19 @@ export const MomentumConfig = {
     TRAILING_TIER2_DISTANCE_PCT: 1.5,   // Tier 2 base: 1.5% trailing
     TRAILING_TIER3_AT_PCT: 6.0,         // At 6% raw profit, widen to tier 3 (lowered from 7%)
     TRAILING_TIER3_DISTANCE_PCT: 2.5,   // Tier 3 base: 2.5% trailing
+
+    // V5.118: ATR-SCALED PROGRESSIVE TRAILING
+    // Instead of fixed % tiers, scale by entry ATR for per-asset adaptation
+    // When enabled, TRAILING_TIER*_AT_PCT and TRAILING_TIER*_DISTANCE_PCT become fallbacks
+    TRAILING_ATR_SCALED_ENABLED: true,
+    // Tier activation: HWM must exceed N × entryAtrPct to enter tier
+    TRAILING_TIER1_ATR_MULT: 2.0,       // Tier 1 at 2×ATR (e.g., DOGE ATR=1.2% → 2.4%)
+    TRAILING_TIER2_ATR_MULT: 3.0,       // Tier 2 at 3×ATR (e.g., DOGE ATR=1.2% → 3.6%)
+    TRAILING_TIER3_ATR_MULT: 4.5,       // Tier 3 at 4.5×ATR (e.g., DOGE ATR=1.2% → 5.4%)
+    // Tier distance: trailing distance = N × entryAtrPct × volMult
+    TRAILING_TIER1_DIST_ATR_MULT: 0.5,  // 0.5×ATR (e.g., DOGE → 0.6%)
+    TRAILING_TIER2_DIST_ATR_MULT: 1.0,  // 1.0×ATR (e.g., DOGE → 1.2%)
+    TRAILING_TIER3_DIST_ATR_MULT: 1.5,  // 1.5×ATR (e.g., DOGE → 1.8%)
 
     // V5.88: Volatility-adaptive progressive trailing
     // On HIGH volatility days (like XRP crash), bounces are larger → need wider trailing
@@ -727,6 +746,7 @@ export const MomentumConfig = {
   // ═══════════════════════════════════════════════════════════════════════════
   // V5.98: SR filter disabled — destroys ROI even with loosened thresholds.
   // Internalized here (V5.101) for future use; toggle ENABLED when ready.
+  // DEAD CONFIG — V5.98 disabled, destroys ROI
   SR_FILTER: {
     ENABLED: false,
     FILTER_THRESHOLD: -0.3,
@@ -736,6 +756,18 @@ export const MomentumConfig = {
     CLUSTER_PCT: 0.3,
     NEAR_THRESHOLD_PCT: 1.5,
     FAR_THRESHOLD_PCT: 5.0,
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // V5.118: CENTRALIZED FEE MODEL — Single source of truth for all cost calculations
+  // Used by: backtestService.ts, trailingReplay1m.ts, positionPersistence.ts
+  // ═══════════════════════════════════════════════════════════════════════════
+  COSTS: {
+    TRADING_FEE_PCT: 0.04,       // Binance taker fee (0.04%)
+    SLIPPAGE_PCT: 0.05,          // Realistic slippage estimate (0.05%)
+    FUNDING_RATE_PCT: 0.01,      // 8h funding rate (0.01%)
+    FUNDING_INTERVAL_BARS: 32,   // 32 × 15min = 8h
+    PAPER_FEE_RATE: 0.0004,      // Fee rate for paper trades (0.04% as decimal)
   },
 };
 
@@ -777,6 +809,7 @@ export interface Position {
   lowWaterMark?: number;   // Lowest price since entry (for short)
   trailingActive?: boolean;
   maxPnlPct?: number;      // V5.11: Track max PnL reached (for exit analysis)
+  entryAtrPct?: number;    // V5.118: ATR% at entry time (for ATR-scaled trailing)
   trailingBreachCandles?: number;  // V5.38: Count consecutive candles that breached trailing stop
   // V5.31: Smart Stagnant - observation window state machine
   stagnantState?: {

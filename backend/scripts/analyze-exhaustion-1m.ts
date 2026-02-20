@@ -67,6 +67,14 @@ const TIERS = {
   TIER2_DISTANCE_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER2_DISTANCE_PCT ?? 1.5,
   TIER3_AT_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER3_AT_PCT ?? 6.0,
   TIER3_DISTANCE_PCT: (MomentumConfig.EXIT as any).TRAILING_TIER3_DISTANCE_PCT ?? 2.5,
+  // V5.118: ATR-scaled progressive trailing
+  ATR_SCALED_ENABLED: (MomentumConfig.EXIT as any).TRAILING_ATR_SCALED_ENABLED ?? false,
+  TIER1_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER1_ATR_MULT ?? 2.0,
+  TIER2_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER2_ATR_MULT ?? 3.0,
+  TIER3_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER3_ATR_MULT ?? 4.5,
+  TIER1_DIST_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER1_DIST_ATR_MULT ?? 0.5,
+  TIER2_DIST_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER2_DIST_ATR_MULT ?? 1.0,
+  TIER3_DIST_ATR_MULT: (MomentumConfig.EXIT as any).TRAILING_TIER3_DIST_ATR_MULT ?? 1.5,
 };
 
 // V5.117: Dynamic vol adaptation matching live's shouldExitPosition()
@@ -199,11 +207,18 @@ function needAfter(endTs: number, cachedEnd: number) { return endTs > cachedEnd;
 // TRAILING STOP CALCULATOR (matches live logic)
 // ═══════════════════════════════════════════════════════════════════════════
 
-function getTrailingDistance(hwmPct: number, vol: VolState): number {
+function getTrailingDistance(hwmPct: number, vol: VolState, entryAtrPct?: number): number {
   if (TIERS.PROGRESSIVE_ENABLED) {
-    if (hwmPct >= TIERS.TIER3_AT_PCT) return TIERS.TIER3_DISTANCE_PCT * vol.volMultiplier;
-    if (hwmPct >= TIERS.TIER2_AT_PCT) return TIERS.TIER2_DISTANCE_PCT * vol.volMultiplier;
-    if (hwmPct >= TIERS.WIDEN_AT_PCT) return TIERS.WIDE_DISTANCE_PCT * vol.volMultiplier;
+    // V5.118: ATR-scaled progressive trailing
+    if (TIERS.ATR_SCALED_ENABLED && entryAtrPct && entryAtrPct > 0) {
+      if (hwmPct >= TIERS.TIER3_ATR_MULT * entryAtrPct) return TIERS.TIER3_DIST_ATR_MULT * entryAtrPct * vol.volMultiplier;
+      if (hwmPct >= TIERS.TIER2_ATR_MULT * entryAtrPct) return TIERS.TIER2_DIST_ATR_MULT * entryAtrPct * vol.volMultiplier;
+      if (hwmPct >= TIERS.TIER1_ATR_MULT * entryAtrPct) return TIERS.TIER1_DIST_ATR_MULT * entryAtrPct * vol.volMultiplier;
+    } else {
+      if (hwmPct >= TIERS.TIER3_AT_PCT) return TIERS.TIER3_DISTANCE_PCT * vol.volMultiplier;
+      if (hwmPct >= TIERS.TIER2_AT_PCT) return TIERS.TIER2_DISTANCE_PCT * vol.volMultiplier;
+      if (hwmPct >= TIERS.WIDEN_AT_PCT) return TIERS.WIDE_DISTANCE_PCT * vol.volMultiplier;
+    }
   } else {
     if (hwmPct >= TIERS.WIDEN_AT_PCT) return TIERS.WIDE_DISTANCE_PCT * vol.volMultiplier;
   }
@@ -211,12 +226,12 @@ function getTrailingDistance(hwmPct: number, vol: VolState): number {
 }
 
 function calcTrailingStop(
-  side: 'long' | 'short', entryPrice: number, hwm: number, vol: VolState,
+  side: 'long' | 'short', entryPrice: number, hwm: number, vol: VolState, entryAtrPct?: number,
 ): { stopPrice: number; distancePct: number; hwmPct: number } {
   const hwmPct = side === 'long'
     ? ((hwm - entryPrice) / entryPrice) * 100
     : ((entryPrice - hwm) / entryPrice) * 100;
-  const distancePct = getTrailingDistance(hwmPct, vol);
+  const distancePct = getTrailingDistance(hwmPct, vol, entryAtrPct);
   const stopPrice = side === 'long'
     ? hwm * (1 - distancePct / 100)
     : hwm * (1 + distancePct / 100);
@@ -351,8 +366,8 @@ function replayTrade(
     }
     if (!trailingActive) continue;
 
-    // ── STEP 4: Compute trailing stop (vol-adapted distances) ──
-    const { stopPrice } = calcTrailingStop(side, entryPrice, hwm, vol);
+    // ── STEP 4: Compute trailing stop (vol-adapted distances, ATR-scaled if available) ──
+    const { stopPrice } = calcTrailingStop(side, entryPrice, hwm, vol, trade.entryAtrPct);
 
     // ── STEP 5: Exhaustion scoring (stop_market & market_exit modes) ──
     if (useExhaustion && exhaustionCalc) {

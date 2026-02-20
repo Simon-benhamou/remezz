@@ -21,6 +21,8 @@ const logger = createLogger('CandleSeeder');
 
 // Default 10 symbols — only seed what we actively trade
 // Extra symbols (SOL, XRP, etc.) are seeded on-demand when an agent is created for them
+// Seed all actively traded symbols + BTC (for regime detection)
+// Must include all symbols from MomentumConfig.SYMBOLS to avoid WS-only warmup delays
 const SEED_SYMBOLS = [
   'AVAX/USDT:USDT',
   'FET/USDT:USDT',
@@ -32,6 +34,9 @@ const SEED_SYMBOLS = [
   'DOGE/USDT:USDT',
   'ADA/USDT:USDT',
   'BTC/USDT:USDT',
+  'SEI/USDT:USDT',
+  'SUI/USDT:USDT',
+  'XRP/USDT:USDT',
 ];
 
 // How many candles to fetch

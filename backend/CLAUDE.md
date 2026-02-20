@@ -629,3 +629,23 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Excluded from replay**: TRAIL_NFS_HIGH (already at optimal trailing stop price), TRAIL_PROACTIVE (already handled by 15m MODE B).
   - **Files**: `services/backtest/trailingReplay1m.ts`, `scripts/analyze-exhaustion-1m.ts`, `strategies/exits/exitLogic.ts`, `strategies/realtimeExitHandler.ts`, `services/backtestService.ts`, `scripts/simulate-xrp-vol-adaptive.ts`
   - **Parity impact**: Closes vol adaptation gap between replay and live. Closes fallback default inconsistencies across all code paths.
+
+- V5.118: Exhaustive audit fixes — ATR-scaled trailing, SHORT filter, COSTS centralization:
+  - **ATR-scaled trailing**: Progressive trailing tiers now scale with asset's ATR at entry instead of fixed 3%/4%/6%. Tiers at `2×/3×/4.5× entryAtrPct` with distances `0.5×/1.0×/1.5× entryAtrPct × volMultiplier`. Falls back to fixed tiers when `entryAtrPct` is unavailable. Config: `TRAILING_ATR_SCALED_ENABLED: true`, `TIER1/2/3_ATR_MULT`, `TIER1/2/3_DIST_ATR_MULT`.
+  - **entryAtrPct**: `calcATR(candles, 14) / lastClose * 100` snapshot at entry. Computed in `positionOpener.ts` (live/paper) and `backtestService.ts` (sim). Stored on Position interface. Propagated through `checkBacktestExit()` to `shouldExitPosition()`.
+  - **SHORT alternation filter**: New filter in `checkMomentumSignal()` BEAR path — rejects signals when last 5 closes alternate direction > 2 times (choppy market). Config: `CANDLE_PATTERN_FILTER.SHORT_MAX_ALT5: 2`.
+  - **Orchestrator regime fix**: 3 fallback paths in `orchestrator.ts` (checkEntry, checkExit, getMarketConditions) now respect `BTC_REGIME_TIMEFRAME` config instead of hardcoding 15m. Fetches real 1h candles when config is '1h'.
+  - **COSTS centralization**: All fee references use `MomentumConfig.COSTS` (single source of truth). Moved hardcoded values from `backtestService.ts`, `trailingReplay1m.ts`, `positionPersistence.ts` to config block: `TRADING_FEE_PCT: 0.04`, `SLIPPAGE_PCT: 0.05`, `FUNDING_RATE_PCT: 0.01`, `PAPER_FEE_RATE: 0.0004`.
+  - **calcSafeLeverage in backtest**: Imported from `positionSizing.ts` — backtest now reduces leverage in high-vol like live does.
+  - **SEED_SYMBOLS expanded**: Added SEI, SUI, XRP to `candleCache.ts`.
+  - **Dead config cleanup**: 8 unused config blocks marked with DEAD comments in `momentumConfig.ts`.
+  - **Files**: `momentumConfig.ts`, `exitLogic.ts`, `momentumSignal.ts`, `orchestrator.ts`, `backtestService.ts`, `trailingReplay1m.ts`, `positionPersistence.ts`, `positionOpener.ts`, `candleCache.ts`, `analyze-exhaustion-1m.ts`
+
+- V5.119: Fee doubling bug fix + entryAtrPct DB persistence + alignment audit:
+  - **CRITICAL: Paper fees doubled in DB** (`positionPersistence.ts:284`): `positionCloser.ts` computes `paperFeeUsd` = entry fee + exit fee + slippage + funding (~$1.82 for $1K notional). This complete amount was passed to `positionPersistence.ts` which blindly applied `calculatedFee * 2`, storing ~$3.64 instead of ~$1.82. Fix: `feeUsd != null ? calculatedFee : calculatedFee * 2` — only double when using the fallback path (exit-side only).
+  - **Data model clarification**: `Trade.realizedPnlUsd` = GROSS (price diff only). `Trade.feesUsd` = separate fee field. Frontend `Net P&L = GROSS - Fees` is structurally correct but was using the 2x-inflated fee.
+  - **entryAtrPct DB persistence**: Added `entryAtrPct Float?` column to Prisma `Position` model. Saved in `savePositionToDb()`, loaded in `loadExistingPosition()`. Agent restart mid-trade now preserves ATR-scaled trailing behavior instead of falling back to fixed tiers.
+  - **entryAtrPct multi-position**: Additional positions (paper+live) now receive the same `entryAtrPct` as the primary position. Previously missing → used fixed trailing tiers.
+  - **Fee rate centralized in positionOpener**: Replaced 2 hardcoded `0.0004` (lines 401, 890) with `MomentumConfig.COSTS.PAPER_FEE_RATE`.
+  - **Alignment audit result**: All 4 code paths (live/paper via orchestrator, backtest, parity via backtest, trailingReplay1m) confirmed aligned for: entryAtrPct computation, calcSafeLeverage, COSTS, SHORT alternation filter, ATR-scaled trailing. Parity service auto-aligned (delegates to backtest engine).
+  - **Files**: `positionPersistence.ts`, `positionOpener.ts`, `prisma/schema.prisma`
