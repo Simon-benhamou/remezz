@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, getClobAskPrice } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -24,6 +24,12 @@ const DECISION_OFFSET_MS = 2.5 * 60 * 1000; // 2.5 minutes into the window
 const POLL_INTERVAL_MS = 1000;               // 1 second
 const SYMBOL = 'BTCUSDT';
 const SYMBOL_SHORT = 'BTC';
+
+// ─── Observation phase constants ─────────────────────────────────────────────
+const OBS_DIP_THRESHOLD = 0.03;           // Buy immediately on 3-cent dip from initial
+const OBS_BOUNCE_THRESHOLD = 0.02;        // Buy when price bounces 2 cents from trough
+const OBS_RISING_THRESHOLD = 0.05;        // Buy if price runs 5 cents above initial
+const OBS_DEADLINE_OFFSET_MS = 4 * 60 * 1000; // T+4:00 deadline (60s before window end)
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -41,6 +47,66 @@ let tickInProgress = false;
 // Prevent placing a new live bet before the previous window's order is fully handled.
 // Set to the windowStart when a bet is ATTEMPTED (not just on success) to prevent retry loops.
 let activeLiveBetWindow: number | null = null; // windowStart of the window with an active live bet
+
+// ─── Observation phase state ─────────────────────────────────────────────────
+let observationActive = false;
+let observationTokenId: string | null = null;
+let observationDirection: 'UP' | 'DOWN' | null = null;
+let observationAmount = 0;
+let observationEntryOdds = 0;
+let observationInitialAsk = 0;
+let observationBestAsk = 0;
+let observationDeadlineMs = 0;
+
+function resetObservation(): void {
+  observationActive = false;
+  observationTokenId = null;
+  observationDirection = null;
+  observationAmount = 0;
+  observationEntryOdds = 0;
+  observationInitialAsk = 0;
+  observationBestAsk = 0;
+  observationDeadlineMs = 0;
+}
+
+async function executeObservationBuy(
+  prisma: PrismaClient,
+  trigger: string,
+  currentAsk: number,
+): Promise<void> {
+  if (!currentWindow || !observationTokenId || !observationDirection) return;
+
+  const savings = observationInitialAsk - currentAsk;
+  log.info(
+    `OBSERVATION BUY [${trigger}]: ${observationDirection} $${observationAmount} @ ${currentAsk.toFixed(3)} ` +
+    `(initial=${observationInitialAsk.toFixed(3)}, best=${observationBestAsk.toFixed(3)}, ` +
+    `savings=${savings >= 0 ? '+' : ''}${(savings * 100).toFixed(1)}¢)`,
+  );
+
+  currentWindow.observationTrigger = trigger;
+
+  const betResult = await placePolymarketBet(
+    prisma,
+    observationDirection,
+    observationTokenId,
+    observationAmount,
+    observationEntryOdds,
+  );
+
+  if (betResult.success) {
+    log.info(`LIVE BET OK: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
+    if (betResult.executionPrice) {
+      currentWindow.executionPrice = betResult.executionPrice;
+    }
+    currentWindow.observationStatus = 'filled';
+  } else {
+    log.error(`LIVE BET FAILED: ${betResult.error}`);
+    currentWindow.observationStatus = 'idle';
+    activeLiveBetWindow = null;
+  }
+
+  resetObservation();
+}
 
 // ─── Polymarket resolution verification ───────────────────────────────────────
 // Our preliminary resolution uses BTC price (start vs end). But Polymarket's oracle
@@ -293,6 +359,12 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
   // ── New window detection ──────────────────────────────────────────────────
   if (!currentWindow || currentWindow.windowStart !== start) {
+    // Safety net: if observation was still active when window ended, force buy
+    if (observationActive && currentWindow) {
+      log.warn('OBSERVATION: window ended with observation still active — forcing buy');
+      await executeObservationBuy(prisma, 'window_end', observationInitialAsk);
+    }
+
     // Snapshot previous window for resolution (uses final currentPrice)
     if (currentWindow && !resolutionDone) {
       pendingResolution = { ...currentWindow };
@@ -322,6 +394,10 @@ async function tick(prisma: PrismaClient): Promise<void> {
       executionPrice: null,
       betAmount: null,
       tokenId: null,
+      observationStatus: null,
+      observationInitialAsk: null,
+      observationBestAsk: null,
+      observationTrigger: null,
       status: 'accumulating',
     };
 
@@ -377,49 +453,101 @@ async function tick(prisma: PrismaClient): Promise<void> {
         `Prediction: ${result.direction} (score=${result.score.total}, conf=${result.confidence}) | odds=${entryOdds.toFixed(3)} | amount=$${pmConfig.amount} | slug=${slug}`,
       );
 
-      // ── Live trading: place real bet if enabled ──────────────────────
+      // ── Live trading: enter observation phase if enabled ──────────────
       const liveConfig = await getLiveTradingConfig(prisma);
       if (liveConfig && tokenId) {
-        // Guard: 1 order at a time — skip if a bet is still active from a previous window
         if (activeLiveBetWindow !== null && activeLiveBetWindow !== start) {
           log.warn(`LIVE MODE: skipping bet — previous window ${activeLiveBetWindow} still has an active bet`);
         } else {
-          // Mark BEFORE placing (not after success) to prevent concurrent ticks from re-entering
           activeLiveBetWindow = start;
 
-          // Pre-order balance check — skip if insufficient funds
           const { balance } = await getPolymarketBalance(prisma);
           if (balance < liveConfig.amount) {
             log.warn(`LIVE MODE: insufficient balance $${balance.toFixed(2)} < $${liveConfig.amount} — skipping bet`);
-            activeLiveBetWindow = null; // Reset — no bet was placed
+            activeLiveBetWindow = null;
           } else {
-            log.info(`LIVE MODE: placing $${liveConfig.amount} bet on ${result.direction} (balance=$${balance.toFixed(2)})...`);
-            const betResult = await placePolymarketBet(
-              prisma,
-              result.direction,
-              tokenId,
-              liveConfig.amount,
-              entryOdds,
-            );
-            if (betResult.success) {
-              log.info(`LIVE BET OK: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
-              // Store actual CLOB execution price for accurate PnL
-              if (betResult.executionPrice) {
-                currentWindow.executionPrice = betResult.executionPrice;
+            // Fetch initial CLOB ask for observation
+            const initAsk = await getClobAskPrice(prisma, tokenId);
+            if (initAsk === null || initAsk === 0) {
+              log.warn('OBSERVATION: CLOB price unavailable — placing immediate FOK');
+              const betResult = await placePolymarketBet(prisma, result.direction, tokenId, liveConfig.amount, entryOdds);
+              if (betResult.success) {
+                log.info(`LIVE BET OK (immediate): orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
+                if (betResult.executionPrice) currentWindow.executionPrice = betResult.executionPrice;
+              } else {
+                log.error(`LIVE BET FAILED: ${betResult.error}`);
+                activeLiveBetWindow = null;
               }
+            } else if (initAsk > 0.85) {
+              log.warn(`OBSERVATION: EV too low (CLOB=${initAsk.toFixed(3)} > 0.85) — skipping`);
+              activeLiveBetWindow = null;
             } else {
-              log.error(`LIVE BET FAILED: ${betResult.error}`);
-              activeLiveBetWindow = null; // Reset on failure so next window can try
+              // Start observation phase — don't buy yet
+              observationActive = true;
+              observationTokenId = tokenId;
+              observationDirection = result.direction;
+              observationAmount = liveConfig.amount;
+              observationEntryOdds = entryOdds;
+              observationInitialAsk = initAsk;
+              observationBestAsk = initAsk;
+              observationDeadlineMs = start + OBS_DEADLINE_OFFSET_MS;
+
+              currentWindow.observationStatus = 'observing';
+              currentWindow.observationInitialAsk = initAsk;
+              currentWindow.observationBestAsk = initAsk;
+
+              log.info(
+                `OBSERVATION: watching ${result.direction} token=${tokenId.slice(0, 12)}… ` +
+                `initialAsk=${initAsk.toFixed(3)} deadline=${new Date(observationDeadlineMs).toISOString().slice(11, 19)}`,
+              );
             }
           }
         }
       } else if (liveConfig && !tokenId) {
         log.warn('Live mode active but no token ID available for this market');
       }
+
+      // Virtual mode: mark observation fields for display
+      if (!liveConfig || !tokenId) {
+        currentWindow.observationStatus = 'idle';
+      }
     } else {
       // Score below threshold — skip this window
       currentWindow.status = 'skipped';
       log.info('Window skipped (score < 40)');
+    }
+  }
+
+  // ── Observation phase: poll CLOB and check triggers ────────────────────
+  if (observationActive && currentWindow && observationTokenId) {
+    const ask = await getClobAskPrice(prisma, observationTokenId);
+
+    if (ask !== null && ask > 0) {
+      observationBestAsk = Math.min(observationBestAsk, ask);
+      currentWindow.observationBestAsk = observationBestAsk;
+
+      const now = Date.now();
+
+      if (ask <= observationInitialAsk - OBS_DIP_THRESHOLD) {
+        await executeObservationBuy(prisma, 'dip', ask);
+      }
+      else if (
+        observationBestAsk < observationInitialAsk &&
+        ask > observationBestAsk + OBS_BOUNCE_THRESHOLD
+      ) {
+        await executeObservationBuy(prisma, 'bounce', ask);
+      }
+      else if (ask >= observationInitialAsk + OBS_RISING_THRESHOLD) {
+        await executeObservationBuy(prisma, 'rising', ask);
+      }
+      else if (now >= observationDeadlineMs) {
+        await executeObservationBuy(prisma, 'deadline', ask);
+      }
+    } else {
+      if (Date.now() >= observationDeadlineMs) {
+        log.warn('OBSERVATION: CLOB price unavailable at deadline — buying at initial ask');
+        await executeObservationBuy(prisma, 'deadline', observationInitialAsk);
+      }
     }
   }
 
@@ -534,6 +662,7 @@ export function stopPolymarketWorker(): void {
   stopChainlinkFeed();
   activeLiveBetWindow = null; // Reset so a restart can place bets immediately
   tickInProgress = false; // Reset in case a tick was in progress when stopped
+  resetObservation();
 }
 
 /**
