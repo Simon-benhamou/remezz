@@ -46,6 +46,7 @@ export interface WindowState {
   entryOdds: number | null;
   executionPrice: number | null;  // Actual CLOB price paid (differs from Gamma entryOdds)
   betAmount: number | null;
+  tokenId: string | null;         // CLOB token ID (for auto-sell after WIN)
   status: 'accumulating' | 'predicted' | 'resolved' | 'skipped';
 }
 

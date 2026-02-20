@@ -367,6 +367,7 @@ model PolymarketPrediction {
   actualResult    String?
   entryOdds       Float?
   executionPrice  Float?            // Actual CLOB price paid (differs from Gamma entryOdds)
+  tokenId         String?           // CLOB token ID (for auto-sell after WIN)
   betAmount       Float?            // USDC amount bet (for dollar PnL calculation)
   simulatedPnl    Float?
   scoreBreakdown  Json?

@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -54,6 +54,7 @@ interface PendingVerification {
   entryOdds: number | null;    // Gamma API odds (for display)
   executionPrice: number | null; // Actual CLOB price paid (for PnL)
   betAmount: number | null;    // USDC amount for dollar PnL
+  tokenId: string | null;      // CLOB token ID (needed for auto-sell)
   verifyAfterMs: number;       // don't check until this time (wait for oracle)
   giveUpAfterMs: number;       // stop retrying after this time
 }
@@ -130,6 +131,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
         actualResult: preliminaryResult,
         entryOdds: w.entryOdds,
         executionPrice: w.executionPrice,  // Actual CLOB price (null for virtual mode)
+        tokenId: w.tokenId,               // CLOB token ID (needed for auto-sell after WIN)
         betAmount: w.betAmount,
         simulatedPnl: null,       // Set by oracle verification only
         scoreBreakdown: w.prediction?.score
@@ -162,6 +164,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
       entryOdds: w.entryOdds,
       executionPrice: w.executionPrice,
       betAmount: w.betAmount,
+      tokenId: w.tokenId,
       verifyAfterMs: Date.now() + 3 * 60 * 1000,   // check after 3 min
       giveUpAfterMs: Date.now() + 60 * 60 * 1000,  // give up after 60 min (was 15 — too short)
     });
@@ -231,6 +234,18 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
         log.warn(
           `Oracle CORRECTION: ${v.slug} | preliminary=${existing?.actualResult} → oracle=${oracleResult} | isCorrect=${isCorrect}`,
         );
+      }
+
+      // ── Auto-sell winning tokens on CLOB ──────────────────────────
+      // After oracle confirms WIN, sell tokens back to USDC immediately.
+      // Only attempt if we have a real bet (tokenId + betAmount + executionPrice).
+      if (isCorrect && v.tokenId && v.betAmount && v.executionPrice) {
+        const sellResult = await sellWinningTokens(prisma, v.tokenId, v.betAmount, v.executionPrice);
+        if (sellResult.success) {
+          log.info(`Auto-sell OK: $${sellResult.usdcReceived?.toFixed(2)} USDC recovered from ${v.slug}`);
+        } else {
+          log.warn(`Auto-sell failed for ${v.slug}: ${sellResult.error} — tokens remain in wallet`);
+        }
       }
 
       toRemove.push(i);
@@ -306,6 +321,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
       entryOdds: null,
       executionPrice: null,
       betAmount: null,
+      tokenId: null,
       status: 'accumulating',
     };
 
@@ -350,6 +366,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
       currentWindow.prediction = result;
       currentWindow.entryOdds = entryOdds;
+      currentWindow.tokenId = tokenId;
       currentWindow.status = 'predicted';
 
       // Store bet amount for dollar PnL calculation (from config, same for virtual + live)
@@ -482,6 +499,7 @@ async function recoverPendingVerifications(prisma: PrismaClient): Promise<void> 
       entryOdds: true,
       executionPrice: true,
       betAmount: true,
+      tokenId: true,
     },
   });
 
@@ -495,6 +513,7 @@ async function recoverPendingVerifications(prisma: PrismaClient): Promise<void> 
       entryOdds: p.entryOdds,
       executionPrice: p.executionPrice,
       betAmount: p.betAmount,
+      tokenId: p.tokenId,
       verifyAfterMs: Date.now(),               // check immediately
       giveUpAfterMs: Date.now() + 60 * 60 * 1000, // 60 min from now
     });

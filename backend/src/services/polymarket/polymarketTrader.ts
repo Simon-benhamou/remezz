@@ -460,6 +460,57 @@ export async function placePolymarketBet(
 }
 
 /**
+ * Sell winning tokens on the CLOB to convert back to USDC.
+ * Called after oracle confirms a WIN. Sells at market price (best bid).
+ * Returns the USDC amount received, or null if sell failed.
+ */
+export async function sellWinningTokens(
+  prisma: PrismaClient,
+  tokenId: string,
+  betAmount: number,
+  executionPrice: number,
+): Promise<{ success: boolean; usdcReceived?: number; error?: string }> {
+  const creds = await loadCredentials(prisma);
+  if (!creds) return { success: false, error: 'No credentials' };
+
+  try {
+    const client = buildClient(creds);
+
+    // Check current bid price — only sell if price is good (>= 0.90)
+    const clobPriceData = await client.getPrice(tokenId, 'SELL');
+    const clobBid = parseFloat((clobPriceData as any)?.price ?? '0');
+
+    if (clobBid < 0.90) {
+      return { success: false, error: `Bid too low (${clobBid.toFixed(3)}) — wait for resolution or higher price` };
+    }
+
+    // Calculate token amount we hold: betAmount / executionPrice
+    const tokenAmount = betAmount / executionPrice;
+    const expectedUsdc = tokenAmount * clobBid;
+
+    const order: UserMarketOrder = {
+      tokenID: tokenId,
+      amount: expectedUsdc, // USDC amount to receive
+      price: clobBid,
+      side: Side.SELL,
+    };
+
+    const result = await client.createAndPostMarketOrder(order, undefined, OrderType.FOK);
+
+    if (result?.error) {
+      const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
+      throw new Error(`Sell rejected (${result.status ?? '?'}): ${errMsg}`);
+    }
+
+    log.info(`Auto-sell OK: ${tokenAmount.toFixed(2)} tokens @ ${clobBid.toFixed(3)} = $${expectedUsdc.toFixed(2)} USDC`);
+    return { success: true, usdcReceived: expectedUsdc };
+  } catch (err: any) {
+    log.error(`Auto-sell failed: ${err?.message}`);
+    return { success: false, error: err?.message };
+  }
+}
+
+/**
  * Check if live mode is active and return config for the worker.
  */
 export async function getLiveTradingConfig(
