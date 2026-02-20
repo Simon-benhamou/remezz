@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, getClobAskPrice } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, getClobAskPrice, MAX_CLOB_PRICE } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -478,8 +478,8 @@ async function tick(prisma: PrismaClient): Promise<void> {
                 log.error(`LIVE BET FAILED: ${betResult.error}`);
                 activeLiveBetWindow = null;
               }
-            } else if (initAsk > 0.85) {
-              log.warn(`OBSERVATION: EV too low (CLOB=${initAsk.toFixed(3)} > 0.85) — skipping`);
+            } else if (initAsk > MAX_CLOB_PRICE) {
+              log.warn(`OBSERVATION: EV too low (CLOB=${initAsk.toFixed(3)} > ${MAX_CLOB_PRICE}) — skipping`);
               activeLiveBetWindow = null;
             } else {
               // Start observation phase — don't buy yet

@@ -35,9 +35,10 @@ const CHAIN_ID = 137; // Polygon
 const USDC_DECIMALS = 6;
 
 // Maximum acceptable CLOB price (absolute cap).
-// Buying above this has poor EV: paying 70¢ for $1 potential = 42.8% ROI max.
-// 5-min BTC markets have thin liquidity above 70¢ — FOK failures common.
-const MAX_CLOB_PRICE = 0.70;
+// Buying above this has poor EV: paying 80¢ for $1 potential = 25% ROI max.
+// At 80% win rate: EV = 0.80×$2.50 - 0.20×$10 = +$0.00 (break-even).
+// 5-min BTC markets price the likely winner to 0.70-0.85 by T+2:30.
+export const MAX_CLOB_PRICE = 0.80;
 
 // Maximum divergence allowed between CLOB and Gamma prices.
 // If CLOB is more than 50% above Gamma, something is likely wrong (stale Gamma, wrong market).
