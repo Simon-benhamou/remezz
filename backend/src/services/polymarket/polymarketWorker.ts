@@ -20,7 +20,7 @@ const log = createLogger('polymarket');
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const WINDOW_MS = 5 * 60 * 1000;           // 5 minutes
-const DECISION_OFFSET_MS = 2.5 * 60 * 1000; // 2.5 minutes into the window
+const DECISION_OFFSET_MS = 1 * 60 * 1000;   // 1 minute into the window ("Early Bird")
 const POLL_INTERVAL_MS = 1000;               // 1 second
 const SYMBOL = 'BTCUSDT';
 const SYMBOL_SHORT = 'BTC';
@@ -29,7 +29,7 @@ const SYMBOL_SHORT = 'BTC';
 const OBS_DIP_THRESHOLD = 0.03;           // Buy immediately on 3-cent dip from initial
 const OBS_BOUNCE_THRESHOLD = 0.02;        // Buy when price bounces 2 cents from trough
 const OBS_RISING_THRESHOLD = 0.05;        // Buy if price runs 5 cents above initial
-const OBS_DEADLINE_OFFSET_MS = 4 * 60 * 1000; // T+4:00 deadline (60s before window end)
+const OBS_DEADLINE_OFFSET_MS = 2 * 60 * 1000; // T+2:00 deadline (60s observation window)
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
