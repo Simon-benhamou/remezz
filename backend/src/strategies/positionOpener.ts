@@ -102,27 +102,17 @@ export class PositionOpener {
 
     // V5.56 FIX: Re-validate BTC regime before entering position
     // This catches cases where signal was generated with stale BTC data
+    // V5.102: Use 15m candles for regime (matches BTC_REGIME_TIMEFRAME config)
     try {
-      // V5.82: Use 1h candles for regime validation (same as entry signal)
-      const btcCandles1hVal = (await this.ctx.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
-      let btcSma200: number;
-      let btcNow: number;
-      if (btcCandles1hVal.length >= 200) {
-        const btcCloses1h = btcCandles1hVal.map(c => c.close);
-        btcSma200 = btcCloses1h.slice(-200).reduce((a, b) => a + b, 0) / 200;
-        btcNow = btcCloses1h[btcCloses1h.length - 1];
+      const btcCandlesForValidation = (await this.ctx.fetchBtcCandles()).filter(c => c.isFinal !== false);
+      let btcSma200 = 0;
+      let btcNow = 0;
+      if (btcCandlesForValidation.length >= 201) {
+        const btcCloses = btcCandlesForValidation.map(c => c.close);
+        btcSma200 = btcCloses.slice(-200).reduce((a, b) => a + b, 0) / 200;
+        btcNow = btcCloses[btcCloses.length - 1];
       } else {
-        // Fallback to 15m
-        const btcCandlesForValidation = await this.ctx.fetchBtcCandles();
-        if (btcCandlesForValidation.length >= 201) {
-          const btcCloses = btcCandlesForValidation.map(c => c.close);
-          btcSma200 = btcCloses.slice(-200).reduce((a, b) => a + b, 0) / 200;
-          btcNow = btcCloses[btcCloses.length - 1];
-        } else {
-          logger.warn(`⚠️ [${symbol}] Not enough BTC candles for regime validation`);
-          btcSma200 = 0;
-          btcNow = 0;
-        }
+        logger.warn(`⚠️ [${symbol}] Not enough BTC 15m candles for regime validation (${btcCandlesForValidation.length}/201)`);
       }
       if (btcSma200 > 0 && btcNow > 0) {
         const btcInBullRegime = btcNow > btcSma200;
@@ -130,11 +120,11 @@ export class PositionOpener {
 
         // Block SHORT in BULL regime and LONG in BEAR regime
         if (side === 'short' && btcInBullRegime) {
-          logger.error(`🚫 [${symbol}] BLOCKED: SHORT in BULL regime! BTC=${btcNow.toFixed(0)} > SMA200(1h)=${btcSma200.toFixed(0)}`);
+          logger.error(`🚫 [${symbol}] BLOCKED: SHORT in BULL regime! BTC=${btcNow.toFixed(0)} > SMA200(15m)=${btcSma200.toFixed(0)}`);
           return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
         }
         if (side === 'long' && btcInBearRegime) {
-          logger.error(`🚫 [${symbol}] BLOCKED: LONG in BEAR regime! BTC=${btcNow.toFixed(0)} < SMA200(1h)=${btcSma200.toFixed(0)}`);
+          logger.error(`🚫 [${symbol}] BLOCKED: LONG in BEAR regime! BTC=${btcNow.toFixed(0)} < SMA200(15m)=${btcSma200.toFixed(0)}`);
           return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
         }
       }

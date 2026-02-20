@@ -103,18 +103,9 @@ function getBtcPrice(klines: Candle1m[]): number {
 
 async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void> {
   const endPrice = w.currentPrice;
-  // Preliminary result from our own price sampling — will be verified against Polymarket oracle
+  // Preliminary result from our own price sampling — will be verified against Polymarket oracle.
+  // isCorrect and simulatedPnl stay NULL until oracle confirms — never trust preliminary.
   const preliminaryResult: 'UP' | 'DOWN' = endPrice >= w.startPrice ? 'UP' : 'DOWN';
-
-  let isCorrect: boolean | null = null;
-  let simulatedPnl: number | null = null;
-
-  if (w.prediction && w.entryOdds !== null) {
-    isCorrect = w.prediction.direction === preliminaryResult;
-    simulatedPnl = isCorrect
-      ? 1 - w.entryOdds
-      : -w.entryOdds;
-  }
 
   // Release the active-bet guard so the next window can place a new order
   if (activeLiveBetWindow === w.windowStart) {
@@ -136,11 +127,11 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
         confidence: w.prediction?.confidence ?? null,
         actualResult: preliminaryResult,
         entryOdds: w.entryOdds,
-        simulatedPnl,
+        simulatedPnl: null,       // Set by oracle verification only
         scoreBreakdown: w.prediction?.score
           ? JSON.parse(JSON.stringify(w.prediction.score))
           : undefined,
-        isCorrect,
+        isCorrect: null,           // Set by oracle verification only — never trust preliminary
         skipped,
         polymarketSlug: w.prediction ? slug : null,
       },
@@ -150,10 +141,11 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
     log.error(`DB persist error: ${msg}`);
   }
 
-  const pnlStr = simulatedPnl !== null ? simulatedPnl.toFixed(3) : 'N/A';
-  const correctStr = isCorrect !== null ? (isCorrect ? 'WIN (preliminary)' : 'LOSS (preliminary)') : 'SKIP';
+  const hasPrediction = w.prediction && w.entryOdds !== null;
+  const preliminaryMatch = hasPrediction ? w.prediction!.direction === preliminaryResult : null;
+  const correctStr = preliminaryMatch !== null ? (preliminaryMatch ? 'WIN?' : 'LOSS?') : 'SKIP';
   log.info(
-    `Resolved (preliminary): actual=${preliminaryResult} | ${correctStr} | pnl=${pnlStr} | ${w.startPrice.toFixed(2)} → ${endPrice.toFixed(2)}`,
+    `Resolved (PRELIMINARY — awaiting oracle): actual=${preliminaryResult} | ${correctStr} | ${w.startPrice.toFixed(2)} → ${endPrice.toFixed(2)}`,
   );
 
   // Schedule Polymarket oracle verification in 3 minutes (time for Chainlink to publish)
@@ -165,7 +157,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
       predictionDirection: w.prediction?.direction ?? null,
       entryOdds: w.entryOdds,
       verifyAfterMs: Date.now() + 3 * 60 * 1000,   // check after 3 min
-      giveUpAfterMs: Date.now() + 15 * 60 * 1000,  // give up after 15 min
+      giveUpAfterMs: Date.now() + 60 * 60 * 1000,  // give up after 60 min (was 15 — too short)
     });
   }
 }
@@ -202,35 +194,31 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
         continue;
       }
 
-      // Compare to what we have in DB
+      // Oracle resolved — always update DB with authoritative result + compute isCorrect
+      const isCorrect = v.predictionDirection ? v.predictionDirection === oracleResult : null;
+      const simulatedPnl =
+        isCorrect !== null && v.entryOdds !== null
+          ? isCorrect ? 1 - v.entryOdds : -v.entryOdds
+          : null;
+
       const existing = await prisma.polymarketPrediction.findFirst({
         where: { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT },
-        select: { actualResult: true, isCorrect: true },
+        select: { actualResult: true },
       });
 
-      if (!existing) {
-        toRemove.push(i);
-        continue;
-      }
+      const preliminaryMatched = existing?.actualResult === oracleResult;
 
-      if (existing.actualResult !== oracleResult) {
-        // Mismatch — update with Polymarket's real result
-        const isCorrect = v.predictionDirection ? v.predictionDirection === oracleResult : null;
-        const simulatedPnl =
-          isCorrect !== null && v.entryOdds !== null
-            ? isCorrect ? 1 - v.entryOdds : -v.entryOdds
-            : null;
+      await prisma.polymarketPrediction.updateMany({
+        where: { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT },
+        data: { actualResult: oracleResult, isCorrect, simulatedPnl },
+      });
 
-        await prisma.polymarketPrediction.updateMany({
-          where: { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT },
-          data: { actualResult: oracleResult, isCorrect, simulatedPnl },
-        });
-
-        log.warn(
-          `Oracle correction: ${v.slug} | preliminary=${existing.actualResult} → oracle=${oracleResult} | wasCorrect=${existing.isCorrect} → isCorrect=${isCorrect}`,
-        );
+      if (preliminaryMatched) {
+        log.info(`Oracle confirmed: ${v.slug} → ${oracleResult} | isCorrect=${isCorrect}`);
       } else {
-        log.info(`Oracle confirmed: ${v.slug} → ${oracleResult} (matches preliminary)`);
+        log.warn(
+          `Oracle CORRECTION: ${v.slug} | preliminary=${existing?.actualResult} → oracle=${oracleResult} | isCorrect=${isCorrect}`,
+        );
       }
 
       toRemove.push(i);
@@ -433,6 +421,12 @@ export function startPolymarketWorker(prisma: PrismaClient): void {
   const ws = getBinanceWebSocket();
   ws.subscribeToKline(SYMBOL, '1m');
 
+  // Recovery: re-queue unverified predictions from the last 2 hours
+  recoverPendingVerifications(prisma).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`Recovery failed: ${msg}`);
+  });
+
   intervalHandle = setInterval(() => {
     tick(prisma).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -443,6 +437,44 @@ export function startPolymarketWorker(prisma: PrismaClient): void {
   log.info(
     `Worker started — polling every ${POLL_INTERVAL_MS}ms, symbol=${SYMBOL}, window=${WINDOW_MS / 1000}s`,
   );
+}
+
+/**
+ * On startup, re-queue predictions that were never oracle-verified.
+ * This handles server restarts that lost in-memory pendingVerifications.
+ */
+async function recoverPendingVerifications(prisma: PrismaClient): Promise<void> {
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  const unverified = await prisma.polymarketPrediction.findMany({
+    where: {
+      createdAt: { gte: twoHoursAgo },
+      skipped: false,
+      prediction: { not: null },
+      polymarketSlug: { not: null },
+      isCorrect: null,           // Not yet oracle-verified
+    },
+    select: {
+      windowStart: true,
+      polymarketSlug: true,
+      prediction: true,
+      entryOdds: true,
+    },
+  });
+
+  if (unverified.length === 0) return;
+
+  for (const p of unverified) {
+    pendingVerifications.push({
+      windowStart: p.windowStart.getTime(),
+      slug: p.polymarketSlug!,
+      predictionDirection: p.prediction as 'UP' | 'DOWN',
+      entryOdds: p.entryOdds,
+      verifyAfterMs: Date.now(),               // check immediately
+      giveUpAfterMs: Date.now() + 60 * 60 * 1000, // 60 min from now
+    });
+  }
+
+  log.info(`Recovery: re-queued ${unverified.length} unverified predictions for oracle check`);
 }
 
 /**
@@ -521,9 +553,11 @@ export async function getPolymarketStats(
     }
   }
 
-  const winRate = totalPredictions > 0 ? (wins / totalPredictions) * 100 : 0;
-  const todayWinRate =
-    todayPredictions > 0 ? (todayWins / todayPredictions) * 100 : 0;
+  // Win rate based on ORACLE-VERIFIED predictions only (wins + losses, excluding pending)
+  const verified = wins + losses;
+  const winRate = verified > 0 ? (wins / verified) * 100 : 0;
+  const todayVerified = todayWins + todayLosses;
+  const todayWinRate = todayVerified > 0 ? (todayWins / todayVerified) * 100 : 0;
 
   return {
     totalWindows,

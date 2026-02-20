@@ -34,10 +34,14 @@ const CHAIN_ID = 137; // Polygon
 // USDC has 6 decimals on Polygon
 const USDC_DECIMALS = 6;
 
-// Maximum slippage accepted vs the Gamma API (expected) price.
-// If CLOB best ask > expectedPrice × (1 + MAX_SLIPPAGE_PCT), the bet is skipped.
-// e.g. expectedPrice=0.495, tolerance=10% → reject if CLOB ask > 0.5445
-const MAX_SLIPPAGE_PCT = 0.10;
+// Maximum acceptable CLOB price (absolute cap).
+// Buying above this has poor EV: paying 85¢ for $1 potential = 17.6% ROI max.
+// Below this threshold, EV is reasonable for 5-min up/down markets.
+const MAX_CLOB_PRICE = 0.85;
+
+// Maximum divergence allowed between CLOB and Gamma prices.
+// If CLOB is more than 50% above Gamma, something is likely wrong (stale Gamma, wrong market).
+const MAX_GAMMA_DIVERGENCE_PCT = 0.50;
 
 // ─── Settings keys ──────────────────────────────────────────────────────────
 
@@ -407,24 +411,27 @@ export async function placePolymarketBet(
   try {
     const client = buildClient(creds);
 
-    // Slippage check: compare CLOB best ask to Gamma API price before placing.
-    // The Gamma API price (e.g. 0.495) can differ significantly from the CLOB ask (e.g. 0.91).
-    // Buying at 0.91 on a ~50% probability market destroys EV (ROI 10% vs ~100%).
+    // Price validation: use CLOB as the real price (Gamma API can be stale).
     const clobPriceData = await client.getPrice(tokenId, 'BUY');
     const clobAsk = parseFloat((clobPriceData as any)?.price ?? '0');
-    const maxAcceptablePrice = price * (1 + MAX_SLIPPAGE_PCT);
 
     if (clobAsk === 0) {
       return { success: false, error: 'CLOB price unavailable — skipping bet' };
     }
-    if (clobAsk > maxAcceptablePrice) {
-      log.warn(
-        `Slippage too high: CLOB ask=${clobAsk.toFixed(3)} > Gamma price=${price.toFixed(3)} × ${1 + MAX_SLIPPAGE_PCT} (${maxAcceptablePrice.toFixed(3)}) — skipping`,
-      );
-      return { success: false, error: `Slippage too high (CLOB=${clobAsk.toFixed(3)} > limit=${maxAcceptablePrice.toFixed(3)})` };
+
+    // 1. Absolute EV cap: don't buy above MAX_CLOB_PRICE (poor risk/reward)
+    if (clobAsk > MAX_CLOB_PRICE) {
+      log.warn(`EV too low: CLOB ask=${clobAsk.toFixed(3)} > cap=${MAX_CLOB_PRICE} — skipping`);
+      return { success: false, error: `EV too low (CLOB=${clobAsk.toFixed(3)} > cap=${MAX_CLOB_PRICE})` };
     }
 
-    log.info(`Slippage OK: CLOB ask=${clobAsk.toFixed(3)}, Gamma=${price.toFixed(3)}, limit=${maxAcceptablePrice.toFixed(3)}`);
+    // 2. Gamma divergence warning: log if CLOB diverges significantly from Gamma (informational)
+    const divergence = (clobAsk - price) / price;
+    if (divergence > MAX_GAMMA_DIVERGENCE_PCT) {
+      log.warn(`Gamma divergence: CLOB=${clobAsk.toFixed(3)} vs Gamma=${price.toFixed(3)} (${(divergence * 100).toFixed(0)}% above) — proceeding with CLOB price`);
+    }
+
+    log.info(`Price OK: CLOB ask=${clobAsk.toFixed(3)}, Gamma=${price.toFixed(3)}, cap=${MAX_CLOB_PRICE}`);
 
     // Pass the CLOB ask price as a limit so FOK fills at that price.
     const order: UserMarketOrder = {

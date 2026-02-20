@@ -394,8 +394,9 @@ function HistoryTable({ predictions }: HistoryTableProps) {
         {predictions.map((p) => {
           const isSkipped = p.skipped;
           const correct = p.isCorrect;
-          const scoreIcon = isSkipped ? '\u2014' : correct === true ? '\u2713' : correct === false ? '\u2717' : '\u2014';
-          const scoreColor = isSkipped ? 'text-muted-foreground' : correct === true ? 'text-success' : correct === false ? 'text-destructive' : 'text-muted-foreground';
+          const awaiting = !isSkipped && p.prediction && correct === null;
+          const scoreIcon = isSkipped ? '\u2014' : awaiting ? '\u23F3' : correct === true ? '\u2713' : correct === false ? '\u2717' : '\u2014';
+          const scoreColor = isSkipped ? 'text-muted-foreground' : awaiting ? 'text-yellow-500' : correct === true ? 'text-success' : correct === false ? 'text-destructive' : 'text-muted-foreground';
           const pnl = p.simulatedPnl ?? 0;
 
           return (
