@@ -116,29 +116,35 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   logger.info(`[PARITY-V2] Verifying ${symbol} ${side} @ ${trade.entryTs.toISOString()}`);
 
   // 2. Compute forced entry timestamp
-  // V5.120 FIX: Trade.entryTs is candle OPEN time (NOT wall-clock).
+  // V5.120b FIX: Trade.entryTs can be EITHER candle OPEN or wall-clock depending on
+  // whether the agent restarted between entry and exit:
   //
-  // Root cause chain:
-  //   - V5.46: position.entryTime = lastCandle.timestamp (candle OPEN)
-  //   - V5.86: position.realEntryTime = Date.now() (wall-clock)
-  //   - savePositionToDb (line 154): openedAt = new Date(position.entryTime) ← candle OPEN
-  //   - loadExistingPosition (line 53-54): realEntryTime = openedAt ← candle OPEN overwrites
-  //   - saveExitToDb (line 241): entryTimeMs = realEntryTime ?? entryTime ← candle OPEN
+  //   Path A (agent restart): savePositionToDb stores openedAt = position.entryTime (candle OPEN).
+  //     On restart, loadExistingPosition sets realEntryTime = openedAt. So saveExitToDb uses
+  //     candle OPEN → Trade.entryTs = exact 15m boundary (offset = 0ms).
   //
-  // So Trade.entryTs = candle OPEN (e.g., 13:30:00 for the 13:30-13:45 candle).
-  // The SIGNAL is detected at candle CLOSE (13:45), which is btcCandle.timestamp = 13:45.
-  // Without offset: forcedEntryTimestamp = 13:30 → BT at 13:30 sees forming candle → NO_SIGNAL.
-  // With +CANDLE_15M_MS: forcedEntryTimestamp = 13:45 → BT at 13:45 sees closed candle → MATCH.
+  //   Path B (no restart): position.realEntryTime = Date.now() (wall-clock ~candle_close + 2s).
+  //     saveExitToDb uses realEntryTime → Trade.entryTs = wall-clock (offset > 0ms from boundary).
   //
-  // V5.106 was actually correct (+CANDLE_15M_MS). V5.107 incorrectly removed it based on
-  // the false assumption that Trade.entryTs = Date.now() (wall-clock).
-  // Trade.entryTs = candle OPEN time (from Position.openedAt in DB).
-  // The signal is detected at candle CLOSE = open + 15min.
-  // In the BT, btcCandle.timestamp at CLOSE is when signalCandidates are populated.
-  // Always add +CANDLE_15M_MS to shift from candle open to candle close boundary.
-  const forcedEntryTimestamp = Math.floor(entryTs / CANDLE_15M_MS) * CANDLE_15M_MS + CANDLE_15M_MS;
+  // In the BT, the signal candle has timestamp = candle_open. The cursor finds candles
+  // where ts < btcCandle.timestamp. So forcedEntryTimestamp must equal candle CLOSE time
+  // (= candle_open + 15min) for the cursor to find the signal candle.
+  //
+  // Path A: entryTs = candle_open (e.g., 16:00:00) → floor = 16:00 → need +15m → 16:15
+  //   Cursor at 16:15: last ts < 16:15 = 16:00 candle ✓
+  //
+  // Path B: entryTs = wall-clock (e.g., 16:15:02) → floor = 16:15 → already at close boundary
+  //   Cursor at 16:15: last ts < 16:15 = 16:00 candle ✓
+  //
+  // Detection: offset === 0 means candle open (Binance timestamps are ms-exact boundaries).
+  // Date.now() returning exactly 0ms offset is virtually impossible (1 in 900,000).
+  const flooredEntryTs = Math.floor(entryTs / CANDLE_15M_MS) * CANDLE_15M_MS;
+  const offsetMs = entryTs - flooredEntryTs;
+  const forcedEntryTimestamp = offsetMs === 0
+    ? flooredEntryTs + CANDLE_15M_MS   // Path A: candle open → shift to close
+    : flooredEntryTs;                   // Path B: wall-clock → floor IS the close boundary
 
-  logger.info(`[PARITY-V2] entryTs=${new Date(entryTs).toISOString()} forced=${new Date(forcedEntryTimestamp).toISOString()} (open→close +15m)`);
+  logger.info(`[PARITY-V2] entryTs=${new Date(entryTs).toISOString()} floor=${new Date(flooredEntryTs).toISOString()} offset=${offsetMs}ms forced=${new Date(forcedEntryTimestamp).toISOString()} (${offsetMs === 0 ? 'candle_open+15m' : 'wall_clock_floor'})`);
 
   // 3. Run backtest with forcedEntry
   let btResult: BacktestResult;
