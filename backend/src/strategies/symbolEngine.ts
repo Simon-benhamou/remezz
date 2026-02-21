@@ -134,15 +134,25 @@ export class SymbolEngine extends EventEmitter {
     // Convert to Candle format (getKlinesWithMeta already returns the right shape)
     this.candles = rawCandles as Candle[];
 
-    // 2. Get BTC 15m candles from global cache (need 200+ for SMA200 in checkMomentumSignal)
-    const btcCache = globalCacheManager.getBtc15mCache();
-    if (!btcCache || !btcCache.candles || btcCache.candles.length < MIN_BTC_15M_CANDLES) {
-      if (this.tickCount % 10 === 1) {
-        logger.debug(`[SymbolEngine] [${this.shortSymbol}] Waiting for BTC 15m cache (${btcCache?.candles?.length || 0}/${MIN_BTC_15M_CANDLES})`);
+    // 2. Get BTC 15m candles — read fresh from WS cache, fallback to globalCacheManager
+    // V5.120 FIX: Previously read only from globalCacheManager which is updated by agent ticks.
+    // When symbol candle isFinal arrives before any agent refreshes the global cache,
+    // symbolEngine could use stale BTC data → wrong regime at SMA200 boundary.
+    // Now reads directly from WS kline cache (same source, no intermediary staleness).
+    const btcWsRaw = getKlinesWithMeta('BTCUSDT', '15m');
+    let allBtcCandles15m: Candle[];
+    if (btcWsRaw && btcWsRaw.length >= MIN_BTC_15M_CANDLES) {
+      allBtcCandles15m = btcWsRaw as Candle[];
+    } else {
+      const btcCache = globalCacheManager.getBtc15mCache();
+      if (!btcCache || !btcCache.candles || btcCache.candles.length < MIN_BTC_15M_CANDLES) {
+        if (this.tickCount % 10 === 1) {
+          logger.debug(`[SymbolEngine] [${this.shortSymbol}] Waiting for BTC 15m data (WS=${btcWsRaw?.length || 0} cache=${btcCache?.candles?.length || 0}/${MIN_BTC_15M_CANDLES})`);
+        }
+        return;
       }
-      return;
+      allBtcCandles15m = btcCache.candles;
     }
-    const allBtcCandles15m = btcCache.candles;
 
     // 3. Filter to closed candles only (matching agent's checkEntry logic exactly)
     const lastCandle = this.candles[this.candles.length - 1];

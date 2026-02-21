@@ -387,6 +387,16 @@ export const api = {
         todayLosses: number;
         todayWinRate: number;
         todayPnl: number;
+        tradedWins: number;
+        tradedLosses: number;
+        tradedWinRate: number;
+        tradedPnl: number;
+        todayTradedWins: number;
+        todayTradedLosses: number;
+        todayTradedWinRate: number;
+        todayTradedPnl: number;
+        unredeemedCount: number;
+        unredeemedUsdc: number;
       },
     getHistory: async (limit = 50) =>
       (await client.get('/api/polymarket/history', { params: { limit } })).data as {
@@ -402,7 +412,13 @@ export const api = {
           confidence: number | null;
           actualResult: string | null;
           entryOdds: number | null;
+          executionPrice: number | null;
+          betAmount: number | null;
           simulatedPnl: number | null;
+          realPnl: number | null;
+          usdcReceived: number | null;
+          sellPrice: number | null;
+          soldAt: string | null;
           scoreBreakdown: Record<string, number> | null;
           isCorrect: boolean | null;
           skipped: boolean;
@@ -441,6 +457,19 @@ export const api = {
       (await client.delete('/api/polymarket/history')).data as {
         success: boolean;
         deleted: number;
+      },
+    getUnredeemed: async () =>
+      (await client.get('/api/polymarket/unredeemed')).data as {
+        count: number;
+        totalStuckUsdc: number;
+        tokens: Array<{
+          slug: string;
+          direction: string;
+          amount: number;
+          status: string;
+          attempts: number;
+          addedAt: number;
+        }>;
       },
   },
 };

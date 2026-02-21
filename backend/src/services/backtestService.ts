@@ -152,6 +152,7 @@ interface BacktestSimPosition {
   exhaustionStopPrice?: number;   // V5.110: Price of the exhaustion stop
   maxPnlPct?: number;  // V5.28: Track max raw PnL % for stagnant trade detection
   entryAtrPct?: number;  // V5.118: ATR% at entry time (for ATR-scaled trailing)
+  fixedSlPct?: number;   // V5.120: Fixed SL% at entry (parity — matches live STOP_MARKET)
   entryReason?: string;  // V5.32: Track entry reason (anticipatory vs classic)
   // V5.30: Multi-position tracking
   positionIndex?: number;     // 0 = primary, 1+ = additional positions
@@ -697,6 +698,26 @@ function checkBacktestExit(
   const holdBars = idx - pos.entryIdx;
   const holdMinutes = holdBars * 15;
   
+  // V5.120: Fixed SL check for parity — matches live's STOP_MARKET behavior.
+  // Live places a fixed STOP_MARKET at entry via calcDynamicStopLoss(). This price
+  // NEVER changes. But shouldExitPosition() recalculates SL dynamically per candle
+  // (volatility regime can shift mid-trade). Check fixed SL on wicks FIRST.
+  if (pos.fixedSlPct != null) {
+    const fixedSlPrice = pos.side === 'long'
+      ? pos.entryPrice * (1 - pos.fixedSlPct / 100)
+      : pos.entryPrice * (1 + pos.fixedSlPct / 100);
+    const slHit = pos.side === 'long'
+      ? current.low <= fixedSlPrice
+      : current.high >= fixedSlPrice;
+    if (slHit) {
+      return {
+        shouldExit: true,
+        exitReason: EXIT_SIGNAL_REASON_MAP['stoploss'] ?? 'SL',
+        exitPrice: fixedSlPrice,
+      };
+    }
+  }
+
   // Convert BacktestSimPosition to Position for shouldExitPosition()
   const position: Position = {
     symbol: pos.symbol,
@@ -714,7 +735,7 @@ function checkBacktestExit(
     entryAtrPct: pos.entryAtrPct,
     stagnantState: pos.stagnantState,
   };
-  
+
   // Call shared exit function with timestamp override for consistent time calculation
   // V5.86: Pass btcCandles1h for regime SMA200 (matches live behavior)
   const exitSignal = shouldExitPosition(position, current.close, windowCandles as Candle[], {
@@ -2064,17 +2085,42 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
             // Signal is valid - enter the trade
             console.log(`[FORCED ENTRY] ✅ Valid signal found. Entering ${forcedSymbol} ${forcedEntry.side} @ ${new Date(currentCandle.timestamp).toISOString()}`);
           } else {
-            // No valid signal - log warning but still enter for comparison
-            // This allows us to see what would have happened even if signal was different
+            // V5.120: Diagnose WHY no signal — run checkMomentumSignal directly for this symbol
+            const forcedWindowCandles2 = forcedCandles.slice(Math.max(0, forcedIdx - 200), forcedIdx + 1);
+            const diagSignal = checkMomentumSignal(
+              forcedSymbol,
+              forcedWindowCandles2,
+              btcWindowForSignal,
+              { nowMs: btcCandle.timestamp, btcCandles1h: cachedBtcCandles1hWindow }
+            );
+            // Check toxic hours
+            const diagHourUtc = new Date(currentCandle.timestamp + 15 * 60 * 1000).getUTCHours();
+            const isToxicHour = [4, 5, 9, 18, 21].includes(diagHourUtc);
+            // Check regime
+            const diagRegime = cachedIsBullRegime ? 'BULL' : 'BEAR';
+            const wantedSide = forcedEntry.side;
+            const regimeMismatch = (wantedSide === 'long' && !cachedIsBullRegime) ||
+                                    (wantedSide === 'short' && cachedIsBullRegime);
+
             console.log(`[FORCED ENTRY] ⚠️ NO VALID SIGNAL at ${new Date(currentCandle.timestamp).toISOString()} for ${forcedSymbol} ${forcedEntry.side}`);
-            console.log(`[FORCED ENTRY] ⚠️ Live may have entered on different conditions or timing`);
-            // Store this info for the parity result
+            console.log(`[FORCED ENTRY] 🔍 Diagnostic: regime=${diagRegime} wanted=${wantedSide} regimeMismatch=${regimeMismatch}`);
+            console.log(`[FORCED ENTRY] 🔍 checkMomentumSignal: valid=${diagSignal.valid} side=${diagSignal.side ?? 'none'} reason="${diagSignal.reason}"`);
+            console.log(`[FORCED ENTRY] 🔍 toxicHour=${isToxicHour} (hour=${diagHourUtc}UTC) signalCandidates=${signalCandidates.length}`);
+            console.log(`[FORCED ENTRY] 🔍 btcCandle.ts=${new Date(btcCandle.timestamp).toISOString()} forcedEntry.ts=${new Date(forcedEntry.entryTimestamp).toISOString()}`);
+
+            // Store diagnostic info in the reason field for parity result
+            const diagReason = regimeMismatch
+              ? `NO_SIGNAL_AT_FORCED_TIME|regime=${diagRegime}_wanted=${wantedSide}`
+              : isToxicHour
+              ? `NO_SIGNAL_AT_FORCED_TIME|toxic_hour=${diagHourUtc}`
+              : `NO_SIGNAL_AT_FORCED_TIME|signal_reason="${diagSignal.reason}"_valid=${diagSignal.valid}_side=${diagSignal.side ?? 'none'}`;
+
             allValidSignals.push({
               symbol: forcedSymbol,
               side: forcedEntry.side,
               timestamp: currentCandle.timestamp,
               price: currentCandle.close,
-              reason: 'NO_SIGNAL_AT_FORCED_TIME',
+              reason: diagReason,
             });
           }
           
@@ -2083,11 +2129,21 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           const marginUsd = Math.min(capital * 0.25, 1000);
           const notionalUsd = marginUsd * posLev;
           const qty = notionalUsd / currentCandle.close;
-          
+
           if (qty > 0 && marginUsd > 0) {
             capitalInUse += marginUsd;
             capital -= marginUsd;
-            
+
+            // V5.120: Compute dynamic SL + ATR at entry (matching normal entry path)
+            // Live places a FIXED STOP_MARKET at entry using calcDynamicStopLoss().
+            // Without this, backtest uses dynamic SL that recalculates per candle.
+            const forcedWindowCandles = forcedCandles.slice(Math.max(0, forcedIdx - 200), forcedIdx + 1);
+            const forcedSlPct = calcDynamicStopLoss(forcedWindowCandles, forcedSymbol).slPct;
+            const forcedAtr = calcATR(forcedWindowCandles, 14);
+            const forcedEntryAtrPct = forcedAtr && forcedWindowCandles.length > 0
+              ? (forcedAtr / forcedWindowCandles[forcedWindowCandles.length - 1].close) * 100
+              : undefined;
+
             positions[forcedSymbol] = {
               symbol: forcedSymbol,
               side: forcedEntry.side,
@@ -2101,7 +2157,9 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
               leverage: posLev,
               capitalBefore: capital + marginUsd,
               wasCapped: false,
-              stopLossPct: CONFIG.EXIT.STOP_LOSS_PCT,
+              stopLossPct: forcedSlPct,
+              fixedSlPct: forcedSlPct,  // V5.120: Fixed SL matching live STOP_MARKET
+              entryAtrPct: forcedEntryAtrPct,  // V5.120: ATR% for ATR-scaled trailing
               highWaterMark: forcedEntry.side === 'long' ? currentCandle.close : undefined,
               lowWaterMark: forcedEntry.side === 'short' ? currentCandle.close : undefined,
               entryReason: 'FORCED_PARITY',

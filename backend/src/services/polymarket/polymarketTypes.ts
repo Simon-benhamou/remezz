@@ -69,4 +69,16 @@ export interface PredictionStats {
   todayLosses: number;
   todayWinRate: number;
   todayPnl: number;
+  // Real traded stats (executionPrice IS NOT NULL = order was placed & filled)
+  tradedWins: number;
+  tradedLosses: number;
+  tradedWinRate: number;
+  tradedPnl: number;          // sum of realPnl (live) or simulatedPnl (virtual)
+  todayTradedWins: number;
+  todayTradedLosses: number;
+  todayTradedWinRate: number;
+  todayTradedPnl: number;
+  // Unredeemed tokens info
+  unredeemedCount: number;
+  unredeemedUsdc: number;
 }

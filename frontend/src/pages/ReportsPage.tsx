@@ -1,6 +1,7 @@
 import React from 'react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import utc from 'dayjs/plugin/utc';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { useReportsCache } from '../hooks/useReportsCache';
@@ -31,6 +32,7 @@ import {
 } from 'lucide-react';
 
 dayjs.extend(relativeTime);
+dayjs.extend(utc);
 
 // ============================================================================
 // TYPES
@@ -432,8 +434,8 @@ function ParityVerificationPanel() {
                 <tbody>
                   <tr>
                     <td className="py-1.5 text-muted-foreground">Entry</td>
-                    <td>{dayjs(record.liveEntryTs).format('MM-DD HH:mm:ss')}</td>
-                    <td>{record.btEntryTs ? dayjs(record.btEntryTs).format('MM-DD HH:mm:ss') : '-'}</td>
+                    <td>{dayjs(record.liveEntryTs).utc().format('MM-DD HH:mm:ss')}</td>
+                    <td>{record.btEntryTs ? dayjs(record.btEntryTs).utc().format('MM-DD HH:mm:ss') : '-'}</td>
                     <td>
                       <span className={cn(
                         "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
@@ -445,8 +447,8 @@ function ParityVerificationPanel() {
                   </tr>
                   <tr>
                     <td className="py-1.5 text-muted-foreground">Exit</td>
-                    <td>{dayjs(record.liveExitTs).format('MM-DD HH:mm:ss')}</td>
-                    <td>{record.btExitTs ? dayjs(record.btExitTs).format('MM-DD HH:mm:ss') : '-'}</td>
+                    <td>{dayjs(record.liveExitTs).utc().format('MM-DD HH:mm:ss')}</td>
+                    <td>{record.btExitTs ? dayjs(record.btExitTs).utc().format('MM-DD HH:mm:ss') : '-'}</td>
                     <td>
                       <span className={cn(
                         "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
@@ -834,9 +836,9 @@ function ParityVerificationPanel() {
                             <TableCell>
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <span className="text-xs">{dayjs(record.liveEntryTs).format('MM-DD HH:mm')}</span>
+                                  <span className="text-xs">{dayjs(record.liveEntryTs).utc().format('MM-DD HH:mm')}</span>
                                 </TooltipTrigger>
-                                <TooltipContent>{dayjs(record.liveEntryTs).format('YYYY-MM-DD HH:mm:ss')}</TooltipContent>
+                                <TooltipContent>{dayjs(record.liveEntryTs).utc().format('YYYY-MM-DD HH:mm:ss')} UTC</TooltipContent>
                               </Tooltip>
                             </TableCell>
                             {/* Exit Reason */}

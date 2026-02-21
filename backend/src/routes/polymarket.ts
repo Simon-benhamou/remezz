@@ -7,6 +7,7 @@ import {
   startPolymarketWorker,
   stopPolymarketWorker,
   isPolymarketWorkerRunning,
+  getUnredeemedTokens,
 } from '../services/polymarket/polymarketWorker.js';
 import {
   getPolymarketConfig,
@@ -151,6 +152,13 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
     } catch (err) {
       res.status(500).json({ balance: 0, error: 'Failed to fetch balance' });
     }
+  });
+
+  // GET /unredeemed — unredeemed winning tokens queue
+  router.get('/unredeemed', (_req, res) => {
+    const tokens = getUnredeemedTokens();
+    const totalStuckUsdc = tokens.reduce((sum, t) => sum + t.amount, 0);
+    res.json({ count: tokens.length, totalStuckUsdc, tokens });
   });
 
   // ── Worker control ────────────────────────────────────────────────────────

@@ -371,6 +371,10 @@ model PolymarketPrediction {
   tokenId         String?           // CLOB token ID (for auto-sell after WIN)
   betAmount       Float?            // USDC amount bet (for dollar PnL calculation)
   simulatedPnl    Float?
+  realPnl         Float?            // Actual USDC in - out (null = not settled)
+  usdcReceived    Float?            // USDC received from selling winning tokens
+  sellPrice       Float?            // CLOB bid price at time of sell
+  soldAt          DateTime?         // When the sell was executed
   scoreBreakdown  Json?
   isCorrect       Boolean?
   skipped         Boolean  @default(false)

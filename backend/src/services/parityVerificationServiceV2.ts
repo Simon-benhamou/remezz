@@ -116,17 +116,29 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   logger.info(`[PARITY-V2] Verifying ${symbol} ${side} @ ${trade.entryTs.toISOString()}`);
 
   // 2. Compute forced entry timestamp
-  // V5.107 FIX: trade.entryTs = Date.now() (wall-clock, from position.realEntryTime in
-  // positionPersistence.ts:233). V5.46 set position.entryTime = candle open time, but V5.86
-  // added realEntryTime = Date.now() which takes priority in the persistence layer.
+  // V5.120 FIX: Trade.entryTs is candle OPEN time (NOT wall-clock).
   //
-  // Wall-clock is ~2s after candle close (e.g., 14:45:02 for a 14:30 candle that closed at 14:45).
-  // floor(14:45:02 / 15min) = 14:45, which is exactly btcCandle.timestamp when the signal candle
-  // (14:30, closed at 14:45) was just processed. So NO offset is needed.
+  // Root cause chain:
+  //   - V5.46: position.entryTime = lastCandle.timestamp (candle OPEN)
+  //   - V5.86: position.realEntryTime = Date.now() (wall-clock)
+  //   - savePositionToDb (line 154): openedAt = new Date(position.entryTime) ← candle OPEN
+  //   - loadExistingPosition (line 53-54): realEntryTime = openedAt ← candle OPEN overwrites
+  //   - saveExitToDb (line 241): entryTimeMs = realEntryTime ?? entryTime ← candle OPEN
   //
-  // V5.106 incorrectly added +CANDLE_15M_MS assuming entryTs was candle OPEN time, which pushed
-  // the forced entry one candle too late → wrong entry price → systematic EXIT_MISMATCH.
-  const forcedEntryTimestamp = Math.floor(entryTs / CANDLE_15M_MS) * CANDLE_15M_MS;
+  // So Trade.entryTs = candle OPEN (e.g., 13:30:00 for the 13:30-13:45 candle).
+  // The SIGNAL is detected at candle CLOSE (13:45), which is btcCandle.timestamp = 13:45.
+  // Without offset: forcedEntryTimestamp = 13:30 → BT at 13:30 sees forming candle → NO_SIGNAL.
+  // With +CANDLE_15M_MS: forcedEntryTimestamp = 13:45 → BT at 13:45 sees closed candle → MATCH.
+  //
+  // V5.106 was actually correct (+CANDLE_15M_MS). V5.107 incorrectly removed it based on
+  // the false assumption that Trade.entryTs = Date.now() (wall-clock).
+  // Trade.entryTs = candle OPEN time (from Position.openedAt in DB).
+  // The signal is detected at candle CLOSE = open + 15min.
+  // In the BT, btcCandle.timestamp at CLOSE is when signalCandidates are populated.
+  // Always add +CANDLE_15M_MS to shift from candle open to candle close boundary.
+  const forcedEntryTimestamp = Math.floor(entryTs / CANDLE_15M_MS) * CANDLE_15M_MS + CANDLE_15M_MS;
+
+  logger.info(`[PARITY-V2] entryTs=${new Date(entryTs).toISOString()} forced=${new Date(forcedEntryTimestamp).toISOString()} (open→close +15m)`);
 
   // 3. Run backtest with forcedEntry
   let btResult: BacktestResult;
@@ -158,17 +170,21 @@ export async function verifyTradeV2(tradeId: string): Promise<ParityResultV2> {
   // 5. Check signal validity from validSignals
   // Look specifically for the NO_SIGNAL_AT_FORCED_TIME entry (not other valid signals
   // from parityMode which may be from different candles)
+  // V5.120: Match NO_SIGNAL_AT_FORCED_TIME with diagnostic suffix (e.g., |regime=BULL_wanted=short)
   const noSignalEntry = btResult.validSignals?.find(
-    s => s.symbol === symbol && s.reason === 'NO_SIGNAL_AT_FORCED_TIME'
+    s => s.symbol === symbol && s.reason?.startsWith('NO_SIGNAL_AT_FORCED_TIME')
   );
   const hadValidSignal = !noSignalEntry;
+
+  // V5.120: Extract diagnostic reason for NO_SIGNAL (helps identify regime flip, toxic hour, etc.)
+  const noSignalDiag = noSignalEntry?.reason?.replace('NO_SIGNAL_AT_FORCED_TIME|', '') ?? null;
 
   const signalCheck = {
     wouldBacktestEnter: hadValidSignal,
     signalStrength: null as number | null,
     signalReason: hadValidSignal
       ? 'Valid signal matches'
-      : 'No signal at forced entry time',
+      : `No signal at forced entry time${noSignalDiag ? ` (${noSignalDiag})` : ''}`,
   };
 
   logger.info(`[PARITY-V2] Signal check: wouldEnter=${hadValidSignal}, reason=${signalCheck.signalReason}`);

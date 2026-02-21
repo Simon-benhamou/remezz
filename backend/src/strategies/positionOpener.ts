@@ -116,16 +116,39 @@ export class PositionOpener {
         logger.warn(`⚠️ [${symbol}] Not enough BTC 15m candles for regime validation (${btcCandlesForValidation.length}/201)`);
       }
       if (btcSma200 > 0 && btcNow > 0) {
-        const btcInBullRegime = btcNow > btcSma200;
-        const btcInBearRegime = btcNow < btcSma200;
+        // V5.120 FIX: Use tolerance band matching checkMomentumSignal (V5.113)
+        // Previously used simple btcNow > btcSma200 which disagreed with signal's
+        // dead zone regime detection. At boundary (±0.2%), checkMomentumSignal uses
+        // SMA200 slope to determine regime, but this guard used simple comparison.
+        const regimeTolerancePct = (MomentumConfig.ENTRY as any).BTC_REGIME_TOLERANCE_PCT ?? 0;
+        const regimeTolerance = btcSma200 * (regimeTolerancePct / 100);
+        let btcInBullRegime: boolean;
+        let btcInBearRegime: boolean;
+        const diffPct = ((btcNow - btcSma200) / btcSma200 * 100);
+
+        if (regimeTolerance > 0 && Math.abs(btcNow - btcSma200) <= regimeTolerance) {
+          // Dead zone: use SMA200 slope (same logic as momentumSignal.ts:405-417)
+          if (btcCandlesForValidation.length >= 201) {
+            const allCloses = btcCandlesForValidation.map(c => c.close);
+            const sma200Prev = allCloses.slice(-(201), -1).reduce((a, b) => a + b, 0) / 200;
+            btcInBullRegime = btcSma200 >= sma200Prev;
+            btcInBearRegime = !btcInBullRegime;
+          } else {
+            btcInBullRegime = btcNow > btcSma200;
+            btcInBearRegime = !btcInBullRegime;
+          }
+        } else {
+          btcInBullRegime = btcNow > btcSma200;
+          btcInBearRegime = btcNow < btcSma200;
+        }
 
         // Block SHORT in BULL regime and LONG in BEAR regime
         if (side === 'short' && btcInBullRegime) {
-          logger.error(`🚫 [${symbol}] BLOCKED: SHORT in BULL regime! BTC=${btcNow.toFixed(0)} > SMA200(15m)=${btcSma200.toFixed(0)}`);
+          logger.error(`🚫 [${symbol}] BLOCKED: SHORT in BULL regime! BTC=${btcNow.toFixed(0)} vs SMA200=${btcSma200.toFixed(0)} (${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(3)}%)`);
           return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
         }
         if (side === 'long' && btcInBearRegime) {
-          logger.error(`🚫 [${symbol}] BLOCKED: LONG in BEAR regime! BTC=${btcNow.toFixed(0)} < SMA200(15m)=${btcSma200.toFixed(0)}`);
+          logger.error(`🚫 [${symbol}] BLOCKED: LONG in BEAR regime! BTC=${btcNow.toFixed(0)} vs SMA200=${btcSma200.toFixed(0)} (${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(3)}%)`);
           return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
         }
       }

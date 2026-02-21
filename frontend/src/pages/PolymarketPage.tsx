@@ -76,6 +76,16 @@ interface StatsData {
   todayLosses: number;
   todayWinRate: number;
   todayPnl: number;
+  tradedWins: number;
+  tradedLosses: number;
+  tradedWinRate: number;
+  tradedPnl: number;
+  todayTradedWins: number;
+  todayTradedLosses: number;
+  todayTradedWinRate: number;
+  todayTradedPnl: number;
+  unredeemedCount: number;
+  unredeemedUsdc: number;
 }
 
 interface PredictionRow {
@@ -90,7 +100,13 @@ interface PredictionRow {
   confidence: number | null;
   actualResult: string | null;
   entryOdds: number | null;
+  executionPrice: number | null;
+  betAmount: number | null;
   simulatedPnl: number | null;
+  realPnl: number | null;
+  usdcReceived: number | null;
+  sellPrice: number | null;
+  soldAt: string | null;
   scoreBreakdown: Record<string, number> | null;
   isCorrect: boolean | null;
   skipped: boolean;
@@ -393,7 +409,7 @@ interface HistoryTableProps {
 }
 
 function HistoryTable({ predictions }: HistoryTableProps) {
-  const gridCols = 'grid-cols-[100px_55px_55px_50px_55px_70px_100px]';
+  const gridCols = 'grid-cols-[80px_50px_50px_45px_60px_90px_70px_80px]';
 
   const formatWindowTime = (ts: string) => {
     const d = new Date(ts);
@@ -412,10 +428,11 @@ function HistoryTable({ predictions }: HistoryTableProps) {
         <span>Window</span>
         <span>Pred</span>
         <span>Real</span>
-        <span>Score</span>
-        <span>Odds</span>
+        <span></span>
+        <span>Entry</span>
+        <span>Trade</span>
         <span>P&L</span>
-        <span>Price</span>
+        <span>Sell</span>
       </div>
 
       {/* Rows */}
@@ -431,7 +448,26 @@ function HistoryTable({ predictions }: HistoryTableProps) {
           const awaiting = !isSkipped && p.prediction && correct === null;
           const scoreIcon = isSkipped ? '\u2014' : awaiting ? '\u23F3' : correct === true ? '\u2713' : correct === false ? '\u2717' : '\u2014';
           const scoreColor = isSkipped ? 'text-muted-foreground' : awaiting ? 'text-yellow-500' : correct === true ? 'text-success' : correct === false ? 'text-destructive' : 'text-muted-foreground';
-          const pnl = p.simulatedPnl ?? 0;
+
+          // Use realPnl when available, fall back to simulatedPnl
+          const pnl = p.realPnl ?? p.simulatedPnl ?? 0;
+          const hasExecution = p.executionPrice != null;
+
+          // Sell status
+          let sellLabel = '\u2014';
+          let sellColor = 'text-muted-foreground';
+          if (hasExecution && correct === true) {
+            if (p.soldAt) {
+              sellLabel = `$${(p.usdcReceived ?? 0).toFixed(2)}`;
+              sellColor = 'text-success';
+            } else {
+              sellLabel = 'Stuck';
+              sellColor = 'text-amber-500';
+            }
+          } else if (hasExecution && correct === false) {
+            sellLabel = 'Lost';
+            sellColor = 'text-destructive';
+          }
 
           return (
             <div
@@ -462,14 +498,26 @@ function HistoryTable({ predictions }: HistoryTableProps) {
                 {isSkipped ? '\u2014' : p.actualResult ?? '\u2014'}
               </span>
 
-              {/* Score */}
+              {/* Result icon */}
               <span className={cn('font-bold', scoreColor)}>
                 {scoreIcon}
               </span>
 
-              {/* Odds */}
+              {/* Entry (CLOB price or Gamma odds) */}
               <span className="font-mono text-muted-foreground">
-                {isSkipped ? '\u2014' : p.entryOdds != null ? `${(p.entryOdds * 100).toFixed(0)}c` : '\u2014'}
+                {isSkipped ? '\u2014' : hasExecution
+                  ? `${(p.executionPrice! * 100).toFixed(0)}c`
+                  : p.entryOdds != null ? `${(p.entryOdds * 100).toFixed(0)}c` : '\u2014'}
+              </span>
+
+              {/* Trade status */}
+              <span className={cn(
+                'text-[10px]',
+                hasExecution ? 'text-foreground' : 'text-muted-foreground',
+              )}>
+                {isSkipped ? '\u2014' : hasExecution
+                  ? `$${p.betAmount?.toFixed(0)} @ ${(p.executionPrice! * 100).toFixed(0)}c`
+                  : 'No trade'}
               </span>
 
               {/* P&L */}
@@ -477,13 +525,12 @@ function HistoryTable({ predictions }: HistoryTableProps) {
                 'font-mono font-semibold',
                 isSkipped ? 'text-muted-foreground' : pnl > 0 ? 'text-success' : pnl < 0 ? 'text-destructive' : 'text-muted-foreground',
               )}>
-                {isSkipped ? '\u2014' : pnl !== 0 ? `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}` : '\u2014'}
+                {isSkipped || pnl === 0 ? '\u2014' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`}
               </span>
 
-              {/* Price */}
-              <span className="font-mono text-muted-foreground text-[10px]">
-                {p.startPrice ? `$${p.startPrice.toLocaleString()}` : '\u2014'}
-                {p.endPrice != null ? ` \u2192 $${p.endPrice.toLocaleString()}` : ''}
+              {/* Sell status */}
+              <span className={cn('text-[10px] font-medium', sellColor)}>
+                {sellLabel}
               </span>
             </div>
           );
@@ -860,28 +907,39 @@ export default function PolymarketPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           icon={Trophy}
-          label="Win Rate (today)"
-          value={`${todayWinRate.toFixed(1)}%`}
-          sub={`${stats?.todayWins ?? 0}W / ${stats?.todayLosses ?? 0}L`}
-          color={todayWinRate >= 50 ? 'success' : todayWinRate > 0 ? 'destructive' : 'default'}
+          label={pmMode === 'live' ? 'Traded WR (today)' : 'Win Rate (today)'}
+          value={`${(pmMode === 'live' ? (stats?.todayTradedWinRate ?? 0) : todayWinRate).toFixed(1)}%`}
+          sub={pmMode === 'live'
+            ? `${stats?.todayTradedWins ?? 0}W / ${stats?.todayTradedLosses ?? 0}L traded`
+            : `${stats?.todayWins ?? 0}W / ${stats?.todayLosses ?? 0}L predicted`}
+          color={(pmMode === 'live' ? (stats?.todayTradedWinRate ?? 0) : todayWinRate) >= 50 ? 'success' : todayWinRate > 0 ? 'destructive' : 'default'}
         />
         <KpiCard
           icon={DollarSign}
-          label="Simulated P&L (today)"
-          value={`${todayPnl >= 0 ? '+' : ''}$${todayPnl.toFixed(2)}`}
-          sub={`Cumulative: ${(stats?.cumulativePnl ?? 0) >= 0 ? '+' : ''}$${(stats?.cumulativePnl ?? 0).toFixed(2)}`}
-          color={todayPnl >= 0 ? 'success' : 'destructive'}
+          label={pmMode === 'live' ? 'Real P&L (today)' : 'Simulated P&L (today)'}
+          value={`${(pmMode === 'live' ? (stats?.todayTradedPnl ?? 0) : todayPnl) >= 0 ? '+' : ''}$${(pmMode === 'live' ? (stats?.todayTradedPnl ?? 0) : todayPnl).toFixed(2)}`}
+          sub={`Cumul: ${(pmMode === 'live' ? (stats?.tradedPnl ?? 0) : (stats?.cumulativePnl ?? 0)) >= 0 ? '+' : ''}$${(pmMode === 'live' ? (stats?.tradedPnl ?? 0) : (stats?.cumulativePnl ?? 0)).toFixed(2)}`}
+          color={(pmMode === 'live' ? (stats?.todayTradedPnl ?? 0) : todayPnl) >= 0 ? 'success' : 'destructive'}
         />
         <KpiCard
           icon={BarChart3}
           label="Predictions / Windows"
           value={`${todayPredictions} / ${todayWindows}`}
-          sub={`Total: ${stats?.totalPredictions ?? 0} preds / ${stats?.totalWindows ?? 0} windows`}
+          sub={`Total: ${stats?.totalPredictions ?? 0} preds / ${stats?.totalWindows ?? 0} win`}
           color="primary"
         />
+        {(stats?.unredeemedCount ?? 0) > 0 && (
+          <KpiCard
+            icon={Wallet}
+            label="Stuck Tokens"
+            value={`${stats?.unredeemedCount ?? 0}`}
+            sub={`~$${(stats?.unredeemedUsdc ?? 0).toFixed(2)} USDC pending`}
+            color="destructive"
+          />
+        )}
       </div>
 
       {/* Live Window + Mini Chart */}

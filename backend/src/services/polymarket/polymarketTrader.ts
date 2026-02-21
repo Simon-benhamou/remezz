@@ -532,7 +532,8 @@ export async function sellWinningTokens(
   tokenId: string,
   betAmount: number,
   executionPrice: number,
-): Promise<{ success: boolean; usdcReceived?: number; error?: string }> {
+  minBid = 0.90,
+): Promise<{ success: boolean; usdcReceived?: number; sellPrice?: number; error?: string }> {
   const creds = await loadCredentials(prisma);
   if (!creds) return { success: false, error: 'No credentials' };
 
@@ -553,8 +554,8 @@ export async function sellWinningTokens(
       throw priceErr;
     }
 
-    if (clobBid < 0.90) {
-      return { success: false, error: `Bid too low (${clobBid.toFixed(3)})` };
+    if (clobBid < minBid) {
+      return { success: false, error: `Bid too low (${clobBid.toFixed(3)} < ${minBid})` };
     }
 
     // Calculate token amount we hold: betAmount / executionPrice
@@ -576,7 +577,7 @@ export async function sellWinningTokens(
     }
 
     log.info(`Auto-sell OK: ${tokenAmount.toFixed(2)} tokens @ ${clobBid.toFixed(3)} = $${expectedUsdc.toFixed(2)} USDC`);
-    return { success: true, usdcReceived: expectedUsdc };
+    return { success: true, usdcReceived: expectedUsdc, sellPrice: clobBid };
   } catch (err: any) {
     log.error(`Auto-sell failed: ${err?.message}`);
     return { success: false, error: err?.message };
