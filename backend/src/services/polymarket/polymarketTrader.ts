@@ -48,9 +48,9 @@ const CTF_ABI = [
 
 // Maximum acceptable CLOB price (absolute cap).
 // Buying above this has poor EV: paying 80¢ for $1 potential = 25% ROI max.
-// At 80% win rate: EV = 0.80×$2.50 - 0.20×$10 = +$0.00 (break-even).
-// 5-min BTC markets price the likely winner to 0.70-0.85 by T+2:30.
-export const MAX_CLOB_PRICE = 0.80;
+// At 55c entry: win=$4.09, loss=$5. Need 55% WR to break even.
+// At 60% WR: EV = 0.60×$4.09 - 0.40×$5 = +$0.45 per trade.
+export const MAX_CLOB_PRICE = 0.55;
 
 // Maximum divergence allowed between CLOB and Gamma prices.
 // If CLOB is more than 50% above Gamma, something is likely wrong (stale Gamma, wrong market).
