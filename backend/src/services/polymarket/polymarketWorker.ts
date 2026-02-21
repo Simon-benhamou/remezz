@@ -577,9 +577,9 @@ async function processUnredeemedTokens(prisma: PrismaClient): Promise<void> {
           }).catch(() => {});
         }
         toRemove.push(i);
-      } else if (sellResult.error?.includes('Market closed') || sellResult.error?.includes('orderbook')) {
-        // CLOB orderbook removed post-resolution — try CTF on-chain redeem
-        log.info(`UNREDEEMED: CLOB closed for ${u.slug}, trying CTF redeem...`);
+      } else {
+        // CLOB sell failed (orderbook removed, bid too low, or unknown error) — try CTF on-chain redeem
+        log.info(`UNREDEEMED: CLOB sell failed for ${u.slug} (${sellResult.error}), trying CTF redeem...`);
         const conditionId = await fetchConditionId(u.slug);
         if (conditionId) {
           const redeemResult = await redeemWinningTokens(prisma, conditionId, u.betAmount, u.executionPrice);

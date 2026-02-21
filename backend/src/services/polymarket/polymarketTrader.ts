@@ -547,8 +547,11 @@ export async function sellWinningTokens(
       clobBid = parseFloat((clobPriceData as any)?.price ?? '0');
     } catch (priceErr: any) {
       // Market resolved → orderbook removed (404). Expected for 5-min markets.
+      // The CLOB client may log the error internally and throw with various message formats.
       const msg = priceErr?.message ?? '';
-      if (msg.includes('404') || msg.includes('orderbook')) {
+      const status = priceErr?.response?.status ?? priceErr?.status;
+      const dataErr = priceErr?.response?.data?.error ?? priceErr?.data?.error ?? '';
+      if (status === 404 || msg.includes('404') || msg.includes('orderbook') || dataErr.includes('orderbook')) {
         return { success: false, error: 'Market closed (orderbook removed after resolution)' };
       }
       throw priceErr;
