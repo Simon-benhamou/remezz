@@ -29,7 +29,7 @@ const SYMBOL_SHORT = 'BTC';
 const OBS_DIP_THRESHOLD = 0.03;           // Buy immediately on 3-cent dip from initial
 const OBS_BOUNCE_THRESHOLD = 0.02;        // Buy when price bounces 2 cents from trough
 const OBS_RISING_THRESHOLD = 0.05;        // Buy if price runs 5 cents above initial
-const OBS_DEADLINE_OFFSET_MS = 2 * 60 * 1000; // T+2:00 deadline (60s observation window)
+const OBS_DEADLINE_OFFSET_MS = 4 * 60 * 1000; // T+4:00 deadline (3min observation window — more time to catch a dip under cap)
 
 // ─── Last-second reversal / hedge constants ─────────────────────────────────
 const REVERSAL_OFFSET_MS = 4 * 60 * 1000;  // T+4:00 — check for last-second reversal/hedge
@@ -834,11 +834,11 @@ async function tick(prisma: PrismaClient): Promise<void> {
                 log.error(`LIVE BET FAILED: ${betResult.error}`);
                 activeLiveBetWindow = null;
               }
-            } else if (initAsk > MAX_CLOB_PRICE) {
-              log.warn(`OBSERVATION: EV too low (CLOB=${initAsk.toFixed(3)} > ${MAX_CLOB_PRICE}) — skipping`);
-              activeLiveBetWindow = null;
             } else {
-              // Start observation phase — don't buy yet
+              // Start observation phase — don't buy yet, wait for a good price
+              if (initAsk > MAX_CLOB_PRICE) {
+                log.info(`OBSERVATION: price high (CLOB=${initAsk.toFixed(3)} > cap=${MAX_CLOB_PRICE}) — watching for dip`);
+              }
               observationActive = true;
               observationTokenId = tokenId;
               observationDirection = result.direction;
@@ -883,26 +883,36 @@ async function tick(prisma: PrismaClient): Promise<void> {
       currentWindow.observationBestAsk = observationBestAsk;
 
       const now = Date.now();
+      const underCap = ask <= MAX_CLOB_PRICE;
 
-      if (ask <= observationInitialAsk - OBS_DIP_THRESHOLD) {
+      if (underCap && ask <= observationInitialAsk - OBS_DIP_THRESHOLD) {
         await executeObservationBuy(prisma, 'dip', ask);
       }
-      else if (
+      else if (underCap &&
         observationBestAsk < observationInitialAsk &&
         ask > observationBestAsk + OBS_BOUNCE_THRESHOLD
       ) {
         await executeObservationBuy(prisma, 'bounce', ask);
       }
-      else if (ask >= observationInitialAsk + OBS_RISING_THRESHOLD) {
+      else if (underCap && ask >= observationInitialAsk + OBS_RISING_THRESHOLD) {
         await executeObservationBuy(prisma, 'rising', ask);
       }
       else if (now >= observationDeadlineMs) {
-        await executeObservationBuy(prisma, 'deadline', ask);
+        if (underCap) {
+          await executeObservationBuy(prisma, 'deadline', ask);
+        } else {
+          log.info(`OBSERVATION: deadline reached but price too high (${ask.toFixed(3)} > cap=${MAX_CLOB_PRICE}) — no trade`);
+          currentWindow.observationStatus = 'skipped_ev';
+          resetObservation();
+          activeLiveBetWindow = null;
+        }
       }
     } else {
       if (Date.now() >= observationDeadlineMs) {
-        log.warn('OBSERVATION: CLOB price unavailable at deadline — buying at initial ask');
-        await executeObservationBuy(prisma, 'deadline', observationInitialAsk);
+        log.warn('OBSERVATION: CLOB price unavailable at deadline — no trade');
+        currentWindow.observationStatus = 'skipped_ev';
+        resetObservation();
+        activeLiveBetWindow = null;
       }
     }
   }

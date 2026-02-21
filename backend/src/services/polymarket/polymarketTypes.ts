@@ -48,7 +48,7 @@ export interface WindowState {
   betAmount: number | null;
   tokenId: string | null;         // CLOB token ID (for auto-sell after WIN)
   // Observation phase (smart CLOB entry)
-  observationStatus: 'idle' | 'observing' | 'filled' | null;
+  observationStatus: 'idle' | 'observing' | 'filled' | 'skipped_ev' | null;
   observationInitialAsk: number | null;
   observationBestAsk: number | null;
   observationTrigger: string | null;  // 'dip' | 'bounce' | 'rising' | 'deadline' | 'window_end'
