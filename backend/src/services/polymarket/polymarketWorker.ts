@@ -375,6 +375,19 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
           const sellResult = await sellWinningTokens(prisma, v.tokenId, v.betAmount, v.executionPrice, 0.80);
           if (sellResult.success) {
             log.info(`HEDGE auto-sell OK: $${sellResult.usdcReceived?.toFixed(2)} USDC from ${v.slug}`);
+          } else if (sellResult.error?.includes('Market closed') || sellResult.error?.includes('orderbook')) {
+            // CLOB gone — try CTF on-chain redeem
+            const conditionId = await fetchConditionId(v.slug);
+            if (conditionId) {
+              const redeemResult = await redeemWinningTokens(prisma, conditionId, v.betAmount, v.executionPrice);
+              if (redeemResult.success) {
+                log.info(`HEDGE CTF redeem OK: ~$${redeemResult.usdcReceived?.toFixed(2)} USDC from ${v.slug}`);
+              } else {
+                log.warn(`HEDGE CTF redeem failed for ${v.slug}: ${redeemResult.error} — claim manually`);
+              }
+            } else {
+              log.warn(`HEDGE: no conditionId for ${v.slug} — claim manually`);
+            }
           } else {
             const alreadyQueued = unredeemedTokens.some((u) => u.windowStart === v.windowStart && u.tokenId === v.tokenId);
             if (!alreadyQueued) {
@@ -422,8 +435,8 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
       }
 
       // ── Recover USDC from winning tokens ──────────────────────────
-      // Try CLOB sell. If it fails, queue for unredeemed retry.
-      // (CTF on-chain redeem doesn't work with proxy wallets.)
+      // Try CLOB sell first. If market closed, try CTF on-chain redeem.
+      // If both fail, queue for unredeemed retry.
       if (isCorrect && v.tokenId && v.betAmount && v.executionPrice) {
         const sellResult = await sellWinningTokens(prisma, v.tokenId, v.betAmount, v.executionPrice, 0.80);
         if (sellResult.success) {
@@ -438,21 +451,60 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
               realPnl,
             },
           }).catch(() => {});
+        } else if (sellResult.error?.includes('Market closed') || sellResult.error?.includes('orderbook')) {
+          // CLOB orderbook removed — try CTF on-chain redeem
+          log.info(`CLOB closed for ${v.slug}, trying CTF redeem...`);
+          const conditionId = await fetchConditionId(v.slug);
+          if (conditionId) {
+            const redeemResult = await redeemWinningTokens(prisma, conditionId, v.betAmount, v.executionPrice);
+            if (redeemResult.success) {
+              log.info(`CTF redeem OK: $${redeemResult.usdcReceived?.toFixed(2)} USDC from ${v.slug}`);
+              const realPnl = (redeemResult.usdcReceived ?? 0) - v.betAmount;
+              await prisma.polymarketPrediction.updateMany({
+                where: { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT },
+                data: {
+                  usdcReceived: redeemResult.usdcReceived,
+                  sellPrice: 1.0,
+                  soldAt: new Date(),
+                  realPnl,
+                },
+              }).catch(() => {});
+            } else {
+              // CTF failed (likely proxy wallet issue) — queue for retry
+              log.warn(`CTF redeem failed for ${v.slug}: ${redeemResult.error} — queuing for retry`);
+              const alreadyQueued = unredeemedTokens.some((u) => u.windowStart === v.windowStart && u.tokenId === v.tokenId);
+              if (!alreadyQueued) {
+                unredeemedTokens.push({
+                  windowStart: v.windowStart, slug: v.slug, tokenId: v.tokenId,
+                  betAmount: v.betAmount, executionPrice: v.executionPrice,
+                  direction: v.predictionDirection ?? 'UP', isHedge: false,
+                  addedAt: Date.now(), attempts: 0, lastAttemptAt: 0,
+                  giveUpAt: Date.now() + 30 * 60 * 1000,
+                });
+              }
+            }
+          } else {
+            log.warn(`No conditionId for ${v.slug} — queuing for retry`);
+            const alreadyQueued = unredeemedTokens.some((u) => u.windowStart === v.windowStart && u.tokenId === v.tokenId);
+            if (!alreadyQueued) {
+              unredeemedTokens.push({
+                windowStart: v.windowStart, slug: v.slug, tokenId: v.tokenId,
+                betAmount: v.betAmount, executionPrice: v.executionPrice,
+                direction: v.predictionDirection ?? 'UP', isHedge: false,
+                addedAt: Date.now(), attempts: 0, lastAttemptAt: 0,
+                giveUpAt: Date.now() + 30 * 60 * 1000,
+              });
+            }
+          }
         } else {
-          // Queue for retry if not already queued
+          // Other CLOB error — queue for retry
           const alreadyQueued = unredeemedTokens.some((u) => u.windowStart === v.windowStart && u.tokenId === v.tokenId);
           if (!alreadyQueued) {
             unredeemedTokens.push({
-              windowStart: v.windowStart,
-              slug: v.slug,
-              tokenId: v.tokenId,
-              betAmount: v.betAmount,
-              executionPrice: v.executionPrice,
-              direction: v.predictionDirection ?? 'UP',
-              isHedge: false,
-              addedAt: Date.now(),
-              attempts: 0,
-              lastAttemptAt: 0,
+              windowStart: v.windowStart, slug: v.slug, tokenId: v.tokenId,
+              betAmount: v.betAmount, executionPrice: v.executionPrice,
+              direction: v.predictionDirection ?? 'UP', isHedge: false,
+              addedAt: Date.now(), attempts: 0, lastAttemptAt: 0,
               giveUpAt: Date.now() + 30 * 60 * 1000,
             });
             log.info(`UNREDEEMED: queued ${v.slug} for retry (CLOB sell failed: ${sellResult.error})`);
@@ -525,6 +577,35 @@ async function processUnredeemedTokens(prisma: PrismaClient): Promise<void> {
           }).catch(() => {});
         }
         toRemove.push(i);
+      } else if (sellResult.error?.includes('Market closed') || sellResult.error?.includes('orderbook')) {
+        // CLOB orderbook removed post-resolution — try CTF on-chain redeem
+        log.info(`UNREDEEMED: CLOB closed for ${u.slug}, trying CTF redeem...`);
+        const conditionId = await fetchConditionId(u.slug);
+        if (conditionId) {
+          const redeemResult = await redeemWinningTokens(prisma, conditionId, u.betAmount, u.executionPrice);
+          if (redeemResult.success) {
+            log.info(`UNREDEEMED REDEEMED: ${u.slug} — ~$${redeemResult.usdcReceived?.toFixed(2)} USDC via CTF`);
+            if (!u.isHedge) {
+              const realPnl = (redeemResult.usdcReceived ?? 0) - u.betAmount;
+              await prisma.polymarketPrediction.updateMany({
+                where: { windowStart: new Date(u.windowStart), symbol: 'BTC' },
+                data: {
+                  usdcReceived: redeemResult.usdcReceived,
+                  sellPrice: 1.0,
+                  soldAt: new Date(),
+                  realPnl,
+                },
+              }).catch(() => {});
+            }
+            toRemove.push(i);
+          } else {
+            log.warn(`CTF redeem failed for ${u.slug}: ${redeemResult.error} — claim manually on Polymarket`);
+            toRemove.push(i); // Stop retrying, CLOB is gone and CTF failed
+          }
+        } else {
+          log.warn(`No conditionId found for ${u.slug} — claim manually on Polymarket`);
+          toRemove.push(i); // Stop retrying
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

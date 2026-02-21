@@ -558,6 +558,11 @@ export async function sellWinningTokens(
       return { success: false, error: `Bid too low (${clobBid.toFixed(3)} < ${minBid})` };
     }
 
+    // CLOB rejects prices outside [0.01, 0.99] — cap at 0.99 near resolution
+    if (clobBid >= 1.0) {
+      clobBid = 0.99;
+    }
+
     // Calculate token amount we hold: betAmount / executionPrice
     const tokenAmount = betAmount / executionPrice;
     const expectedUsdc = tokenAmount * clobBid;
