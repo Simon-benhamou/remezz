@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, MAX_CLOB_PRICE } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, placeTakeProfitSell, checkOrderStatus, cancelClobOrder, MAX_CLOB_PRICE } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -42,12 +42,21 @@ const REVERSAL_MIN_ROC_PCT = 0.08;          // Minimum 2-candle reversal strengt
 const PRE_SELL_START_MS = 4 * 60 * 1000;        // T+4:00 — start attempting sells
 const PRE_SELL_RETRY_MS = 10 * 1000;             // Retry every 10 seconds
 
+// ─── Take-profit constants ──────────────────────────────────────────────────
+// Place a GTC SELL limit order at 2.5x execution price for cheap entries.
+// Only activates when executionPrice < 0.40 (entries < 40c). Expensive entries
+// resolve normally — the $1 payout on a 55c entry is already good risk/reward.
+const TP_MULTIPLIER = 2.5;                        // Sell at 2.5x the entry price
+const TP_MAX_ENTRY_PRICE = 0.40;                  // Only TP on cheap entries (< 40c)
+const TP_CHECK_INTERVAL_MS = 5_000;                // Check TP order status every 5s
+
 // ─── Module state ─────────────────────────────────────────────────────────────
 
 let currentWindow: WindowState | null = null;
 let decisionMade = false;
 let reversalChecked = false;
 let lastPreSellAttemptMs = 0;
+let lastTpCheckMs = 0;
 let resolutionDone = false;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let pendingResolution: WindowState | null = null; // Previous window awaiting DB persist
@@ -70,6 +79,8 @@ interface PendingAutoSell {
   direction: 'UP' | 'DOWN';
   isHedge: boolean;
   sold: boolean;
+  tpOrderId: string | null;       // GTC sell order for mid-window take-profit
+  tpTargetPrice: number | null;   // Target sell price (executionPrice * TP_MULTIPLIER)
 }
 let pendingAutoSells: PendingAutoSell[] = [];
 
@@ -144,14 +155,28 @@ async function executeObservationBuy(
 
     // Track for pre-sell at T+4:50
     if (betResult.executionPrice && observationDirection && observationTokenId) {
-      pendingAutoSells.push({
+      const sell: PendingAutoSell = {
         tokenId: observationTokenId,
         betAmount: observationAmount,
         executionPrice: betResult.executionPrice,
         direction: observationDirection,
         isHedge: false,
         sold: false,
-      });
+        tpOrderId: null,
+        tpTargetPrice: null,
+      };
+      pendingAutoSells.push(sell);
+
+      // Place take-profit GTC sell for cheap entries
+      if (betResult.executionPrice < TP_MAX_ENTRY_PRICE) {
+        const tpPrice = Math.min(betResult.executionPrice * TP_MULTIPLIER, 0.95);
+        const tpResult = await placeTakeProfitSell(prisma, observationTokenId, observationAmount, betResult.executionPrice, tpPrice);
+        if (tpResult.success && tpResult.orderId) {
+          sell.tpOrderId = tpResult.orderId;
+          sell.tpTargetPrice = tpPrice;
+          log.info(`TP ORDER placed: sell @ ${(tpPrice * 100).toFixed(0)}c (entry ${(betResult.executionPrice * 100).toFixed(0)}c, ${TP_MULTIPLIER}x)`);
+        }
+      }
     }
   } else {
     log.error(`LIVE BET FAILED: ${betResult.error}`);
@@ -560,6 +585,14 @@ async function tick(prisma: PrismaClient): Promise<void> {
       pendingResolution = { ...currentWindow };
     }
 
+    // Cancel any outstanding TP orders before window transition
+    for (const s of pendingAutoSells) {
+      if (s.tpOrderId && !s.sold) {
+        await cancelClobOrder(prisma, s.tpOrderId).catch(() => {});
+        s.tpOrderId = null;
+      }
+    }
+
     // Move unsold tokens to unredeemed queue for post-resolution retry
     if (currentWindow) {
       const unsold = pendingAutoSells.filter((s) => !s.sold);
@@ -587,6 +620,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
     decisionMade = false;
     reversalChecked = false;
     lastPreSellAttemptMs = 0;
+    lastTpCheckMs = 0;
     resolutionDone = false;
     pendingAutoSells = [];
 
@@ -692,14 +726,28 @@ async function tick(prisma: PrismaClient): Promise<void> {
                 log.info(`LIVE BET OK (immediate): orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
                 if (betResult.executionPrice) {
                   currentWindow.executionPrice = betResult.executionPrice;
-                  pendingAutoSells.push({
+                  const sell: PendingAutoSell = {
                     tokenId,
                     betAmount: liveConfig.amount,
                     executionPrice: betResult.executionPrice,
                     direction: result.direction,
                     isHedge: false,
                     sold: false,
-                  });
+                    tpOrderId: null,
+                    tpTargetPrice: null,
+                  };
+                  pendingAutoSells.push(sell);
+
+                  // Place take-profit GTC sell for cheap entries
+                  if (betResult.executionPrice < TP_MAX_ENTRY_PRICE) {
+                    const tpPrice = Math.min(betResult.executionPrice * TP_MULTIPLIER, 0.95);
+                    const tpResult = await placeTakeProfitSell(prisma, tokenId, liveConfig.amount, betResult.executionPrice, tpPrice);
+                    if (tpResult.success && tpResult.orderId) {
+                      sell.tpOrderId = tpResult.orderId;
+                      sell.tpTargetPrice = tpPrice;
+                      log.info(`TP ORDER placed: sell @ ${(tpPrice * 100).toFixed(0)}c (entry ${(betResult.executionPrice * 100).toFixed(0)}c, ${TP_MULTIPLIER}x)`);
+                    }
+                  }
                 }
               } else {
                 log.error(`LIVE BET FAILED: ${betResult.error}`);
@@ -885,6 +933,8 @@ async function tick(prisma: PrismaClient): Promise<void> {
                     direction: reverseDir,
                     isHedge: hasEarlyBird,
                     sold: false,
+                    tpOrderId: null,   // No TP for hedge/reversal bets (placed at T+4:00, too late)
+                    tpTargetPrice: null,
                   });
                 }
 
@@ -913,6 +963,67 @@ async function tick(prisma: PrismaClient): Promise<void> {
               `${mode}: ${reverseDir} token @ ${clobAsk.toFixed(3)} > ${maxPrice} — too expensive`,
             );
           }
+        }
+      }
+    }
+  }
+
+  // ── Take-profit monitoring: check GTC sell order status ─────────────────
+  // Between buy time and T+4:00, check if any TP orders have been filled.
+  // At T+4:00, cancel unfilled TP orders so pre-sell can take over.
+  if (currentWindow && pendingAutoSells.length > 0) {
+    const hasTpOrders = pendingAutoSells.some((s) => s.tpOrderId && !s.sold);
+    const now = Date.now();
+
+    if (hasTpOrders) {
+      if (elapsed >= PRE_SELL_START_MS) {
+        // T+4:00 reached — cancel all unfilled TP orders, pre-sell takes over
+        for (const sell of pendingAutoSells) {
+          if (sell.tpOrderId && !sell.sold) {
+            await cancelClobOrder(prisma, sell.tpOrderId).catch(() => {});
+            log.info(`TP ORDER cancelled at T+4:00: ${sell.direction} (switching to pre-sell)`);
+            sell.tpOrderId = null;
+          }
+        }
+      } else if (now - lastTpCheckMs >= TP_CHECK_INTERVAL_MS) {
+        // Check TP order status every 5s
+        lastTpCheckMs = now;
+
+        for (const sell of pendingAutoSells) {
+          if (!sell.tpOrderId || sell.sold) continue;
+
+          const status = await checkOrderStatus(prisma, sell.tpOrderId);
+          if (status === 'MATCHED' || status === 'FILLED') {
+            sell.sold = true;
+            const tokenAmount = sell.betAmount / sell.executionPrice;
+            const usdcReceived = tokenAmount * (sell.tpTargetPrice ?? sell.executionPrice);
+            const realPnl = usdcReceived - sell.betAmount;
+
+            log.info(
+              `TP FILLED: ${sell.isHedge ? 'HEDGE' : 'Early Bird'} ${sell.direction} — ` +
+              `$${usdcReceived.toFixed(2)} USDC @ ${((sell.tpTargetPrice ?? 0) * 100).toFixed(0)}c ` +
+              `(entry ${(sell.executionPrice * 100).toFixed(0)}c, profit +$${realPnl.toFixed(2)})`,
+            );
+
+            // Update DB with real PnL
+            if (!sell.isHedge) {
+              await prisma.polymarketPrediction.updateMany({
+                where: { windowStart: new Date(currentWindow.windowStart), symbol: 'BTC' },
+                data: {
+                  usdcReceived,
+                  sellPrice: sell.tpTargetPrice,
+                  soldAt: new Date(),
+                  realPnl,
+                },
+              }).catch(() => {});
+            }
+
+            sell.tpOrderId = null; // Clear the order reference
+          } else if (status === 'CANCELED' || status === 'CANCELLED' || status === 'EXPIRED') {
+            log.warn(`TP ORDER ${status}: ${sell.direction}`);
+            sell.tpOrderId = null;
+          }
+          // 'LIVE' = still open, keep waiting
         }
       }
     }
@@ -1079,6 +1190,7 @@ export function stopPolymarketWorker(): void {
   tickInProgress = false; // Reset in case a tick was in progress when stopped
   pendingAutoSells = [];
   lastPreSellAttemptMs = 0;
+  lastTpCheckMs = 0;
   unredeemedTokens = [];
   resetObservation();
 }

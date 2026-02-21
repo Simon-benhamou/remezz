@@ -607,6 +607,90 @@ export async function getClobAskPrice(
 }
 
 /**
+ * Place a GTC limit sell order for take-profit.
+ * Used mid-window for cheap entries (< 40c) to lock in gains at 2.5x.
+ * Returns the orderId for later cancellation if not filled.
+ */
+export async function placeTakeProfitSell(
+  prisma: PrismaClient,
+  tokenId: string,
+  betAmount: number,
+  executionPrice: number,
+  targetPrice: number,
+): Promise<{ success: boolean; orderId?: string; error?: string }> {
+  const creds = await loadCredentials(prisma);
+  if (!creds) return { success: false, error: 'No credentials' };
+
+  try {
+    const client = buildClient(creds);
+    const tokenAmount = betAmount / executionPrice;
+
+    const order = {
+      tokenID: tokenId,
+      price: targetPrice,
+      size: tokenAmount,
+      side: Side.SELL,
+    };
+
+    const result = await client.createAndPostOrder(order, undefined, OrderType.GTC);
+
+    if (result?.error) {
+      const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
+      throw new Error(`TP sell rejected (${result.status ?? '?'}): ${errMsg}`);
+    }
+
+    const orderId = result?.orderID ?? result?.id ?? 'unknown';
+    log.info(`TP SELL placed: ${tokenAmount.toFixed(2)} tokens @ ${targetPrice.toFixed(3)} | orderId=${orderId}`);
+    return { success: true, orderId };
+  } catch (err: any) {
+    log.error(`TP sell failed: ${err?.message}`);
+    return { success: false, error: err?.message };
+  }
+}
+
+/**
+ * Check if a GTC order has been filled.
+ * Returns 'MATCHED'|'FILLED' if filled, 'LIVE' if still open, or 'CANCELED'/'EXPIRED' if dead.
+ */
+export async function checkOrderStatus(
+  prisma: PrismaClient,
+  orderId: string,
+): Promise<string | null> {
+  const creds = await loadCredentials(prisma);
+  if (!creds) return null;
+
+  try {
+    const client = buildClient(creds);
+    const orderStatus = await client.getOrder(orderId);
+    return (orderStatus as any)?.status ?? (orderStatus as any)?.order?.status ?? null;
+  } catch (err: any) {
+    log.warn(`checkOrderStatus failed: ${err?.message}`);
+    return null;
+  }
+}
+
+/**
+ * Cancel a GTC order by orderId.
+ */
+export async function cancelClobOrder(
+  prisma: PrismaClient,
+  orderId: string,
+): Promise<boolean> {
+  const creds = await loadCredentials(prisma);
+  if (!creds) return false;
+
+  try {
+    const client = buildClient(creds);
+    await client.cancelOrder({ orderID: orderId });
+    log.info(`Order cancelled: ${orderId}`);
+    return true;
+  } catch (err: any) {
+    log.warn(`Cancel order failed: ${err?.message}`);
+    return false;
+  }
+}
+
+/**
  * Check if live mode is active and return config for the worker.
  */
 export async function getLiveTradingConfig(
