@@ -101,19 +101,19 @@ interface StoredCreds {
   apiCreds: ApiKeyCreds; // { key, secret, passphrase } for L2 HMAC auth
 }
 
-// ─── In-memory credential cache ──────────────────────────────────────────────
+// ─── In-memory credential cache (per-user) ──────────────────────────────────
 
-let _credCache: StoredCreds | null = null;
+const _credCacheByUser = new Map<string, StoredCreds>();
 
-function clearCredCache(): void {
-  _credCache = null;
+function clearCredCache(userId?: string): void {
+  if (userId) _credCacheByUser.delete(userId);
+  else _credCacheByUser.clear();
 }
 
-// ─── In-memory balance cache ──────────────────────────────────────────────────
+// ─── In-memory balance cache (per-user) ──────────────────────────────────────
 // Guard against cluster nodes that silently return $0 instead of proxy balance.
 
-let _lastGoodBalance: number | null = null;
-let _lastGoodBalanceAt = 0;
+const _balanceCacheByUser = new Map<string, { balance: number; at: number }>();
 const BALANCE_CACHE_TTL_MS = 60_000;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -147,13 +147,14 @@ function buildClient(creds: StoredCreds, withApiKey = true): ClobClient {
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
- * Read polymarket trading config from SystemSetting.
+ * Read polymarket trading config from UserSetting.
  */
 export async function getPolymarketConfig(
   prisma: PrismaClient,
+  userId: string,
 ): Promise<PolymarketConfig> {
-  const settings = await prisma.systemSetting.findMany({
-    where: { key: { in: [SETTING_KEYS.MODE, SETTING_KEYS.AMOUNT, SETTING_KEYS.HEDGE_AMOUNT, SETTING_KEYS.API_KEY] } },
+  const settings = await prisma.userSetting.findMany({
+    where: { userId, key: { in: [SETTING_KEYS.MODE, SETTING_KEYS.AMOUNT, SETTING_KEYS.HEDGE_AMOUNT, SETTING_KEYS.API_KEY] } },
   });
   const map = new Map(settings.map((s) => [s.key, s.value]));
   return {
@@ -169,24 +170,25 @@ export async function getPolymarketConfig(
  */
 export async function savePolymarketConfig(
   prisma: PrismaClient,
+  userId: string,
   mode: 'virtual' | 'live',
   amount: number,
   hedgeAmount: number,
 ): Promise<void> {
   await Promise.all([
-    prisma.systemSetting.upsert({
-      where: { key: SETTING_KEYS.MODE },
-      create: { key: SETTING_KEYS.MODE, value: mode },
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.MODE } },
+      create: { userId, key: SETTING_KEYS.MODE, value: mode, category: 'polymarket' },
       update: { value: mode },
     }),
-    prisma.systemSetting.upsert({
-      where: { key: SETTING_KEYS.AMOUNT },
-      create: { key: SETTING_KEYS.AMOUNT, value: amount.toString() },
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.AMOUNT } },
+      create: { userId, key: SETTING_KEYS.AMOUNT, value: amount.toString(), category: 'polymarket' },
       update: { value: amount.toString() },
     }),
-    prisma.systemSetting.upsert({
-      where: { key: SETTING_KEYS.HEDGE_AMOUNT },
-      create: { key: SETTING_KEYS.HEDGE_AMOUNT, value: hedgeAmount.toString() },
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.HEDGE_AMOUNT } },
+      create: { userId, key: SETTING_KEYS.HEDGE_AMOUNT, value: hedgeAmount.toString(), category: 'polymarket' },
       update: { value: hedgeAmount.toString() },
     }),
   ]);
@@ -198,6 +200,7 @@ export async function savePolymarketConfig(
  */
 export async function savePolymarketCredentials(
   prisma: PrismaClient,
+  userId: string,
   rawPrivateKey: string,
   rawProxyAddress?: string,
 ): Promise<{ address: string }> {
@@ -235,44 +238,44 @@ export async function savePolymarketCredentials(
   }
 
   const upserts: Promise<any>[] = [
-    prisma.systemSetting.upsert({
-      where: { key: SETTING_KEYS.PRIVATE_KEY },
-      create: { key: SETTING_KEYS.PRIVATE_KEY, value: encryptedPk },
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.PRIVATE_KEY } },
+      create: { userId, key: SETTING_KEYS.PRIVATE_KEY, value: encryptedPk, category: 'polymarket' },
       update: { value: encryptedPk },
     }),
-    prisma.systemSetting.upsert({
-      where: { key: SETTING_KEYS.API_KEY },
-      create: { key: SETTING_KEYS.API_KEY, value: encryptedApiKey },
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.API_KEY } },
+      create: { userId, key: SETTING_KEYS.API_KEY, value: encryptedApiKey, category: 'polymarket' },
       update: { value: encryptedApiKey },
     }),
-    prisma.systemSetting.upsert({
-      where: { key: SETTING_KEYS.API_SECRET },
-      create: { key: SETTING_KEYS.API_SECRET, value: encryptedSecret },
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.API_SECRET } },
+      create: { userId, key: SETTING_KEYS.API_SECRET, value: encryptedSecret, category: 'polymarket' },
       update: { value: encryptedSecret },
     }),
-    prisma.systemSetting.upsert({
-      where: { key: SETTING_KEYS.API_PASSPHRASE },
-      create: { key: SETTING_KEYS.API_PASSPHRASE, value: encryptedPassphrase },
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.API_PASSPHRASE } },
+      create: { userId, key: SETTING_KEYS.API_PASSPHRASE, value: encryptedPassphrase, category: 'polymarket' },
       update: { value: encryptedPassphrase },
     }),
   ];
 
   if (proxyAddress) {
     upserts.push(
-      prisma.systemSetting.upsert({
-        where: { key: SETTING_KEYS.PROXY_ADDRESS },
-        create: { key: SETTING_KEYS.PROXY_ADDRESS, value: proxyAddress },
+      prisma.userSetting.upsert({
+        where: { userId_key: { userId, key: SETTING_KEYS.PROXY_ADDRESS } },
+        create: { userId, key: SETTING_KEYS.PROXY_ADDRESS, value: proxyAddress, category: 'polymarket' },
         update: { value: proxyAddress },
       }),
     );
   } else {
-    upserts.push(prisma.systemSetting.deleteMany({ where: { key: SETTING_KEYS.PROXY_ADDRESS } }));
+    upserts.push(prisma.userSetting.deleteMany({ where: { userId, key: SETTING_KEYS.PROXY_ADDRESS } }));
   }
 
   await Promise.all(upserts);
 
-  clearCredCache();
-  _lastGoodBalance = null;
+  clearCredCache(userId);
+  _balanceCacheByUser.delete(userId);
 
   return { address: wallet6.address };
 }
@@ -280,9 +283,10 @@ export async function savePolymarketCredentials(
 /**
  * Delete all Polymarket credentials and reset mode to virtual.
  */
-export async function deletePolymarketCredentials(prisma: PrismaClient): Promise<void> {
-  await prisma.systemSetting.deleteMany({
+export async function deletePolymarketCredentials(prisma: PrismaClient, userId: string): Promise<void> {
+  await prisma.userSetting.deleteMany({
     where: {
+      userId,
       key: {
         in: [
           SETTING_KEYS.PRIVATE_KEY,
@@ -294,23 +298,25 @@ export async function deletePolymarketCredentials(prisma: PrismaClient): Promise
       },
     },
   });
-  await prisma.systemSetting.upsert({
-    where: { key: SETTING_KEYS.MODE },
-    create: { key: SETTING_KEYS.MODE, value: 'virtual' },
+  await prisma.userSetting.upsert({
+    where: { userId_key: { userId, key: SETTING_KEYS.MODE } },
+    create: { userId, key: SETTING_KEYS.MODE, value: 'virtual', category: 'polymarket' },
     update: { value: 'virtual' },
   });
-  clearCredCache();
-  _lastGoodBalance = null;
+  clearCredCache(userId);
+  _balanceCacheByUser.delete(userId);
 }
 
 /**
- * Load decrypted credentials from DB (with in-memory cache).
+ * Load decrypted credentials from DB (with per-user in-memory cache).
  */
-async function loadCredentials(prisma: PrismaClient): Promise<StoredCreds | null> {
-  if (_credCache) return _credCache;
+async function loadCredentials(prisma: PrismaClient, userId: string): Promise<StoredCreds | null> {
+  const cached = _credCacheByUser.get(userId);
+  if (cached) return cached;
 
-  const settings = await prisma.systemSetting.findMany({
+  const settings = await prisma.userSetting.findMany({
     where: {
+      userId,
       key: {
         in: [
           SETTING_KEYS.PRIVATE_KEY,
@@ -336,9 +342,9 @@ async function loadCredentials(prisma: PrismaClient): Promise<StoredCreds | null
     const wallet = new ethers6.Wallet(privateKey);
     const proxyAddress = map.get(SETTING_KEYS.PROXY_ADDRESS) || undefined;
 
-    log.debug(`Credentials loaded — address=${wallet.address}${proxyAddress ? ` proxy=${proxyAddress}` : ''}`);
+    log.debug(`Credentials loaded for user=${userId} — address=${wallet.address}${proxyAddress ? ` proxy=${proxyAddress}` : ''}`);
 
-    _credCache = {
+    const creds: StoredCreds = {
       privateKey,
       address: wallet.address,
       proxyAddress,
@@ -348,9 +354,10 @@ async function loadCredentials(prisma: PrismaClient): Promise<StoredCreds | null
         passphrase: decryptApiKey(encPass).trim(),
       },
     };
-    return _credCache;
+    _credCacheByUser.set(userId, creds);
+    return creds;
   } catch (err) {
-    log.error(`Failed to load Polymarket credentials: ${err}`);
+    log.error(`Failed to load Polymarket credentials for user=${userId}: ${err}`);
     return null;
   }
 }
@@ -361,8 +368,9 @@ async function loadCredentials(prisma: PrismaClient): Promise<StoredCreds | null
  */
 export async function validatePolymarketCredentials(
   prisma: PrismaClient,
+  userId: string,
 ): Promise<{ valid: boolean; address?: string; error?: string }> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return { valid: false, error: 'No credentials configured' };
 
   const client = buildClient(creds);
@@ -392,11 +400,13 @@ export async function validatePolymarketCredentials(
  */
 export async function getPolymarketBalance(
   prisma: PrismaClient,
+  userId: string,
 ): Promise<{ balance: number; cached?: boolean; error?: string }> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return { balance: 0, error: 'No credentials configured' };
 
   const client = buildClient(creds);
+  const balCache = _balanceCacheByUser.get(userId);
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -406,15 +416,14 @@ export async function getPolymarketBalance(
 
       // If we get $0 but have a proxy configured AND previously had a non-zero balance,
       // the cluster node may have silently ignored signature_type=1 — retry
-      if (balance === 0 && creds.proxyAddress && _lastGoodBalance !== null && _lastGoodBalance > 0 && attempt < 3) {
+      if (balance === 0 && creds.proxyAddress && balCache && balCache.balance > 0 && attempt < 3) {
         log.warn(`Balance returned $0 with proxy configured (attempt ${attempt}/3) — retrying`);
         await new Promise((r) => setTimeout(r, 1500));
         continue;
       }
 
       if (balance > 0 || !creds.proxyAddress) {
-        _lastGoodBalance = balance;
-        _lastGoodBalanceAt = Date.now();
+        _balanceCacheByUser.set(userId, { balance, at: Date.now() });
       }
       return { balance };
     } catch (err: any) {
@@ -424,9 +433,9 @@ export async function getPolymarketBalance(
   }
 
   // All attempts failed — return cached balance if recent enough
-  if (_lastGoodBalance !== null && Date.now() - _lastGoodBalanceAt < BALANCE_CACHE_TTL_MS) {
-    log.warn(`Returning cached balance $${_lastGoodBalance.toFixed(2)} (API temporarily inconsistent)`);
-    return { balance: _lastGoodBalance, cached: true };
+  if (balCache && Date.now() - balCache.at < BALANCE_CACHE_TTL_MS) {
+    log.warn(`Returning cached balance $${balCache.balance.toFixed(2)} (API temporarily inconsistent)`);
+    return { balance: balCache.balance, cached: true };
   }
 
   return { balance: 0, error: 'Failed to fetch balance (cluster inconsistency)' };
@@ -438,6 +447,7 @@ export async function getPolymarketBalance(
  */
 export async function placePolymarketBet(
   prisma: PrismaClient,
+  userId: string,
   direction: 'UP' | 'DOWN',
   tokenId: string,
   amount: number,
@@ -445,7 +455,7 @@ export async function placePolymarketBet(
   skipEvCheck = false,
   confidenceScore?: number,
 ): Promise<{ success: boolean; orderId?: string; executionPrice?: number; error?: string }> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return { success: false, error: 'No credentials' };
 
   try {
@@ -547,11 +557,12 @@ export async function placePolymarketBet(
  */
 export async function placeGtcLimitBuy(
   prisma: PrismaClient,
+  userId: string,
   tokenId: string,
   amount: number,
   limitPrice: number,
 ): Promise<{ success: boolean; orderId?: string; error?: string }> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return { success: false, error: 'No credentials' };
 
   try {
@@ -588,12 +599,13 @@ export async function placeGtcLimitBuy(
  */
 export async function sellWinningTokens(
   prisma: PrismaClient,
+  userId: string,
   tokenId: string,
   betAmount: number,
   executionPrice: number,
   minBid = 0.90,
 ): Promise<{ success: boolean; usdcReceived?: number; sellPrice?: number; error?: string }> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return { success: false, error: 'No credentials' };
 
   try {
@@ -657,9 +669,10 @@ export async function sellWinningTokens(
  */
 export async function getClobAskPrice(
   prisma: PrismaClient,
+  userId: string,
   tokenId: string,
 ): Promise<number | null> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return null;
 
   try {
@@ -680,12 +693,13 @@ export async function getClobAskPrice(
  */
 export async function placeTakeProfitSell(
   prisma: PrismaClient,
+  userId: string,
   tokenId: string,
   betAmount: number,
   executionPrice: number,
   targetPrice: number,
 ): Promise<{ success: boolean; orderId?: string; error?: string }> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return { success: false, error: 'No credentials' };
 
   try {
@@ -721,9 +735,10 @@ export async function placeTakeProfitSell(
  */
 export async function checkOrderStatus(
   prisma: PrismaClient,
+  userId: string,
   orderId: string,
 ): Promise<string | null> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return null;
 
   try {
@@ -741,9 +756,10 @@ export async function checkOrderStatus(
  */
 export async function cancelClobOrder(
   prisma: PrismaClient,
+  userId: string,
   orderId: string,
 ): Promise<boolean> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return false;
 
   try {
@@ -762,8 +778,9 @@ export async function cancelClobOrder(
  */
 export async function getLiveTradingConfig(
   prisma: PrismaClient,
+  userId: string,
 ): Promise<{ live: boolean; amount: number } | null> {
-  const config = await getPolymarketConfig(prisma);
+  const config = await getPolymarketConfig(prisma, userId);
   if (config.mode !== 'live' || !config.hasCredentials) return null;
   return { live: true, amount: config.amount };
 }
@@ -778,11 +795,12 @@ export async function getLiveTradingConfig(
  */
 export async function redeemWinningTokens(
   prisma: PrismaClient,
+  userId: string,
   conditionId: string,
   betAmount: number,
   executionPrice: number,
 ): Promise<{ success: boolean; usdcReceived?: number; error?: string }> {
-  const creds = await loadCredentials(prisma);
+  const creds = await loadCredentials(prisma, userId);
   if (!creds) return { success: false, error: 'No credentials' };
 
   try {
@@ -815,4 +833,26 @@ export async function redeemWinningTokens(
     log.error(`CTF redeem failed: ${msg}`);
     return { success: false, error: msg };
   }
+}
+
+// ─── Multi-user helpers ─────────────────────────────────────────────────────
+
+/**
+ * Returns all userIds that have polymarket_mode = 'live' AND credentials configured.
+ * Used by the worker to iterate over all active Polymarket users.
+ */
+export async function getActivePolymarketUserIds(prisma: PrismaClient): Promise<string[]> {
+  const modeSettings = await prisma.userSetting.findMany({
+    where: { key: SETTING_KEYS.MODE, value: 'live' },
+    select: { userId: true },
+  });
+  const userIds = modeSettings.map((s) => s.userId);
+  if (userIds.length === 0) return [];
+
+  // Verify each has credentials (API key = derived from private key = ready to trade)
+  const credSettings = await prisma.userSetting.findMany({
+    where: { userId: { in: userIds }, key: SETTING_KEYS.API_KEY },
+    select: { userId: true },
+  });
+  return credSettings.map((s) => s.userId);
 }
