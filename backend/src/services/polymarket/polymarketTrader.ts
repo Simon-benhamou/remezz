@@ -47,14 +47,14 @@ const CTF_ABI = [
 ];
 
 // Confidence-tiered pricing: higher score → accept higher CLOB price.
-// Data-driven (3-day DB sample, 17 predictions, 76.5% overall WR):
-//   Score 40-49: 60% WR → breakeven at 0.60 → cap 0.58
-//   Score 50-59: 87.5% WR → breakeven at 0.63 → cap 0.63
-//   Score 60+:   75% WR → breakeven at 0.68 → cap 0.68
+// Data-driven (23 predictions, 78.3% overall WR — updated 2026-02-22):
+//   Score 40-49: 55.6% WR (9 samples) → breakeven 0.556 → cap 0.54 (margin)
+//   Score 50-59: 100% WR (10 samples, will regress ~80%) → breakeven ~0.80 → cap 0.75 (conservative)
+//   Score 60+:   75% WR (4 samples) → breakeven 0.75 → cap 0.73 (tight margin)
 export const CLOB_PRICE_TIERS = [
-  { minScore: 60, maxPrice: 0.68 },
-  { minScore: 50, maxPrice: 0.63 },
-  { minScore: 40, maxPrice: 0.58 },
+  { minScore: 60, maxPrice: 0.73 },
+  { minScore: 50, maxPrice: 0.75 },
+  { minScore: 40, maxPrice: 0.54 },
 ] as const;
 
 /** Get the maximum acceptable CLOB price for a given confidence score. */
@@ -66,7 +66,7 @@ export function getMaxPriceForScore(score: number): number {
 }
 
 // Keep MAX_CLOB_PRICE for hedge bets (they don't have a score — use the lowest tier)
-export const MAX_CLOB_PRICE = CLOB_PRICE_TIERS[CLOB_PRICE_TIERS.length - 1].maxPrice; // 0.58
+export const MAX_CLOB_PRICE = CLOB_PRICE_TIERS[CLOB_PRICE_TIERS.length - 1].maxPrice; // 0.54
 
 // Maximum divergence allowed between CLOB and Gamma prices.
 // If CLOB is more than 50% above Gamma, something is likely wrong (stale Gamma, wrong market).
