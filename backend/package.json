@@ -45,6 +45,7 @@
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.0.4",
+    "@polymarket/builder-relayer-client": "^0.0.8",
     "@polymarket/clob-client": "^5.2.3",
     "@prisma/client": "^6.19.0",
     "@types/bcryptjs": "^2.4.6",

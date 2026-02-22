@@ -6,6 +6,6 @@
     "frontend"
   ],
   "dependencies": {
-    "ccxt": "^4.5.26"
+    "ccxt": "^4.5.39"
   }
 }

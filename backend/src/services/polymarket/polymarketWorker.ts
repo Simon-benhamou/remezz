@@ -64,7 +64,7 @@ let tickInProgress = false;
 const activeLiveBetByUser = new Map<string, number | null>(); // userId → windowStart
 
 // ─── Pre-sell tracking ──────────────────────────────────────────────────────
-// Tracks live bets placed this window so we can sell winning tokens at T+4:50.
+// Tracks live bets placed this window so we can sell winning tokens at T+4:00→4:55.
 interface PendingAutoSell {
   userId: string;
   tokenId: string;
@@ -732,7 +732,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
   currentWindow.currentPrice = getBtcPrice(klines);
   currentWindow.elapsed = elapsed;
 
-  // ── Decision at T+2.5min ──────────────────────────────────────────────────
+  // ── Decision at T+1min ("Early Bird") ────────────────────────────────────
   if (elapsed >= DECISION_OFFSET_MS && !decisionMade) {
     decisionMade = true; // Set IMMEDIATELY before any async work to prevent concurrent ticks from re-entering
 

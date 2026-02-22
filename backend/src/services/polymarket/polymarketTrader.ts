@@ -10,7 +10,11 @@
  */
 
 import { ethers as ethers6 } from 'ethers'; // v6, used only for address validation
-import { Wallet, Contract, providers, constants } from 'ethers5'; // v5 alias, required by @polymarket/clob-client
+import { Wallet } from 'ethers5'; // v5 alias, required by @polymarket/clob-client
+import { RelayClient, RelayerTxType } from '@polymarket/builder-relayer-client';
+import { createWalletClient, http, encodeFunctionData } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { polygon } from 'viem/chains';
 import {
   ClobClient,
   type ApiKeyCreds,
@@ -39,12 +43,24 @@ const USDC_DECIMALS = 6;
 // be redeemed on-chain via the Conditional Token Framework (CTF) contract.
 const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
 const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
-const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+// Viem-format ABI for CTF redeemPositions (used by Builder Relayer)
+const CTF_REDEEM_ABI = [
+  {
+    type: 'function',
+    name: 'redeemPositions',
+    inputs: [
+      { name: 'collateralToken', type: 'address' },
+      { name: 'parentCollectionId', type: 'bytes32' },
+      { name: 'conditionId', type: 'bytes32' },
+      { name: 'indexSets', type: 'uint256[]' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+] as const;
 
-const CTF_ABI = [
-  'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)',
-  'function balanceOf(address owner, uint256 id) view returns (uint256)',
-];
+// Builder Relayer — gasless on-chain tx via Polymarket proxy (replaces direct ethers5 CTF call)
+const RELAYER_URL = 'https://relayer-v2.polymarket.com/';
 
 // Confidence-tiered pricing: higher score → accept higher CLOB price.
 // Data-driven (30-day backtest, 3854 predictions, 86% overall WR — updated 2026-02-22):
@@ -143,6 +159,23 @@ function buildClient(creds: StoredCreds, withApiKey = true): ClobClient {
     signatureType,
     creds.proxyAddress,
   );
+}
+
+/**
+ * Build a RelayClient for gasless on-chain transactions via Polymarket's Relayer.
+ * Uses a viem WalletClient (avoids ethers5 provider requirement).
+ * PROXY type for Magic.link wallets (auto-deploys, no MATIC needed).
+ */
+function buildRelayClient(creds: StoredCreds): RelayClient {
+  const account = privateKeyToAccount(creds.privateKey as `0x${string}`);
+  const wallet = createWalletClient({
+    account,
+    chain: polygon,
+    transport: http('https://polygon-rpc.com'),
+  });
+  // PROXY for Magic.link wallets (gasless, auto-deploy). SAFE for direct EOA.
+  const txType = creds.proxyAddress ? RelayerTxType.PROXY : RelayerTxType.SAFE;
+  return new RelayClient(RELAYER_URL, CHAIN_ID, wallet, undefined, txType);
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -788,10 +821,11 @@ export async function getLiveTradingConfig(
 
 /**
  * Redeem winning tokens on-chain via CTF contract after market resolution.
- * This is the proper way to convert winning tokens to USDC — each token = exactly $1.00.
+ * Uses Polymarket's Builder Relayer for gasless execution through the proxy wallet.
+ * Each winning token = exactly $1.00 USDC.
  * Called as fallback when CLOB sell fails (orderbook removed after resolution).
  *
- * Requires: conditionId from Gamma API, tiny MATIC for gas (~$0.001).
+ * Requires: conditionId from Gamma API, POLYMARKET_BUILDER_* env vars.
  * Burns ALL winning tokens for this condition — no partial redemption.
  */
 export async function redeemWinningTokens(
@@ -804,34 +838,37 @@ export async function redeemWinningTokens(
   const creds = await loadCredentials(prisma, userId);
   if (!creds) return { success: false, error: 'No credentials' };
 
+  const relay = buildRelayClient(creds);
+
   try {
-    const provider = new providers.JsonRpcProvider(POLYGON_RPC_URL);
-    const wallet = new Wallet(creds.privateKey, provider);
-    const ctf = new Contract(CTF_ADDRESS, CTF_ABI, wallet);
+    const BYTES32_ZERO = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`;
 
-    // Binary markets: indexSets [1, 2] = both YES and NO outcomes
-    // redeemPositions burns all winning tokens and returns USDC
-    const tx = await ctf.redeemPositions(
-      USDC_ADDRESS,
-      constants.HashZero,   // parentCollectionId (always zero for Polymarket)
-      conditionId,
-      [1, 2],               // both outcomes for binary market
-    );
+    const redeemTx = {
+      to: CTF_ADDRESS,
+      data: encodeFunctionData({
+        abi: CTF_REDEEM_ABI,
+        functionName: 'redeemPositions',
+        args: [
+          USDC_ADDRESS as `0x${string}`,
+          BYTES32_ZERO,                     // parentCollectionId (always zero for Polymarket)
+          conditionId as `0x${string}`,
+          [1n, 2n],                         // both outcomes for binary market
+        ],
+      }),
+      value: '0',
+    };
 
-    const receipt = await tx.wait();
-    const gasUsed = receipt.gasUsed?.toString() ?? '?';
+    const response = await relay.execute([redeemTx], 'Redeem winning tokens');
+    const result = await response.wait();
+
     const expectedUsdc = betAmount / executionPrice; // tokens held × $1.00
+    const txHash = result?.transactionHash ?? response.transactionHash ?? '?';
 
-    log.info(`CTF redeem OK: conditionId=${conditionId.slice(0, 12)}… | gas=${gasUsed} | ~$${expectedUsdc.toFixed(2)} USDC`);
+    log.info(`Relay redeem OK: conditionId=${conditionId.slice(0, 12)}… | tx=${txHash.slice(0, 14)}… | ~$${expectedUsdc.toFixed(2)} USDC`);
     return { success: true, usdcReceived: expectedUsdc };
   } catch (err: any) {
     const msg = err?.message ?? String(err);
-    // Common issues: no MATIC for gas, already redeemed, wrong conditionId
-    if (msg.includes('insufficient funds')) {
-      log.error(`CTF redeem failed: no MATIC for gas — add ~0.01 MATIC to wallet`);
-      return { success: false, error: 'No MATIC for gas — add ~0.01 MATIC to wallet' };
-    }
-    log.error(`CTF redeem failed: ${msg}`);
+    log.error(`Relay redeem failed: ${msg}`);
     return { success: false, error: msg };
   }
 }
