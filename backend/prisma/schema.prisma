@@ -381,7 +381,7 @@ model PolymarketPrediction {
   isCorrect       Boolean?
   skipped         Boolean  @default(false)
   polymarketSlug  String?
-  user            User?    @relation(fields: [userId], references: [id])
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([windowStart])
   @@index([createdAt])

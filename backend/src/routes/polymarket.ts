@@ -158,9 +158,9 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
     }
   });
 
-  // GET /unredeemed — unredeemed winning tokens queue
-  router.get('/unredeemed', (_req, res) => {
-    const tokens = getUnredeemedTokens();
+  // GET /unredeemed — unredeemed winning tokens queue (per-user)
+  router.get('/unredeemed', authenticateUser, (req: AuthenticatedRequest, res) => {
+    const tokens = getUnredeemedTokens(req.user!.id);
     const totalStuckUsdc = tokens.reduce((sum, t) => sum + t.amount, 0);
     res.json({ count: tokens.length, totalStuckUsdc, tokens });
   });

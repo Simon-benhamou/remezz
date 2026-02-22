@@ -398,7 +398,7 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
       // Build WHERE clause: scoped by userId (null for shared, specific for per-user)
       const dbWhere = v.userId
         ? { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT, userId: v.userId }
-        : { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT, userId: null as any };
+        : { windowStart: new Date(v.windowStart), symbol: SYMBOL_SHORT, userId: { equals: null } };
 
       const existing = await prisma.polymarketPrediction.findFirst({
         where: dbWhere,
@@ -1240,7 +1240,7 @@ export function isPolymarketWorkerRunning(): boolean {
 /**
  * Returns the current unredeemed token queue for API/frontend visibility.
  */
-export function getUnredeemedTokens(): Array<{
+export function getUnredeemedTokens(userId?: string): Array<{
   slug: string;
   direction: string;
   amount: number;
@@ -1248,7 +1248,10 @@ export function getUnredeemedTokens(): Array<{
   attempts: number;
   addedAt: number;
 }> {
-  return unredeemedTokens.map((u) => ({
+  const filtered = userId
+    ? unredeemedTokens.filter((u) => u.userId === userId)
+    : unredeemedTokens;
+  return filtered.map((u) => ({
     slug: u.slug,
     direction: u.direction,
     amount: u.betAmount / u.executionPrice, // tokens held
@@ -1351,8 +1354,8 @@ export async function getPolymarketStats(
   const todayTradedVerified = todayTradedWins + todayTradedLosses;
   const todayTradedWinRate = todayTradedVerified > 0 ? (todayTradedWins / todayTradedVerified) * 100 : 0;
 
-  // Unredeemed tokens from queue
-  const unredeemed = getUnredeemedTokens();
+  // Unredeemed tokens from queue (scoped by userId if provided)
+  const unredeemed = getUnredeemedTokens(userId);
   const unredeemedCount = unredeemed.length;
   const unredeemedUsdc = unredeemed.reduce((sum, u) => sum + u.amount, 0);
 
