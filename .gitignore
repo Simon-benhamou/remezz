@@ -35,3 +35,6 @@ cypress/screenshots/
 **/training_metrics.json
 
 .DS_Store
+
+# Worktrees
+.worktrees/
