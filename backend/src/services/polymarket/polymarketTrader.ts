@@ -46,11 +46,27 @@ const CTF_ABI = [
   'function balanceOf(address owner, uint256 id) view returns (uint256)',
 ];
 
-// Maximum acceptable CLOB price (absolute cap).
-// Buying above this has poor EV: paying 80¢ for $1 potential = 25% ROI max.
-// At 55c entry: win=$4.09, loss=$5. Need 55% WR to break even.
-// At 60% WR: EV = 0.60×$4.09 - 0.40×$5 = +$0.45 per trade.
-export const MAX_CLOB_PRICE = 0.55;
+// Confidence-tiered pricing: higher score → accept higher CLOB price.
+// Data-driven (3-day DB sample, 17 predictions, 76.5% overall WR):
+//   Score 40-49: 60% WR → breakeven at 0.60 → cap 0.58
+//   Score 50-59: 87.5% WR → breakeven at 0.63 → cap 0.63
+//   Score 60+:   75% WR → breakeven at 0.68 → cap 0.68
+export const CLOB_PRICE_TIERS = [
+  { minScore: 60, maxPrice: 0.68 },
+  { minScore: 50, maxPrice: 0.63 },
+  { minScore: 40, maxPrice: 0.58 },
+] as const;
+
+/** Get the maximum acceptable CLOB price for a given confidence score. */
+export function getMaxPriceForScore(score: number): number {
+  for (const tier of CLOB_PRICE_TIERS) {
+    if (score >= tier.minScore) return tier.maxPrice;
+  }
+  return 0.50; // fallback — should never hit (scorer returns null for score < 40)
+}
+
+// Keep MAX_CLOB_PRICE for hedge bets (they don't have a score — use the lowest tier)
+export const MAX_CLOB_PRICE = CLOB_PRICE_TIERS[CLOB_PRICE_TIERS.length - 1].maxPrice; // 0.58
 
 // Maximum divergence allowed between CLOB and Gamma prices.
 // If CLOB is more than 50% above Gamma, something is likely wrong (stale Gamma, wrong market).
@@ -427,6 +443,7 @@ export async function placePolymarketBet(
   amount: number,
   price: number,
   skipEvCheck = false,
+  confidenceScore?: number,
 ): Promise<{ success: boolean; orderId?: string; executionPrice?: number; error?: string }> {
   const creds = await loadCredentials(prisma);
   if (!creds) return { success: false, error: 'No credentials' };
@@ -442,11 +459,12 @@ export async function placePolymarketBet(
       return { success: false, error: 'CLOB price unavailable — skipping bet' };
     }
 
-    // 1. Absolute EV cap: don't buy above MAX_CLOB_PRICE (poor risk/reward)
+    // 1. Confidence-tiered EV cap: higher score → accept higher price
     //    skipEvCheck: used by hedge bets (small insurance, EV cap doesn't apply)
-    if (!skipEvCheck && clobAsk > MAX_CLOB_PRICE) {
-      log.warn(`EV too low: CLOB ask=${clobAsk.toFixed(3)} > cap=${MAX_CLOB_PRICE} — skipping`);
-      return { success: false, error: `EV too low (CLOB=${clobAsk.toFixed(3)} > cap=${MAX_CLOB_PRICE})` };
+    const maxPrice = confidenceScore ? getMaxPriceForScore(confidenceScore) : MAX_CLOB_PRICE;
+    if (!skipEvCheck && clobAsk > maxPrice) {
+      log.warn(`EV too low: CLOB ask=${clobAsk.toFixed(3)} > cap=${maxPrice.toFixed(2)} (score=${confidenceScore ?? 'n/a'}) — skipping`);
+      return { success: false, error: `EV too low (CLOB=${clobAsk.toFixed(3)} > cap=${maxPrice.toFixed(2)})` };
     }
 
     // 2. Gamma divergence warning: log if CLOB diverges significantly from Gamma (informational)
@@ -455,7 +473,7 @@ export async function placePolymarketBet(
       log.warn(`Gamma divergence: CLOB=${clobAsk.toFixed(3)} vs Gamma=${price.toFixed(3)} (${(divergence * 100).toFixed(0)}% above) — proceeding with CLOB price`);
     }
 
-    log.info(`Price OK: CLOB ask=${clobAsk.toFixed(3)}, Gamma=${price.toFixed(3)}, cap=${MAX_CLOB_PRICE}`);
+    log.info(`Price OK: CLOB ask=${clobAsk.toFixed(3)}, Gamma=${price.toFixed(3)}, cap=${maxPrice.toFixed(2)} (score=${confidenceScore ?? 'n/a'})`);
 
     // Place GTC limit order (not FOK) — 5-min BTC markets have thin liquidity,
     // FOK fails when the order book can't fill $10 at the ask price in one shot.
@@ -519,6 +537,47 @@ export async function placePolymarketBet(
   } catch (err: any) {
     log.error(`Failed to place bet: ${err?.message}`);
     return { success: false, error: err?.message };
+  }
+}
+
+/**
+ * Place a GTC limit BUY order at a specific price (non-blocking).
+ * Returns immediately after order placement — caller manages polling/cancellation.
+ * Used as fallback when CLOB ask exceeds tier cap: place limit at cap and wait.
+ */
+export async function placeGtcLimitBuy(
+  prisma: PrismaClient,
+  tokenId: string,
+  amount: number,
+  limitPrice: number,
+): Promise<{ success: boolean; orderId?: string; error?: string }> {
+  const creds = await loadCredentials(prisma);
+  if (!creds) return { success: false, error: 'No credentials' };
+
+  try {
+    const client = buildClient(creds);
+    const tokenSize = amount / limitPrice;
+    const order = {
+      tokenID: tokenId,
+      price: limitPrice,
+      size: tokenSize,
+      side: Side.BUY,
+    };
+
+    const result = await client.createAndPostOrder(order, undefined, OrderType.GTC);
+
+    if (result?.error) {
+      const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
+      throw new Error(`Limit order rejected: ${errMsg}`);
+    }
+
+    const orderId = result?.orderID ?? result?.id ?? 'unknown';
+    log.info(`GTC LIMIT placed: BUY $${amount} @ ${limitPrice.toFixed(3)} | orderId=${orderId}`);
+    return { success: true, orderId };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error(`Failed to place GTC limit: ${msg}`);
+    return { success: false, error: msg };
   }
 }
 
