@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, placeGtcLimitBuy, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, placeTakeProfitSell, checkOrderStatus, cancelClobOrder, MAX_CLOB_PRICE, getMaxPriceForScore } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, placeTakeProfitSell, checkOrderStatus, cancelClobOrder, MAX_CLOB_PRICE, getMaxPriceForScore } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -24,9 +24,6 @@ const DECISION_OFFSET_MS = 1 * 60 * 1000;   // 1 minute into the window ("Early 
 const POLL_INTERVAL_MS = 1000;               // 1 second
 const SYMBOL = 'BTCUSDT';
 const SYMBOL_SHORT = 'BTC';
-
-// ─── GTC limit deadline ─────────────────────────────────────────────────────
-const OBS_DEADLINE_OFFSET_MS = 4 * 60 * 1000; // T+4:00 deadline (3min observation window — more time to catch a dip under cap)
 
 // ─── Last-second reversal / hedge constants ─────────────────────────────────
 const REVERSAL_OFFSET_MS = 4 * 60 * 1000;  // T+4:00 — check for last-second reversal/hedge
@@ -98,26 +95,7 @@ interface UnredeemedToken {
 }
 let unredeemedTokens: UnredeemedToken[] = [];
 
-// ─── GTC limit fallback state (replaces observation phase) ──────────────────
-// When CLOB ask exceeds tier cap at T+1:00, a passive GTC limit is placed at the cap price.
-// The order sits in the book until filled or cancelled at T+4:00.
-let pendingLimitOrderId: string | null = null;
-let pendingLimitDeadlineMs = 0;
-let pendingLimitTokenId: string | null = null;
-let pendingLimitDirection: 'UP' | 'DOWN' | null = null;
-let pendingLimitAmount = 0;
-let pendingLimitEntryOdds = 0;
-let pendingLimitPrice = 0;
-
-function resetPendingLimit(): void {
-  pendingLimitOrderId = null;
-  pendingLimitDeadlineMs = 0;
-  pendingLimitTokenId = null;
-  pendingLimitDirection = null;
-  pendingLimitAmount = 0;
-  pendingLimitEntryOdds = 0;
-  pendingLimitPrice = 0;
-}
+// (GTC limit fallback removed — dips often signal reversals, FOK-or-skip is cleaner)
 
 // ─── Polymarket resolution verification ───────────────────────────────────────
 // Our preliminary resolution uses BTC price (start vs end). But Polymarket's oracle
@@ -587,14 +565,6 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
   // ── New window detection ──────────────────────────────────────────────────
   if (!currentWindow || currentWindow.windowStart !== start) {
-    // Cancel any pending GTC limit from previous window
-    if (pendingLimitOrderId) {
-      log.warn('GTC LIMIT: window ended with pending limit — cancelling');
-      try { await cancelClobOrder(prisma, pendingLimitOrderId); } catch {}
-      activeLiveBetWindow = null;
-    }
-    resetPendingLimit();
-
     // Snapshot previous window for resolution (uses final currentPrice)
     if (currentWindow && !resolutionDone) {
       pendingResolution = { ...currentWindow };
@@ -769,23 +739,10 @@ async function tick(prisma: PrismaClient): Promise<void> {
               }
               currentWindow.observationStatus = 'filled';
             } else if (betResult.error?.startsWith('EV too low')) {
-              // CLOB ask > tier cap → place passive GTC limit at cap price
-              log.info(`CLOB above cap — placing GTC LIMIT at ${tierMax.toFixed(2)} (score=${score})`);
-              const limitResult = await placeGtcLimitBuy(prisma, tokenId, liveConfig.amount, tierMax);
-              if (limitResult.success && limitResult.orderId) {
-                pendingLimitOrderId = limitResult.orderId;
-                pendingLimitDeadlineMs = start + OBS_DEADLINE_OFFSET_MS;
-                pendingLimitTokenId = tokenId;
-                pendingLimitDirection = result.direction;
-                pendingLimitAmount = liveConfig.amount;
-                pendingLimitEntryOdds = entryOdds;
-                pendingLimitPrice = tierMax;
-                currentWindow.observationStatus = 'observing'; // reuse for display
-              } else {
-                log.error(`GTC LIMIT failed: ${limitResult.error}`);
-                activeLiveBetWindow = null;
-                currentWindow.observationStatus = 'skipped_ev';
-              }
+              // CLOB ask > tier cap → skip (no GTC limit — dips often signal reversals)
+              log.info(`CLOB above cap ${tierMax.toFixed(2)} (score=${score}) — skipping (no limit fallback)`);
+              activeLiveBetWindow = null;
+              currentWindow.observationStatus = 'skipped_ev';
             } else {
               log.error(`LIVE BET FAILED: ${betResult.error}`);
               activeLiveBetWindow = null;
@@ -808,77 +765,12 @@ async function tick(prisma: PrismaClient): Promise<void> {
     }
   }
 
-  // ── GTC limit fallback: check fill status or cancel at deadline ──────────
-  if (pendingLimitOrderId && currentWindow) {
-    const now = Date.now();
-
-    if (now >= pendingLimitDeadlineMs) {
-      // Deadline reached — cancel unfilled limit order
-      log.info(`GTC LIMIT deadline: cancelling orderId=${pendingLimitOrderId}`);
-      try {
-        await cancelClobOrder(prisma, pendingLimitOrderId);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.warn(`Failed to cancel GTC limit: ${msg}`);
-      }
-      currentWindow.observationStatus = 'skipped_ev';
-      activeLiveBetWindow = null;
-      resetPendingLimit();
-    } else {
-      // Check if order filled
-      try {
-        const status = await checkOrderStatus(prisma, pendingLimitOrderId);
-        if (status === 'MATCHED' || status === 'FILLED') {
-          log.info(`GTC LIMIT FILLED: ${pendingLimitDirection} $${pendingLimitAmount} @ ${pendingLimitPrice.toFixed(3)}`);
-          currentWindow.executionPrice = pendingLimitPrice;
-          currentWindow.observationStatus = 'filled';
-
-          // Track for pre-sell
-          if (pendingLimitTokenId && pendingLimitDirection) {
-            const sell: PendingAutoSell = {
-              tokenId: pendingLimitTokenId,
-              betAmount: pendingLimitAmount,
-              executionPrice: pendingLimitPrice,
-              direction: pendingLimitDirection,
-              isHedge: false,
-              sold: false,
-              tpOrderId: null,
-              tpTargetPrice: null,
-            };
-            pendingAutoSells.push(sell);
-
-            // TP for cheap limit fills
-            if (pendingLimitPrice < TP_MAX_ENTRY_PRICE) {
-              const tpPrice = Math.min(pendingLimitPrice * TP_MULTIPLIER, 0.95);
-              const tpResult = await placeTakeProfitSell(prisma, pendingLimitTokenId, pendingLimitAmount, pendingLimitPrice, tpPrice);
-              if (tpResult.success && tpResult.orderId) {
-                sell.tpOrderId = tpResult.orderId;
-                sell.tpTargetPrice = tpPrice;
-                log.info(`TP ORDER placed: sell @ ${(tpPrice * 100).toFixed(0)}c (limit entry ${(pendingLimitPrice * 100).toFixed(0)}c)`);
-              }
-            }
-          }
-
-          resetPendingLimit();
-        } else if (status === 'CANCELED' || status === 'CANCELLED' || status === 'EXPIRED') {
-          log.warn(`GTC LIMIT ${status} externally — orderId=${pendingLimitOrderId}`);
-          currentWindow.observationStatus = 'skipped_ev';
-          activeLiveBetWindow = null;
-          resetPendingLimit();
-        }
-        // else: still LIVE — continue waiting
-      } catch (err: unknown) {
-        // Poll error — will retry next tick
-      }
-    }
-  }
-
   // ── Last-second reversal / hedge (T+4:00) ────────────────────────────────
   // Two modes:
   //   HEDGE:   Early Bird active → $1 insurance on opposite token (no signal needed)
   //   LOTTERY: No Early Bird → full amount on reversal (strong signal required)
   // Both only buy if opposite token < 20¢ (massive asymmetry).
-  if (elapsed >= REVERSAL_OFFSET_MS && !reversalChecked && currentWindow && !pendingLimitOrderId) {
+  if (elapsed >= REVERSAL_OFFSET_MS && !reversalChecked && currentWindow) {
     reversalChecked = true;
 
     const liveConfig = await getLiveTradingConfig(prisma);
@@ -1239,7 +1131,6 @@ export function stopPolymarketWorker(): void {
   lastPreSellAttemptMs = 0;
   lastTpCheckMs = 0;
   unredeemedTokens = [];
-  resetPendingLimit();
 }
 
 /**
