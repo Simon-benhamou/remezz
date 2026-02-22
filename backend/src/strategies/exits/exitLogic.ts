@@ -144,12 +144,12 @@ export function shouldExitPosition(
 
         if (currentlyBullRegime) {
           // Flipped to bull - require bullish momentum
-          if (btcRoc5 < MomentumConfig.REGIME_CHANGE_EXIT.MIN_ROC5_BULL) {
+          if (btcRoc5 < 0.015) {
             confirmed = false; // Not enough bullish momentum
           }
         } else {
           // Flipped to bear - require bearish momentum
-          if (btcRoc5 > MomentumConfig.REGIME_CHANGE_EXIT.MIN_ROC5_BEAR) {
+          if (btcRoc5 > -0.015) {
             confirmed = false; // Not enough bearish momentum
           }
         }

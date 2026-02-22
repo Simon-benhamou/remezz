@@ -460,6 +460,14 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Zero behavioral change** on active filters. All 12 LONG + 13 SHORT filters intact: regime, cash mode, candle direction, consec, breakout, ROC, volume, BTC volatility, MTF, green ratio, alternation5, BB touches, StochRSI, ROC acceleration.
   - **Files**: momentumConfig.ts (-55 lines), momentumSignal.ts (-120 lines), technicalIndicators.ts (-160 lines), backtestService.ts (-85 lines), momentumSimple.ts (-6 lines), symbolEngine.test.ts (-1 line).
 
+- V5.122: SOD parity — close 3 BT↔Live gaps + parity alert + dead config cleanup:
+  - **Backtest sizing via `calculatePositionSize()`**: Replaced ~90 lines inline sizing + hardcoded `LIQUIDITY_CAPS` dict with shared `calculatePositionSize()` from `positionSizing.ts`. BT now uses identical sizing logic as live (adaptive %, liquidity tiers, safe leverage, multi-position plan). Forced entry also uses `calculatePositionSize()` instead of `capital * 0.25`.
+  - **`fixedSlPct` on standard BT entries**: Added `fixedSlPct: slPct` to standard entry position creation. Previously only forced entries had it. `checkBacktestExit()` already checks `fixedSlPct` on wicks before calling `shouldExitPosition()` — standard entries now benefit from fixed SL matching live's STOP_MARKET.
+  - **Parity degradation Telegram alert**: After each `verifyTradeV2()`, queries last 10 `tradeParityResult` rows. If match rate < 70%: warning alert. If < 50%: critical alert. Uses existing `notifySystemAlert()`.
+  - **8 dead config fields removed** from `momentumConfig.ts`: `MIN_ROC5_BULL/BEAR` (gated by REQUIRE_MOMENTUM_CONFIRMATION=false), `ENTRY_LONG.BB_PERIOD/BB_STD` (duplicate of ENTRY.BB_*), `BTC_MOMENTUM_MIN/PERIOD` (superseded by SMA200), `ALLOWED_DAYS` (never checked), `CACHE_1H_CANDLES/CACHE_REFRESH_MINUTES` (1h regime vestige). Refs in `exitLogic.ts` replaced with inline constants; `backtestService.ts` refs pointed to `ENTRY.BB_*`.
+  - **Gotcha**: Removing "dead" config fields can break TS compilation if other files reference them (even behind disabled flags). Always grep all callers before deleting config.
+  - **Files**: `backtestService.ts`, `parityVerificationServiceV2.ts`, `momentumConfig.ts`, `exitLogic.ts`
+
 ## Multi-User Scaling
 
 System designed for 40+ users × 20 agents (800+ concurrent agents) with single Binance IP.

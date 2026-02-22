@@ -19,6 +19,7 @@ import { runBacktest, type BacktestResult, type BacktestTrade } from './backtest
 import { createLogger } from '../utils/logger.js';
 import { normalizeToFamily } from '../types/exitReasons.js';
 import { CANDLE_15M_MS } from '../strategies/momentumSimple.js';
+import { notifySystemAlert } from '../utils/notifications.js';
 
 const logger = createLogger('parity-v2');
 
@@ -460,6 +461,23 @@ export function triggerVerificationV2(tradeId: string): void {
       logger.info(`[PARITY-V2] Auto-verifying trade ${tradeId}`);
       await verifyTradeV2(tradeId);
       logger.info(`[PARITY-V2] Auto-verification complete for ${tradeId}`);
+
+      // Check rolling match rate — alert if parity is degrading
+      const recent = await prisma.tradeParityResult.findMany({
+        orderBy: { verifiedAt: 'desc' },
+        take: 10,
+        select: { overallMatch: true },
+      });
+      if (recent.length >= 10) {
+        const matchRate = recent.filter(r => r.overallMatch).length / recent.length * 100;
+        if (matchRate < 70) {
+          await notifySystemAlert({
+            level: matchRate < 50 ? 'critical' : 'warning',
+            title: 'Parity Degradation',
+            message: `Match rate ${matchRate.toFixed(0)}% on last 10 trades (threshold: 70%)`,
+          });
+        }
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn(`[PARITY-V2] Background verification failed for ${tradeId}: ${msg}`);

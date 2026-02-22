@@ -135,17 +135,11 @@ export const MomentumConfig = {
     REQUIRE_VOLUME_CONFIRMATION: true, // V5.27: Require volume spike to confirm regime change
     MIN_VOLUME_MULTIPLIER: 1.5,       // V5.27: Need 1.5x avg volume to confirm
     REQUIRE_MOMENTUM_CONFIRMATION: false, // NO momentum confirmation (reduces PnL)
-    MIN_ROC5_BULL: 0.015,             // DEAD — REQUIRE_MOMENTUM_CONFIRMATION is false
-    MIN_ROC5_BEAR: -0.015,            // DEAD — REQUIRE_MOMENTUM_CONFIRMATION is false
   },
 
   // Signal d'entrée LONG (Bull Market: BTC > SMA200)
   // V5.13: Lower thresholds for earlier entries (+25% ROI validated on 2024)
   ENTRY_LONG: {
-    // Bollinger Bands — DEAD: code uses ENTRY.BB_PERIOD/BB_STD instead
-    BB_PERIOD: 20,
-    BB_STD: 2,
-
     // Momentum confirmation - V5.13 OPTIMIZED (2024 backtest: +25% ROI vs V5.12)
     ROC_MIN: 0.0175,             // V5.13: ROC 10 > 1.75% (was 2.5%) - Earlier entries
     VOL_MULTIPLIER: 1.15,        // V5.13: 1.15x (was 1.5) - +25% ROI, 62.2% win rate
@@ -216,10 +210,6 @@ export const MomentumConfig = {
     BTC_SMA_PERIOD: 200,         // SMA 200 (on 15m = 50h = ~2 days — fast regime for momentum breakout)
     BTC_REGIME_TIMEFRAME: '15m' as const,  // V5.102: Use 15m for regime SMA200 (validated: +2325% ROI, +0.19 Sharpe on 9 symbols)
     BTC_REGIME_TOLERANCE_PCT: 0.2, // V5.113: Dead zone ±0.2% around SMA200 — when price is in band, use SMA slope to determine regime (prevents whipsaw). Validated: +$4.4K PnL, -2.7pp DD, +0.09 Sharpe
-    BTC_MOMENTUM_MIN: 0,         // DEAD — superseded by SMA200 regime
-    BTC_MOMENTUM_PERIOD: 24,     // DEAD — kept for type compatibility
-
-    ALLOWED_DAYS: [0, 1, 2, 3, 4, 5, 6],  // DEAD — never checked in checkMomentumSignal
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -249,8 +239,6 @@ export const MomentumConfig = {
     MIN_BTC_ROC_LONG: 0.0,            // LONG: Require BTC 15m ROC > 0% (bullish)
     MAX_BTC_ROC_SHORT: 0.0,           // SHORT: Require BTC 15m ROC < 0% (bearish)
     LOOKBACK_CANDLES: 40,             // V5.102: 40 × 15m = 10h (was 10 × 1h = 10h — same window)
-    CACHE_1H_CANDLES: true,           // DEAD — vestige from 1h regime, no longer used
-    CACHE_REFRESH_MINUTES: 15,        // DEAD — vestige from 1h regime
   },
 
   BTC_VOLATILITY_FILTER: {

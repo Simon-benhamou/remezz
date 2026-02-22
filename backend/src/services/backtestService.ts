@@ -54,6 +54,7 @@ import {
   calcBollingerBands,
   calcDynamicStopLoss,
   calcSafeLeverage,
+  calculatePositionSize,
   // V5.46 PARITY: Both backtest and live now use the same time calculation:
   // - entryTime = candle.timestamp (candle START/OPEN time)
   // - nowMs = entryTime + holdBars * 15 * 60000 (backtest) 
@@ -373,8 +374,8 @@ const CONFIG = {
 // Use production config values directly for exact parity
 const SIGNAL_CONFIG = {
   LONG: {
-    BB_PERIOD: MomentumConfig.ENTRY_LONG.BB_PERIOD,
-    BB_STD: MomentumConfig.ENTRY_LONG.BB_STD,
+    BB_PERIOD: MomentumConfig.ENTRY.BB_PERIOD,
+    BB_STD: MomentumConfig.ENTRY.BB_STD,
     ROC_MIN: MomentumConfig.ENTRY_LONG.ROC_MIN, // V5.13: 0.0175 = 1.75% as ratio
     VOL_MULTIPLIER: MomentumConfig.ENTRY_LONG.VOL_MULTIPLIER, // V5.13: 1.15x
     MAX_CONSEC_UP: MomentumConfig.ENTRY_LONG.MAX_CONSEC_UP,
@@ -1852,9 +1853,20 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           }
           
           // Enter the trade regardless (to compare exit behavior)
-          const posLev = leverage || 5;
-          const marginUsd = Math.min(capital * 0.25, 1000);
-          const notionalUsd = marginUsd * posLev;
+          // V5.122: Use calculatePositionSize() for forced entry (parity with live sizing)
+          const forcedSafeLev = calcSafeLeverage(forcedCandles.slice(Math.max(0, forcedIdx - 200), forcedIdx + 1), leverage || 5);
+          const forcedSizing = calculatePositionSize({
+            symbol: forcedSymbol,
+            currentPrice: currentCandle.close,
+            totalCapitalUsd: capital,
+            riskPerTradePct: 0.015,
+            stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
+            safeLeverage: forcedSafeLev.leverage,
+            initialCapitalUsd: initialCapital,
+          });
+          const posLev = forcedSizing.leverage;
+          const marginUsd = forcedSizing.marginUsd;
+          const notionalUsd = forcedSizing.notionalUsd;
           const qty = notionalUsd / currentCandle.close;
 
           if (qty > 0 && marginUsd > 0) {
@@ -1985,144 +1997,75 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
             if (availableCapital < minAvailableCapital) break;
           }
 
-          // V5.118: Apply calcSafeLeverage to match live behavior (reduce leverage in high-vol)
-          const baseLev = leverage || 5;
-          const safeLev = calcSafeLeverage(windowCandles, baseLev);
-          const posLev = safeLev.leverage;
+          // V5.122: Use calculatePositionSize() (shared with live) instead of inline sizing
+          const safeLev = calcSafeLeverage(windowCandles, leverage || 5);
+          const sizing = calculatePositionSize({
+            symbol,
+            currentPrice: entryPrice,
+            totalCapitalUsd: availableCapital,
+            riskPerTradePct: 0.015,
+            stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
+            safeLeverage: safeLev.leverage,
+            initialCapitalUsd: initialCapital,
+          });
+          let marginUsd = sizing.marginUsd;
+          let notionalUsd = sizing.notionalUsd;
+          const posLev = sizing.leverage;
+          const wasCapped = sizing.wasLiquidityCapped ?? false;
 
-          // V5.18: Dynamic position sizing - moderate boost for bigger accounts
-          const positionSizePct = Math.min(
-            CONFIG.SIZING.POSITION_SIZE_PCT_BASE + (initialCapital / 5000) * CONFIG.SIZING.POSITION_SIZE_PCT_BOOST_PER_5K,
-            CONFIG.SIZING.POSITION_SIZE_PCT_MAX
-          );
-          let marginUsd = availableCapital * positionSizePct;
-          let notionalUsd = marginUsd * posLev;
-
-          // Apply liquidity caps (aligned with prod LIQUIDITY_CONFIG)
-          const LIQUIDITY_CAPS: Record<string, number> = {
-            // Tier HIGH: $500K
-            'BTC/USDT:USDT': 500_000,
-            'ETH/USDT:USDT': 500_000,
-            // Tier MEDIUM: $100K
-            'XRP/USDT:USDT': 100_000,
-            'SOL/USDT:USDT': 100_000,
-            'DOGE/USDT:USDT': 100_000,
-            'ADA/USDT:USDT': 100_000,
-            'AVAX/USDT:USDT': 100_000,
-            'LINK/USDT:USDT': 100_000,
-            'LTC/USDT:USDT': 100_000,
-            'BCH/USDT:USDT': 100_000,
-            'UNI/USDT:USDT': 100_000,
-            'NEAR/USDT:USDT': 100_000,
-            'TIA/USDT:USDT': 100_000,
-            'OP/USDT:USDT': 100_000,
-            'ARB/USDT:USDT': 100_000,
-            'INJ/USDT:USDT': 100_000,
-            // Tier LOW: $25K
-            'SEI/USDT:USDT': 25_000,
-            'IMX/USDT:USDT': 25_000,
-            'DOT/USDT:USDT': 25_000,
-            'SUI/USDT:USDT': 25_000,
-            'SONIC/USDT:USDT': 25_000,
-            'APT/USDT:USDT': 25_000,
-            'FET/USDT:USDT': 25_000,
-            'WIF/USDT:USDT': 25_000,
-            'STX/USDT:USDT': 25_000,
-            'RENDER/USDT:USDT': 25_000,
-            'JUP/USDT:USDT': 25_000,
-          };
-          const cap = LIQUIDITY_CAPS[symbol] ?? Infinity;
-          const wasCapped = Number.isFinite(cap) && notionalUsd > cap;
-          
-          // V5.30: Multi-position logic for large accounts hitting liquidity caps
-          // Only activate for accounts >= $30K with MULTI_POSITION_ENABLED=true
-          const MULTI_POSITION_ENABLED = process.env.MULTI_POSITION_ENABLED === 'true';
-          const MULTI_POSITION_MIN_CAPITAL = 30_000;
-          
-          // V5.35: Use CURRENT capital, not initial capital (allows growing into multi-position)
-          const currentTotalCapital = capital + capitalInUse;
-          
+          // V5.30: Multi-position logic using calculatePositionSize().multiPositionPlan
           let totalPositions = 1;
-          let totalMarginUsd = marginUsd;
-          let totalNotionalUsd = notionalUsd;
-          
-          if (wasCapped && MULTI_POSITION_ENABLED && currentTotalCapital >= MULTI_POSITION_MIN_CAPITAL) {
-            // Calculate how many positions we need
-            const targetNotional = marginUsd * posLev;
-            const idealPositions = Math.ceil(targetNotional / cap);
-            
-            // Cap by capital tier - use current capital, not initial
-            const capitalTiers: { [minCap: number]: number } = {
-              300_000: 5,
-              150_000: 4,
-              75_000: 3,
-              30_000: 2,
-            };
-            let maxPositions = 1;
-            for (const [minCap, positions] of Object.entries(capitalTiers).sort((a, b) => Number(b[0]) - Number(a[0]))) {
-              if (currentTotalCapital >= Number(minCap)) {
-                maxPositions = positions;
-                break;
-              }
-            }
-            
-            totalPositions = Math.min(idealPositions, maxPositions);
-            
-            if (totalPositions > 1) {
-              // V5.30: Create SEPARATE positions instead of one big one
-              // Each position uses cap notional
-              const perPosNotional = cap;
-              const perPosMargin = perPosNotional / posLev;
-              
-              // Make sure we have enough capital for all positions
-              const totalNeededMargin = perPosMargin * totalPositions;
-              if (totalNeededMargin > availableCapital * 0.95) {
-                totalPositions = Math.floor((availableCapital * 0.95) / perPosMargin);
-                if (totalPositions < 1) totalPositions = 1;
-              }
-              
-              // Primary position uses cap
-              notionalUsd = perPosNotional;
-              marginUsd = perPosMargin;
-              
-              // Create additional positions (will be stored in multiPositions array)
-              for (let posIdx = 1; posIdx < totalPositions; posIdx++) {
-                // V5.64: Use wick breakout entry price for multi-positions too
-                const multiEntryPrice = entryPrice * (1 + (posIdx * 0.003 * (signal.side === 'long' ? -1 : 1))); // Slight price spread
-                const addQty = perPosNotional / multiEntryPrice;
-                capitalInUse += perPosMargin;
-                capital -= perPosMargin;
 
-                multiPositions[symbol].push({
-                  symbol,
-                  side: signal.side,
-                  entryPrice: multiEntryPrice,
-                  entryTime: current.timestamp,
-                  entryIdx: idx,
-                  entryCandle: current,  // V5.68: Store entry candle for realistic timing
-                  qty: addQty,
-                  notionalUsd: perPosNotional,
-                  marginUsd: perPosMargin,
-                  leverage: posLev,
-                  capitalBefore: capital + perPosMargin,
-                  wasCapped: true,
-                  stopLossPct: calcDynamicStopLoss(windowCandles, symbol).slPct,
-                  entryAtrPct: (() => {
-                    const atr = calcATR(windowCandles, 14);
-                    return atr && windowCandles.length > 0 ? (atr / windowCandles[windowCandles.length - 1].close) * 100 : undefined;
-                  })(),
-                  highWaterMark: signal.side === 'long' ? multiEntryPrice : undefined,
-                  lowWaterMark: signal.side === 'short' ? multiEntryPrice : undefined,
-                  entryReason: `${signal.reason}_MULTI${posIdx}${wickBreakout.triggered ? '|wick_entry' : ''}`,
-                  positionIndex: posIdx,
-                  totalPositions,
-                  stagnantState: { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 }
-                });
-              }
+          if (sizing.multiPositionPlan && sizing.multiPositionPlan.totalPositions > 1) {
+            const plan = sizing.multiPositionPlan;
+            totalPositions = plan.totalPositions;
+            const perPosNotional = plan.positionSizeUsd;
+            const perPosMargin = perPosNotional / posLev;
+
+            // Make sure we have enough capital for all positions
+            const totalNeededMargin = perPosMargin * totalPositions;
+            if (totalNeededMargin > availableCapital * 0.95) {
+              totalPositions = Math.floor((availableCapital * 0.95) / perPosMargin);
+              if (totalPositions < 1) totalPositions = 1;
             }
-          } else if (wasCapped) {
-            notionalUsd = cap;
-            marginUsd = notionalUsd / posLev;
+
+            // Primary position uses cap
+            notionalUsd = perPosNotional;
+            marginUsd = perPosMargin;
+
+            // Create additional positions (will be stored in multiPositions array)
+            for (let posIdx = 1; posIdx < totalPositions; posIdx++) {
+              const multiEntryPrice = entryPrice * (1 + (posIdx * 0.003 * (signal.side === 'long' ? -1 : 1)));
+              const addQty = perPosNotional / multiEntryPrice;
+              capitalInUse += perPosMargin;
+              capital -= perPosMargin;
+
+              multiPositions[symbol].push({
+                symbol,
+                side: signal.side,
+                entryPrice: multiEntryPrice,
+                entryTime: current.timestamp,
+                entryIdx: idx,
+                entryCandle: current,
+                qty: addQty,
+                notionalUsd: perPosNotional,
+                marginUsd: perPosMargin,
+                leverage: posLev,
+                capitalBefore: capital + perPosMargin,
+                wasCapped: true,
+                stopLossPct: calcDynamicStopLoss(windowCandles, symbol).slPct,
+                entryAtrPct: (() => {
+                  const atr = calcATR(windowCandles, 14);
+                  return atr && windowCandles.length > 0 ? (atr / windowCandles[windowCandles.length - 1].close) * 100 : undefined;
+                })(),
+                highWaterMark: signal.side === 'long' ? multiEntryPrice : undefined,
+                lowWaterMark: signal.side === 'short' ? multiEntryPrice : undefined,
+                entryReason: `${signal.reason}_MULTI${posIdx}${wickBreakout.triggered ? '|wick_entry' : ''}`,
+                positionIndex: posIdx,
+                totalPositions,
+                stagnantState: { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 }
+              });
+            }
           }
 
           const qty = notionalUsd / entryPrice;
@@ -2154,6 +2097,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
             capitalBefore: capital + marginUsd,
             wasCapped,
             stopLossPct: slPct,
+            fixedSlPct: slPct,  // V5.122: Fixed SL matching live STOP_MARKET (parity)
             entryAtrPct: (() => {
               const atr = calcATR(windowCandles, 14);
               return atr && windowCandles.length > 0 ? (atr / windowCandles[windowCandles.length - 1].close) * 100 : undefined;
