@@ -51,16 +51,16 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
         take: limit * 2, // fetch extra to account for duplicates before dedup
       });
 
-      // Deduplicate by windowStart: prefer per-user row (has execution data) over shared row
-      const byWindow = new Map<number, (typeof allRows)[0]>();
+      // Deduplicate by windowStart:symbol: prefer per-user row (has execution data) over shared row
+      const byWindowSymbol = new Map<string, (typeof allRows)[0]>();
       for (const row of allRows) {
-        const ws = row.windowStart.getTime();
-        const existing = byWindow.get(ws);
+        const key = `${row.windowStart.getTime()}:${row.symbol}`;
+        const existing = byWindowSymbol.get(key);
         if (!existing || (existing.userId === null && row.userId !== null)) {
-          byWindow.set(ws, row);
+          byWindowSymbol.set(key, row);
         }
       }
-      const predictions = [...byWindow.values()]
+      const predictions = [...byWindowSymbol.values()]
         .sort((a, b) => b.windowStart.getTime() - a.windowStart.getTime())
         .slice(0, limit);
 
@@ -82,10 +82,10 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
     }
   });
 
-  // PUT /settings — save mode + amount + hedgeAmount
+  // PUT /settings — save mode + amount + hedgeAmount + symbols
   router.put('/settings', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const { mode, amount, hedgeAmount } = req.body;
+      const { mode, amount, hedgeAmount, symbols } = req.body;
       if (!mode || !['virtual', 'live'].includes(mode)) {
         return res.status(400).json({ error: 'Invalid mode (virtual or live)' });
       }
@@ -98,6 +98,15 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
         return res.status(400).json({ error: 'Hedge amount must be >= $0' });
       }
 
+      // Validate symbols array if provided
+      let parsedSymbols: string[] | undefined;
+      if (symbols && Array.isArray(symbols)) {
+        parsedSymbols = symbols.map((s: string) => String(s).toUpperCase());
+        if (parsedSymbols.length === 0) {
+          return res.status(400).json({ error: 'At least one symbol must be active' });
+        }
+      }
+
       // If switching to live, validate credentials exist
       if (mode === 'live') {
         const config = await getPolymarketConfig(prisma, req.user!.id);
@@ -106,7 +115,7 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
         }
       }
 
-      await savePolymarketConfig(prisma, req.user!.id, mode, parsedAmount, parsedHedge);
+      await savePolymarketConfig(prisma, req.user!.id, mode, parsedAmount, parsedHedge, parsedSymbols);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Failed to save settings' });

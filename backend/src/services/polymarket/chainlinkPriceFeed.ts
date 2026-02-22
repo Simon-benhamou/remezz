@@ -1,10 +1,12 @@
 /**
- * Chainlink BTC/USD price feed via Polymarket RTDS WebSocket.
+ * Chainlink multi-symbol price feed via Polymarket RTDS WebSocket.
  *
  * Connects to wss://ws-live-data.polymarket.com and subscribes to
  * the `crypto_prices_chainlink` topic to receive real-time Chainlink
  * oracle prices — the same source Polymarket uses for "price to beat"
- * resolution on Bitcoin up/down 5-minute markets.
+ * resolution on up/down 5-minute markets.
+ *
+ * Supports BTC, ETH, SOL, XRP in a single WS connection.
  */
 
 import WebSocket from 'ws';
@@ -20,11 +22,18 @@ const WATCHDOG_INTERVAL_MS = 10_000;  // Check liveness every 10s
 const DATA_TIMEOUT_MS = 30_000;       // Force reconnect if no data for 30s
 const STALE_LOG_INTERVAL_MS = 60_000; // Throttle stale warnings to once per 60s
 
+/** Feed symbols subscribed via RTDS (lowercase/usd format) */
+const FEED_SYMBOLS = ['btc/usd', 'eth/usd', 'sol/usd', 'xrp/usd'] as const;
+
+/** Normalize RTDS symbol ('btc/usd') to short uppercase ('BTC') */
+function normalizeSymbol(rtdsSymbol: string): string {
+  return rtdsSymbol.split('/')[0].toUpperCase();
+}
+
 // ─── Module state ────────────────────────────────────────────────────────────
 
 let ws: WebSocket | null = null;
-let latestPrice: number | null = null;
-let latestTimestamp: number | null = null;
+const pricesBySymbol = new Map<string, { price: number; ts: number }>();
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -41,23 +50,30 @@ export interface ChainlinkPrice {
 }
 
 /**
- * Returns the latest Chainlink BTC/USD price, or null if not yet received.
+ * Returns the latest Chainlink price for a given symbol, or null if not yet received / stale.
  */
-export function getChainlinkBtcPrice(): ChainlinkPrice | null {
-  if (latestPrice === null || latestTimestamp === null) return null;
+export function getChainlinkPrice(symbol: string): ChainlinkPrice | null {
+  const entry = pricesBySymbol.get(symbol.toUpperCase());
+  if (!entry) return null;
 
-  // Consider stale if older than 30 seconds
   const now = Date.now();
-  const age = now - latestTimestamp;
+  const age = now - entry.ts;
   if (age > 30_000) {
     if (now - lastStaleLogAt >= STALE_LOG_INTERVAL_MS) {
-      log.warn(`Chainlink price stale: ${Math.round(age / 1000)}s old`);
+      log.warn(`Chainlink ${symbol} price stale: ${Math.round(age / 1000)}s old`);
       lastStaleLogAt = now;
     }
     return null;
   }
 
-  return { price: latestPrice, timestamp: latestTimestamp };
+  return { price: entry.price, timestamp: entry.ts };
+}
+
+/**
+ * Backward-compatible wrapper: returns BTC price.
+ */
+export function getChainlinkBtcPrice(): ChainlinkPrice | null {
+  return getChainlinkPrice('BTC');
 }
 
 /**
@@ -110,18 +126,17 @@ function connect(): void {
   ws = new WebSocket(RTDS_URL);
 
   ws.on('open', () => {
-    log.info('RTDS connected — subscribing to crypto_prices_chainlink btc/usd');
+    const symbolList = FEED_SYMBOLS.join(', ');
+    log.info(`RTDS connected — subscribing to crypto_prices_chainlink [${symbolList}]`);
     reconnectAttempts = 0;
 
     const subscribeMsg = JSON.stringify({
       action: 'subscribe',
-      subscriptions: [
-        {
-          topic: 'crypto_prices_chainlink',
-          type: '*',
-          filters: JSON.stringify({ symbol: 'btc/usd' }),
-        },
-      ],
+      subscriptions: FEED_SYMBOLS.map((s) => ({
+        topic: 'crypto_prices_chainlink',
+        type: '*',
+        filters: JSON.stringify({ symbol: s }),
+      })),
     });
     ws!.send(subscribeMsg);
 
@@ -159,11 +174,14 @@ function connect(): void {
 
       if (
         msg.topic === 'crypto_prices_chainlink' &&
-        msg.payload?.symbol === 'btc/usd' &&
+        msg.payload?.symbol &&
         typeof msg.payload.value === 'number'
       ) {
-        latestPrice = msg.payload.value;
-        latestTimestamp = msg.payload.timestamp ?? Date.now();
+        const sym = normalizeSymbol(msg.payload.symbol);
+        pricesBySymbol.set(sym, {
+          price: msg.payload.value,
+          ts: msg.payload.timestamp ?? Date.now(),
+        });
       }
     } catch {
       // Ignore non-JSON messages (e.g., subscription confirmations)

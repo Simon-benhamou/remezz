@@ -37,6 +37,7 @@ export interface PolymarketOdds {
 }
 
 export interface WindowState {
+  symbol: string;  // 'BTC', 'ETH', 'SOL', 'XRP'
   windowStart: number;
   windowEnd: number;
   startPrice: number;

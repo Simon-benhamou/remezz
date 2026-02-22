@@ -95,6 +95,7 @@ const SETTING_KEYS = {
   MODE: 'polymarket_mode',
   AMOUNT: 'polymarket_amount',
   HEDGE_AMOUNT: 'polymarket_hedge_amount',
+  SYMBOLS: 'polymarket_symbols',
   PRIVATE_KEY: 'polymarket_private_key',
   PROXY_ADDRESS: 'polymarket_proxy_address', // proxy wallet shown in Polymarket UI (Magic.link)
   API_KEY: 'polymarket_api_key',
@@ -104,10 +105,14 @@ const SETTING_KEYS = {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
+export const ALL_POLYMARKET_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP'] as const;
+export type PolymarketSymbol = (typeof ALL_POLYMARKET_SYMBOLS)[number];
+
 export interface PolymarketConfig {
   mode: 'virtual' | 'live';
   amount: number; // USDC per Early Bird trade
   hedgeAmount: number; // USDC for T+4:00 hedge bet
+  symbols: string[]; // Active symbols (e.g. ['BTC', 'ETH'])
   hasCredentials: boolean;
 }
 
@@ -188,13 +193,21 @@ export async function getPolymarketConfig(
   userId: string,
 ): Promise<PolymarketConfig> {
   const settings = await prisma.userSetting.findMany({
-    where: { userId, key: { in: [SETTING_KEYS.MODE, SETTING_KEYS.AMOUNT, SETTING_KEYS.HEDGE_AMOUNT, SETTING_KEYS.API_KEY] } },
+    where: { userId, key: { in: [SETTING_KEYS.MODE, SETTING_KEYS.AMOUNT, SETTING_KEYS.HEDGE_AMOUNT, SETTING_KEYS.SYMBOLS, SETTING_KEYS.API_KEY] } },
   });
   const map = new Map(settings.map((s) => [s.key, s.value]));
+
+  // Parse symbols CSV, default to ['BTC'] for backward compat
+  const symbolsCsv = map.get(SETTING_KEYS.SYMBOLS);
+  const symbols = symbolsCsv
+    ? symbolsCsv.split(',').map((s) => s.trim().toUpperCase()).filter((s) => (ALL_POLYMARKET_SYMBOLS as readonly string[]).includes(s))
+    : ['BTC'];
+
   return {
     mode: (map.get(SETTING_KEYS.MODE) as 'virtual' | 'live') || 'virtual',
     amount: parseFloat(map.get(SETTING_KEYS.AMOUNT) || '5'),
     hedgeAmount: parseFloat(map.get(SETTING_KEYS.HEDGE_AMOUNT) || '1'),
+    symbols: symbols.length > 0 ? symbols : ['BTC'],
     hasCredentials: !!map.get(SETTING_KEYS.API_KEY),
   };
 }
@@ -208,8 +221,9 @@ export async function savePolymarketConfig(
   mode: 'virtual' | 'live',
   amount: number,
   hedgeAmount: number,
+  symbols?: string[],
 ): Promise<void> {
-  await Promise.all([
+  const ops: Promise<any>[] = [
     prisma.userSetting.upsert({
       where: { userId_key: { userId, key: SETTING_KEYS.MODE } },
       create: { userId, key: SETTING_KEYS.MODE, value: mode, category: 'polymarket' },
@@ -225,7 +239,20 @@ export async function savePolymarketConfig(
       create: { userId, key: SETTING_KEYS.HEDGE_AMOUNT, value: hedgeAmount.toString(), category: 'polymarket' },
       update: { value: hedgeAmount.toString() },
     }),
-  ]);
+  ];
+
+  if (symbols) {
+    const csv = symbols.map((s) => s.toUpperCase()).join(',');
+    ops.push(
+      prisma.userSetting.upsert({
+        where: { userId_key: { userId, key: SETTING_KEYS.SYMBOLS } },
+        create: { userId, key: SETTING_KEYS.SYMBOLS, value: csv, category: 'polymarket' },
+        update: { value: csv },
+      }),
+    );
+  }
+
+  await Promise.all(ops);
 }
 
 /**

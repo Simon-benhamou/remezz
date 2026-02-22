@@ -360,17 +360,20 @@ export const api = {
   polymarket: {
     getStatus: async () =>
       (await client.get('/api/polymarket/status')).data as {
-        window: {
-          windowStart: number;
-          windowEnd: number;
-          startPrice: number;
-          currentPrice: number;
-          elapsed: number;
-          prediction: { direction: string; confidence: number; score: Record<string, number>; microRocPct: number } | null;
-          entryOdds: number | null;
-          status: string;
-        } | null;
-        klines1m: Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number; isFinal: boolean }>;
+        symbols: Record<string, {
+          window: {
+            symbol: string;
+            windowStart: number;
+            windowEnd: number;
+            startPrice: number;
+            currentPrice: number;
+            elapsed: number;
+            prediction: { direction: string; confidence: number; score: Record<string, number>; microRocPct: number } | null;
+            entryOdds: number | null;
+            status: string;
+          } | null;
+          klines1m: Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number; isFinal: boolean }>;
+        }>;
       },
     getStats: async () =>
       (await client.get('/api/polymarket/stats')).data as {
@@ -430,10 +433,11 @@ export const api = {
         mode: 'virtual' | 'live';
         amount: number;
         hedgeAmount: number;
+        symbols: string[];
         hasCredentials: boolean;
       },
-    saveSettings: async (mode: 'virtual' | 'live', amount: number, hedgeAmount?: number) =>
-      (await client.put('/api/polymarket/settings', { mode, amount, hedgeAmount: hedgeAmount ?? 1 })).data,
+    saveSettings: async (mode: 'virtual' | 'live', amount: number, hedgeAmount?: number, symbols?: string[]) =>
+      (await client.put('/api/polymarket/settings', { mode, amount, hedgeAmount: hedgeAmount ?? 1, symbols })).data,
     saveCredentials: async (privateKey: string, proxyAddress?: string) =>
       (await client.put('/api/polymarket/credentials', { privateKey, proxyAddress })).data as {
         success: boolean;

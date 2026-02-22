@@ -57,10 +57,16 @@ interface Kline1m {
   isFinal: boolean;
 }
 
-interface StatusData {
+interface SymbolStatusData {
   window: WindowData | null;
   klines1m: Kline1m[];
 }
+
+interface StatusData {
+  symbols: Record<string, SymbolStatusData>;
+}
+
+const ALL_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP'] as const;
 
 interface StatsData {
   totalWindows: number;
@@ -409,7 +415,7 @@ interface HistoryTableProps {
 }
 
 function HistoryTable({ predictions }: HistoryTableProps) {
-  const gridCols = 'grid-cols-[80px_50px_50px_45px_60px_90px_70px_80px]';
+  const gridCols = 'grid-cols-[80px_40px_50px_50px_45px_60px_90px_70px_80px]';
 
   const formatWindowTime = (ts: string) => {
     const d = new Date(ts);
@@ -426,6 +432,7 @@ function HistoryTable({ predictions }: HistoryTableProps) {
       {/* Header */}
       <div className={cn('grid gap-2 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border', gridCols)}>
         <span>Window</span>
+        <span>Sym</span>
         <span>Pred</span>
         <span>Real</span>
         <span></span>
@@ -480,6 +487,11 @@ function HistoryTable({ predictions }: HistoryTableProps) {
               {/* Window */}
               <span className="font-mono text-muted-foreground">
                 {formatWindowTime(p.windowStart)}
+              </span>
+
+              {/* Symbol */}
+              <span className="font-mono text-xs font-semibold text-foreground">
+                {p.symbol}
               </span>
 
               {/* Pred */}
@@ -550,6 +562,7 @@ export default function PolymarketPage() {
   const [history, setHistory] = useState<HistoryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeSymbol, setActiveSymbol] = useState<string>('BTC');
 
   // Live mode state
   const [pmMode, setPmMode] = useState<'virtual' | 'live'>('virtual');
@@ -709,8 +722,26 @@ export default function PolymarketPage() {
           </button>
         </div>
         <p className="text-sm text-muted-foreground mt-1">
-          5-minute BTC price direction predictions (Polymarket experiment)
+          5-minute price direction predictions (Polymarket multi-symbol)
         </p>
+      </div>
+
+      {/* Symbol tabs */}
+      <div className="flex items-center gap-1">
+        {ALL_SYMBOLS.map((sym) => (
+          <button
+            key={sym}
+            onClick={() => setActiveSymbol(sym)}
+            className={cn(
+              'px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer',
+              activeSymbol === sym
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80',
+            )}
+          >
+            {sym}
+          </button>
+        ))}
       </div>
 
       {/* Mode + Wallet — side by side */}
@@ -942,26 +973,33 @@ export default function PolymarketPage() {
         )}
       </div>
 
-      {/* Live Window + Mini Chart */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {status?.window ? (
-          <WindowProgress window={status.window} />
-        ) : (
-          <div className="rounded-2xl border border-border bg-card p-4 flex items-center justify-center text-sm text-muted-foreground min-h-[140px]">
-            <Clock className="h-4 w-4 mr-2" />
-            Waiting for next window...
-          </div>
-        )}
+      {/* Live Window + Mini Chart (for active symbol) */}
+      {(() => {
+        const symData = status?.symbols?.[activeSymbol];
+        const symWindow = symData?.window ?? null;
+        const symKlines = symData?.klines1m ?? [];
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {symWindow ? (
+              <WindowProgress window={symWindow} />
+            ) : (
+              <div className="rounded-2xl border border-border bg-card p-4 flex items-center justify-center text-sm text-muted-foreground min-h-[140px]">
+                <Clock className="h-4 w-4 mr-2" />
+                [{activeSymbol}] Waiting for next window...
+              </div>
+            )}
 
-        {status?.klines1m && status.klines1m.length > 0 ? (
-          <MiniChart klines={status.klines1m} startPrice={status.window?.startPrice} />
-        ) : (
-          <div className="rounded-2xl border border-border bg-card p-4 flex items-center justify-center text-sm text-muted-foreground min-h-[140px]">
-            <BarChart3 className="h-4 w-4 mr-2" />
-            No candle data
+            {symKlines.length > 0 ? (
+              <MiniChart klines={symKlines} startPrice={symWindow?.startPrice} />
+            ) : (
+              <div className="rounded-2xl border border-border bg-card p-4 flex items-center justify-center text-sm text-muted-foreground min-h-[140px]">
+                <BarChart3 className="h-4 w-4 mr-2" />
+                [{activeSymbol}] No candle data
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* History Table — only show actual predictions, not skipped windows */}
       <HistoryTable predictions={(history?.predictions ?? []).filter((p) => !p.skipped)} />

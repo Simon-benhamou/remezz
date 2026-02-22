@@ -965,10 +965,13 @@ function PreferencesTab() {
 // Polymarket Tab
 // ---------------------------------------------------------------------------
 
+const ALL_PM_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP'] as const;
+
 function PolymarketTab() {
   // Config state
   const [mode, setMode] = useState<'virtual' | 'live'>('virtual');
   const [amount, setAmount] = useState('5');
+  const [enabledSymbols, setEnabledSymbols] = useState<string[]>(['BTC']);
   const [hasCredentials, setHasCredentials] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -991,6 +994,7 @@ function PolymarketTab() {
         const config = await api.polymarket.getSettings();
         setMode(config.mode);
         setAmount(config.amount.toString());
+        setEnabledSymbols(config.symbols?.length ? config.symbols : ['BTC']);
         setHasCredentials(config.hasCredentials);
       } catch {
         // ignore
@@ -1059,8 +1063,8 @@ function PolymarketTab() {
   const handleSaveSettings = async () => {
     setSavingSettings(true);
     try {
-      await api.polymarket.saveSettings(mode, parseFloat(amount) || 5);
-      toast.success(`Polymarket mode: ${mode.toUpperCase()}, amount: $${amount}`);
+      await api.polymarket.saveSettings(mode, parseFloat(amount) || 5, undefined, enabledSymbols);
+      toast.success(`Polymarket mode: ${mode.toUpperCase()}, amount: $${amount}, symbols: ${enabledSymbols.join(',')}`);
     } catch (error: any) {
       toast.error(error?.response?.data?.error || 'Failed to save settings');
     } finally {
@@ -1226,6 +1230,39 @@ function PolymarketTab() {
             />
             <p className="text-xs text-muted-foreground">
               How much USDC to wager on each prediction (min $1).
+            </p>
+          </div>
+
+          <Separator />
+
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Active Symbols</Label>
+            <div className="flex flex-wrap gap-3">
+              {ALL_PM_SYMBOLS.map((sym) => {
+                const checked = enabledSymbols.includes(sym);
+                return (
+                  <label key={sym} className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        if (checked) {
+                          // Don't allow unchecking the last symbol
+                          if (enabledSymbols.length <= 1) return;
+                          setEnabledSymbols(enabledSymbols.filter((s) => s !== sym));
+                        } else {
+                          setEnabledSymbols([...enabledSymbols, sym]);
+                        }
+                      }}
+                      className="rounded border-border"
+                    />
+                    <span className="text-sm font-mono font-semibold">{sym}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Select which symbols to trade. At least one must be active. All 4 are scored in parallel; bets are placed by confidence (highest first).
             </p>
           </div>
 
