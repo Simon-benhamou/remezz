@@ -905,7 +905,10 @@ async function tick(prisma: PrismaClient): Promise<void> {
       if (!liveConfig) continue;
 
       const hasEarlyBird = activeLiveBetByUser.get(userId) === start;
-      const signalOk = hasEarlyBird || lotterySignalOk; // hedge always OK, lottery needs signal
+      // Hedge disabled — no longer placing $1 insurance on opposite token.
+      // With aggressive caps (0.78-0.90) and 86% WR, hedge cost eats too much profit.
+      // Only lottery mode remains (no Early Bird → strong reversal signal required).
+      const signalOk = !hasEarlyBird && lotterySignalOk;
 
       if (!signalOk) continue;
 
