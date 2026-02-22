@@ -29,21 +29,22 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
     res.json(state);
   });
 
-  // GET /stats — aggregated KPIs
-  router.get('/stats', async (_req, res) => {
+  // GET /stats — aggregated KPIs (scoped by user)
+  router.get('/stats', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const stats = await getPolymarketStats(prisma);
+      const stats = await getPolymarketStats(prisma, req.user!.id);
       res.json(stats);
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch stats' });
     }
   });
 
-  // GET /history — recent predictions
-  router.get('/history', async (req, res) => {
+  // GET /history — recent predictions (scoped by user)
+  router.get('/history', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
       const predictions = await prisma.polymarketPrediction.findMany({
+        where: { userId: req.user!.id },
         orderBy: { windowStart: 'desc' },
         take: limit,
       });
@@ -56,9 +57,9 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
   // ── Authenticated endpoints (settings / trading) ──────────────────────────
 
   // GET /settings — current polymarket trading config
-  router.get('/settings', authenticateUser, async (_req: AuthenticatedRequest, res) => {
+  router.get('/settings', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const config = await getPolymarketConfig(prisma);
+      const config = await getPolymarketConfig(prisma, req.user!.id);
       res.json(config);
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch settings' });
@@ -83,13 +84,13 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
 
       // If switching to live, validate credentials exist
       if (mode === 'live') {
-        const config = await getPolymarketConfig(prisma);
+        const config = await getPolymarketConfig(prisma, req.user!.id);
         if (!config.hasCredentials) {
           return res.status(400).json({ error: 'Save valid API credentials before enabling live mode' });
         }
       }
 
-      await savePolymarketConfig(prisma, mode, parsedAmount, parsedHedge);
+      await savePolymarketConfig(prisma, req.user!.id, mode, parsedAmount, parsedHedge);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Failed to save settings' });
@@ -105,6 +106,7 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
       }
       const result = await savePolymarketCredentials(
         prisma,
+        req.user!.id,
         privateKey.trim(),
         proxyAddress?.trim() || undefined,
       );
@@ -115,9 +117,9 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
   });
 
   // DELETE /credentials — remove all credentials and reset to virtual
-  router.delete('/credentials', authenticateUser, async (_req: AuthenticatedRequest, res) => {
+  router.delete('/credentials', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      await deletePolymarketCredentials(prisma);
+      await deletePolymarketCredentials(prisma, req.user!.id);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Failed to delete credentials' });
@@ -125,19 +127,21 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
   });
 
   // POST /validate-credentials — test credentials are valid
-  router.post('/validate-credentials', authenticateUser, async (_req: AuthenticatedRequest, res) => {
+  router.post('/validate-credentials', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const result = await validatePolymarketCredentials(prisma);
+      const result = await validatePolymarketCredentials(prisma, req.user!.id);
       res.json(result);
     } catch (err) {
       res.status(500).json({ valid: false, error: 'Validation failed' });
     }
   });
 
-  // DELETE /history — reset all predictions (clear stats)
-  router.delete('/history', authenticateUser, async (_req: AuthenticatedRequest, res) => {
+  // DELETE /history — reset predictions for this user
+  router.delete('/history', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const { count } = await prisma.polymarketPrediction.deleteMany();
+      const { count } = await prisma.polymarketPrediction.deleteMany({
+        where: { userId: req.user!.id },
+      });
       res.json({ success: true, deleted: count });
     } catch (err) {
       res.status(500).json({ error: 'Failed to reset predictions' });
@@ -145,9 +149,9 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
   });
 
   // GET /balance — USDC balance on Polymarket
-  router.get('/balance', authenticateUser, async (_req: AuthenticatedRequest, res) => {
+  router.get('/balance', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const result = await getPolymarketBalance(prisma);
+      const result = await getPolymarketBalance(prisma, req.user!.id);
       res.json(result);
     } catch (err) {
       res.status(500).json({ balance: 0, error: 'Failed to fetch balance' });
