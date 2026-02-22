@@ -458,7 +458,7 @@ async function loadBacktestData() {
 
   const btc1hLocal = await loadLocalJsonCandles('BTC/USDT:USDT', '1h');
   if (!btc1hLocal) throw new Error('No local BTC 1h data');
-  const btcCandles1h = sliceCandlesByTime(btc1hLocal.candles, since, endMs);
+  const btcCandlesRegime = sliceCandlesByTime(btc1hLocal.candles, since, endMs);
 
   const allData: Record<string, any[]> = {};
   for (const symbol of SYMBOLS) {
@@ -470,7 +470,7 @@ async function loadBacktestData() {
   const configTfStr = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME;
   const configTfMin = parseInt(configTfStr) * (configTfStr.includes('h') ? 60 : 1);
 
-  return { btcCandles, btcCandles1h, allData, CANDLE_REGIME_INTERVAL_MS: configTfMin * 60 * 1000 };
+  return { btcCandles, btcCandlesRegime, allData, CANDLE_REGIME_INTERVAL_MS: configTfMin * 60 * 1000 };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

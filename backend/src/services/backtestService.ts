@@ -309,7 +309,7 @@ export interface BacktestResult {
 export interface BacktestComputationInput {
   params: BacktestParams;
   btcCandles: BacktestCandle[];
-  btcCandles1h: BacktestCandle[];
+  btcCandlesRegime: BacktestCandle[];
   allData: Record<string, BacktestCandle[]>;
   CANDLE_REGIME_INTERVAL_MS: number;
   // V5.111: Optional 1m candle data for high-resolution exhaustion simulation
@@ -691,7 +691,7 @@ function checkBacktestExit(
   current: BacktestCandle,
   windowCandles: BacktestCandle[],
   btcWindowCandles: Candle[],
-  btcCandles1hWindow: Candle[],  // V5.86: 1h candles for regime SMA200 (matches live)
+  btcCandlesRegimeWindow: Candle[],  // V5.86: 1h candles for regime SMA200 (matches live)
   idx: number,
   params: BacktestParams
 ): BacktestExitResult {
@@ -737,13 +737,13 @@ function checkBacktestExit(
   };
 
   // Call shared exit function with timestamp override for consistent time calculation
-  // V5.86: Pass btcCandles1h for regime SMA200 (matches live behavior)
+  // V5.86: Pass btcCandlesRegime for regime SMA200 (matches live behavior)
   const exitSignal = shouldExitPosition(position, current.close, windowCandles as Candle[], {
     nowMs: pos.entryTime + holdMinutes * 60000,  // Simulate correct time
     priceHigh: current.high,
     priceLow: current.low,
     btcCandles: btcWindowCandles,
-    btcCandles1h: btcCandles1hWindow,  // V5.86: 1h candles for regime SMA200
+    btcCandlesRegime: btcCandlesRegimeWindow,  // V5.86: 1h candles for regime SMA200
   });
   
   // Sync state back to pos (stagnant, trailing, etc.)
@@ -1321,7 +1321,7 @@ function calculateRealisticHoldMinutes(
 // ============================================================================
 
 export async function runBacktestComputation(input: BacktestComputationInput): Promise<BacktestResult> {
-  const { params, btcCandles, btcCandles1h, allData, CANDLE_REGIME_INTERVAL_MS, allData1m } = input;
+  const { params, btcCandles, btcCandlesRegime, allData, CANDLE_REGIME_INTERVAL_MS, allData1m } = input;
   const { startDate, endDate, initialCapital, symbols, leverage, parityMode, forcedEntry } = params;
   const btcCloses = btcCandles.map((c) => c.close);
 
@@ -1383,9 +1383,9 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
   const allValidSignals: ValidSignal[] = [];
 
   // Regime candle cursor: advances monotonically for O(1) per-step filtering
-  // Tracks the largest index i where btcCandles1h[i].timestamp + CANDLE_REGIME_INTERVAL_MS <= btcCandle.timestamp
+  // Tracks the largest index i where btcCandlesRegime[i].timestamp + CANDLE_REGIME_INTERVAL_MS <= btcCandle.timestamp
   let regimeCursorForEntry = 0;
-  // V5.111: Cache btcCandles1h window — only recreate when cursor advances
+  // V5.111: Cache btcCandlesRegime window — only recreate when cursor advances
   // Previously sliced twice per symbol per iteration (exit + entry), growing up to ~500 elements
   let cachedBtcCandles1hWindow: BacktestCandle[] = [];
   let lastRegimeCursor = -1;
@@ -1396,15 +1396,15 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
 
     // Advance regime candle cursor for this BTC timestamp
     while (
-      regimeCursorForEntry < btcCandles1h.length &&
-      btcCandles1h[regimeCursorForEntry].timestamp + CANDLE_REGIME_INTERVAL_MS <= btcCandle.timestamp
+      regimeCursorForEntry < btcCandlesRegime.length &&
+      btcCandlesRegime[regimeCursorForEntry].timestamp + CANDLE_REGIME_INTERVAL_MS <= btcCandle.timestamp
     ) {
       regimeCursorForEntry++;
     }
 
     // Update cached 1h window only when cursor changes
     if (regimeCursorForEntry !== lastRegimeCursor) {
-      cachedBtcCandles1hWindow = btcCandles1h.slice(0, regimeCursorForEntry);
+      cachedBtcCandles1hWindow = btcCandlesRegime.slice(0, regimeCursorForEntry);
       lastRegimeCursor = regimeCursorForEntry;
     }
     // regimeCursorForEntry is now the EXCLUSIVE end index (first candle that doesn't pass)
@@ -1535,7 +1535,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
 
         // V5.86: Compute regime candles window for exit
         // Use regimeCursorForEntry as upper bound (current.timestamp <= btcCandle.timestamp)
-        const btcCandles1hWindowForExit = cachedBtcCandles1hWindow;
+        const btcCandlesRegimeWindowForExit = cachedBtcCandles1hWindow;
 
         // ═══════════════════════════════════════════════════════════════════
         // V5.111: EXHAUSTION-BASED PROACTIVE STOP (before standard exit check)
@@ -1798,7 +1798,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           current,
           windowCandles,
           btcWindowCandles as Candle[],
-          btcCandles1hWindowForExit as Candle[],  // V5.86: 1h candles for regime
+          btcCandlesRegimeWindowForExit as Candle[],  // V5.86: 1h candles for regime
           idx,
           params
         );
@@ -1959,10 +1959,10 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
 
         // V5.111 PERF: Use cached BTC regime (same for all 10 symbols in this BTC step)
         if (cachedIsBullRegime === null) {
-          const btcCandles1hWindow = cachedBtcCandles1hWindow;
+          const btcCandlesRegimeWindow = cachedBtcCandles1hWindow;
           const smaPeriod = MomentumConfig.ENTRY.BTC_SMA_PERIOD;
-          if (btcCandles1hWindow.length >= smaPeriod) {
-            const btcCloses1h = btcCandles1hWindow.map(c => c.close);
+          if (btcCandlesRegimeWindow.length >= smaPeriod) {
+            const btcCloses1h = btcCandlesRegimeWindow.map(c => c.close);
             const btcSma200_1h = calcSMA(btcCloses1h, smaPeriod);
             const btcNow1h = btcCloses1h[btcCloses1h.length - 1];
             cachedIsBullRegime = btcNow1h > btcSma200_1h;
@@ -1982,7 +1982,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           btcWindowForSignal, // V5.111 PERF: pre-computed once per BTC step
           {
             nowMs: btcCandle.timestamp,
-            btcCandles1h: cachedBtcCandles1hWindow,
+            btcCandlesRegime: cachedBtcCandles1hWindow,
           }
         );
         if (!signal.valid || !signal.side) continue;
@@ -2091,7 +2091,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
               forcedSymbol,
               forcedWindowCandles2,
               btcWindowForSignal,
-              { nowMs: btcCandle.timestamp, btcCandles1h: cachedBtcCandles1hWindow }
+              { nowMs: btcCandle.timestamp, btcCandlesRegime: cachedBtcCandles1hWindow }
             );
             // Check toxic hours
             const diagHourUtc = new Date(currentCandle.timestamp + 15 * 60 * 1000).getUTCHours();
@@ -2747,16 +2747,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   const configTfStr = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME;
   const configTfMin = parseInt(configTfStr) * (configTfStr.includes('h') ? 60 : 1);
   const regimeTfMin = params.regimeTimeframeMinutes ?? configTfMin;
-  let btcCandles1h: BacktestCandle[];
+  let btcCandlesRegime: BacktestCandle[];
   if (regimeTfMin === 60) {
-    btcCandles1h = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
-    console.log(`[Backtest] BTC 1h: ${btcCandles1h.length} candles (native)`);
+    btcCandlesRegime = await fetchCandles1h(exchange, 'BTC/USDT:USDT', dataLoadStart, endDate);
+    console.log(`[Backtest] BTC 1h: ${btcCandlesRegime.length} candles (native)`);
   } else if (regimeTfMin <= 15) {
-    btcCandles1h = btcCandles;
-    console.log(`[Backtest] BTC regime: using 15m candles directly (${btcCandles1h.length} candles)`);
+    btcCandlesRegime = btcCandles;
+    console.log(`[Backtest] BTC regime: using 15m candles directly (${btcCandlesRegime.length} candles)`);
   } else {
-    btcCandles1h = aggregate15mCandles(btcCandles, regimeTfMin) as BacktestCandle[];
-    console.log(`[Backtest] BTC ${regimeTfMin}m: ${btcCandles1h.length} candles (aggregated from 15m)`);
+    btcCandlesRegime = aggregate15mCandles(btcCandles, regimeTfMin) as BacktestCandle[];
+    console.log(`[Backtest] BTC ${regimeTfMin}m: ${btcCandlesRegime.length} candles (aggregated from 15m)`);
   }
 
   const CANDLE_REGIME_INTERVAL_MS = regimeTfMin * 60 * 1000;
@@ -2781,7 +2781,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   const input: BacktestComputationInput = {
     params,
     btcCandles,
-    btcCandles1h,
+    btcCandlesRegime,
     allData,
     CANDLE_REGIME_INTERVAL_MS,
   };

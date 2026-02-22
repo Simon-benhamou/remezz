@@ -86,6 +86,7 @@ import { CandleFetcher } from './agent/candleFetcher.js';
 import { ExchangeSync } from './agent/exchangeSync.js';
 import { PositionCloser } from './agent/positionCloser.js';
 import { buildAgentState, type AgentStateResult, type TradeEvent } from './agent/agentState.js';
+import { getBtcDataService } from '../services/btcDataService.js';
 
 // CapitalPool extracted to capitalPool.ts
 
@@ -281,7 +282,6 @@ export class AgentOrchestrator {
       isClosingPosition: () => this.closingPosition,
       setClosingPosition: (val: boolean) => { this.closingPosition = val; },
       fetchCandles: () => this.candleFetcher.fetchCandles(),
-      fetchBtcCandles: () => this.candleFetcher.fetchBtcCandles(),
       orderManager: this.orderManager,
       closePosition: (pos, price, reason) => this.closePosition(pos, price, reason),
       setLastPrice: (price: number) => { this.lastPrice = price; },
@@ -303,8 +303,6 @@ export class AgentOrchestrator {
       setTrailingStopOnExchange: (pos, isWidening) => this.setTrailingStopOnExchange(pos, isWidening),
       formatQtyForExchange: (sym, qty) => this.formatQtyForExchange(sym, qty),
       startRealtimeExitMonitorIfNeeded: () => this.startRealtimeExitMonitorIfNeeded(),
-      fetchBtcCandles: () => this.candleFetcher.fetchBtcCandles(),
-      fetchBtcCandles1h: () => this.candleFetcher.fetchBtcCandles1h(),
       onTrade: config.onTrade ? (trade) => config.onTrade!(trade) : undefined,
     });
 
@@ -545,18 +543,24 @@ export class AgentOrchestrator {
         await this.exchangeSync.syncWithExchange();
       }
       
-      // Update market conditions: prefer SymbolEngine cache, fallback to self-computation
+      // Update market conditions: prefer SymbolEngine cache, then BtcDataService, then self-computation
       const engineForConditions = symbolEngineManager.getEngine(this.config.symbol);
       const engineConditions = engineForConditions?.getMarketConditions();
       let newConditions: typeof engineConditions;
       if (engineConditions) {
         newConditions = engineConditions;
       } else {
-        const btc15m = await this.candleFetcher.fetchBtcCandles();
-        const btcForRegime = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME === '15m'
-          ? btc15m
-          : (await this.candleFetcher.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
-        newConditions = getMarketConditions(btc15m, btcForRegime);
+        const btcService = getBtcDataService();
+        if (btcService.isReady()) {
+          newConditions = btcService.getMarketConditions() ?? undefined;
+        }
+        if (!newConditions) {
+          const btc15m = await this.candleFetcher.fetchBtcCandles();
+          const btcForRegime = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME === '15m'
+            ? btc15m
+            : (await this.candleFetcher.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
+          newConditions = getMarketConditions(btc15m, btcForRegime);
+        }
       }
       this.lastMarketConditions = {
         ...newConditions,
@@ -807,44 +811,21 @@ export class AgentOrchestrator {
           return;
         }
 
-        // Fetch BTC data (only needed in fallback path)
-        const allBtcCandles = await this.candleFetcher.fetchBtcCandles();
-        const MIN_BTC_CANDLES = 201;
-        if (allBtcCandles.length < MIN_BTC_CANDLES) {
+        // Fetch BTC data from BtcDataService (single source of truth)
+        const btcService = getBtcDataService();
+        if (!btcService.isReady()) {
           if (this.tickCount % 10 === 1) {
-            logger.info(`⚠️ [${shortSymbol}] Waiting for BTC data (${allBtcCandles.length}/${MIN_BTC_CANDLES})`);
+            logger.info(`⚠️ [${shortSymbol}] Waiting for BtcDataService to be ready`);
           }
           this.lastRejectReason = 'waiting_new_candle';
           return;
         }
-
-        let btcLastClosedIdx = allBtcCandles.length - 1;
-        if (allBtcCandles.length > 0 && allBtcCandles[btcLastClosedIdx].isFinal === false) {
-          btcLastClosedIdx = allBtcCandles.length - 2;
-        }
-        btcCandles = btcLastClosedIdx >= 0 ? allBtcCandles.slice(0, btcLastClosedIdx + 1) : allBtcCandles;
-
-        // V5.102: Use BTC candles matching config regime timeframe
-        let btcCandlesForRegime: typeof btcCandles;
-        if (MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME === '15m') {
-          btcCandlesForRegime = btcCandles; // Use same 15m candles
-        } else {
-          // Fetch real 1h candles for regime when configured
-          const btc1h = (await this.candleFetcher.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
-          btcCandlesForRegime = btc1h.length >= 201 ? btc1h : btcCandles;
-        }
-        const MIN_BTC_REGIME_CANDLES = 201; // Need 200 for SMA200 + 1
-        if (btcCandlesForRegime.length < MIN_BTC_REGIME_CANDLES) {
-          if (this.tickCount % 10 === 1) {
-            logger.info(`⚠️ [${shortSymbol}] Waiting for BTC 15m data (${btcCandlesForRegime.length}/${MIN_BTC_REGIME_CANDLES})`);
-          }
-          this.lastRejectReason = 'waiting_new_candle';
-          return;
-        }
+        btcCandles = btcService.getBtcCandles15m();
+        const btcCandlesForRegime = btcService.getBtcCandlesForRegime();
 
         signal = checkMomentumSignal(symbol, candles, btcCandles, {
           nowMs: now,
-          btcCandles1h: btcCandlesForRegime,  // V5.102: 15m candles for regime/MTF
+          btcCandlesRegime: btcCandlesForRegime,
         });
       }
 
@@ -1112,47 +1093,22 @@ export class AgentOrchestrator {
       const allCandles = await this.candleFetcher.fetchCandles();
       if (allCandles.length === 0) return;
 
-      // Fetch BTC candles for regime detection (V5.13)
-      const allBtcCandles = await this.candleFetcher.fetchBtcCandles();
-
       // V5.50 FIX: Use isFinal flag from WebSocket instead of time-based heuristic
-      // This ensures live trading detects candle close at the EXACT same moment as backtest
-      // Previously: used (now - timestamp < 15min) which caused 15-min delay
-      // Now: use isFinal flag directly from Binance WebSocket
       let lastClosedIdx = allCandles.length - 1;
       const lastCandle = allCandles[lastClosedIdx];
-      
-      // If the last candle is not final (still in progress), use the previous one
       if (lastCandle.isFinal === false) {
         lastClosedIdx = allCandles.length - 2;
       }
-      
       if (lastClosedIdx < 0) {
         return;
       }
-      
       const candles = allCandles.slice(0, lastClosedIdx + 1);
       const latestClosedCandle = candles[candles.length - 1];
-      
-      // V5.50 FIX: Use isFinal for BTC candles too (aligned with backtest)
-      // This ensures regime detection uses the same closed candle data as backtest
-      let lastClosedBtcIdx = allBtcCandles.length - 1;
-      if (allBtcCandles.length > 0) {
-        const lastBtcCandle = allBtcCandles[lastClosedBtcIdx];
-        if (lastBtcCandle.isFinal === false) {
-          lastClosedBtcIdx = allBtcCandles.length - 2;
-        }
-      }
-      const btcCandles = lastClosedBtcIdx >= 0 ? allBtcCandles.slice(0, lastClosedBtcIdx + 1) : [];
 
-      // V5.102: Use BTC candles matching config regime timeframe
-      let btcCandles1h: typeof btcCandles;
-      if (MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME === '15m') {
-        btcCandles1h = btcCandles;
-      } else {
-        const btc1h = (await this.candleFetcher.fetchBtcCandles1h()).filter(c => c.isFinal !== false);
-        btcCandles1h = btc1h.length >= 201 ? btc1h : btcCandles;
-      }
+      // BTC data from BtcDataService (single source of truth, already filtered to closed)
+      const btcService = getBtcDataService();
+      const btcCandles = btcService.getBtcCandles15m();
+      const btcCandlesRegime = btcService.getBtcCandlesForRegime();
 
       // Only process exit once per newly-closed candle.
       if (latestClosedCandle.timestamp === this.lastProcessedExitCandleTs) {
@@ -1284,7 +1240,7 @@ export class AgentOrchestrator {
         priceHigh: exitHigh,
         priceLow: exitLow,
         btcCandles: btcCandles,
-        btcCandles1h: btcCandles1h,  // V5.102: 15m candles for regime SMA200
+        btcCandlesRegime: btcCandlesRegime,  // V5.102: 15m candles for regime SMA200
       });
 
       // 🔍 DEBUG: Log regime change detection for debugging timing issues

@@ -54,7 +54,7 @@ import {
   resetCapitalPool,
   type CapitalPool
 } from "./strategies/simpleAgent.js";
-import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, LIQUIDATION_CONFIG, getLiquidityTier, getMaxSafePositionSize, calcSMA } from "./strategies/momentumSimple.js";
+import { MomentumConfig, LIQUIDITY_CONFIG, LIQUIDATION_CONFIG, getLiquidityTier, getMaxSafePositionSize } from "./strategies/momentumSimple.js";
 import { symbolEngineManager } from "./strategies/symbolEngineManager.js";
 import { USER_LIMITS } from "./config/constants.js";
 
@@ -550,99 +550,45 @@ app.get("/api/market-conditions", async (req, res) => {
       }
     }
     
-    // If no agent running, try WebSocket data first, then give up (no REST to avoid bans)
+    // If no agent running, use BtcDataService (single source of truth)
     try {
-      const { getKlinesOhlcvFromWebSocket } = await import('./services/binanceWebSocket.js');
-      
-      // Try to get BTC candles from WebSocket cache (0 API weight)
-      const wsKlines = getKlinesOhlcvFromWebSocket('BTCUSDT', '15m');
-      
-      if (!wsKlines || wsKlines.length < 50) {
+      const { getBtcDataService } = await import('./services/btcDataService.js');
+      const btcService = getBtcDataService();
+
+      if (!btcService.isReady()) {
         return res.json({
           status: 'unknown',
-          reason: 'No agent running and WebSocket data not ready yet - please wait',
+          reason: 'No agent running and BTC data not ready yet - please wait',
           tradingRecommended: false,
           marketQuality: 'unknown',
-          qualityReason: 'WebSocket kline cache not populated',
+          qualityReason: 'BtcDataService not ready',
         });
       }
-      
-      // Convert WebSocket format to candle format
-      const btcCandles = wsKlines;
-      
-      if (btcCandles.length < 50) {
+
+      const conditions = btcService.getMarketConditions();
+      if (!conditions) {
         return res.json({
           status: 'unknown',
-          reason: 'Insufficient data',
+          reason: 'Insufficient data for market conditions',
           tradingRecommended: false,
+          marketQuality: 'unknown',
+          qualityReason: null,
         });
       }
-      
-      // Calculate indicators
-      const btcCloses = btcCandles.map((c: any) => c[4]);
-      const btcNow = btcCloses[btcCloses.length - 1];
-      
-      // SMA200 — import from momentumSimple.ts (single source of truth)
-      const btcSma200 = calcSMA(btcCloses, 200);
-      const btcAboveMa50 = btcNow > btcSma200; // Field name kept for API compat, but uses SMA200
-      
-      // 6h momentum — timestamp-based lookback to handle candle gaps
-      const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-      const lastTs = Number(btcCandles[btcCandles.length - 1][0]);
-      const targetTs = lastTs - SIX_HOURS_MS;
-      let btc6hAgoIndex = 0;
-      for (let i = btcCandles.length - 1; i >= 0; i--) {
-        if (Number(btcCandles[i][0]) <= targetTs) {
-          btc6hAgoIndex = i;
-          break;
-        }
-      }
-      const btc6hAgo = btcCloses[btc6hAgoIndex];
-      const btcMomentum6h = btc6hAgo > 0 ? ((btcNow - btc6hAgo) / btc6hAgo) * 100 : 0;
-      
-      // Check if trading day (Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6)
-      const dayOfWeek = new Date().getUTCDay();
-      const ALLOWED_DAYS = [0, 1, 2, 3, 4, 5, 6]; // All days
-      const isTradingDay = ALLOWED_DAYS.includes(dayOfWeek);
-      
-      // Determine trend — aligned with agent V5.3 regime (SMA200 only, no momentum threshold)
-      let btcTrend: 'bullish' | 'bearish' | 'neutral' = 'neutral';
-      if (btcAboveMa50) {
-        btcTrend = 'bullish';
-      } else {
-        btcTrend = 'bearish';
-      }
 
-      // Overall status — matches agent logic exactly
-      let status: string = 'neutral';
-      let reason = '';
-
-      if (!isTradingDay) {
-        status = 'unfavorable';
-        reason = `Not a trading day (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]})`;
-      } else if (btcAboveMa50) {
-        status = 'favorable_long';
-        reason = `V5.3 BULL: BTC ${btcNow.toFixed(0)} > SMA200 ${btcSma200.toFixed(0)} → LONG only`;
-      } else {
-        status = 'favorable_short';
-        reason = `V5.3 BEAR: BTC ${btcNow.toFixed(0)} < SMA200 ${btcSma200.toFixed(0)} → SHORT only`;
-      }
-      
       return res.json({
-        status,
-        btcAboveMa50,
-        btcMomentum6h,
-        btcTrend,
-        isTradingDay,
-        reason,
-        tradingRecommended: status === 'favorable_long' || status === 'favorable_short',
-        // V5.5: No market quality without agent (need altcoin data)
+        status: conditions.overallStatus || 'unknown',
+        btcAboveMa50: conditions.btcAboveMa50 ?? null,
+        btcMomentum6h: conditions.btcMomentum6h ?? null,
+        btcTrend: conditions.btcTrend ?? null,
+        isTradingDay: conditions.isTradingDay ?? null,
+        reason: conditions.reason || 'Not analyzed yet',
+        tradingRecommended: conditions.overallStatus === 'favorable_long' || conditions.overallStatus === 'favorable_short',
         marketQuality: 'unknown',
         qualityReason: 'No agent running - cannot assess altcoin momentum',
       });
-      
     } catch (fetchError) {
-      logger.warn('Failed to fetch BTC candles for market conditions:', fetchError);
+      logger.warn('Failed to get market conditions from BtcDataService:', fetchError);
       return res.json({
         status: 'unknown',
         reason: 'Unable to fetch market data',
@@ -4517,6 +4463,15 @@ async function runStartupSequence(): Promise<void> {
     logger.info('✅ Subscribed to BTC 1h WebSocket for MTF filter');
   } catch (error) {
     logger.warn('⚠️ Failed to subscribe to BTC 1h WebSocket:', error);
+  }
+
+  // Start BtcDataService (single source of truth for BTC data & regime)
+  try {
+    const { getBtcDataService } = await import('./services/btcDataService.js');
+    getBtcDataService().start();
+    logger.info('✅ BtcDataService started');
+  } catch (error) {
+    logger.warn('⚠️ Failed to start BtcDataService:', error);
   }
 
   // STEP 5: Restore active sessions (REST calls via queue)

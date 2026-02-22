@@ -43,8 +43,8 @@ async function loadData() {
   // Load BTC 1h
   const btc1hLocal = await loadLocalJsonCandles('BTC/USDT:USDT', '1h');
   if (!btc1hLocal) throw new Error('No local BTC 1h data');
-  const btcCandles1h = sliceCandlesByTime(btc1hLocal.candles, since, endMs);
-  console.log(`BTC 1h: ${btcCandles1h.length} candles`);
+  const btcCandlesRegime = sliceCandlesByTime(btc1hLocal.candles, since, endMs);
+  console.log(`BTC 1h: ${btcCandlesRegime.length} candles`);
 
   // Load symbol data
   const allData: Record<string, any[]> = {};
@@ -59,7 +59,7 @@ async function loadData() {
   const configTfMin = parseInt(configTfStr) * (configTfStr.includes('h') ? 60 : 1);
   const CANDLE_REGIME_INTERVAL_MS = configTfMin * 60 * 1000;
 
-  return { btcCandles, btcCandles1h, allData, CANDLE_REGIME_INTERVAL_MS };
+  return { btcCandles, btcCandlesRegime, allData, CANDLE_REGIME_INTERVAL_MS };
 }
 
 function exitReasonStats(trades: any[]) {

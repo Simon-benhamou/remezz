@@ -28,15 +28,13 @@ import {
 } from './momentumSimple.js';
 import { calculateSignalScore } from './signalRanker.js';
 import { getKlinesWithMeta, toBinanceSymbolId } from '../services/binanceWebSocket.js';
-import { globalCacheManager } from './cacheManager.js';
+import { getBtcDataService } from '../services/btcDataService.js';
 import { type SignalFeatures } from '../services/signalRadarService.js';
 
 const logger = createLogger('symbol-engine');
 
 const TICK_INTERVAL_MS = 15_000; // 15 seconds, aligned with agent ticks
 const MIN_CANDLES = 61;           // Minimum candles for indicators (match agent threshold)
-const MIN_BTC_15M_CANDLES = 201;  // Need 200 for SMA200 + 1 current (match agent + checkMomentumSignal)
-const MIN_BTC_1H_CANDLES = 201;   // Need 200 for SMA200 regime + 1 current (match backtest)
 
 export interface SymbolSignalResult {
   signal: SignalResult;
@@ -52,7 +50,7 @@ export interface SymbolSignalResult {
   /** BTC 15m closed candles used */
   btcCandles: Candle[];
   /** BTC 1h closed candles used */
-  btcCandles1h: Candle[];
+  btcCandlesRegime: Candle[];
   /** Current price from latest candle (including in-progress) */
   currentPrice: number;
 }
@@ -134,27 +132,18 @@ export class SymbolEngine extends EventEmitter {
     // Convert to Candle format (getKlinesWithMeta already returns the right shape)
     this.candles = rawCandles as Candle[];
 
-    // 2. Get BTC 15m candles — read fresh from WS cache, fallback to globalCacheManager
-    // V5.120 FIX: Previously read only from globalCacheManager which is updated by agent ticks.
-    // When symbol candle isFinal arrives before any agent refreshes the global cache,
-    // symbolEngine could use stale BTC data → wrong regime at SMA200 boundary.
-    // Now reads directly from WS kline cache (same source, no intermediary staleness).
-    const btcWsRaw = getKlinesWithMeta('BTCUSDT', '15m');
-    let allBtcCandles15m: Candle[];
-    if (btcWsRaw && btcWsRaw.length >= MIN_BTC_15M_CANDLES) {
-      allBtcCandles15m = btcWsRaw as Candle[];
-    } else {
-      const btcCache = globalCacheManager.getBtc15mCache();
-      if (!btcCache || !btcCache.candles || btcCache.candles.length < MIN_BTC_15M_CANDLES) {
-        if (this.tickCount % 10 === 1) {
-          logger.debug(`[SymbolEngine] [${this.shortSymbol}] Waiting for BTC 15m data (WS=${btcWsRaw?.length || 0} cache=${btcCache?.candles?.length || 0}/${MIN_BTC_15M_CANDLES})`);
-        }
-        return;
+    // 2. Get BTC data from BtcDataService (single source of truth)
+    const btcData = getBtcDataService();
+    if (!btcData.isReady()) {
+      if (this.tickCount % 10 === 1) {
+        logger.debug(`[SymbolEngine] [${this.shortSymbol}] Waiting for BtcDataService to be ready`);
       }
-      allBtcCandles15m = btcCache.candles;
+      return;
     }
+    const btcCandles = btcData.getBtcCandles15m();
+    const btcCandlesRegime = btcData.getBtcCandlesForRegime();
 
-    // 3. Filter to closed candles only (matching agent's checkEntry logic exactly)
+    // 3. Filter symbol candles to closed only (matching agent's checkEntry logic exactly)
     const lastCandle = this.candles[this.candles.length - 1];
     let lastClosedIdx = this.candles.length - 1;
     if (lastCandle.isFinal === false) {
@@ -163,34 +152,6 @@ export class SymbolEngine extends EventEmitter {
     if (lastClosedIdx < 0) return;
     const closedCandles = this.candles.slice(0, lastClosedIdx + 1);
     const lastClosedCandleTs = closedCandles[closedCandles.length - 1].timestamp;
-
-    // Filter BTC 15m to closed candles too (matching agent logic)
-    let btcLastClosedIdx = allBtcCandles15m.length - 1;
-    if (allBtcCandles15m.length > 0 && allBtcCandles15m[btcLastClosedIdx].isFinal === false) {
-      btcLastClosedIdx = allBtcCandles15m.length - 2;
-    }
-    const btcCandles = btcLastClosedIdx >= 0
-      ? allBtcCandles15m.slice(0, btcLastClosedIdx + 1)
-      : allBtcCandles15m;
-
-    // 4. Get BTC candles for regime/MTF
-    // V5.105: When regime timeframe is 15m (V5.102), use BTC 15m candles (matching backtest + agent fallback)
-    // Previously always used real 1h candles, causing parity mismatch (different SMA200 → different regime)
-    let btcCandles1h: Candle[];
-    if (MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME === '15m') {
-      btcCandles1h = btcCandles; // Use same 15m candles for regime (matches backtest behavior)
-    } else {
-      const btc1hCache = globalCacheManager.getBtc1hCache();
-      const allBtcCandles1h = btc1hCache?.candles || [];
-      btcCandles1h = allBtcCandles1h.filter(c => c.isFinal !== false);
-
-      if (btcCandles1h.length < MIN_BTC_1H_CANDLES) {
-        if (this.tickCount % 10 === 1) {
-          logger.debug(`[SymbolEngine] [${this.shortSymbol}] Waiting for BTC 1h data (${btcCandles1h.length}/${MIN_BTC_1H_CANDLES})`);
-        }
-        return;
-      }
-    }
 
     const isNewCandle = lastClosedCandleTs !== this.lastProcessedCandleTs;
 
@@ -212,16 +173,16 @@ export class SymbolEngine extends EventEmitter {
       // 6. Compute signal using same function as agents (with closed candles only)
       const signal = checkMomentumSignal(this.symbol, closedCandles, btcCandles, {
         nowMs: now,
-        btcCandles1h,
+        btcCandlesRegime,
       });
 
-      // 7. Compute market conditions
-      this.marketConditions = getMarketConditions(btcCandles, btcCandles1h);
+      // 7. Compute market conditions (from BtcDataService, already computed)
+      this.marketConditions = btcData.getMarketConditions() ?? getMarketConditions(btcCandles, btcCandlesRegime);
 
       // 8. Compute regime
       let regime: MarketRegime | null = null;
       try {
-        regime = detectMarketRegime(btcCandles, btcCandles1h);
+        regime = detectMarketRegime(btcCandles, btcCandlesRegime);
       } catch {
         // detectMarketRegime may throw if insufficient data
       }
@@ -278,7 +239,7 @@ export class SymbolEngine extends EventEmitter {
         candleCloseTs: lastClosedCandleTs,
         closedCandles,
         btcCandles,
-        btcCandles1h,
+        btcCandlesRegime,
         currentPrice,
       };
 

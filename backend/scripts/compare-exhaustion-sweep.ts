@@ -34,7 +34,7 @@ async function loadData() {
   if (!btcLocal || !btc1hLocal) throw new Error('No local BTC data');
 
   const btcCandles = sliceCandlesByTime(btcLocal.candles, since, endMs);
-  const btcCandles1h = sliceCandlesByTime(btc1hLocal.candles, since, endMs);
+  const btcCandlesRegime = sliceCandlesByTime(btc1hLocal.candles, since, endMs);
 
   const allData: Record<string, any[]> = {};
   for (const symbol of SYMBOLS) {
@@ -45,7 +45,7 @@ async function loadData() {
 
   const configTfStr = MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME;
   const configTfMin = parseInt(configTfStr) * (configTfStr.includes('h') ? 60 : 1);
-  return { btcCandles, btcCandles1h, allData, CANDLE_REGIME_INTERVAL_MS: configTfMin * 60 * 1000 };
+  return { btcCandles, btcCandlesRegime, allData, CANDLE_REGIME_INTERVAL_MS: configTfMin * 60 * 1000 };
 }
 
 async function main() {

@@ -30,7 +30,7 @@ import {
   detectVolumeAccumulation,
 } from '../indicators/technicalIndicators.js';
 
-export function getMarketConditions(btcCandles: Candle[], btcCandles1h?: Candle[]): MarketConditions {
+export function getMarketConditions(btcCandles: Candle[], btcCandlesRegime?: Candle[]): MarketConditions {
   const now = new Date();
   const dayOfWeek = now.getUTCDay();
   const isTradingDay = true;
@@ -55,8 +55,8 @@ export function getMarketConditions(btcCandles: Candle[], btcCandles1h?: Candle[
   // V5.82: Use 1h candles for SMA200 regime (more stable)
   let btcSma200: number;
   let btcNow: number;
-  if (btcCandles1h && btcCandles1h.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
-    const btcCloses1h = btcCandles1h.map(c => c.close);
+  if (btcCandlesRegime && btcCandlesRegime.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
+    const btcCloses1h = btcCandlesRegime.map(c => c.close);
     btcSma200 = calcSMA(btcCloses1h, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
     btcNow = btcCloses1h[btcCloses1h.length - 1];
   } else {
@@ -71,8 +71,8 @@ export function getMarketConditions(btcCandles: Candle[], btcCandles1h?: Candle[
   let btcAboveSma200: boolean;
   if (mcTolerance > 0 && Math.abs(btcNow - btcSma200) <= mcTolerance) {
     // In dead zone: use SMA200 slope
-    const slopeCloses = btcCandles1h && btcCandles1h.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1
-      ? btcCandles1h.map(c => c.close)
+    const slopeCloses = btcCandlesRegime && btcCandlesRegime.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1
+      ? btcCandlesRegime.map(c => c.close)
       : btcCloses;
     if (slopeCloses.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1) {
       const sma200Prev = calcSMA(slopeCloses.slice(-(MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1), -1), MomentumConfig.ENTRY.BTC_SMA_PERIOD);
@@ -364,7 +364,7 @@ export function checkMomentumSignal(
   btcCandles: Candle[],
   opts?: {
     nowMs?: number;
-    btcCandles1h?: Candle[];  // V5.36: For MTF filter + V5.82: For regime SMA200
+    btcCandlesRegime?: Candle[];  // V5.36: For MTF filter + V5.82: For regime SMA200
   }
 ): SignalResult {
   // Need more data for SMA200
@@ -387,9 +387,9 @@ export function checkMomentumSignal(
   // Falls back to 15m if 1h candles not available.
   let btcSma200: number;
   let btcNow: number;
-  const btcCandles1h = opts?.btcCandles1h;
-  if (btcCandles1h && btcCandles1h.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
-    const btcCloses1h = btcCandles1h.map(c => c.close);
+  const btcCandlesRegime = opts?.btcCandlesRegime;
+  if (btcCandlesRegime && btcCandlesRegime.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
+    const btcCloses1h = btcCandlesRegime.map(c => c.close);
     btcSma200 = calcSMA(btcCloses1h, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
     btcNow = btcCloses1h[btcCloses1h.length - 1];
   } else {
@@ -404,8 +404,8 @@ export function checkMomentumSignal(
   let btcInBearRegime: boolean;
   if (regimeTolerance > 0 && Math.abs(btcNow - btcSma200) <= regimeTolerance) {
     // In dead zone: use SMA200 slope to determine regime
-    const btcClosesForSlope = btcCandles1h && btcCandles1h.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1
-      ? btcCandles1h.map(c => c.close)
+    const btcClosesForSlope = btcCandlesRegime && btcCandlesRegime.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1
+      ? btcCandlesRegime.map(c => c.close)
       : btcCloses;
     if (btcClosesForSlope.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1) {
       const sma200Prev = calcSMA(btcClosesForSlope.slice(-(MomentumConfig.ENTRY.BTC_SMA_PERIOD + 1), -1), MomentumConfig.ENTRY.BTC_SMA_PERIOD);
@@ -500,7 +500,7 @@ export function checkMomentumSignal(
   // CASH MODE: Skip entry in choppy / low-vol markets
   // ═══════════════════════════════════════════════════════════════════════════
   if (MomentumConfig.CASH_MODE.ENABLED) {
-    const regime = detectMarketRegime(btcCandles, btcCandles1h || []);
+    const regime = detectMarketRegime(btcCandles, btcCandlesRegime || []);
     if (regime === 'CHOPPY' || regime === 'LOW_VOL') {
       return { valid: false, reason: `cash_mode:${regime.toLowerCase()}`, features };
     }
@@ -674,7 +674,7 @@ export function checkMomentumSignal(
 
     // V5.36 Pattern 1: Multi-Timeframe Confluence Filter
     // Requires BTC 1h trend to align with LONG direction (filters divergent moves)
-    const mtfAligned = checkMTFAlignment(opts?.btcCandles1h || [], 'LONG');
+    const mtfAligned = checkMTFAlignment(opts?.btcCandlesRegime || [], 'LONG');
     if (!mtfAligned) {
       return {
         valid: false,
@@ -876,7 +876,7 @@ export function checkMomentumSignal(
 
     // V5.36 Pattern 1: Multi-Timeframe Confluence Filter
     // Requires BTC 1h trend to align with SHORT direction (filters divergent moves)
-    const mtfAlignedShort = checkMTFAlignment(opts?.btcCandles1h || [], 'SHORT');
+    const mtfAlignedShort = checkMTFAlignment(opts?.btcCandlesRegime || [], 'SHORT');
     if (!mtfAlignedShort) {
       return {
         valid: false,

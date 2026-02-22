@@ -305,12 +305,12 @@ export function calcADX(candles: Candle[], period = 14): number {
  */
 export function detectMarketRegime(
   btcCandles: Candle[],
-  btcCandles1h: Candle[],
+  btcCandlesRegime: Candle[],
 ): MarketRegime {
   const cfg = MomentumConfig.CASH_MODE;
 
   // ADX on 1h candles for trend strength
-  const adx = btcCandles1h.length > 30 ? calcADX(btcCandles1h) : calcADX(btcCandles);
+  const adx = btcCandlesRegime.length > 30 ? calcADX(btcCandlesRegime) : calcADX(btcCandles);
 
   // ATR declining check (volatility drying up)
   const atrCurrent = calcATR(btcCandles, 14);
@@ -324,7 +324,7 @@ export function detectMarketRegime(
   }
 
   // SMA200 slope (flat = ranging)
-  const closes1h = btcCandles1h.filter(c => c.isFinal !== false).map(c => c.close);
+  const closes1h = btcCandlesRegime.filter(c => c.isFinal !== false).map(c => c.close);
   let sma200SlopeFlat = false;
   // Try 1h closes first; fall back to 15m if insufficient data for SMA200 slope
   let slopeCloses: number[] | null;
@@ -556,12 +556,12 @@ export function detectVolumeAccumulation(
  * V5.36 PATTERN 1: Multi-Timeframe Confluence Filter
  * Checks if BTC higher timeframe (1h) trend aligns with signal direction
  *
- * @param btcCandles1h - BTC 1h candles (at least 11 candles needed)
+ * @param btcCandlesRegime - BTC 1h candles (at least 11 candles needed)
  * @param side - Trade direction (LONG or SHORT)
  * @returns true if MTF aligned, false if divergent
  */
 export function checkMTFAlignment(
-  btcCandles1h: any[],
+  btcCandlesRegime: any[],
   side: 'LONG' | 'SHORT'
 ): boolean {
   const config = MomentumConfig.MULTI_TIMEFRAME_FILTER;
@@ -570,13 +570,13 @@ export function checkMTFAlignment(
     return true; // Pass-through if disabled
   }
 
-  if (!btcCandles1h || btcCandles1h.length < config.LOOKBACK_CANDLES + 1) {
+  if (!btcCandlesRegime || btcCandlesRegime.length < config.LOOKBACK_CANDLES + 1) {
     // Not enough data - fail safe: allow trade (log warning in production)
     return true;
   }
 
   // Calculate BTC 1h ROC
-  const closes = btcCandles1h.map((c: any) => c.close);
+  const closes = btcCandlesRegime.map((c: any) => c.close);
   const btcRoc1h = calcROC(closes, config.LOOKBACK_CANDLES);
 
   // Check alignment

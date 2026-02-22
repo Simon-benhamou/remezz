@@ -308,7 +308,7 @@ describe('SymbolEngine', () => {
   // ═══════════════════════════════════════════════════════════════════════════════
 
   describe('V5.105 regime timeframe branching', () => {
-    it('15m regime: btcCandles1h is same reference as btcCandles', async () => {
+    it('15m regime: btcCandlesRegime is same reference as btcCandles', async () => {
       MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME = '15m';
       setupStandardData();
       mockBtc1hCandles = make1h(250); // should be ignored
@@ -319,8 +319,8 @@ describe('SymbolEngine', () => {
       await tick(e);
 
       expect(out).toHaveLength(1);
-      // Same reference — engine reuses btcCandles for btcCandles1h
-      expect(out[0].btcCandles1h).toBe(out[0].btcCandles);
+      // Same reference — engine reuses btcCandles for btcCandlesRegime
+      expect(out[0].btcCandlesRegime).toBe(out[0].btcCandles);
     });
 
     it('15m regime: works without 1h cache', async () => {
@@ -336,7 +336,7 @@ describe('SymbolEngine', () => {
       expect(out).toHaveLength(1);
     });
 
-    it('1h regime: btcCandles1h uses real 1h data', async () => {
+    it('1h regime: btcCandlesRegime uses real 1h data', async () => {
       MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME = '1h';
       setupStandardData();
       mockBtc1hCandles = make1h(250);
@@ -347,9 +347,9 @@ describe('SymbolEngine', () => {
       await tick(e);
 
       expect(out).toHaveLength(1);
-      expect(out[0].btcCandles1h).not.toBe(out[0].btcCandles);
+      expect(out[0].btcCandlesRegime).not.toBe(out[0].btcCandles);
       // Verify it's 1h interval data
-      const c1h = out[0].btcCandles1h;
+      const c1h = out[0].btcCandlesRegime;
       if (c1h.length >= 2) {
         expect(c1h[1].timestamp - c1h[0].timestamp).toBe(CANDLE_1H_MS);
       }
@@ -378,11 +378,11 @@ describe('SymbolEngine', () => {
       await tick(e);
 
       expect(out).toHaveLength(1);
-      expect(out[0].btcCandles1h).toHaveLength(250);
-      expect(out[0].btcCandles1h.every((c: any) => c.isFinal !== false)).toBe(true);
+      expect(out[0].btcCandlesRegime).toHaveLength(250);
+      expect(out[0].btcCandlesRegime.every((c: any) => c.isFinal !== false)).toBe(true);
     });
 
-    it('15m regime: checkMomentumSignal receives btcCandles as btcCandles1h', async () => {
+    it('15m regime: checkMomentumSignal receives btcCandles as btcCandlesRegime', async () => {
       MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME = '15m';
       setupStandardData();
 
@@ -391,11 +391,11 @@ describe('SymbolEngine', () => {
 
       expect(checkMomentumSignalCalls).toHaveLength(1);
       const [_symbol, _closedCandles, btcCandles, opts] = checkMomentumSignalCalls[0];
-      // btcCandles1h in opts should be same reference as btcCandles arg
-      expect(opts.btcCandles1h).toBe(btcCandles);
+      // btcCandlesRegime in opts should be same reference as btcCandles arg
+      expect(opts.btcCandlesRegime).toBe(btcCandles);
     });
 
-    it('1h regime: checkMomentumSignal receives real 1h candles as btcCandles1h', async () => {
+    it('1h regime: checkMomentumSignal receives real 1h candles as btcCandlesRegime', async () => {
       MomentumConfig.ENTRY.BTC_REGIME_TIMEFRAME = '1h';
       setupStandardData();
       mockBtc1hCandles = make1h(250);
@@ -405,11 +405,11 @@ describe('SymbolEngine', () => {
 
       expect(checkMomentumSignalCalls).toHaveLength(1);
       const [_symbol, _closedCandles, btcCandles, opts] = checkMomentumSignalCalls[0];
-      // btcCandles1h should NOT be same reference as btcCandles (15m)
-      expect(opts.btcCandles1h).not.toBe(btcCandles);
+      // btcCandlesRegime should NOT be same reference as btcCandles (15m)
+      expect(opts.btcCandlesRegime).not.toBe(btcCandles);
       // Should have 1h interval
-      if (opts.btcCandles1h.length >= 2) {
-        expect(opts.btcCandles1h[1].timestamp - opts.btcCandles1h[0].timestamp).toBe(CANDLE_1H_MS);
+      if (opts.btcCandlesRegime.length >= 2) {
+        expect(opts.btcCandlesRegime[1].timestamp - opts.btcCandlesRegime[0].timestamp).toBe(CANDLE_1H_MS);
       }
     });
   });
@@ -482,7 +482,7 @@ describe('SymbolEngine', () => {
       for (const key of [
         'signal', 'score', 'features', 'marketConditions', 'regime',
         'timestamp', 'candleCloseTs', 'closedCandles', 'btcCandles',
-        'btcCandles1h', 'currentPrice',
+        'btcCandlesRegime', 'currentPrice',
       ]) {
         expect(r).toHaveProperty(key);
       }
@@ -554,7 +554,7 @@ describe('SymbolEngine', () => {
   // ═══════════════════════════════════════════════════════════════════════════════
 
   describe('signal computation args', () => {
-    it('passes symbol, closed candles, BTC 15m candles, and opts with btcCandles1h', async () => {
+    it('passes symbol, closed candles, BTC 15m candles, and opts with btcCandlesRegime', async () => {
       setupStandardData();
       const e = new SymbolEngine('DOGE/USDT:USDT');
       await tick(e);
@@ -565,7 +565,7 @@ describe('SymbolEngine', () => {
       expect(closedCandles.length).toBe(250);
       expect(btcCandles.length).toBe(250);
       expect(opts).toHaveProperty('nowMs');
-      expect(opts).toHaveProperty('btcCandles1h');
+      expect(opts).toHaveProperty('btcCandlesRegime');
     });
 
     it('passes only closed candles (not in-progress)', async () => {

@@ -343,7 +343,7 @@ interface SignalResult {
 function checkSignal(
   candles: Candle[],
   btcCandles: Candle[],
-  btcCandles1h: Candle[],
+  btcCandlesRegime: Candle[],
 ): SignalResult {
   if (candles.length < 50 || btcCandles.length < 200) {
     return { valid: false, reason: 'insufficient' };
@@ -356,8 +356,8 @@ function checkSignal(
 
   // Regime detection (1h preferred)
   let isBullRegime: boolean;
-  if (btcCandles1h.length >= 200) {
-    const btcCloses1h = btcCandles1h.map(c => c.close);
+  if (btcCandlesRegime.length >= 200) {
+    const btcCloses1h = btcCandlesRegime.map(c => c.close);
     const sma200 = calcSMA(btcCloses1h, 200);
     isBullRegime = btcCloses1h[btcCloses1h.length - 1] > sma200;
   } else {
@@ -373,8 +373,8 @@ function checkSignal(
   const isBearish = current.close < current.open;
 
   // MTF filter
-  if (btcCandles1h.length >= 10) {
-    const btcCloses1h = btcCandles1h.map(c => c.close);
+  if (btcCandlesRegime.length >= 10) {
+    const btcCloses1h = btcCandlesRegime.map(c => c.close);
     const btcRoc1h = calcROC(btcCloses1h, 10);
     if (isBullRegime && btcRoc1h <= 0) return { valid: false, reason: 'mtf_misaligned' };
     if (!isBullRegime && btcRoc1h >= 0) return { valid: false, reason: 'mtf_misaligned' };
@@ -642,9 +642,9 @@ async function main() {
   // Load BTC data
   console.log('\nLoading data...');
   const btcCandles15m = await loadCandles('BTC/USDT', '15m');
-  const btcCandles1h = await loadCandles('BTC/USDT', '1h');
+  const btcCandlesRegime = await loadCandles('BTC/USDT', '1h');
   console.log(`BTC 15m: ${btcCandles15m.length} candles`);
-  console.log(`BTC 1h: ${btcCandles1h.length} candles`);
+  console.log(`BTC 1h: ${btcCandlesRegime.length} candles`);
 
   if (!btcCandles15m.length) {
     console.error('No BTC data found! Make sure you run from backend/ directory.');
@@ -695,7 +695,7 @@ async function main() {
       if (btcWindow15m.length < 200) continue;
 
       const CANDLE_1H_MS = 60 * 60 * 1000;
-      const btcWindow1h = btcCandles1h.filter(c => c.timestamp + CANDLE_1H_MS <= current.timestamp);
+      const btcWindow1h = btcCandlesRegime.filter(c => c.timestamp + CANDLE_1H_MS <= current.timestamp);
 
       // Toxic hours filter
       const signalHourUtc = new Date(current.timestamp + 15 * 60 * 1000).getUTCHours();

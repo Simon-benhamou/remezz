@@ -59,7 +59,6 @@ export interface RealtimeExitContext {
 
   // Data fetchers
   fetchCandles: () => Promise<Candle[]>;
-  fetchBtcCandles: () => Promise<Candle[]>;
 
   // Exchange order manager for proactive limits
   orderManager: ExchangeOrderManager;
@@ -353,7 +352,6 @@ export class RealtimeExitHandler {
       // ──────────────────────────────────────────────────────────────────
       try {
         const symbolCandles = await this.ctx.fetchCandles();
-        const btcCandles = await this.ctx.fetchBtcCandles();
         const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
 
         // ⚠️  STRATEGIC EXITS ONLY ON 15M CLOSE
@@ -519,8 +517,6 @@ export class RealtimeExitHandler {
         const updatedPosition = updatePositionWaterMarks(position, closePx, priceHigh, priceLow);
         this.ctx.setPosition(updatedPosition);
 
-        // V5.13: Fetch BTC candles for regime detection in realtime
-        const btcCandles = await this.ctx.fetchBtcCandles();
         const symbolCandles = await this.ctx.fetchCandles();
         const candles = symbolCandles.length > 1 ? symbolCandles.slice(0, -1) : symbolCandles;
 

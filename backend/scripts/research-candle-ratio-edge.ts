@@ -177,8 +177,8 @@ async function main() {
 
   // Load BTC 1h for MTF filter
   const btcData1h = await loadLocalJsonCandles('BTC/USDT:USDT', '1h');
-  const btcCandles1h = btcData1h?.candles ?? [];
-  console.log(`BTC 1h: ${btcCandles1h.length} candles`);
+  const btcCandlesRegime = btcData1h?.candles ?? [];
+  console.log(`BTC 1h: ${btcCandlesRegime.length} candles`);
 
   // Load all symbol candles
   const allCandles: Record<string, Candle[]> = {};
@@ -240,9 +240,9 @@ async function main() {
 
     // BTC 1h ROC for context
     let btcRoc1h = 0;
-    const btc1hIdx = btcCandles1h.findIndex(c => c.timestamp > btcCandle.timestamp) - 1;
+    const btc1hIdx = btcCandlesRegime.findIndex(c => c.timestamp > btcCandle.timestamp) - 1;
     if (btc1hIdx >= 4) {
-      const btc1hCloses = btcCandles1h.slice(btc1hIdx - 4, btc1hIdx + 1).map(c => c.close);
+      const btc1hCloses = btcCandlesRegime.slice(btc1hIdx - 4, btc1hIdx + 1).map(c => c.close);
       btcRoc1h = ((btc1hCloses[btc1hCloses.length - 1] - btc1hCloses[0]) / btc1hCloses[0]) * 100;
     }
 

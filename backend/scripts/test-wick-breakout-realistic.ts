@@ -326,7 +326,7 @@ async function runTest() {
       // Check for valid signal using REAL signal function
       const signal = checkMomentumSignal(symbol, windowCandles, btcWindow, {
         nowMs: currentTs,
-        btcCandles1h: btc1hWindow,
+        btcCandlesRegime: btc1hWindow,
       });
 
       if (!signal.valid || !signal.side) continue;
