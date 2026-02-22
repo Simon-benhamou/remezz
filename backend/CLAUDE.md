@@ -62,14 +62,15 @@ npm run migrate             # Run migrations
 - `signalRanker.ts` - ML-powered signal scoring with XGBoost integration
 - `positionPersistence.ts` - Extracted DB operations (load/save/update positions, session KPIs)
 - `exchangeOrderManager.ts` - Extracted exchange order placement (SL, trailing stop, proactive limits)
-- `symbolEngine.ts` - Per-symbol signal computation (shared across users). Uses same `checkMomentumSignal()` as agents. **Must stay aligned with regime timeframe config** (V5.105 fix: was using 1h candles when config was 15m)
-- `cacheManager.ts` - Mutex-protected BTC 15m/1h candle caches and leverage cache (`globalCacheManager` singleton)
+- `symbolEngine.ts` - Per-symbol signal computation (shared across users). Uses same `checkMomentumSignal()` as agents. Gets BTC data from `BtcDataService`
+- `cacheManager.ts` - Mutex-protected leverage cache (`globalCacheManager` singleton). BTC candle caches still present as fallback but primary source is `BtcDataService`
 
 **Config & Types** (`src/config/`, `src/types/`)
 - `config/constants.ts` - Centralized magic numbers: `CACHE_TTLS`, `SYNC_INTERVALS`, `ORDER_QUEUE`, `WS_THROTTLE`, `USER_LIMITS`, `IP_WEIGHT`
 - `types/exchange.ts` - Typed CCXT interfaces: `CcxtOrder`, `CcxtPosition`, `CcxtTrade`, `CcxtBalance`, `CcxtMarket`, `Exchange`
 
 **Services** (`src/services/`)
+- `btcDataService.ts` - **Single source of truth** for BTC candles and regime. `filterClosed()` + `computeRegime()` are pure functions replacing 6 inline variants. `LiveBtcDataService` reads WS cache directly (5s polling), singleton via `getBtcDataService()`. `BacktestBtcDataProvider` available for cursor-based access. Consumers: symbolEngine, orchestrator, positionOpener, server.ts. `btcCandlesRegime` is the canonical param name (renamed from misleading `btcCandles1h`)
 - `orderQueue.ts` - Rate-limited order execution (3 concurrent, 350ms delays), per-user queues for multi-user isolation
 - `binanceWebSocket.ts` - Real-time market data with REST fallback. Per-user data streams (ORDER_TRADE_UPDATE, balance, positions). Order cache with 2000-entry cap
 - `ipWeightTracker.ts` - Global singleton tracking all Binance REST API weight per minute (2400w/min limit). Exposes stats to `/api/health`
@@ -173,7 +174,8 @@ This is a standalone 5-minute BTC up/down prediction system that bets on Polymar
 - **Order Priority**: Stop loss > exits > entries (see `ExitReason` union in `orderPriority.ts`)
 - **WebSocket First**: REST fallback only when WS unavailable
 - **Fail Fast**: Markets must be preloaded at startup (no ad-hoc loadMarkets)
-- **Mutex Caches**: BTC 15m/1h candle caches and leverage cache are mutex-protected via `globalCacheManager` to prevent concurrent fetch races
+- **BTC Data Service**: `getBtcDataService()` is the single source of truth for BTC candles, regime, and market conditions. Consumers: symbolEngine, orchestrator (checkEntry/checkExit/getMarketConditions), positionOpener, server.ts. Pure functions `filterClosed()` and `computeRegime()` eliminate 6 formerly-duplicated implementations. Param name: `btcCandlesRegime` (not `btcCandles1h`)
+- **Mutex Caches**: Leverage cache is mutex-protected via `globalCacheManager`. BTC candle caches in cacheManager still exist as fallback but primary source is `BtcDataService`
 - **Error Handling**: Use `errMsg(error: unknown): string` helper for safe error extraction in `catch (error: unknown)` blocks (no `catch (error: any)`)
 - **MomentumConfig Mutability**: `MomentumConfig` is a mutable `const` object (not `as const`) so tests can toggle fields like `CASH_MODE.ENABLED`
 - **Cash Mode**: Market regime detection (ADX + ATR + SMA200 slope) skips entries in CHOPPY/LOW_VOL regimes. Integrated at top of `checkMomentumSignal()`
@@ -445,6 +447,18 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Fix**: Use `btcIdx` (exclusive end) instead of `btcIdx+1` in `backtestService.ts`, matching live's `isFinal` filtering exactly.
   - **Impact**: 743 → 741 trades, 64.7% → 64.6% WR, $59,808 → $56,169 PnL (minimal degradation, better parity).
   - **Verification script**: `scripts/bt-verify-fix.ts` — compares before/after backtest results.
+
+- V5.121: Dead code cleanup — signal chain audit (~425 lines removed):
+  - **BREAKOUT_CONFIRMATION removed**: Config block (momentumConfig.ts), LONG/SHORT code blocks + 3 rejection paths each (momentumSignal.ts), snapshot field (backtestService.ts). Was ENABLED:false since V5.34. `distanceFromUpper`/`distanceFromLower` recalculated inline for confidence formula only.
+  - **ANTICIPATORY_ENTRY removed**: Config block (momentumConfig.ts), 70-line code block in BULL path (momentumSignal.ts), `detectBBSqueeze()` + `BBSqueezeResult` + `detectVolumeAccumulation()` from technicalIndicators.ts. Was ENABLED:false since V5.32 (27x worse than classic).
+  - **SR_FILTER removed**: Config block (momentumConfig.ts), LONG/SHORT filter blocks (momentumSignal.ts), `SRLevel` interface + `findSRLevels()` + `calcSRProximityScore()` from technicalIndicators.ts. Was ENABLED:false since V5.98 (destroys ROI).
+  - **Dead indicators removed**: `rsi` (calcRSI result) and `btcRoc4h` computation+features in checkMomentumSignal (filter removed in V5.10, calc stayed). `btcMa50`+`btcAboveMa50` dead computation in getMarketConditions (overwritten by btcAboveSma200). Note: `btcMa50`/`btcAboveMa50` in checkMomentumSignal kept (used in features for dashboard).
+  - **checkSignal_DEPRECATED removed**: 82-line deprecated function + local helpers (detectBBSqueeze, detectVolumeAccumulation, calcRSI, calcStochRSI) in backtestService.ts. Zero callers.
+  - **Bug fix R1: SHORT alternation5**: Replaced inline close-vs-close comparison with `calcAlternation5(candles)` (candle direction: close>open). LONG already used `calcAlternation5()`. The inline version measured price direction (closes[i] > closes[i-1]) which is different from candle direction (close > open). Now both paths are identical.
+  - **Types fixed**: `checkMTFAlignment(btcCandlesRegime: any[])` → `Candle[]`, `checkBTCVolatility(btcCandles: any[])` → `Candle[]`.
+  - **Imports cleaned**: Removed unused imports from momentumSignal.ts (findSRLevels, calcSRProximityScore, detectBBSqueeze, detectVolumeAccumulation, calcBB, calcATR, calcADX, shouldSkipEntryForRegime). Barrel (momentumSimple.ts) cleaned: removed SRLevel, findSRLevels, calcSRProximityScore re-exports. Test mock (symbolEngine.test.ts) removed SR_FILTER.
+  - **Zero behavioral change** on active filters. All 12 LONG + 13 SHORT filters intact: regime, cash mode, candle direction, consec, breakout, ROC, volume, BTC volatility, MTF, green ratio, alternation5, BB touches, StochRSI, ROC acceleration.
+  - **Files**: momentumConfig.ts (-55 lines), momentumSignal.ts (-120 lines), technicalIndicators.ts (-160 lines), backtestService.ts (-85 lines), momentumSimple.ts (-6 lines), symbolEngine.test.ts (-1 line).
 
 ## Multi-User Scaling
 

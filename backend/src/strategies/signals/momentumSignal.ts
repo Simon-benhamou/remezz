@@ -11,23 +11,15 @@ import {
   calcROC,
   calcVolRatio,
   calcBollingerBands,
-  calcBB,
   countConsecUp,
   countConsecDown,
-  calcADX,
   detectMarketRegime,
-  shouldSkipEntryForRegime,
   checkMTFAlignment,
   checkBTCVolatility,
-  calcATR,
-  findSRLevels,
-  calcSRProximityScore,
   calcGreenRatio,
   calcAlternation5,
   calcBBTouchCount,
   calcRocAcceleration,
-  detectBBSqueeze,
-  detectVolumeAccumulation,
 } from '../indicators/technicalIndicators.js';
 
 export function getMarketConditions(btcCandles: Candle[], btcCandlesRegime?: Candle[]): MarketConditions {
@@ -50,7 +42,6 @@ export function getMarketConditions(btcCandles: Candle[], btcCandlesRegime?: Can
 
   const btcCloses = btcCandles.map(c => c.close);
   const btcNow15m = btcCloses[btcCloses.length - 1];
-  const btcMa50 = calcMA(btcCloses, 50);
 
   // V5.82: Use 1h candles for SMA200 regime (more stable)
   let btcSma200: number;
@@ -63,8 +54,6 @@ export function getMarketConditions(btcCandles: Candle[], btcCandlesRegime?: Can
     btcSma200 = calcMA(btcCloses, 200);
     btcNow = btcNow15m;
   }
-  const btcAboveMa50 = btcNow15m > btcMa50;
-
   // V5.113: Tolerance band around SMA200 to prevent whipsaw
   const mcTolerancePct = (MomentumConfig.ENTRY as any).BTC_REGIME_TOLERANCE_PCT ?? 0;
   const mcTolerance = btcSma200 > 0 ? btcSma200 * (mcTolerancePct / 100) : 0;
@@ -462,12 +451,6 @@ export function checkMomentumSignal(
     stochRsiConfig.STOCH_SMOOTH
   );
 
-  // V5.10: RSI + BTC ROC 4h filter for LONG
-  const rsi = calcRSI(closes, 14);
-  const btcRoc4h = btcCloses.length >= 17
-    ? ((btcCloses[btcCloses.length - 1] - btcCloses[btcCloses.length - 17]) / btcCloses[btcCloses.length - 17]) * 100
-    : 0;
-
   const features = {
     volRatio,
     isBullish,
@@ -485,8 +468,6 @@ export function checkMomentumSignal(
     bbUpper: bb.upper,
     bbLower: bb.lower,
     stochRsi: stochRsi ?? undefined,  // V5.8
-    rsi: rsi ?? undefined,  // V5.10
-    btcRoc4h,  // V5.10
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -512,96 +493,11 @@ export function checkMomentumSignal(
   // V5.32: Added ANTICIPATORY ENTRY - Enter BEFORE breakout on BB Squeeze
   // ═══════════════════════════════════════════════════════════════════════════
   if (btcInBullRegime) {
-    // V5.32: ANTICIPATORY ENTRY - Catch momentum BEFORE it happens
-    const anticipatoryConfig = MomentumConfig.ANTICIPATORY_ENTRY;
-
-    if (anticipatoryConfig.ENABLED) {
-      // Detect BB Squeeze (volatility compression)
-      const squeeze = detectBBSqueeze(
-        closes,
-        MomentumConfig.ENTRY.BB_PERIOD,
-        anticipatoryConfig.BB_SQUEEZE_LOOKBACK,
-        anticipatoryConfig.BB_SQUEEZE_THRESHOLD
-      );
-
-      // Detect Volume Accumulation
-      const volAccum = detectVolumeAccumulation(
-        volumes,
-        anticipatoryConfig.VOL_ACCUMULATION_CANDLES,
-        anticipatoryConfig.VOL_ACCUMULATION_MIN_TREND,
-        anticipatoryConfig.VOL_ACCUMULATION_MIN_RATIO
-      );
-
-      // Pre-breakout zone: close approaching upper band
-      const distanceToUpper = (bb.upper - close) / close;  // % distance to upper band
-      const inPreBreakoutZone = distanceToUpper <= anticipatoryConfig.PRE_BREAKOUT_ZONE_PCT / 100;
-
-      // Momentum building but not exhausted
-      const roc5Building = roc5 >= anticipatoryConfig.PRE_BREAKOUT_MIN_ROC5;
-      const roc10NotExhausted = roc10 < anticipatoryConfig.PRE_BREAKOUT_MAX_ROC10;
-
-      // Price above MA20 (uptrend) but not too far
-      const distanceFromMa20 = (close - ma20) / ma20;
-      const maDistanceOk = distanceFromMa20 <= anticipatoryConfig.MAX_DISTANCE_FROM_ENTRY / 100;
-
-      // Bullish candle check
-      const bullishOk = !anticipatoryConfig.REQUIRE_BULLISH_CANDLE || isBullish;
-      const priceAboveOk = !anticipatoryConfig.REQUIRE_PRICE_ABOVE_MA20 || priceAboveMa20;
-
-      // ✅ ANTICIPATORY ENTRY CONDITIONS
-      const anticipatoryValid =
-        squeeze.isSqueeze &&              // BB bands contracting
-        inPreBreakoutZone &&              // Price approaching upper band
-        roc5Building &&                   // Momentum building
-        roc10NotExhausted &&              // But not already exhausted
-        bullishOk &&                      // Bullish candle
-        priceAboveOk &&                   // Above MA20
-        maDistanceOk &&                   // Not too far from MA20
-        (volAccum.isAccumulating || volRatio >= 0.9);  // Volume building OR decent volume
-
-      if (anticipatoryValid) {
-        const confidence = Math.min(1,
-          (1 - squeeze.squeezeRatio) * 0.3 +  // Tighter squeeze = higher confidence
-          volAccum.trendScore * 0.3 +          // Better vol trend = higher confidence
-          (roc5 / 0.01) * 0.2 +                // Momentum building
-          0.2                                   // Base confidence
-        );
-
-        return {
-          valid: true,
-          side: 'long',
-          reason: `v5.32_anticipatory_entry|squeeze=${squeeze.squeezeRatio.toFixed(2)}|vol_trend=${volAccum.trendScore.toFixed(2)}|dist_to_upper=${(distanceToUpper*100).toFixed(2)}%`,
-          confidence,
-          features: {
-            ...features,
-            bbSqueeze: squeeze.squeezeRatio,
-            volAccumulating: volAccum.isAccumulating,
-            distanceToUpper: distanceToUpper * 100,
-          } as any
-        };
-      }
-    }
-
-    // FALLBACK: Classic LONG conditions V5.12 (breakout-based)
-    // V5.33: Added BREAKOUT CONFIRMATION filter for higher win rate
+    // LONG conditions V5.12 (breakout-based)
     const breakoutOk = close > bb.upper;
     const rocOk = roc10 >= MomentumConfig.ENTRY_LONG.ROC_MIN;
     const volOk = volRatio >= MomentumConfig.ENTRY_LONG.VOL_MULTIPLIER;
     const consecOk = consecUp <= MomentumConfig.ENTRY_LONG.MAX_CONSEC_UP;
-
-    // V5.33: BREAKOUT CONFIRMATION - Wait for clear breakout confirmation
-    // Analysis of 30,000+ LONG breakouts shows:
-    // - Distance > 0.5%: 53% WR (vs 36% baseline)
-    // - Distance > 0.75%: 60% WR
-    // - Distance > 1.0%: 66% WR
-    const confirmConfig = MomentumConfig.BREAKOUT_CONFIRMATION;
-    const distanceFromUpper = bb.upper > 0 ? (close - bb.upper) / bb.upper : 0;
-    const distanceOk = !confirmConfig.ENABLED ||
-      distanceFromUpper >= confirmConfig.LONG_MIN_DISTANCE_PCT / 100;
-    const roc1Ok = !confirmConfig.ENABLED ||
-      roc1 >= confirmConfig.LONG_MIN_ROC1_PCT;
-    const confirmVolOk = !confirmConfig.ENABLED ||
-      volRatio >= confirmConfig.LONG_MIN_VOL_RATIO;
 
     if (!isBullish) {
       return { valid: false, reason: 'bull_regime:bearish_candle', features };
@@ -617,28 +513,6 @@ export function checkMomentumSignal(
       return {
         valid: false,
         reason: `bull_regime:no_breakout(close=${close.toFixed(4)} < bb_upper=${bb.upper.toFixed(4)})`,
-        features
-      };
-    }
-    // V5.33: Check breakout confirmation AFTER basic breakout
-    if (!distanceOk) {
-      return {
-        valid: false,
-        reason: `v5.33_breakout_not_confirmed(dist=${(distanceFromUpper*100).toFixed(2)}% < ${confirmConfig.LONG_MIN_DISTANCE_PCT}%)`,
-        features
-      };
-    }
-    if (!roc1Ok) {
-      return {
-        valid: false,
-        reason: `v5.33_roc1_weak(${(roc1*100).toFixed(2)}% < ${(confirmConfig.LONG_MIN_ROC1_PCT*100).toFixed(1)}%)`,
-        features
-      };
-    }
-    if (!confirmVolOk) {
-      return {
-        valid: false,
-        reason: `v5.33_vol_low(${volRatio.toFixed(2)}x < ${confirmConfig.LONG_MIN_VOL_RATIO}x)`,
         features
       };
     }
@@ -724,25 +598,8 @@ export function checkMomentumSignal(
       }
     }
 
-    // V5.101: S/R proximity filter
-    if (MomentumConfig.SR_FILTER.ENABLED) {
-      const srCfg = MomentumConfig.SR_FILTER;
-      const levels = findSRLevels(candles, {
-        lookbackCandles: srCfg.LOOKBACK_CANDLES,
-        pivotLookback: srCfg.PIVOT_LOOKBACK,
-        minTouches: srCfg.MIN_TOUCHES,
-        clusterPct: srCfg.CLUSTER_PCT,
-      });
-      const srScore = calcSRProximityScore(close, 'long', levels, {
-        nearThresholdPct: srCfg.NEAR_THRESHOLD_PCT,
-        farThresholdPct: srCfg.FAR_THRESHOLD_PCT,
-      });
-      if (srScore < srCfg.FILTER_THRESHOLD) {
-        return { valid: false, reason: `v5.101_sr_filter(score=${srScore.toFixed(2)})`, features };
-      }
-    }
-
     // ✅ ALL LONG CONDITIONS MET
+    const distanceFromUpper = bb.upper > 0 ? (close - bb.upper) / bb.upper : 0;
     const confidence = Math.min(1, (volRatio / 3) * 0.3 + (roc10 / 0.04) * 0.3 + (distanceFromUpper * 50) * 0.2 + 0.2);
     return {
       valid: true,
@@ -768,20 +625,6 @@ export function checkMomentumSignal(
     const priceBelowBBLower = MomentumConfig.ENTRY_SHORT.PRICE_BELOW_BB_LOWER
       ? close < bb.lower
       : true;
-
-    // V5.33: BREAKOUT CONFIRMATION for SHORT
-    // Analysis of 29,000+ SHORT breakdowns shows:
-    // - Distance > 0.5%: 61% WR (vs 44% baseline)
-    // - Distance > 0.75%: 66% WR
-    // - Distance > 1.0%: 71% WR
-    const confirmConfig = MomentumConfig.BREAKOUT_CONFIRMATION;
-    const distanceFromLower = bb.lower > 0 ? (bb.lower - close) / bb.lower : 0;
-    const shortDistanceOk = !confirmConfig.ENABLED ||
-      distanceFromLower >= confirmConfig.SHORT_MIN_DISTANCE_PCT / 100;
-    const shortRoc1Ok = !confirmConfig.ENABLED ||
-      roc1 <= confirmConfig.SHORT_MAX_ROC1_PCT;
-    const shortConfirmVolOk = !confirmConfig.ENABLED ||
-      volRatio >= confirmConfig.SHORT_MIN_VOL_RATIO;
 
     if (!isBearish) {
       return { valid: false, reason: 'bear_regime:bullish_candle', features };
@@ -836,29 +679,6 @@ export function checkMomentumSignal(
       };
     }
 
-    // V5.33: Check breakout confirmation for SHORT
-    if (!shortDistanceOk) {
-      return {
-        valid: false,
-        reason: `v5.33_short_not_confirmed(dist=${(distanceFromLower*100).toFixed(2)}% < ${confirmConfig.SHORT_MIN_DISTANCE_PCT}%)`,
-        features
-      };
-    }
-    if (!shortRoc1Ok) {
-      return {
-        valid: false,
-        reason: `v5.33_short_roc1_weak(${(roc1*100).toFixed(2)}% > ${(confirmConfig.SHORT_MAX_ROC1_PCT*100).toFixed(1)}%)`,
-        features
-      };
-    }
-    if (!shortConfirmVolOk) {
-      return {
-        valid: false,
-        reason: `v5.33_short_vol_low(${volRatio.toFixed(2)}x < ${confirmConfig.SHORT_MIN_VOL_RATIO}x)`,
-        features
-      };
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
     // V5.36: PATTERN FILTERS (2-Year Validated: +22.4pp WR)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -901,44 +721,20 @@ export function checkMomentumSignal(
       }
 
       // V5.118: SHORT choppiness filter — skip if market alternates heavily
-      // Same logic as LONG alternation5: count direction changes in last 5 candles
-      if (closes.length >= 6) {
-        const shortMaxAlt5 = patternConfigShort.SHORT_MAX_ALT5 ?? 2;
-        let altCount = 0;
-        for (let i = closes.length - 5; i < closes.length; i++) {
-          if ((closes[i] > closes[i - 1]) !== (closes[i - 1] > closes[i - 2])) {
-            altCount++;
-          }
-        }
-        if (altCount > shortMaxAlt5) {
-          return {
-            valid: false,
-            reason: `v5.118_short_choppy(alt5=${altCount}>${shortMaxAlt5})`,
-            features
-          };
-        }
-      }
-    }
-
-    // V5.101: S/R proximity filter
-    if (MomentumConfig.SR_FILTER.ENABLED) {
-      const srCfg = MomentumConfig.SR_FILTER;
-      const levels = findSRLevels(candles, {
-        lookbackCandles: srCfg.LOOKBACK_CANDLES,
-        pivotLookback: srCfg.PIVOT_LOOKBACK,
-        minTouches: srCfg.MIN_TOUCHES,
-        clusterPct: srCfg.CLUSTER_PCT,
-      });
-      const srScore = calcSRProximityScore(close, 'short', levels, {
-        nearThresholdPct: srCfg.NEAR_THRESHOLD_PCT,
-        farThresholdPct: srCfg.FAR_THRESHOLD_PCT,
-      });
-      if (srScore < srCfg.FILTER_THRESHOLD) {
-        return { valid: false, reason: `v5.101_sr_filter(score=${srScore.toFixed(2)})`, features };
+      // Uses calcAlternation5() for parity with LONG path (candle direction, not close-vs-close)
+      const shortAlt5 = calcAlternation5(candles);
+      const shortMaxAlt5 = patternConfigShort.SHORT_MAX_ALT5 ?? 2;
+      if (shortAlt5 > shortMaxAlt5) {
+        return {
+          valid: false,
+          reason: `v5.118_short_choppy(alt5=${shortAlt5}>${shortMaxAlt5})`,
+          features
+        };
       }
     }
 
     // ✅ ALL SHORT CONDITIONS MET
+    const distanceFromLower = bb.lower > 0 ? (bb.lower - close) / bb.lower : 0;
     const confidence = Math.min(1, (volRatio / 4) * 0.3 + (Math.abs(roc5) / 0.04) * 0.3 + (distanceFromLower * 50) * 0.2 + 0.2);
     return {
       valid: true,

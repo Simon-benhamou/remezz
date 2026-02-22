@@ -67,7 +67,6 @@ jest.mock('../../src/strategies/momentumSimple.js', () => {
   const config = {
     ENTRY: { BTC_REGIME_TIMEFRAME: '15m' },
     EXIT: {},
-    SR_FILTER: { ENABLED: false },
     CASH_MODE: { ENABLED: false },
   };
   return {

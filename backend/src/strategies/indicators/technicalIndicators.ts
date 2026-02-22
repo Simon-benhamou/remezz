@@ -67,168 +67,6 @@ export function calcTrendStrength(closes: number[], period = 50): number {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// V5.101: S/R LEVEL DETECTION & PROXIMITY SCORING
-// Moved from contextScore.ts — pure functions, no external deps.
-// Used by the SR filter inside checkMomentumSignal().
-// ═══════════════════════════════════════════════════════════════════════════
-
-export interface SRLevel {
-  price: number;
-  type: 'support' | 'resistance';
-  touches: number;
-}
-
-/**
- * Detect support/resistance levels from pivot points in candle history.
- *
- * A pivot HIGH is a candle whose high is >= all highs within `pivotLookback`
- * candles on each side.  Pivot LOW is symmetrical on lows.
- *
- * Nearby pivots are clustered (within `clusterPct`%), touches counted,
- * and weak levels (< minTouches) filtered out.
- */
-export function findSRLevels(
-  candles: Candle[],
-  opts: { lookbackCandles: number; pivotLookback: number; minTouches: number; clusterPct: number },
-): SRLevel[] {
-  const { lookbackCandles, pivotLookback, minTouches, clusterPct } = opts;
-
-  // Use only the most recent `lookbackCandles` candles
-  const slice = candles.length > lookbackCandles
-    ? candles.slice(candles.length - lookbackCandles)
-    : candles;
-
-  if (slice.length < pivotLookback * 2 + 1) return [];
-
-  // --- Find pivot points ---
-  const pivots: { price: number; type: 'support' | 'resistance' }[] = [];
-
-  for (let i = pivotLookback; i < slice.length - pivotLookback; i++) {
-    const c = slice[i];
-
-    // Pivot HIGH
-    let isHigh = true;
-    for (let j = 1; j <= pivotLookback; j++) {
-      if (slice[i - j].high > c.high || slice[i + j].high > c.high) {
-        isHigh = false;
-        break;
-      }
-    }
-    if (isHigh) pivots.push({ price: c.high, type: 'resistance' });
-
-    // Pivot LOW
-    let isLow = true;
-    for (let j = 1; j <= pivotLookback; j++) {
-      if (slice[i - j].low < c.low || slice[i + j].low < c.low) {
-        isLow = false;
-        break;
-      }
-    }
-    if (isLow) pivots.push({ price: c.low, type: 'support' });
-  }
-
-  if (pivots.length === 0) return [];
-
-  // --- Cluster nearby pivots ---
-  pivots.sort((a, b) => a.price - b.price);
-
-  const clusters: { prices: number[]; type: 'support' | 'resistance' }[] = [];
-
-  for (const pivot of pivots) {
-    let merged = false;
-    for (const cluster of clusters) {
-      const avgPrice = cluster.prices.reduce((s, p) => s + p, 0) / cluster.prices.length;
-      const distance = Math.abs(pivot.price - avgPrice) / avgPrice * 100;
-      if (distance <= clusterPct) {
-        cluster.prices.push(pivot.price);
-        merged = true;
-        break;
-      }
-    }
-    if (!merged) {
-      clusters.push({ prices: [pivot.price], type: pivot.type });
-    }
-  }
-
-  // --- Build levels, filter by minTouches ---
-  const levels: SRLevel[] = [];
-  for (const cluster of clusters) {
-    if (cluster.prices.length < minTouches) continue;
-    const avgPrice = cluster.prices.reduce((s, p) => s + p, 0) / cluster.prices.length;
-    levels.push({
-      price: avgPrice,
-      type: cluster.type,
-      touches: cluster.prices.length,
-    });
-  }
-
-  return levels;
-}
-
-/**
- * Score how favourable the current price is relative to nearby S/R levels.
- *
- * - LONG near support   → +1.0  (bouncing off support)
- * - LONG near resistance → -1.0  (running into ceiling)
- * - SHORT near resistance → +1.0  (bouncing off resistance)
- * - SHORT near support   → -0.8  (running into floor, slightly less penalised)
- * - No nearby S/R         →  0.0
- *
- * Strength bonus: levels with 4+ touches get a 1.2x multiplier (capped at |1.0|).
- */
-export function calcSRProximityScore(
-  price: number,
-  side: 'long' | 'short',
-  levels: SRLevel[],
-  opts: { nearThresholdPct: number; farThresholdPct: number },
-): number {
-  if (levels.length === 0) return 0;
-
-  const { nearThresholdPct, farThresholdPct } = opts;
-
-  let bestScore = 0;
-
-  for (const level of levels) {
-    const distPct = Math.abs(price - level.price) / price * 100;
-
-    // Skip levels that are too far away
-    if (distPct > farThresholdPct) continue;
-
-    // Proximity factor: 1.0 at distPct=0, linearly to 0.0 at farThresholdPct
-    const proximity = 1 - distPct / farThresholdPct;
-
-    let rawScore = 0;
-
-    if (side === 'long') {
-      if (level.type === 'support' && price >= level.price * (1 - nearThresholdPct / 100)) {
-        rawScore = proximity;
-      } else if (level.type === 'resistance' && price <= level.price * (1 + nearThresholdPct / 100)) {
-        rawScore = -proximity;
-      }
-    } else {
-      if (level.type === 'resistance' && price <= level.price * (1 + nearThresholdPct / 100)) {
-        rawScore = proximity;
-      } else if (level.type === 'support' && price >= level.price * (1 - nearThresholdPct / 100)) {
-        rawScore = -0.8 * proximity;
-      }
-    }
-
-    // Strength bonus for 4+ touches
-    if (level.touches >= 4) {
-      rawScore *= 1.2;
-    }
-
-    // Keep the strongest absolute score
-    if (Math.abs(rawScore) > Math.abs(bestScore)) {
-      bestScore = rawScore;
-    }
-  }
-
-  // Clamp to [-1, +1]
-  return Math.max(-1, Math.min(1, bestScore));
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // MARKET REGIME DETECTION (Cash Mode)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -446,109 +284,6 @@ export function getCooldownBars(exitReason: string, defaultCooldown: number = 8)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// V5.32: BB SQUEEZE DETECTION - Identify volatility compression
-// When bandwidth is contracting, a big move is coming (works 70%+ of the time)
-// ═══════════════════════════════════════════════════════════════════════════
-
-export interface BBSqueezeResult {
-  isSqueeze: boolean;        // Is there a squeeze? (bandwidth contracting)
-  currentBW: number;         // Current bandwidth %
-  avgBW: number;             // Average bandwidth over lookback period
-  squeezeRatio: number;      // currentBW / avgBW (< 1 = squeezing)
-}
-
-/**
- * Detect BB Squeeze - volatility compression before explosive moves
- * @param closes - Array of closing prices
- * @param period - BB period (default 20)
- * @param lookback - How many candles to compare (default 10)
- * @param threshold - Squeeze threshold (default 0.7 = 70%)
- */
-export function detectBBSqueeze(
-  closes: number[],
-  period: number = 20,
-  lookback: number = 10,
-  threshold: number = 0.7
-): BBSqueezeResult {
-  if (closes.length < period + lookback) {
-    return { isSqueeze: false, currentBW: 0, avgBW: 0, squeezeRatio: 1 };
-  }
-
-  // Calculate current bandwidth
-  const currentBB = calcBollingerBands(closes, period);
-  const currentBW = (currentBB.upper - currentBB.lower) / currentBB.middle;
-
-  // Calculate average bandwidth over lookback period
-  const bandwidths: number[] = [];
-  for (let i = lookback; i >= 1; i--) {
-    const pastCloses = closes.slice(0, -i);
-    if (pastCloses.length >= period) {
-      const pastBB = calcBollingerBands(pastCloses, period);
-      const pastBW = (pastBB.upper - pastBB.lower) / pastBB.middle;
-      bandwidths.push(pastBW);
-    }
-  }
-
-  if (bandwidths.length === 0) {
-    return { isSqueeze: false, currentBW, avgBW: currentBW, squeezeRatio: 1 };
-  }
-
-  const avgBW = bandwidths.reduce((a, b) => a + b, 0) / bandwidths.length;
-  const squeezeRatio = avgBW > 0 ? currentBW / avgBW : 1;
-
-  return {
-    isSqueeze: squeezeRatio < threshold,
-    currentBW,
-    avgBW,
-    squeezeRatio,
-  };
-}
-
-/**
- * Detect Volume Accumulation - rising volume pattern before spike
- * @param volumes - Array of volume values
- * @param lookback - How many candles to check (default 3)
- * @param minTrend - Minimum trend multiplier (default 1.05 = 5% increase)
- * @param minRatio - Minimum absolute volume ratio vs avg (default 0.8)
- */
-export function detectVolumeAccumulation(
-  volumes: number[],
-  lookback: number = 3,
-  minTrend: number = 1.05,
-  minRatio: number = 0.8
-): { isAccumulating: boolean; trendScore: number; avgRatio: number } {
-  if (volumes.length < lookback + 10) {
-    return { isAccumulating: false, trendScore: 0, avgRatio: 0 };
-  }
-
-  // Get recent volumes
-  const recentVols = volumes.slice(-lookback);
-
-  // Calculate average volume (excluding recent)
-  const avgSlice = volumes.slice(-20, -lookback);
-  const avgVol = avgSlice.reduce((a, b) => a + b, 0) / avgSlice.length;
-
-  // Check if each candle has more volume than the previous
-  let trendCount = 0;
-  for (let i = 1; i < recentVols.length; i++) {
-    if (recentVols[i] >= recentVols[i - 1] * minTrend) {
-      trendCount++;
-    }
-  }
-  const trendScore = trendCount / (lookback - 1);
-
-  // Check absolute volume level
-  const recentAvg = recentVols.reduce((a, b) => a + b, 0) / recentVols.length;
-  const avgRatio = avgVol > 0 ? recentAvg / avgVol : 0;
-
-  return {
-    isAccumulating: trendScore >= 0.5 && avgRatio >= minRatio,
-    trendScore,
-    avgRatio,
-  };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // V5.36: PATTERN FILTER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -561,7 +296,7 @@ export function detectVolumeAccumulation(
  * @returns true if MTF aligned, false if divergent
  */
 export function checkMTFAlignment(
-  btcCandlesRegime: any[],
+  btcCandlesRegime: Candle[],
   side: 'LONG' | 'SHORT'
 ): boolean {
   const config = MomentumConfig.MULTI_TIMEFRAME_FILTER;
@@ -576,7 +311,7 @@ export function checkMTFAlignment(
   }
 
   // Calculate BTC 1h ROC
-  const closes = btcCandlesRegime.map((c: any) => c.close);
+  const closes = btcCandlesRegime.map(c => c.close);
   const btcRoc1h = calcROC(closes, config.LOOKBACK_CANDLES);
 
   // Check alignment
@@ -599,7 +334,7 @@ export function checkMTFAlignment(
  * @param btcCandles - BTC candles (15m timeframe)
  * @returns true if volatility sufficient, false if too low
  */
-export function checkBTCVolatility(btcCandles: any[]): boolean {
+export function checkBTCVolatility(btcCandles: Candle[]): boolean {
   const config = MomentumConfig.BTC_VOLATILITY_FILTER;
 
   if (!config.ENABLED) {

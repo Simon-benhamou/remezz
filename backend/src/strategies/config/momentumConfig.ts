@@ -152,71 +152,6 @@ export const MomentumConfig = {
     MAX_CONSEC_UP: 5,            // V5.12: 5 (was 3) - +34% PnL
   },
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // V5.33: BREAKOUT CONFIRMATION FILTER (OPTIMIZED)
-  // ═══════════════════════════════════════════════════════════════════════════
-  // OPTIMIZATION RESULT (13,135 trades analyzed):
-  // - Baseline: 46.1% WR, 0.029% avg PnL
-  // - Distance 0.5%: 47.0% WR, 0.074% avg PnL (+155% improvement!)
-  // - Distance 0.75%: 46.8% WR, 0.069% avg PnL
-  // - Distance 1.0%+: Diminishing returns, fewer trades
-  //
-  // BEST CONFIG: Distance 0.5%, no ROC1 filter needed
-  // - 49% fewer trades (13,135 → 6,724)
-  // - +155% better avg PnL per trade
-  // ═══════════════════════════════════════════════════════════════════════════
-  // V5.34 UPDATE: DISABLED - Distance filter reduces trades without WR improvement
-  // Test showed: 4943 trades → 2051 trades but same 55% WR
-  // Better to keep all trades and rely on V5.34 optimized stagnant exit
-  // ═══════════════════════════════════════════════════════════════════════════
-  // DEAD CONFIG — V5.34 disabled, kept for reference only
-  BREAKOUT_CONFIRMATION: {
-    ENABLED: false,                     // V5.34: DISABLED - let stagnant exit handle filtering
-
-    // LONG entry confirmation (Bull Regime) - DISABLED
-    LONG_MIN_DISTANCE_PCT: 0.5,         // Not used when ENABLED: false
-    LONG_MIN_ROC1_PCT: 0,
-    LONG_MIN_VOL_RATIO: 1.2,
-
-    // SHORT entry confirmation (Bear Regime) - DISABLED
-    SHORT_MIN_DISTANCE_PCT: 0.5,
-    SHORT_MAX_ROC1_PCT: 0,
-    SHORT_MIN_VOL_RATIO: 1.2,
-  },
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // V5.32: ANTICIPATORY ENTRY - DISABLED (proven counterproductive)
-  // ═══════════════════════════════════════════════════════════════════════════
-  // BACKTEST RESULTS (Dec 30, 2025):
-  // - Anticipatory: 386 trades, 53.6% WR, +0.07% avg PnL
-  // - Classic: 2103 trades, 59.9% WR, +1.89% avg PnL
-  // CONCLUSION: Classic breakout outperforms anticipatory by 27x per trade
-  // DISABLED pending further optimization of squeeze detection
-  // ═══════════════════════════════════════════════════════════════════════════
-  // DEAD CONFIG — V5.32 disabled, proven counterproductive
-  ANTICIPATORY_ENTRY: {
-    ENABLED: false,                    // DISABLED - underperforms classic breakout
-
-    // BB Squeeze Detection
-    BB_SQUEEZE_LOOKBACK: 10,           // Compare current bandwidth to last N candles
-    BB_SQUEEZE_THRESHOLD: 0.7,         // Current BW < 70% of avg BW = squeeze detected
-
-    // Pre-breakout Position (close approaching upper band)
-    PRE_BREAKOUT_ZONE_PCT: 0.3,        // Enter if close >= upper - 0.3% (within 0.3% of upper)
-    PRE_BREAKOUT_MIN_ROC5: 0.003,      // Require ROC5 > 0.3% (building momentum, not flat)
-    PRE_BREAKOUT_MAX_ROC10: 0.015,     // ROC10 < 1.5% (not already exhausted)
-
-    // Volume Accumulation (rising volume before spike)
-    VOL_ACCUMULATION_CANDLES: 3,       // Look at last 3 candles
-    VOL_ACCUMULATION_MIN_TREND: 1.05,  // Each candle should have ~5% more volume than prev
-    VOL_ACCUMULATION_MIN_RATIO: 0.8,   // But absolute volume >= 0.8x average (not dead)
-
-    // Confirmation filters
-    REQUIRE_BULLISH_CANDLE: true,      // Current candle must be bullish
-    REQUIRE_PRICE_ABOVE_MA20: true,    // Price must be above MA20 (uptrend)
-    MAX_DISTANCE_FROM_ENTRY: 0.5,      // Don't enter if we're already >0.5% above MA20 (late)
-  },
-
   // Signal d'entrée SHORT (Bear Market: BTC < SMA200)
   // V5.4: BB Breakdown - Plus stable (10/12 mois positifs)
   ENTRY_SHORT: {
@@ -737,25 +672,6 @@ export const MomentumConfig = {
     ATR_DECLINING_LOOKBACK: 5,        // Compare current ATR to N periods ago
     ATR_DECLINING_RATIO: 0.85,        // ATR declining > 15% = volatility drying up
     SMA200_SLOPE_FLAT_PCT: 0.05,      // SMA200 slope near zero = ranging market
-  },
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // V5.101: S/R Proximity Filter (inside checkMomentumSignal)
-  // Replaces V5.99 DRASH_CONTEXT — filter is now internal to signal detection.
-  // No external application needed (backtest, live, parity all automatic).
-  // ═══════════════════════════════════════════════════════════════════════════
-  // V5.98: SR filter disabled — destroys ROI even with loosened thresholds.
-  // Internalized here (V5.101) for future use; toggle ENABLED when ready.
-  // DEAD CONFIG — V5.98 disabled, destroys ROI
-  SR_FILTER: {
-    ENABLED: false,
-    FILTER_THRESHOLD: -0.3,
-    LOOKBACK_CANDLES: 200,
-    PIVOT_LOOKBACK: 5,
-    MIN_TOUCHES: 2,
-    CLUSTER_PCT: 0.3,
-    NEAR_THRESHOLD_PCT: 1.5,
-    FAR_THRESHOLD_PCT: 5.0,
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
