@@ -53,7 +53,6 @@ let lastPreSellAttemptMs = 0;
 let lastTpCheckMs = 0;
 let resolutionDone = false;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
-let pendingResolution: WindowState | null = null; // Previous window awaiting DB persist
 
 // Prevent concurrent tick() executions: setInterval fires every 1s but tick() can take 3-5s
 // (balance fetch, rederive, etc). Without this guard multiple ticks see decisionMade=false
@@ -628,12 +627,6 @@ async function tick(prisma: PrismaClient): Promise<void> {
   const elapsed = nowMs - start;
   const klines = getKlines1m();
 
-  // ── Resolve previous window on new-window boundary ──────────────────────
-  if (pendingResolution) {
-    await resolveWindow(pendingResolution, prisma);
-    pendingResolution = null;
-  }
-
   // ── Verify pending Polymarket oracle resolutions ─────────────────────────
   if (pendingVerifications.length > 0) {
     await verifyPendingResolutions(prisma);
@@ -646,9 +639,16 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
   // ── New window detection ──────────────────────────────────────────────────
   if (!currentWindow || currentWindow.windowStart !== start) {
-    // Snapshot previous window for resolution (uses final currentPrice)
+    // Resolve previous window BEFORE clearing pendingAutoSells.
+    // resolveWindow() reads pendingAutoSells to create per-user DB rows (with executionPrice).
+    // Previously deferred to next tick via pendingResolution, but by then pendingAutoSells was [].
     if (currentWindow && !resolutionDone) {
-      pendingResolution = { ...currentWindow };
+      try {
+        await resolveWindow({ ...currentWindow } as WindowState, prisma);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(`resolveWindow error: ${msg}`);
+      }
     }
 
     // Cancel any outstanding TP orders before window transition (per-user)
