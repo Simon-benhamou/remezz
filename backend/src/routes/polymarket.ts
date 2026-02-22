@@ -40,14 +40,30 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
   });
 
   // GET /history — recent predictions (scoped by user)
+  // Includes shared virtual rows (userId=null) so predictions that weren't traded
+  // (e.g. EV too low) still appear in history.
   router.get('/history', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-      const predictions = await prisma.polymarketPrediction.findMany({
-        where: { userId: req.user!.id },
+      const allRows = await prisma.polymarketPrediction.findMany({
+        where: { OR: [{ userId: req.user!.id }, { userId: null }] },
         orderBy: { windowStart: 'desc' },
-        take: limit,
+        take: limit * 2, // fetch extra to account for duplicates before dedup
       });
+
+      // Deduplicate by windowStart: prefer per-user row (has execution data) over shared row
+      const byWindow = new Map<number, (typeof allRows)[0]>();
+      for (const row of allRows) {
+        const ws = row.windowStart.getTime();
+        const existing = byWindow.get(ws);
+        if (!existing || (existing.userId === null && row.userId !== null)) {
+          byWindow.set(ws, row);
+        }
+      }
+      const predictions = [...byWindow.values()]
+        .sort((a, b) => b.windowStart.getTime() - a.windowStart.getTime())
+        .slice(0, limit);
+
       res.json({ predictions });
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch history' });
@@ -136,11 +152,11 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
     }
   });
 
-  // DELETE /history — reset predictions for this user
+  // DELETE /history — reset predictions for this user (including shared virtual rows)
   router.delete('/history', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
       const { count } = await prisma.polymarketPrediction.deleteMany({
-        where: { userId: req.user!.id },
+        where: { OR: [{ userId: req.user!.id }, { userId: null }] },
       });
       res.json({ success: true, deleted: count });
     } catch (err) {

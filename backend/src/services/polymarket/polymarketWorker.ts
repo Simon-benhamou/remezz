@@ -1268,11 +1268,24 @@ export async function getPolymarketStats(
   prisma: PrismaClient,
   userId?: string,
 ): Promise<PredictionStats> {
-  const predictions = await prisma.polymarketPrediction.findMany({
-    where: userId ? { userId } : undefined,
+  // Include both per-user rows (live trades) AND shared virtual rows (userId=null).
+  // When a prediction is made but not traded (e.g. EV too low), only the shared row exists.
+  const allRows = await prisma.polymarketPrediction.findMany({
+    where: userId ? { OR: [{ userId }, { userId: null }] } : undefined,
     orderBy: { createdAt: 'desc' },
     take: 5000,
   });
+
+  // Deduplicate by windowStart: prefer per-user row (has execution data) over shared row
+  const byWindow = new Map<number, (typeof allRows)[0]>();
+  for (const row of allRows) {
+    const ws = row.windowStart.getTime();
+    const existing = byWindow.get(ws);
+    if (!existing || (existing.userId === null && row.userId !== null)) {
+      byWindow.set(ws, row);
+    }
+  }
+  const predictions = [...byWindow.values()];
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
