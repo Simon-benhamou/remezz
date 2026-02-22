@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, placeTakeProfitSell, checkOrderStatus, cancelClobOrder, MAX_CLOB_PRICE } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, placeGtcLimitBuy, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, placeTakeProfitSell, checkOrderStatus, cancelClobOrder, MAX_CLOB_PRICE, getMaxPriceForScore } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -25,10 +25,7 @@ const POLL_INTERVAL_MS = 1000;               // 1 second
 const SYMBOL = 'BTCUSDT';
 const SYMBOL_SHORT = 'BTC';
 
-// ─── Observation phase constants ─────────────────────────────────────────────
-const OBS_DIP_THRESHOLD = 0.03;           // Buy immediately on 3-cent dip from initial
-const OBS_BOUNCE_THRESHOLD = 0.02;        // Buy when price bounces 2 cents from trough
-const OBS_RISING_THRESHOLD = 0.05;        // Buy if price runs 5 cents above initial
+// ─── GTC limit deadline ─────────────────────────────────────────────────────
 const OBS_DEADLINE_OFFSET_MS = 4 * 60 * 1000; // T+4:00 deadline (3min observation window — more time to catch a dip under cap)
 
 // ─── Last-second reversal / hedge constants ─────────────────────────────────
@@ -43,11 +40,11 @@ const PRE_SELL_START_MS = 4 * 60 * 1000;        // T+4:00 — start attempting s
 const PRE_SELL_RETRY_MS = 10 * 1000;             // Retry every 10 seconds
 
 // ─── Take-profit constants ──────────────────────────────────────────────────
-// Place a GTC SELL limit order at 2.5x execution price for cheap entries.
-// Only activates when executionPrice < 0.40 (entries < 40c). Expensive entries
+// Place a GTC SELL limit order at 2.0x execution price for cheap entries.
+// Only activates when executionPrice < 0.50 (entries < 50c). Expensive entries
 // resolve normally — the $1 payout on a 55c entry is already good risk/reward.
-const TP_MULTIPLIER = 2.5;                        // Sell at 2.5x the entry price
-const TP_MAX_ENTRY_PRICE = 0.40;                  // Only TP on cheap entries (< 40c)
+const TP_MULTIPLIER = 2.0;                        // Sell at 2.0x the entry price
+const TP_MAX_ENTRY_PRICE = 0.50;                  // TP on entries below 50c (widened from 40c for tiered pricing)
 const TP_CHECK_INTERVAL_MS = 5_000;                // Check TP order status every 5s
 
 // ─── Module state ─────────────────────────────────────────────────────────────
@@ -101,90 +98,25 @@ interface UnredeemedToken {
 }
 let unredeemedTokens: UnredeemedToken[] = [];
 
-// ─── Observation phase state ─────────────────────────────────────────────────
-let observationActive = false;
-let observationTokenId: string | null = null;
-let observationDirection: 'UP' | 'DOWN' | null = null;
-let observationAmount = 0;
-let observationEntryOdds = 0;
-let observationInitialAsk = 0;
-let observationBestAsk = 0;
-let observationDeadlineMs = 0;
+// ─── GTC limit fallback state (replaces observation phase) ──────────────────
+// When CLOB ask exceeds tier cap at T+1:00, a passive GTC limit is placed at the cap price.
+// The order sits in the book until filled or cancelled at T+4:00.
+let pendingLimitOrderId: string | null = null;
+let pendingLimitDeadlineMs = 0;
+let pendingLimitTokenId: string | null = null;
+let pendingLimitDirection: 'UP' | 'DOWN' | null = null;
+let pendingLimitAmount = 0;
+let pendingLimitEntryOdds = 0;
+let pendingLimitPrice = 0;
 
-function resetObservation(): void {
-  observationActive = false;
-  observationTokenId = null;
-  observationDirection = null;
-  observationAmount = 0;
-  observationEntryOdds = 0;
-  observationInitialAsk = 0;
-  observationBestAsk = 0;
-  observationDeadlineMs = 0;
-}
-
-async function executeObservationBuy(
-  prisma: PrismaClient,
-  trigger: string,
-  currentAsk: number,
-): Promise<void> {
-  if (!currentWindow || !observationTokenId || !observationDirection) return;
-
-  const savings = observationInitialAsk - currentAsk;
-  log.info(
-    `OBSERVATION BUY [${trigger}]: ${observationDirection} $${observationAmount} @ ${currentAsk.toFixed(3)} ` +
-    `(initial=${observationInitialAsk.toFixed(3)}, best=${observationBestAsk.toFixed(3)}, ` +
-    `savings=${savings >= 0 ? '+' : ''}${(savings * 100).toFixed(1)}¢)`,
-  );
-
-  currentWindow.observationTrigger = trigger;
-
-  const betResult = await placePolymarketBet(
-    prisma,
-    observationDirection,
-    observationTokenId,
-    observationAmount,
-    observationEntryOdds,
-  );
-
-  if (betResult.success) {
-    log.info(`LIVE BET OK: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
-    if (betResult.executionPrice) {
-      currentWindow.executionPrice = betResult.executionPrice;
-    }
-    currentWindow.observationStatus = 'filled';
-
-    // Track for pre-sell at T+4:50
-    if (betResult.executionPrice && observationDirection && observationTokenId) {
-      const sell: PendingAutoSell = {
-        tokenId: observationTokenId,
-        betAmount: observationAmount,
-        executionPrice: betResult.executionPrice,
-        direction: observationDirection,
-        isHedge: false,
-        sold: false,
-        tpOrderId: null,
-        tpTargetPrice: null,
-      };
-      pendingAutoSells.push(sell);
-
-      // Place take-profit GTC sell for cheap entries
-      if (betResult.executionPrice < TP_MAX_ENTRY_PRICE) {
-        const tpPrice = Math.min(betResult.executionPrice * TP_MULTIPLIER, 0.95);
-        const tpResult = await placeTakeProfitSell(prisma, observationTokenId, observationAmount, betResult.executionPrice, tpPrice);
-        if (tpResult.success && tpResult.orderId) {
-          sell.tpOrderId = tpResult.orderId;
-          sell.tpTargetPrice = tpPrice;
-          log.info(`TP ORDER placed: sell @ ${(tpPrice * 100).toFixed(0)}c (entry ${(betResult.executionPrice * 100).toFixed(0)}c, ${TP_MULTIPLIER}x)`);
-        }
-      }
-    }
-  } else {
-    log.error(`LIVE BET FAILED: ${betResult.error}`);
-    currentWindow.observationStatus = 'idle';
-    activeLiveBetWindow = null;
-  }
-
-  resetObservation();
+function resetPendingLimit(): void {
+  pendingLimitOrderId = null;
+  pendingLimitDeadlineMs = 0;
+  pendingLimitTokenId = null;
+  pendingLimitDirection = null;
+  pendingLimitAmount = 0;
+  pendingLimitEntryOdds = 0;
+  pendingLimitPrice = 0;
 }
 
 // ─── Polymarket resolution verification ───────────────────────────────────────
@@ -655,11 +587,13 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
   // ── New window detection ──────────────────────────────────────────────────
   if (!currentWindow || currentWindow.windowStart !== start) {
-    // Safety net: if observation was still active when window ended, force buy
-    if (observationActive && currentWindow) {
-      log.warn('OBSERVATION: window ended with observation still active — forcing buy');
-      await executeObservationBuy(prisma, 'window_end', observationInitialAsk);
+    // Cancel any pending GTC limit from previous window
+    if (pendingLimitOrderId) {
+      log.warn('GTC LIMIT: window ended with pending limit — cancelling');
+      try { await cancelClobOrder(prisma, pendingLimitOrderId); } catch {}
+      activeLiveBetWindow = null;
     }
+    resetPendingLimit();
 
     // Snapshot previous window for resolution (uses final currentPrice)
     if (currentWindow && !resolutionDone) {
@@ -785,7 +719,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
         `Prediction: ${result.direction} (score=${result.score.total}, conf=${result.confidence}) | odds=${entryOdds.toFixed(3)} | amount=$${pmConfig.amount} | slug=${slug}`,
       );
 
-      // ── Live trading: enter observation phase if enabled ──────────────
+      // ── Live trading: immediate entry or GTC limit fallback ─────────────
       const liveConfig = await getLiveTradingConfig(prisma);
       if (liveConfig && tokenId) {
         if (activeLiveBetWindow !== null && activeLiveBetWindow !== start) {
@@ -798,64 +732,64 @@ async function tick(prisma: PrismaClient): Promise<void> {
             log.warn(`LIVE MODE: insufficient balance $${balance.toFixed(2)} < $${liveConfig.amount} — skipping bet`);
             activeLiveBetWindow = null;
           } else {
-            // Fetch initial CLOB ask for observation
-            const initAsk = await getClobAskPrice(prisma, tokenId);
-            if (initAsk === null || initAsk === 0) {
-              log.warn('OBSERVATION: CLOB price unavailable — placing immediate FOK');
-              const betResult = await placePolymarketBet(prisma, result.direction, tokenId, liveConfig.amount, entryOdds);
-              if (betResult.success) {
-                log.info(`LIVE BET OK (immediate): orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
-                if (betResult.executionPrice) {
-                  currentWindow.executionPrice = betResult.executionPrice;
-                  const sell: PendingAutoSell = {
-                    tokenId,
-                    betAmount: liveConfig.amount,
-                    executionPrice: betResult.executionPrice,
-                    direction: result.direction,
-                    isHedge: false,
-                    sold: false,
-                    tpOrderId: null,
-                    tpTargetPrice: null,
-                  };
-                  pendingAutoSells.push(sell);
+            const score = result.confidence;
+            const tierMax = getMaxPriceForScore(score);
 
-                  // Place take-profit GTC sell for cheap entries
-                  if (betResult.executionPrice < TP_MAX_ENTRY_PRICE) {
-                    const tpPrice = Math.min(betResult.executionPrice * TP_MULTIPLIER, 0.95);
-                    const tpResult = await placeTakeProfitSell(prisma, tokenId, liveConfig.amount, betResult.executionPrice, tpPrice);
-                    if (tpResult.success && tpResult.orderId) {
-                      sell.tpOrderId = tpResult.orderId;
-                      sell.tpTargetPrice = tpPrice;
-                      log.info(`TP ORDER placed: sell @ ${(tpPrice * 100).toFixed(0)}c (entry ${(betResult.executionPrice * 100).toFixed(0)}c, ${TP_MULTIPLIER}x)`);
-                    }
+            // Try immediate entry — placePolymarketBet fetches CLOB ask and checks tier cap
+            const betResult = await placePolymarketBet(
+              prisma, result.direction, tokenId, liveConfig.amount, entryOdds, false, score,
+            );
+
+            if (betResult.success) {
+              log.info(`LIVE BET OK: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)} (score=${score}, cap=${tierMax})`);
+              if (betResult.executionPrice) {
+                currentWindow.executionPrice = betResult.executionPrice;
+                const sell: PendingAutoSell = {
+                  tokenId,
+                  betAmount: liveConfig.amount,
+                  executionPrice: betResult.executionPrice,
+                  direction: result.direction,
+                  isHedge: false,
+                  sold: false,
+                  tpOrderId: null,
+                  tpTargetPrice: null,
+                };
+                pendingAutoSells.push(sell);
+
+                // Place take-profit GTC sell for entries below 50c
+                if (betResult.executionPrice < TP_MAX_ENTRY_PRICE) {
+                  const tpPrice = Math.min(betResult.executionPrice * TP_MULTIPLIER, 0.95);
+                  const tpResult = await placeTakeProfitSell(prisma, tokenId, liveConfig.amount, betResult.executionPrice, tpPrice);
+                  if (tpResult.success && tpResult.orderId) {
+                    sell.tpOrderId = tpResult.orderId;
+                    sell.tpTargetPrice = tpPrice;
+                    log.info(`TP ORDER placed: sell @ ${(tpPrice * 100).toFixed(0)}c (entry ${(betResult.executionPrice * 100).toFixed(0)}c, ${TP_MULTIPLIER}x)`);
                   }
                 }
+              }
+              currentWindow.observationStatus = 'filled';
+            } else if (betResult.error?.startsWith('EV too low')) {
+              // CLOB ask > tier cap → place passive GTC limit at cap price
+              log.info(`CLOB above cap — placing GTC LIMIT at ${tierMax.toFixed(2)} (score=${score})`);
+              const limitResult = await placeGtcLimitBuy(prisma, tokenId, liveConfig.amount, tierMax);
+              if (limitResult.success && limitResult.orderId) {
+                pendingLimitOrderId = limitResult.orderId;
+                pendingLimitDeadlineMs = start + OBS_DEADLINE_OFFSET_MS;
+                pendingLimitTokenId = tokenId;
+                pendingLimitDirection = result.direction;
+                pendingLimitAmount = liveConfig.amount;
+                pendingLimitEntryOdds = entryOdds;
+                pendingLimitPrice = tierMax;
+                currentWindow.observationStatus = 'observing'; // reuse for display
               } else {
-                log.error(`LIVE BET FAILED: ${betResult.error}`);
+                log.error(`GTC LIMIT failed: ${limitResult.error}`);
                 activeLiveBetWindow = null;
+                currentWindow.observationStatus = 'skipped_ev';
               }
             } else {
-              // Start observation phase — don't buy yet, wait for a good price
-              if (initAsk > MAX_CLOB_PRICE) {
-                log.info(`OBSERVATION: price high (CLOB=${initAsk.toFixed(3)} > cap=${MAX_CLOB_PRICE}) — watching for dip`);
-              }
-              observationActive = true;
-              observationTokenId = tokenId;
-              observationDirection = result.direction;
-              observationAmount = liveConfig.amount;
-              observationEntryOdds = entryOdds;
-              observationInitialAsk = initAsk;
-              observationBestAsk = initAsk;
-              observationDeadlineMs = start + OBS_DEADLINE_OFFSET_MS;
-
-              currentWindow.observationStatus = 'observing';
-              currentWindow.observationInitialAsk = initAsk;
-              currentWindow.observationBestAsk = initAsk;
-
-              log.info(
-                `OBSERVATION: watching ${result.direction} token=${tokenId.slice(0, 12)}… ` +
-                `initialAsk=${initAsk.toFixed(3)} deadline=${new Date(observationDeadlineMs).toISOString().slice(11, 19)}`,
-              );
+              log.error(`LIVE BET FAILED: ${betResult.error}`);
+              activeLiveBetWindow = null;
+              currentWindow.observationStatus = 'idle';
             }
           }
         }
@@ -874,45 +808,67 @@ async function tick(prisma: PrismaClient): Promise<void> {
     }
   }
 
-  // ── Observation phase: poll CLOB and check triggers ────────────────────
-  if (observationActive && currentWindow && observationTokenId) {
-    const ask = await getClobAskPrice(prisma, observationTokenId);
+  // ── GTC limit fallback: check fill status or cancel at deadline ──────────
+  if (pendingLimitOrderId && currentWindow) {
+    const now = Date.now();
 
-    if (ask !== null && ask > 0) {
-      observationBestAsk = Math.min(observationBestAsk, ask);
-      currentWindow.observationBestAsk = observationBestAsk;
-
-      const now = Date.now();
-      const underCap = ask <= MAX_CLOB_PRICE;
-
-      if (underCap && ask <= observationInitialAsk - OBS_DIP_THRESHOLD) {
-        await executeObservationBuy(prisma, 'dip', ask);
+    if (now >= pendingLimitDeadlineMs) {
+      // Deadline reached — cancel unfilled limit order
+      log.info(`GTC LIMIT deadline: cancelling orderId=${pendingLimitOrderId}`);
+      try {
+        await cancelClobOrder(prisma, pendingLimitOrderId);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`Failed to cancel GTC limit: ${msg}`);
       }
-      else if (underCap &&
-        observationBestAsk < observationInitialAsk &&
-        ask > observationBestAsk + OBS_BOUNCE_THRESHOLD
-      ) {
-        await executeObservationBuy(prisma, 'bounce', ask);
-      }
-      else if (underCap && ask >= observationInitialAsk + OBS_RISING_THRESHOLD) {
-        await executeObservationBuy(prisma, 'rising', ask);
-      }
-      else if (now >= observationDeadlineMs) {
-        if (underCap) {
-          await executeObservationBuy(prisma, 'deadline', ask);
-        } else {
-          log.info(`OBSERVATION: deadline reached but price too high (${ask.toFixed(3)} > cap=${MAX_CLOB_PRICE}) — no trade`);
-          currentWindow.observationStatus = 'skipped_ev';
-          resetObservation();
-          activeLiveBetWindow = null;
-        }
-      }
+      currentWindow.observationStatus = 'skipped_ev';
+      activeLiveBetWindow = null;
+      resetPendingLimit();
     } else {
-      if (Date.now() >= observationDeadlineMs) {
-        log.warn('OBSERVATION: CLOB price unavailable at deadline — no trade');
-        currentWindow.observationStatus = 'skipped_ev';
-        resetObservation();
-        activeLiveBetWindow = null;
+      // Check if order filled
+      try {
+        const status = await checkOrderStatus(prisma, pendingLimitOrderId);
+        if (status === 'MATCHED' || status === 'FILLED') {
+          log.info(`GTC LIMIT FILLED: ${pendingLimitDirection} $${pendingLimitAmount} @ ${pendingLimitPrice.toFixed(3)}`);
+          currentWindow.executionPrice = pendingLimitPrice;
+          currentWindow.observationStatus = 'filled';
+
+          // Track for pre-sell
+          if (pendingLimitTokenId && pendingLimitDirection) {
+            const sell: PendingAutoSell = {
+              tokenId: pendingLimitTokenId,
+              betAmount: pendingLimitAmount,
+              executionPrice: pendingLimitPrice,
+              direction: pendingLimitDirection,
+              isHedge: false,
+              sold: false,
+              tpOrderId: null,
+              tpTargetPrice: null,
+            };
+            pendingAutoSells.push(sell);
+
+            // TP for cheap limit fills
+            if (pendingLimitPrice < TP_MAX_ENTRY_PRICE) {
+              const tpPrice = Math.min(pendingLimitPrice * TP_MULTIPLIER, 0.95);
+              const tpResult = await placeTakeProfitSell(prisma, pendingLimitTokenId, pendingLimitAmount, pendingLimitPrice, tpPrice);
+              if (tpResult.success && tpResult.orderId) {
+                sell.tpOrderId = tpResult.orderId;
+                sell.tpTargetPrice = tpPrice;
+                log.info(`TP ORDER placed: sell @ ${(tpPrice * 100).toFixed(0)}c (limit entry ${(pendingLimitPrice * 100).toFixed(0)}c)`);
+              }
+            }
+          }
+
+          resetPendingLimit();
+        } else if (status === 'CANCELED' || status === 'CANCELLED' || status === 'EXPIRED') {
+          log.warn(`GTC LIMIT ${status} externally — orderId=${pendingLimitOrderId}`);
+          currentWindow.observationStatus = 'skipped_ev';
+          activeLiveBetWindow = null;
+          resetPendingLimit();
+        }
+        // else: still LIVE — continue waiting
+      } catch (err: unknown) {
+        // Poll error — will retry next tick
       }
     }
   }
@@ -922,7 +878,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
   //   HEDGE:   Early Bird active → $1 insurance on opposite token (no signal needed)
   //   LOTTERY: No Early Bird → full amount on reversal (strong signal required)
   // Both only buy if opposite token < 20¢ (massive asymmetry).
-  if (elapsed >= REVERSAL_OFFSET_MS && !reversalChecked && currentWindow && !observationActive) {
+  if (elapsed >= REVERSAL_OFFSET_MS && !reversalChecked && currentWindow && !pendingLimitOrderId) {
     reversalChecked = true;
 
     const liveConfig = await getLiveTradingConfig(prisma);
@@ -1283,7 +1239,7 @@ export function stopPolymarketWorker(): void {
   lastPreSellAttemptMs = 0;
   lastTpCheckMs = 0;
   unredeemedTokens = [];
-  resetObservation();
+  resetPendingLimit();
 }
 
 /**
