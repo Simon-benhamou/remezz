@@ -18,10 +18,11 @@ model User {
   updatedAt    DateTime       @updatedAt
   lastLoginAt  DateTime?
   isLegacy     Boolean        @default(false)
-  sessions     AgentSession[]
-  reports      DailyReport[]
-  apiKeys      UserApiKey[]
-  settings     UserSetting[]
+  sessions               AgentSession[]
+  reports                DailyReport[]
+  apiKeys                UserApiKey[]
+  settings               UserSetting[]
+  polymarketPredictions  PolymarketPrediction[]
 
   @@index([username])
   @@index([email])
@@ -357,6 +358,7 @@ model TradeParityResult {
 
 model PolymarketPrediction {
   id              Int      @id @default(autoincrement())
+  userId          String?
   createdAt       DateTime @default(now())
   symbol          String   @default("BTC")
   windowStart     DateTime
@@ -379,10 +381,12 @@ model PolymarketPrediction {
   isCorrect       Boolean?
   skipped         Boolean  @default(false)
   polymarketSlug  String?
+  user            User?    @relation(fields: [userId], references: [id])
 
   @@index([windowStart])
   @@index([createdAt])
   @@index([symbol, createdAt])
+  @@index([userId, createdAt])
 }
 
 enum AgentActionStatus {
