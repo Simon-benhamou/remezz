@@ -936,3 +936,70 @@ export async function getActivePolymarketUserIds(prisma: PrismaClient): Promise<
   });
   return credSettings.map((s) => s.userId);
 }
+
+/**
+ * Returns all userIds that have polymarket_mode = 'virtual' AND credentials configured.
+ * Virtual users need credentials to fetch CLOB prices, but don't place orders.
+ */
+export async function getVirtualPolymarketUserIds(prisma: PrismaClient): Promise<string[]> {
+  const modeSettings = await prisma.userSetting.findMany({
+    where: { key: SETTING_KEYS.MODE, value: 'virtual' },
+    select: { userId: true },
+  });
+  const userIds = modeSettings.map((s) => s.userId);
+  if (userIds.length === 0) return [];
+
+  const credSettings = await prisma.userSetting.findMany({
+    where: { userId: { in: userIds }, key: SETTING_KEYS.API_KEY },
+    select: { userId: true },
+  });
+  return credSettings.map((s) => s.userId);
+}
+
+/**
+ * Simulate a Polymarket bet: fetch real CLOB ask, apply identical guards as placePolymarketBet,
+ * but DON'T place any order. Returns the CLOB ask price if guards pass.
+ * Used by virtual mode for realistic WR tracking.
+ */
+export async function simulatePolymarketBet(
+  prisma: PrismaClient,
+  userId: string,
+  direction: 'UP' | 'DOWN',
+  tokenId: string,
+  amount: number,
+  gammaPrice: number,
+  confidenceScore?: number,
+): Promise<{ success: boolean; clobAsk?: number; error?: string }> {
+  const creds = await loadCredentials(prisma, userId);
+  if (!creds) return { success: false, error: 'No credentials' };
+
+  try {
+    const client = buildClient(creds);
+    const clobPriceData = await client.getPrice(tokenId, 'BUY');
+    const clobAsk = parseFloat((clobPriceData as any)?.price ?? '0');
+
+    if (clobAsk === 0) {
+      return { success: false, error: 'CLOB price unavailable' };
+    }
+
+    // Same guards as placePolymarketBet:
+    const MIN_CLOB_PRICE = 0.55;
+    if (clobAsk < MIN_CLOB_PRICE) {
+      return { success: false, error: `Price too low (${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE})` };
+    }
+
+    const maxPrice = confidenceScore ? getMaxPriceForScore(confidenceScore) : MAX_CLOB_PRICE;
+    if (clobAsk > maxPrice) {
+      return { success: false, error: `EV too low (CLOB=${clobAsk.toFixed(3)} > cap=${maxPrice.toFixed(2)})` };
+    }
+
+    const divergence = (clobAsk - gammaPrice) / gammaPrice;
+    if (divergence < -0.20) {
+      return { success: false, error: `Reversal signal (${(divergence * 100).toFixed(0)}% below Gamma)` };
+    }
+
+    return { success: true, clobAsk };
+  } catch (err: any) {
+    return { success: false, error: err?.message ?? 'Simulation failed' };
+  }
+}

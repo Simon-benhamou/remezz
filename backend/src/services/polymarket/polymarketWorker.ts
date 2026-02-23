@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, placeTakeProfitSell, checkOrderStatus, cancelClobOrder, placeGtcLimitBuy, MAX_CLOB_PRICE, getMaxPriceForScore, getActivePolymarketUserIds, ALL_POLYMARKET_SYMBOLS } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, placeTakeProfitSell, checkOrderStatus, cancelClobOrder, placeGtcLimitBuy, MAX_CLOB_PRICE, getMaxPriceForScore, getActivePolymarketUserIds, getVirtualPolymarketUserIds, simulatePolymarketBet, ALL_POLYMARKET_SYMBOLS } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -49,6 +49,17 @@ const lastPreSellBySymbol = new Map<string, number>();
 const lastTpCheckBySymbol = new Map<string, number>();
 const resolutionDoneBySymbol = new Map<string, boolean>();
 const autoSellsBySymbol = new Map<string, PendingAutoSell[]>();
+
+// ─── Virtual bet tracking (CLOB-priced, no real order) ──────────────────────
+interface VirtualBet {
+  userId: string;
+  symbol: string;
+  tokenId: string;
+  betAmount: number;
+  clobAsk: number;
+  direction: 'UP' | 'DOWN';
+}
+const virtualBetsBySymbol = new Map<string, VirtualBet[]>();
 const liveStateBySymbol = new Map<string, { window: WindowState | null; klines1m: Candle1m[] }>();
 
 // ─── Observation mode state (V5.124: smart entry with GTC limit) ────────────
@@ -125,6 +136,7 @@ interface PendingVerification {
   verifyAfterMs: number;
   giveUpAfterMs: number;
   isHedge?: boolean;
+  isVirtual?: boolean;
 }
 
 const pendingVerifications: PendingVerification[] = [];
@@ -173,6 +185,15 @@ function getAutoSells(symbol: string): PendingAutoSell[] {
   if (!arr) {
     arr = [];
     autoSellsBySymbol.set(symbol, arr);
+  }
+  return arr;
+}
+
+function getVirtualBets(symbol: string): VirtualBet[] {
+  let arr = virtualBetsBySymbol.get(symbol);
+  if (!arr) {
+    arr = [];
+    virtualBetsBySymbol.set(symbol, arr);
   }
   return arr;
 }
@@ -263,6 +284,44 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
     }
   }
 
+  // ── Per-user virtual bet rows (CLOB-priced, no real order) ──────────
+  const virtualBets = getVirtualBets(sym);
+  const seenVirtualUsers = new Set<string>();
+  for (const vb of virtualBets) {
+    if (seenVirtualUsers.has(vb.userId)) continue;
+    seenVirtualUsers.add(vb.userId);
+
+    try {
+      await prisma.polymarketPrediction.create({
+        data: {
+          userId: vb.userId,
+          symbol: sym,
+          windowStart: new Date(w.windowStart),
+          windowEnd: new Date(w.windowEnd),
+          startPrice: w.startPrice,
+          endPrice,
+          prediction: w.prediction?.direction ?? null,
+          confidence: w.prediction?.confidence ?? null,
+          actualResult: preliminaryResult,
+          entryOdds: w.entryOdds,
+          executionPrice: vb.clobAsk,  // CLOB price, not Gamma
+          tokenId: vb.tokenId,
+          betAmount: vb.betAmount,
+          simulatedPnl: null,
+          scoreBreakdown: w.prediction?.score
+            ? JSON.parse(JSON.stringify(w.prediction.score))
+            : undefined,
+          isCorrect: null,
+          skipped: false,
+          polymarketSlug: slug,
+        },
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error(`DB persist error (virtual ${vb.userId.slice(0, 8)}, ${sym}): ${msg}`);
+    }
+  }
+
   const hasPrediction = w.prediction && w.entryOdds !== null;
   const preliminaryMatch = hasPrediction ? w.prediction!.direction === preliminaryResult : null;
   const correctStr = preliminaryMatch !== null ? (preliminaryMatch ? 'WIN?' : 'LOSS?') : 'SKIP';
@@ -302,6 +361,25 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
         tokenId: sell.tokenId,
         verifyAfterMs: Date.now() + 3 * 60 * 1000,
         giveUpAfterMs: Date.now() + 60 * 60 * 1000,
+      });
+    }
+
+    // Schedule verification for virtual bets
+    for (const vb of virtualBets) {
+      if (seenVirtualUsers.has(vb.userId) && verifiedUsers.has(vb.userId)) continue;
+      pendingVerifications.push({
+        userId: vb.userId,
+        symbol: sym,
+        windowStart: w.windowStart,
+        slug,
+        predictionDirection: w.prediction?.direction ?? null,
+        entryOdds: w.entryOdds,
+        executionPrice: vb.clobAsk,
+        betAmount: vb.betAmount,
+        tokenId: vb.tokenId,
+        verifyAfterMs: Date.now() + 3 * 60 * 1000,
+        giveUpAfterMs: Date.now() + 60 * 60 * 1000,
+        isVirtual: true,
       });
     }
   }
@@ -381,6 +459,24 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
             }
           }
         }
+
+        toRemove.push(i);
+        continue;
+      }
+
+      // ── Virtual bets: update DB with PnL, skip auto-sell/redeem ────
+      if (v.isVirtual) {
+        if (!v.userId) { toRemove.push(i); continue; }
+
+        const dbWhere = { windowStart: new Date(v.windowStart), symbol: v.symbol, userId: v.userId };
+
+        await prisma.polymarketPrediction.updateMany({
+          where: dbWhere,
+          data: { actualResult: oracleResult, isCorrect, simulatedPnl, realPnl: simulatedPnl },
+        });
+
+        const resultStr = isCorrect === true ? 'WIN' : isCorrect === false ? 'LOSS' : '?';
+        log.info(`Oracle VIRTUAL ${userLabel}: ${v.slug} → ${oracleResult} | ${resultStr} | PnL $${simulatedPnl?.toFixed(2)} (CLOB=${v.executionPrice?.toFixed(3)})`);
 
         toRemove.push(i);
         continue;
@@ -689,6 +785,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
       lastTpCheckBySymbol.set(sym, 0);
       resolutionDoneBySymbol.set(sym, false);
       autoSellsBySymbol.set(sym, []);
+      virtualBetsBySymbol.set(sym, []);
 
       const startPrice = getPrice(sym, klines);
       if (startPrice === 0) {
@@ -884,6 +981,33 @@ async function tick(prisma: PrismaClient): Promise<void> {
       }
 
       w.observationStatus = anyUserFilled ? 'filled' : (activeUsers.length > 0 ? 'skipped_ev' : 'idle');
+
+      // ── Virtual user simulation (CLOB price, no order) ──────────────
+      if (tokenId) {
+      const virtualUsers = await getVirtualPolymarketUserIds(prisma);
+      for (const userId of virtualUsers) {
+        const uLabel = `[${userId.slice(0, 8)}]`;
+        const pmConfig = await getPolymarketConfig(prisma, userId);
+        if (!pmConfig.symbols.includes(sym)) continue;
+
+        const score = result.confidence;
+        const tierMax = getMaxPriceForScore(score);
+
+        const simResult = await simulatePolymarketBet(
+          prisma, userId, result.direction, tokenId, pmConfig.amount, entryOdds, score,
+        );
+
+        if (simResult.success && simResult.clobAsk) {
+          getVirtualBets(sym).push({
+            userId, symbol: sym, tokenId,
+            betAmount: pmConfig.amount, clobAsk: simResult.clobAsk, direction: result.direction,
+          });
+          log.info(`VIRTUAL BET OK ${uLabel} [${sym}]: simulated @ CLOB ${simResult.clobAsk.toFixed(3)} (score=${score}, cap=${tierMax.toFixed(2)})`);
+        } else {
+          log.info(`VIRTUAL SKIP ${uLabel} [${sym}]: ${simResult.error}`);
+        }
+      }
+      }
     }
 
     // Mark symbols that scored below threshold
@@ -1313,6 +1437,7 @@ export function stopPolymarketWorker(): void {
   lastTpCheckBySymbol.clear();
   resolutionDoneBySymbol.clear();
   autoSellsBySymbol.clear();
+  virtualBetsBySymbol.clear();
   observationOrderBySymbol.clear();
   liveStateBySymbol.clear();
   unredeemedTokens = [];
