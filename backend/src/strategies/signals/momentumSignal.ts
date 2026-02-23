@@ -494,7 +494,8 @@ export function checkMomentumSignal(
   // ═══════════════════════════════════════════════════════════════════════════
   if (btcInBullRegime) {
     // LONG conditions V5.12 (breakout-based)
-    const breakoutOk = close > bb.upper;
+    const requireBBBreakout = MomentumConfig.ENTRY_LONG.REQUIRE_BB_BREAKOUT !== false;
+    const breakoutOk = requireBBBreakout ? close > bb.upper : true;
     const rocOk = roc10 >= MomentumConfig.ENTRY_LONG.ROC_MIN;
     const volOk = volRatio >= MomentumConfig.ENTRY_LONG.VOL_MULTIPLIER;
     const consecOk = consecUp <= MomentumConfig.ENTRY_LONG.MAX_CONSEC_UP;
@@ -621,11 +622,6 @@ export function checkMomentumSignal(
     const priceBelowMa20Ok = priceBelowMa20;
     const consecDownOk = consecDown <= (MomentumConfig.ENTRY_SHORT.MAX_CONSEC_DOWN || 5);
 
-    // V5.4: BB Breakdown filter
-    const priceBelowBBLower = MomentumConfig.ENTRY_SHORT.PRICE_BELOW_BB_LOWER
-      ? close < bb.lower
-      : true;
-
     if (!isBearish) {
       return { valid: false, reason: 'bear_regime:bullish_candle', features };
     }
@@ -671,14 +667,6 @@ export function checkMomentumSignal(
         features
       };
     }
-    if (!priceBelowBBLower) {
-      return {
-        valid: false,
-        reason: `bear_regime:price_above_bb_lower(${close.toFixed(4)} >= ${bb.lower.toFixed(4)})`,
-        features
-      };
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
     // V5.36: PATTERN FILTERS (2-Year Validated: +22.4pp WR)
     // ═══════════════════════════════════════════════════════════════════════════

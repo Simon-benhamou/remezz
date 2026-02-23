@@ -45,6 +45,7 @@ export interface SignalState {
   lastSignalFeatures: {
     volRatio: number;
     roc: number;
+    roc5: number;
     bbDistance: number;
     reason: string;
   } | null;

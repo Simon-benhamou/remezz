@@ -475,6 +475,18 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Data model**: `Trade.feesUsd` = total costs (for display). `Fill.fee` = per-fill fee (for KPI aggregation). `SessionKpi.realizedPnlUsd` = GROSS - SUM(Fill.fee) (NET).
   - **File**: `positionPersistence.ts`
 
+- V5.125: SHORT filter sweep optimization + BB Lower permanently removed:
+  - **Problem**: SHORT entry filters (ROC5 ≤ -1.5%, Volume ≥ 2.0x, Price < BB Lower) formed a "triple confirmation tardive" — all measure that a move has ALREADY happened. By the time all 3 pass, the breakout is exhausted and entries are too late. Live logs showed all symbols rejected by `roc5_not_low_enough` during dips that were over by the time filters triggered.
+  - **Methodology**: 48-config parameter sweep over 18 months (Jun 2024–Dec 2025), 9 symbols. In-sample: DOGE, IMX, AVAX, FET, WIF. OOS: ADA, DOT, STX, TIA. Scripts: `scripts/sweep-short-filters.ts`, `scripts/sweep-long-filters.ts`.
+  - **SHORT changes (applied)**:
+    - `VOL_SPIKE`: 2.0 → 1.0 (captures breakouts earlier, before volume spike peaks)
+    - `PRICE_BELOW_BB_LOWER`: **permanently removed** (config field + code deleted). BB Lower requires price at -2σ, which is a mean-reversion signal — contradicts our momentum/continuation strategy. Sweep showed BB=OFF dominates in ALL 20 config pairs (BB=Y vs BB=N).
+  - **SHORT results**: Sharpe 3.54 → 4.33 (+0.79), PnL +$106K, DD 28.6% → 27.0% (-1.6pp), WR 66.2% → 66.0% (-0.2pp). OOS: PnL $23K → $54K, WR 63.2%.
+  - **LONG sweep result**: Baseline (ROC10=1.75%, Vol=1.15x, BB Upper=ON) tied for best Sharpe (4.33). No changes needed — BB Upper confirms true breakout (close > +2σ), which IS correct for momentum.
+  - **roc5 added to logs**: `orchestrator.ts` now displays ROC5 in feature summary alongside ROC10, so the actual filter value is visible.
+  - **Alignment**: All code paths (live/paper/backtest/parity/symbolEngine) read from unified `MomentumConfig.ENTRY_SHORT` — single source of truth. Parity auto-aligned via backtest engine.
+  - **Files**: `momentumConfig.ts`, `momentumSignal.ts`, `orchestrator.ts`, `agentState.ts`, `scripts/sweep-short-filters.ts`, `scripts/sweep-long-filters.ts`
+
 ## Multi-User Scaling
 
 System designed for 40+ users × 20 agents (800+ concurrent agents) with single Binance IP.

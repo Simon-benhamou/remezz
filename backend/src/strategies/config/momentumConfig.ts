@@ -57,9 +57,9 @@
  * SHORT ENTRY (BTC < SMA200 = Bear Market):
  * ═════════════════════════════════════════════════════════════
  * - ROC 5 périodes < -1.5%
- * - Volume > 2x moyenne
- * - Price < MA20 & BB Lower
- * - ConsecDown <= 4
+ * - Volume > 1.0x moyenne (V5.125: was 2.0x)
+ * - Price < MA20
+ * - ConsecDown <= 6 (V5.93: was 4)
  * - StochRSI >= 15 OR volRatio >= 4 (V5.9)
  *
  * EXIT (V5.27):
@@ -144,17 +144,18 @@ export const MomentumConfig = {
     ROC_MIN: 0.0175,             // V5.13: ROC 10 > 1.75% (was 2.5%) - Earlier entries
     VOL_MULTIPLIER: 1.15,        // V5.13: 1.15x (was 1.5) - +25% ROI, 62.2% win rate
     MAX_CONSEC_UP: 5,            // V5.12: 5 (was 3) - +34% PnL
+    REQUIRE_BB_BREAKOUT: true,   // V5.125: Require close > BB upper (can be disabled for sweep)
   },
 
   // Signal d'entrée SHORT (Bear Market: BTC < SMA200)
-  // V5.4: BB Breakdown - Plus stable (10/12 mois positifs)
+  // V5.125: Sweep-validated — BB Lower OFF + Vol 1.0x (was 2.0x, BB=true)
+  // Backtest 18mo (Jun24-Dec25): Sharpe 3.54→4.33, PnL +$106K, DD 28.6%→27.0%, WR 66.2%→66.0%
+  // OOS (ADA/DOT/STX/TIA): PnL +$31K, WR 63.2%. BB Lower was mean-reversion in momentum strat.
   ENTRY_SHORT: {
-    // Conditions SHORT optimisées
-    ROC_DROP_MIN: -0.015,        // ROC 5 < -1.5% (était -2%)
-    VOL_SPIKE: 2.0,              // Volume > 2x moyenne (était 2.5x)
+    ROC_DROP_MIN: -0.015,        // ROC 5 < -1.5% (unchanged)
+    VOL_SPIKE: 1.0,              // V5.125: Volume > 1.0x (was 2.0x) — captures breakouts earlier
     PRICE_BELOW_MA20: true,      // Prix < MA20
-    PRICE_BELOW_BB_LOWER: true,  // Prix < BB Lower (nouveau filtre)
-    MAX_CONSEC_DOWN: 6,          // V5.93: Max 6 (was 4) - backtest 2025: +30% PnL, +0.21 Sharpe, +1.3% WR, -3% DD
+    MAX_CONSEC_DOWN: 6,          // V5.93: Max 6 (was 4)
   },
 
   // ═══════════════════════════════════════════════════════════════════════════

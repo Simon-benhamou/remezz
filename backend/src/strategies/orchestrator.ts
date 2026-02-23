@@ -187,6 +187,7 @@ export class AgentOrchestrator {
   private lastSignalFeatures: {
     volRatio: number;
     roc: number;
+    roc5: number;
     bbDistance: number;  // % distance from BB upper/lower
     reason: string;
   } | null = null;
@@ -704,7 +705,7 @@ export class AgentOrchestrator {
         const f = this.lastSignalFeatures;
         // Show key metrics: vol ratio, ROC%, BB distance
         const featuresSummary = f
-          ? `vol=${f.volRatio.toFixed(1)}x roc=${f.roc.toFixed(1)}% bb=${f.bbDistance > 0 ? '+' : ''}${f.bbDistance.toFixed(1)}%`
+          ? `vol=${f.volRatio.toFixed(1)}x roc=${f.roc.toFixed(1)}% roc5=${f.roc5.toFixed(1)}% bb=${f.bbDistance > 0 ? '+' : ''}${f.bbDistance.toFixed(1)}%`
           : 'no_data';
         // Simplified reject reason (just the key part)
         const rejectKey = this.lastRejectReason?.split(':')[1]?.split('(')[0] || this.lastRejectReason?.split(':')[0] || '';
@@ -894,6 +895,7 @@ export class AgentOrchestrator {
         this.lastSignalFeatures = {
           volRatio: f.volRatio,
           roc: f.roc || 0,
+          roc5: f.roc5 || 0,
           bbDistance,
           reason: signal.reason || '',
         };
