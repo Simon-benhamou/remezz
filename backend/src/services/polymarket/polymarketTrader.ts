@@ -985,17 +985,17 @@ export async function simulatePolymarketBet(
     // Same guards as placePolymarketBet:
     const MIN_CLOB_PRICE = 0.55;
     if (clobAsk < MIN_CLOB_PRICE) {
-      return { success: false, error: `Price too low (${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE})` };
+      return { success: false, clobAsk, error: `Price too low (${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE})` };
     }
 
     const maxPrice = confidenceScore ? getMaxPriceForScore(confidenceScore) : MAX_CLOB_PRICE;
     if (clobAsk > maxPrice) {
-      return { success: false, error: `EV too low (CLOB=${clobAsk.toFixed(3)} > cap=${maxPrice.toFixed(2)})` };
+      return { success: false, clobAsk, error: `EV too low (CLOB=${clobAsk.toFixed(3)} > cap=${maxPrice.toFixed(2)})` };
     }
 
     const divergence = (clobAsk - gammaPrice) / gammaPrice;
     if (divergence < -0.20) {
-      return { success: false, error: `Reversal signal (${(divergence * 100).toFixed(0)}% below Gamma)` };
+      return { success: false, clobAsk, error: `Reversal signal (${(divergence * 100).toFixed(0)}% below Gamma)` };
     }
 
     return { success: true, clobAsk };

@@ -60,6 +60,20 @@ interface VirtualBet {
   direction: 'UP' | 'DOWN';
 }
 const virtualBetsBySymbol = new Map<string, VirtualBet[]>();
+
+// ─── Virtual observation tracking (mirrors live observation, no real GTC) ────
+interface VirtualObservation {
+  symbol: string;
+  tokenId: string;
+  direction: 'UP' | 'DOWN';
+  tierMax: number;
+  initialAsk: number;
+  bestAsk: number;
+  startedAt: number;
+  users: Array<{ userId: string; amount: number }>;
+}
+const virtualObservationBySymbol = new Map<string, VirtualObservation>();
+
 const liveStateBySymbol = new Map<string, { window: WindowState | null; klines1m: Candle1m[] }>();
 
 // ─── Observation mode state (V5.124: smart entry with GTC limit) ────────────
@@ -777,6 +791,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
         await cancelClobOrder(prisma, pendingObs.userId, pendingObs.orderId).catch(() => {});
         observationOrderBySymbol.delete(sym);
       }
+      virtualObservationBySymbol.delete(sym);
 
       // Reset per-symbol flags
       decisionMadeBySymbol.set(sym, false);
@@ -1003,6 +1018,23 @@ async function tick(prisma: PrismaClient): Promise<void> {
             betAmount: pmConfig.amount, clobAsk: simResult.clobAsk, direction: result.direction,
           });
           log.info(`VIRTUAL BET OK ${uLabel} [${sym}]: simulated @ CLOB ${simResult.clobAsk.toFixed(3)} (score=${score}, cap=${tierMax.toFixed(2)})`);
+        } else if (simResult.error?.startsWith('EV too low') && simResult.clobAsk) {
+          // Observation mode: CLOB ask above cap but maybe within reach — track and wait for dip
+          if (simResult.clobAsk <= tierMax + OBSERVATION_MAX_OVERSHOOT && !virtualObservationBySymbol.has(sym)) {
+            virtualObservationBySymbol.set(sym, {
+              symbol: sym, tokenId, direction: result.direction,
+              tierMax, initialAsk: simResult.clobAsk, bestAsk: simResult.clobAsk,
+              startedAt: Date.now(),
+              users: [{ userId, amount: pmConfig.amount }],
+            });
+            log.info(`[${sym}] VIRTUAL OBSERVATION ${uLabel}: waiting for dip to ${tierMax.toFixed(3)} (ask=${simResult.clobAsk.toFixed(3)}, cap+${OBSERVATION_MAX_OVERSHOOT})`);
+          } else if (virtualObservationBySymbol.has(sym)) {
+            // Already observing — add this user to the existing observation
+            virtualObservationBySymbol.get(sym)!.users.push({ userId, amount: pmConfig.amount });
+            log.info(`[${sym}] VIRTUAL OBSERVATION ${uLabel}: joined existing observation`);
+          } else {
+            log.info(`VIRTUAL SKIP ${uLabel} [${sym}]: ${simResult.error} (too far for observation)`);
+          }
         } else {
           log.info(`VIRTUAL SKIP ${uLabel} [${sym}]: ${simResult.error}`);
         }
@@ -1215,6 +1247,38 @@ async function tick(prisma: PrismaClient): Promise<void> {
             obs.bestAsk = Math.min(obs.bestAsk, currentAsk);
             if (w) w.observationBestAsk = obs.bestAsk;
           }
+        }
+      }
+    }
+
+    // ── Virtual observation: poll CLOB for dip (mirrors live observation) ──
+    const vObs = virtualObservationBySymbol.get(sym);
+    if (vObs) {
+      const vObsElapsed = Date.now() - vObs.startedAt;
+
+      if (vObsElapsed > OBSERVATION_TIMEOUT_MS) {
+        virtualObservationBySymbol.delete(sym);
+        log.info(`[${sym}] Virtual observation timeout after ${(vObsElapsed / 1000).toFixed(0)}s`);
+      } else {
+        // Need any virtual user's credentials to fetch CLOB price
+        const probeUserId = vObs.users[0]?.userId;
+        const currentAsk = probeUserId ? await getClobAskPrice(prisma, probeUserId, vObs.tokenId) : null;
+
+        if (currentAsk && currentAsk <= vObs.tierMax) {
+          // Dip! Record virtual fill for all tracked users
+          for (const u of vObs.users) {
+            getVirtualBets(sym).push({
+              userId: u.userId, symbol: sym, tokenId: vObs.tokenId,
+              betAmount: u.amount, clobAsk: vObs.tierMax, direction: vObs.direction,
+            });
+            log.info(`[${sym}] VIRTUAL OBSERVATION FILLED [${u.userId.slice(0, 8)}] @ ${vObs.tierMax.toFixed(3)} after ${(vObsElapsed / 1000).toFixed(0)}s (initial=${vObs.initialAsk.toFixed(3)}, best=${vObs.bestAsk.toFixed(3)})`);
+          }
+          virtualObservationBySymbol.delete(sym);
+        } else if (currentAsk && currentAsk < vObs.initialAsk * OBSERVATION_REVERSAL_PCT) {
+          virtualObservationBySymbol.delete(sym);
+          log.info(`[${sym}] Virtual observation reversal — ask dropped ${vObs.initialAsk.toFixed(3)} → ${currentAsk.toFixed(3)} — cancelled`);
+        } else if (currentAsk) {
+          vObs.bestAsk = Math.min(vObs.bestAsk, currentAsk);
         }
       }
     }
@@ -1438,6 +1502,7 @@ export function stopPolymarketWorker(): void {
   resolutionDoneBySymbol.clear();
   autoSellsBySymbol.clear();
   virtualBetsBySymbol.clear();
+  virtualObservationBySymbol.clear();
   observationOrderBySymbol.clear();
   liveStateBySymbol.clear();
   unredeemedTokens = [];
