@@ -468,6 +468,13 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Gotcha**: Removing "dead" config fields can break TS compilation if other files reference them (even behind disabled flags). Always grep all callers before deleting config.
   - **Files**: `backtestService.ts`, `parityVerificationServiceV2.ts`, `momentumConfig.ts`, `exitLogic.ts`
 
+- V5.123: Fix SessionKpi double-counting entry trading fee (Dashboard vs Ledger PnL mismatch):
+  - **Problem**: Dashboard (Active Agents cards) showed worse PnL than Execution Ledger Net P&L. AVAX: $10.40 vs $10.81, DOT: $1.01 vs $1.41, IMX: -$9.22 vs -$8.98. Systematic ~$0.25-0.41 per trade.
+  - **Root cause**: Entry fill `fee = entryNotional × PAPER_FEE_RATE` (created in `savePositionToDb`). Exit fill `fee = paperFeeUsd` (created in `saveExitToDb`). But `paperFeeUsd` already includes the entry trading fee (computed in `positionCloser.ts` as `tradingFeeEntry + tradingFeeExit + slippageEntry + slippageExit + fundingFee`). `recomputeKpi()` aggregates `SUM(Fill.fee) WHERE realizedPnl IS NOT NULL` — entry fills have `realizedPnl=0` (not null!) so they're included → entry trading fee counted twice.
+  - **Fix**: Added `exitFillFee = feeUsd != null ? calculatedFee - entryTradingFee : calculatedFee` in `saveExitToDb`. Exit fill stores `exitFillFee` (excludes entry trading fee). `Trade.feesUsd` unchanged (still stores full `paperFeeUsd` for Ledger display). SessionKpi now sums: `entryFill.fee + exitFillFee = entryTradingFee + (paperFeeUsd - entryTradingFee) = paperFeeUsd` (correct).
+  - **Data model**: `Trade.feesUsd` = total costs (for display). `Fill.fee` = per-fill fee (for KPI aggregation). `SessionKpi.realizedPnlUsd` = GROSS - SUM(Fill.fee) (NET).
+  - **File**: `positionPersistence.ts`
+
 ## Multi-User Scaling
 
 System designed for 40+ users × 20 agents (800+ concurrent agents) with single Binance IP.

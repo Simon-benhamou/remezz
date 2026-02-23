@@ -230,6 +230,12 @@ export class PositionPersistence {
 
       const notionalUsd = position.qty * exitPrice;
       const calculatedFee = feeUsd ?? (notionalUsd * MomentumConfig.COSTS.PAPER_FEE_RATE);
+      // V5.123: Exit fill fee must exclude entry trading fee (already stored in entry fill).
+      // paperFeeUsd includes entry+exit trading fees + slippage + funding.
+      // If we store it as-is, recomputeKpi() double-counts the entry fee
+      // (entry fill.fee + exit fill.fee both contain it).
+      const entryTradingFee = position.entryPrice * position.qty * MomentumConfig.COSTS.PAPER_FEE_RATE;
+      const exitFillFee = feeUsd != null ? calculatedFee - entryTradingFee : calculatedFee;
 
       const exitTs = new Date();
       // V5.107 NOTE: realEntryTime (Date.now()) takes priority for Trade.entryTs.
@@ -306,7 +312,7 @@ export class PositionPersistence {
             qty: position.qty,
             side: exitSide,
             realizedPnl: pnlUsd,
-            fee: calculatedFee,
+            fee: exitFillFee,
             strategyUsed: 'momentum_simple',
             strategyFamily: 'momentum',
             ts: exitTs,
