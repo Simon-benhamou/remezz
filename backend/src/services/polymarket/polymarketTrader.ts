@@ -76,6 +76,8 @@ export const CLOB_PRICE_TIERS = [
 
 /** Get the maximum acceptable CLOB price for a given confidence score. */
 export function getMaxPriceForScore(score: number): number {
+  // V5.124: VHigh (70+) = 50% WR at avg 0.794 = -EV. Cap at 0.82 to limit overpaying.
+  if (score >= 70) return 0.82;
   for (const tier of CLOB_PRICE_TIERS) {
     if (score >= tier.minScore) return tier.maxPrice;
   }
@@ -530,6 +532,13 @@ export async function placePolymarketBet(
       return { success: false, error: 'CLOB price unavailable — skipping bet' };
     }
 
+    // V5.124: Minimum CLOB price floor — prices < 0.55 have 42.9% WR (market already reversed)
+    const MIN_CLOB_PRICE = 0.55;
+    if (!skipEvCheck && clobAsk < MIN_CLOB_PRICE) {
+      log.warn(`Price too low: CLOB=${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE} — momentum likely reversed, skipping`);
+      return { success: false, error: `Price too low (${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE}) — momentum likely reversed` };
+    }
+
     // 1. Confidence-tiered EV cap: higher score → accept higher price
     //    skipEvCheck: used by hedge bets (small insurance, EV cap doesn't apply)
     const maxPrice = confidenceScore ? getMaxPriceForScore(confidenceScore) : MAX_CLOB_PRICE;
@@ -538,10 +547,16 @@ export async function placePolymarketBet(
       return { success: false, error: `EV too low (CLOB=${clobAsk.toFixed(3)} > cap=${maxPrice.toFixed(2)})` };
     }
 
-    // 2. Gamma divergence warning: log if CLOB diverges significantly from Gamma (informational)
+    // 2. Gamma divergence: warn if CLOB above Gamma, REJECT if CLOB significantly below Gamma (reversal)
     const divergence = (clobAsk - price) / price;
     if (divergence > MAX_GAMMA_DIVERGENCE_PCT) {
       log.warn(`Gamma divergence: CLOB=${clobAsk.toFixed(3)} vs Gamma=${price.toFixed(3)} (${(divergence * 100).toFixed(0)}% above) — proceeding with CLOB price`);
+    }
+    // V5.124: CLOB >20% below Gamma = market reversed against our prediction ("too good to be true")
+    const MIN_GAMMA_DIVERGENCE_PCT = -0.20;
+    if (!skipEvCheck && divergence < MIN_GAMMA_DIVERGENCE_PCT) {
+      log.warn(`Reversal signal: CLOB=${clobAsk.toFixed(3)} << Gamma=${price.toFixed(3)} (${(divergence * 100).toFixed(0)}% below) — skipping`);
+      return { success: false, error: `Reversal signal (CLOB ${(divergence * 100).toFixed(0)}% below Gamma)` };
     }
 
     log.info(`Price OK: CLOB ask=${clobAsk.toFixed(3)}, Gamma=${price.toFixed(3)}, cap=${maxPrice.toFixed(2)} (score=${confidenceScore ?? 'n/a'})`);

@@ -8,7 +8,7 @@ import {
   startChainlinkFeed,
   stopChainlinkFeed,
 } from './chainlinkPriceFeed.js';
-import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, placeTakeProfitSell, checkOrderStatus, cancelClobOrder, MAX_CLOB_PRICE, getMaxPriceForScore, getActivePolymarketUserIds, ALL_POLYMARKET_SYMBOLS } from './polymarketTrader.js';
+import { getLiveTradingConfig, placePolymarketBet, getPolymarketBalance, getPolymarketConfig, sellWinningTokens, redeemWinningTokens, getClobAskPrice, placeTakeProfitSell, checkOrderStatus, cancelClobOrder, placeGtcLimitBuy, MAX_CLOB_PRICE, getMaxPriceForScore, getActivePolymarketUserIds, ALL_POLYMARKET_SYMBOLS } from './polymarketTrader.js';
 import type {
   Candle1m,
   PredictionStats,
@@ -32,7 +32,7 @@ const REVERSAL_MAX_TOKEN_PRICE = 0.20;      // Only buy tokens below 20c
 const REVERSAL_MIN_ROC_PCT = 0.08;          // Minimum 2-candle reversal strength (%) — lottery only
 
 // ─── Pre-sell constants ──────────────────────────────────────────────────────
-const PRE_SELL_START_MS = 4 * 60 * 1000;        // T+4:00 — start attempting sells
+const PRE_SELL_START_MS = 3 * 60 * 1000;        // T+3:00 — start attempting sells (V5.124: was T+4:00)
 const PRE_SELL_RETRY_MS = 10 * 1000;             // Retry every 10 seconds
 
 // ─── Take-profit constants ──────────────────────────────────────────────────
@@ -50,6 +50,25 @@ const lastTpCheckBySymbol = new Map<string, number>();
 const resolutionDoneBySymbol = new Map<string, boolean>();
 const autoSellsBySymbol = new Map<string, PendingAutoSell[]>();
 const liveStateBySymbol = new Map<string, { window: WindowState | null; klines1m: Candle1m[] }>();
+
+// ─── Observation mode state (V5.124: smart entry with GTC limit) ────────────
+const OBSERVATION_MAX_OVERSHOOT = 0.10; // Enter observation if CLOB ask <= tierCap + 0.10
+const OBSERVATION_TIMEOUT_MS = 120_000; // 2 min max observation
+const OBSERVATION_REVERSAL_PCT = 0.85;  // Cancel if ask drops >15% from initial
+
+interface ObservationOrder {
+  userId: string;
+  orderId: string;
+  tokenId: string;
+  sym: string;
+  limitPrice: number;
+  amount: number;
+  direction: 'UP' | 'DOWN';
+  initialAsk: number;
+  bestAsk: number;
+  startedAt: number;
+}
+const observationOrderBySymbol = new Map<string, ObservationOrder>();
 
 // ─── Global state (not per-symbol) ──────────────────────────────────────────
 
@@ -498,7 +517,7 @@ async function processUnredeemedTokens(prisma: PrismaClient): Promise<void> {
 
     const uLabel = `[${u.userId.slice(0, 8)}]`;
     try {
-      const sellResult = await sellWinningTokens(prisma, u.userId, u.tokenId, u.betAmount, u.executionPrice, 0.80);
+      const sellResult = await sellWinningTokens(prisma, u.userId, u.tokenId, u.betAmount, u.executionPrice, 0.50);
       if (sellResult.success) {
         log.info(`UNREDEEMED SOLD ${uLabel}: ${u.slug} — $${sellResult.usdcReceived?.toFixed(2)} USDC @ ${sellResult.sellPrice?.toFixed(3)} (attempt ${u.attempts})`);
         if (!u.isHedge) {
@@ -611,6 +630,25 @@ async function tick(prisma: PrismaClient): Promise<void> {
         }
       }
 
+      // V5.124: Final sell attempt at aggressive minBid before giving up
+      const finalUnsold = autoSells.filter((s) => !s.sold);
+      for (const s of finalUnsold) {
+        try {
+          const sellResult = await sellWinningTokens(prisma, s.userId, s.tokenId, s.betAmount, s.executionPrice, 0.70);
+          if (sellResult.success) {
+            s.sold = true;
+            log.info(`[${sym}] FINAL SELL OK [${s.userId.slice(0, 8)}]: ${s.direction} — $${sellResult.usdcReceived?.toFixed(2)} USDC @ ${sellResult.sellPrice?.toFixed(3)}`);
+            if (!s.isHedge && currentWindow) {
+              const realPnl = (sellResult.usdcReceived ?? 0) - s.betAmount;
+              await prisma.polymarketPrediction.updateMany({
+                where: { windowStart: new Date(currentWindow.windowStart), symbol: sym, userId: s.userId },
+                data: { usdcReceived: sellResult.usdcReceived, sellPrice: sellResult.sellPrice, soldAt: new Date(), realPnl },
+              }).catch(() => {});
+            }
+          }
+        } catch (_) { /* ignore — will be queued as unredeemed */ }
+      }
+
       // Move unsold tokens to unredeemed queue
       if (currentWindow) {
         const unsold = autoSells.filter((s) => !s.sold);
@@ -635,6 +673,13 @@ async function tick(prisma: PrismaClient): Promise<void> {
             log.info(`UNREDEEMED [${s.userId.slice(0, 8)}]: queued ${s.isHedge ? 'HEDGE' : 'Early Bird'} ${s.direction} ${sym} from ${slug} for retry`);
           }
         }
+      }
+
+      // Cancel any pending observation GTC order
+      const pendingObs = observationOrderBySymbol.get(sym);
+      if (pendingObs) {
+        await cancelClobOrder(prisma, pendingObs.userId, pendingObs.orderId).catch(() => {});
+        observationOrderBySymbol.delete(sym);
       }
 
       // Reset per-symbol flags
@@ -687,6 +732,15 @@ async function tick(prisma: PrismaClient): Promise<void> {
     // Collect symbols ready for decision at T+1min
     if (elapsed >= DECISION_OFFSET_MS && !decisionMadeBySymbol.get(sym)) {
       decisionMadeBySymbol.set(sym, true);
+
+      // V5.124: Dead hours filter — 2h-7h UTC has ~50% WR
+      const hourUtc = new Date(nowMs).getUTCHours();
+      if (hourUtc >= 2 && hourUtc < 7) {
+        w.status = 'skipped';
+        log.info(`[${sym}] Skipping — dead hours (${hourUtc}h UTC)`);
+        continue;
+      }
+
       readyForDecision.push({ sym, klines, startPrice: w.startPrice });
     }
   }
@@ -800,8 +854,29 @@ async function tick(prisma: PrismaClient): Promise<void> {
             }
           }
         } else if (betResult.error?.startsWith('EV too low')) {
-          log.info(`CLOB above cap ${uLabel} [${sym}] ${tierMax.toFixed(2)} (score=${score}) — skipping`);
-          activeLiveBetByUser.delete(betKey);
+          // V5.124: Observation mode — place GTC limit at cap and wait for dip
+          const clobAsk = await getClobAskPrice(prisma, userId, tokenId);
+          if (clobAsk && clobAsk <= tierMax + OBSERVATION_MAX_OVERSHOOT && !observationOrderBySymbol.has(sym)) {
+            const gtcResult = await placeGtcLimitBuy(prisma, userId, tokenId, liveConfig.amount, tierMax);
+            if (gtcResult.success && gtcResult.orderId) {
+              observationOrderBySymbol.set(sym, {
+                userId, orderId: gtcResult.orderId, tokenId, sym,
+                limitPrice: tierMax, amount: liveConfig.amount, direction: result.direction,
+                initialAsk: clobAsk, bestAsk: clobAsk, startedAt: Date.now(),
+              });
+              w.observationStatus = 'observing';
+              w.observationInitialAsk = clobAsk;
+              w.observationBestAsk = clobAsk;
+              log.info(`[${sym}] OBSERVATION ${uLabel}: GTC limit BUY @ ${tierMax.toFixed(3)} (ask=${clobAsk.toFixed(3)}, cap+${OBSERVATION_MAX_OVERSHOOT}) — waiting for dip`);
+            } else {
+              log.info(`CLOB above cap ${uLabel} [${sym}] ${tierMax.toFixed(2)} (score=${score}) — GTC failed: ${gtcResult.error}`);
+              activeLiveBetByUser.delete(betKey);
+            }
+          } else {
+            const reason = !clobAsk ? 'no CLOB price' : clobAsk > tierMax + OBSERVATION_MAX_OVERSHOOT ? `too far (${clobAsk.toFixed(3)} > ${(tierMax + OBSERVATION_MAX_OVERSHOOT).toFixed(2)})` : 'already observing';
+            log.info(`CLOB above cap ${uLabel} [${sym}] ${tierMax.toFixed(2)} (score=${score}) — ${reason}`);
+            activeLiveBetByUser.delete(betKey);
+          }
         } else {
           log.error(`LIVE BET FAILED ${uLabel} [${sym}]: ${betResult.error}`);
           activeLiveBetByUser.delete(betKey);
@@ -878,9 +953,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
         const betKey = activeBetKey(userId, sym);
         const hasEarlyBird = activeLiveBetByUser.get(betKey) === start;
-        const signalOk = !hasEarlyBird && lotterySignalOk;
 
-        if (!signalOk) continue;
+        // V5.124: LOTTERY disabled (0% WR on 5 trades, -25$). Only HEDGE remains.
+        if (!hasEarlyBird) continue;
 
         const mode = hasEarlyBird ? 'HEDGE' : 'LOTTERY';
         const betAmount = hasEarlyBird ? pmConfig.hedgeAmount : liveConfig.amount;
@@ -964,6 +1039,62 @@ async function tick(prisma: PrismaClient): Promise<void> {
       }
     }
 
+    // ── Observation mode: poll GTC limit buy (V5.124) ──────────────────
+    const obs = observationOrderBySymbol.get(sym);
+    if (obs) {
+      const obsElapsed = Date.now() - obs.startedAt;
+
+      // Deadline: 2 minutes max observation
+      if (obsElapsed > OBSERVATION_TIMEOUT_MS) {
+        await cancelClobOrder(prisma, obs.userId, obs.orderId).catch(() => {});
+        observationOrderBySymbol.delete(sym);
+        activeLiveBetByUser.delete(activeBetKey(obs.userId, sym));
+        log.info(`[${sym}] Observation timeout — cancelled GTC after ${(obsElapsed / 1000).toFixed(0)}s`);
+      } else {
+        // Check fill status
+        const status = await checkOrderStatus(prisma, obs.userId, obs.orderId);
+        if (status === 'MATCHED' || status === 'FILLED') {
+          // Filled! Record execution
+          if (w) {
+            w.executionPrice = obs.limitPrice;
+            w.observationStatus = 'filled';
+            w.observationTrigger = 'dip';
+            w.betAmount = obs.amount;
+          }
+          getAutoSells(sym).push({
+            userId: obs.userId,
+            symbol: sym,
+            tokenId: obs.tokenId,
+            betAmount: obs.amount,
+            executionPrice: obs.limitPrice,
+            direction: obs.direction,
+            isHedge: false,
+            sold: false,
+            tpOrderId: null,
+            tpTargetPrice: null,
+          });
+          observationOrderBySymbol.delete(sym);
+          log.info(`[${sym}] GTC FILLED [${obs.userId.slice(0, 8)}] @ ${obs.limitPrice.toFixed(3)} after ${(obsElapsed / 1000).toFixed(0)}s (initial=${obs.initialAsk.toFixed(3)}, best=${obs.bestAsk.toFixed(3)})`);
+        } else if (status === 'CANCELED' || status === 'CANCELLED' || status === 'EXPIRED') {
+          observationOrderBySymbol.delete(sym);
+          activeLiveBetByUser.delete(activeBetKey(obs.userId, sym));
+          log.info(`[${sym}] Observation GTC ${status} by exchange`);
+        } else {
+          // Still open — check reversal
+          const currentAsk = await getClobAskPrice(prisma, obs.userId, obs.tokenId);
+          if (currentAsk && currentAsk < obs.initialAsk * OBSERVATION_REVERSAL_PCT) {
+            await cancelClobOrder(prisma, obs.userId, obs.orderId).catch(() => {});
+            observationOrderBySymbol.delete(sym);
+            activeLiveBetByUser.delete(activeBetKey(obs.userId, sym));
+            log.info(`[${sym}] Reversal detected — ask dropped ${obs.initialAsk.toFixed(3)} → ${currentAsk.toFixed(3)} (>${((1 - OBSERVATION_REVERSAL_PCT) * 100).toFixed(0)}%) — cancelled GTC`);
+          } else if (currentAsk) {
+            obs.bestAsk = Math.min(obs.bestAsk, currentAsk);
+            if (w) w.observationBestAsk = obs.bestAsk;
+          }
+        }
+      }
+    }
+
     // ── Take-profit monitoring ──────────────────────────────────────────
     if (autoSells.length > 0) {
       const hasTpOrders = autoSells.some((s) => s.tpOrderId && !s.sold);
@@ -1013,7 +1144,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
       }
     }
 
-    // ── Aggressive pre-sell: T+4:00 → T+4:55 ──────────────────────────
+    // ── Aggressive pre-sell: T+3:00 → T+4:55 (V5.124: was T+4:00, lower minBid) ──
     if (elapsed >= PRE_SELL_START_MS && autoSells.length > 0) {
       const unsold = autoSells.filter((s) => !s.sold);
       const now = Date.now();
@@ -1021,7 +1152,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
       if (unsold.length > 0 && now - (lastPreSellBySymbol.get(sym) ?? 0) >= PRE_SELL_RETRY_MS) {
         lastPreSellBySymbol.set(sym, now);
 
-        const minBid = elapsed >= 280_000 ? 0.80 : elapsed >= 260_000 ? 0.85 : 0.90;
+        const minBid = elapsed >= 280_000 ? 0.75 : elapsed >= 240_000 ? 0.80 : 0.85;
 
         for (const sell of unsold) {
           try {
@@ -1182,6 +1313,7 @@ export function stopPolymarketWorker(): void {
   lastTpCheckBySymbol.clear();
   resolutionDoneBySymbol.clear();
   autoSellsBySymbol.clear();
+  observationOrderBySymbol.clear();
   liveStateBySymbol.clear();
   unredeemedTokens = [];
 }
