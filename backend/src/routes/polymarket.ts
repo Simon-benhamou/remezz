@@ -60,9 +60,27 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
           byWindowSymbol.set(key, row);
         }
       }
+      // Determine trade type per row:
+      // - userId=null → prediction only (shared signal row)
+      // - userId set + executionPrice → traded (virtual or live)
+      // - userId set + no executionPrice → shouldn't happen but treat as prediction
+      const config = await getPolymarketConfig(prisma, req.user!.id);
       const predictions = [...byWindowSymbol.values()]
         .sort((a, b) => b.windowStart.getTime() - a.windowStart.getTime())
-        .slice(0, limit);
+        .slice(0, limit)
+        .map((row) => {
+          let tradeType: 'prediction' | 'virtual' | 'live';
+          if (row.userId === null || row.executionPrice == null) {
+            tradeType = 'prediction';
+          } else if (row.soldAt || row.usdcReceived) {
+            // Has real sell data → was definitely a live trade
+            tradeType = 'live';
+          } else {
+            // Per-user row with CLOB price but no sell → use current mode as best guess
+            tradeType = config.mode === 'live' ? 'live' : 'virtual';
+          }
+          return { ...row, tradeType };
+        });
 
       res.json({ predictions });
     } catch (err) {

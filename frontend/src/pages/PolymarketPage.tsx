@@ -116,6 +116,7 @@ interface PredictionRow {
   scoreBreakdown: Record<string, number> | null;
   isCorrect: boolean | null;
   skipped: boolean;
+  tradeType: 'prediction' | 'virtual' | 'live';
 }
 
 interface HistoryData {
@@ -415,7 +416,7 @@ interface HistoryTableProps {
 }
 
 function HistoryTable({ predictions }: HistoryTableProps) {
-  const gridCols = 'grid-cols-[80px_40px_50px_50px_45px_60px_90px_70px_80px]';
+  const gridCols = 'grid-cols-[70px_36px_44px_44px_32px_70px_60px_70px_80px]';
 
   const formatWindowTime = (ts: string) => {
     const d = new Date(ts);
@@ -436,8 +437,8 @@ function HistoryTable({ predictions }: HistoryTableProps) {
         <span>Pred</span>
         <span>Real</span>
         <span></span>
-        <span>Entry</span>
-        <span>Trade</span>
+        <span>Mode</span>
+        <span>CLOB</span>
         <span>P&L</span>
         <span>Sell</span>
       </div>
@@ -456,14 +457,31 @@ function HistoryTable({ predictions }: HistoryTableProps) {
           const scoreIcon = isSkipped ? '\u2014' : awaiting ? '\u23F3' : correct === true ? '\u2713' : correct === false ? '\u2717' : '\u2014';
           const scoreColor = isSkipped ? 'text-muted-foreground' : awaiting ? 'text-yellow-500' : correct === true ? 'text-success' : correct === false ? 'text-destructive' : 'text-muted-foreground';
 
-          // Use realPnl when available, fall back to simulatedPnl
           const pnl = p.realPnl ?? p.simulatedPnl ?? 0;
-          const hasExecution = p.executionPrice != null;
+          const isTrade = p.tradeType === 'virtual' || p.tradeType === 'live';
 
-          // Sell status
+          // Mode badge
+          let modeLabel: string;
+          let modeBg: string;
+          let modeText: string;
+          if (p.tradeType === 'live') {
+            modeLabel = 'LIVE';
+            modeBg = 'bg-emerald-500/15';
+            modeText = 'text-emerald-500';
+          } else if (p.tradeType === 'virtual') {
+            modeLabel = 'VIRTUAL';
+            modeBg = 'bg-blue-500/15';
+            modeText = 'text-blue-500';
+          } else {
+            modeLabel = 'SIGNAL';
+            modeBg = 'bg-muted';
+            modeText = 'text-muted-foreground';
+          }
+
+          // Sell status (live trades only)
           let sellLabel = '\u2014';
           let sellColor = 'text-muted-foreground';
-          if (hasExecution && correct === true) {
+          if (p.tradeType === 'live' && correct === true) {
             if (p.soldAt) {
               sellLabel = `$${(p.usdcReceived ?? 0).toFixed(2)}`;
               sellColor = 'text-success';
@@ -471,7 +489,7 @@ function HistoryTable({ predictions }: HistoryTableProps) {
               sellLabel = 'Stuck';
               sellColor = 'text-amber-500';
             }
-          } else if (hasExecution && correct === false) {
+          } else if (p.tradeType === 'live' && correct === false) {
             sellLabel = 'Lost';
             sellColor = 'text-destructive';
           }
@@ -515,32 +533,30 @@ function HistoryTable({ predictions }: HistoryTableProps) {
                 {scoreIcon}
               </span>
 
-              {/* Entry (CLOB price or Gamma odds) */}
-              <span className="font-mono text-muted-foreground">
-                {isSkipped ? '\u2014' : hasExecution
-                  ? `${(p.executionPrice! * 100).toFixed(0)}c`
-                  : p.entryOdds != null ? `${(p.entryOdds * 100).toFixed(0)}c` : '\u2014'}
+              {/* Mode badge */}
+              <span className={cn(
+                'inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[9px] font-semibold w-fit',
+                modeBg, modeText,
+              )}>
+                {modeLabel}
               </span>
 
-              {/* Trade status */}
-              <span className={cn(
-                'text-[10px]',
-                hasExecution ? 'text-foreground' : 'text-muted-foreground',
-              )}>
-                {isSkipped ? '\u2014' : hasExecution
-                  ? `$${p.betAmount?.toFixed(0)} @ ${(p.executionPrice! * 100).toFixed(0)}c`
-                  : 'No trade'}
+              {/* CLOB price */}
+              <span className="font-mono text-muted-foreground">
+                {isSkipped ? '\u2014' : isTrade && p.executionPrice
+                  ? `${(p.executionPrice * 100).toFixed(0)}c`
+                  : p.entryOdds != null ? `${(p.entryOdds * 100).toFixed(0)}c*` : '\u2014'}
               </span>
 
               {/* P&L */}
               <span className={cn(
                 'font-mono font-semibold',
-                isSkipped ? 'text-muted-foreground' : pnl > 0 ? 'text-success' : pnl < 0 ? 'text-destructive' : 'text-muted-foreground',
+                !isTrade || isSkipped ? 'text-muted-foreground' : pnl > 0 ? 'text-success' : pnl < 0 ? 'text-destructive' : 'text-muted-foreground',
               )}>
-                {isSkipped || pnl === 0 ? '\u2014' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`}
+                {!isTrade || isSkipped || pnl === 0 ? '\u2014' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`}
               </span>
 
-              {/* Sell status */}
+              {/* Sell status (live only) */}
               <span className={cn('text-[10px] font-medium', sellColor)}>
                 {sellLabel}
               </span>
@@ -937,23 +953,21 @@ export default function PolymarketPage() {
         </div>
       </div>
 
-      {/* KPI Cards */}
+      {/* KPI Cards — always use traded stats (virtual+live both have CLOB execution) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           icon={Trophy}
-          label={pmMode === 'live' ? 'Traded WR (today)' : 'Win Rate (today)'}
-          value={`${(pmMode === 'live' ? (stats?.todayTradedWinRate ?? 0) : todayWinRate).toFixed(1)}%`}
-          sub={pmMode === 'live'
-            ? `${stats?.todayTradedWins ?? 0}W / ${stats?.todayTradedLosses ?? 0}L traded`
-            : `${stats?.todayWins ?? 0}W / ${stats?.todayLosses ?? 0}L predicted`}
-          color={(pmMode === 'live' ? (stats?.todayTradedWinRate ?? 0) : todayWinRate) >= 50 ? 'success' : todayWinRate > 0 ? 'destructive' : 'default'}
+          label={pmMode === 'live' ? 'Live WR (today)' : 'Virtual WR (today)'}
+          value={`${(stats?.todayTradedWinRate ?? 0).toFixed(1)}%`}
+          sub={`${stats?.todayTradedWins ?? 0}W / ${stats?.todayTradedLosses ?? 0}L (CLOB-priced)`}
+          color={(stats?.todayTradedWinRate ?? 0) >= 50 ? 'success' : (stats?.todayTradedWinRate ?? 0) > 0 ? 'destructive' : 'default'}
         />
         <KpiCard
           icon={DollarSign}
-          label={pmMode === 'live' ? 'Real P&L (today)' : 'Simulated P&L (today)'}
-          value={`${(pmMode === 'live' ? (stats?.todayTradedPnl ?? 0) : todayPnl) >= 0 ? '+' : ''}$${(pmMode === 'live' ? (stats?.todayTradedPnl ?? 0) : todayPnl).toFixed(2)}`}
-          sub={`Cumul: ${(pmMode === 'live' ? (stats?.tradedPnl ?? 0) : (stats?.cumulativePnl ?? 0)) >= 0 ? '+' : ''}$${(pmMode === 'live' ? (stats?.tradedPnl ?? 0) : (stats?.cumulativePnl ?? 0)).toFixed(2)}`}
-          color={(pmMode === 'live' ? (stats?.todayTradedPnl ?? 0) : todayPnl) >= 0 ? 'success' : 'destructive'}
+          label={pmMode === 'live' ? 'Real P&L (today)' : 'Virtual P&L (today)'}
+          value={`${(stats?.todayTradedPnl ?? 0) >= 0 ? '+' : ''}$${(stats?.todayTradedPnl ?? 0).toFixed(2)}`}
+          sub={`Cumul: ${(stats?.tradedPnl ?? 0) >= 0 ? '+' : ''}$${(stats?.tradedPnl ?? 0).toFixed(2)}`}
+          color={(stats?.todayTradedPnl ?? 0) >= 0 ? 'success' : 'destructive'}
         />
         <KpiCard
           icon={BarChart3}
