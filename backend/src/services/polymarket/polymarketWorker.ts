@@ -26,11 +26,6 @@ const POLL_INTERVAL_MS = 1000;               // 1 second
 /** Map short symbol → Binance pair */
 const BINANCE_SYMBOL = (s: string) => `${s}USDT`;
 
-// ─── Last-second reversal / hedge constants ─────────────────────────────────
-const REVERSAL_OFFSET_MS = 4 * 60 * 1000;  // T+4:00 — check for last-second reversal/hedge
-const REVERSAL_MAX_TOKEN_PRICE = 0.20;      // Only buy tokens below 20c
-const REVERSAL_MIN_ROC_PCT = 0.08;          // Minimum 2-candle reversal strength (%) — lottery only
-
 // ─── Pre-sell constants ──────────────────────────────────────────────────────
 const PRE_SELL_START_MS = 3 * 60 * 1000;        // T+3:00 — start attempting sells (V5.124: was T+4:00)
 const PRE_SELL_RETRY_MS = 10 * 1000;             // Retry every 10 seconds
@@ -44,7 +39,6 @@ const TP_CHECK_INTERVAL_MS = 5_000;                // Check TP order status ever
 
 const windowBySymbol = new Map<string, WindowState | null>();
 const decisionMadeBySymbol = new Map<string, boolean>();
-const reversalCheckedBySymbol = new Map<string, boolean>();
 const lastPreSellBySymbol = new Map<string, number>();
 const lastTpCheckBySymbol = new Map<string, number>();
 const resolutionDoneBySymbol = new Map<string, boolean>();
@@ -111,7 +105,6 @@ interface PendingAutoSell {
   betAmount: number;
   executionPrice: number;
   direction: 'UP' | 'DOWN';
-  isHedge: boolean;
   sold: boolean;
   tpOrderId: string | null;
   tpTargetPrice: number | null;
@@ -127,7 +120,6 @@ interface UnredeemedToken {
   betAmount: number;
   executionPrice: number;
   direction: 'UP' | 'DOWN';
-  isHedge: boolean;
   addedAt: number;
   attempts: number;
   lastAttemptAt: number;
@@ -149,7 +141,6 @@ interface PendingVerification {
   tokenId: string | null;
   verifyAfterMs: number;
   giveUpAfterMs: number;
-  isHedge?: boolean;
   isVirtual?: boolean;
 }
 
@@ -261,9 +252,8 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
   }
 
   // ── Per-user live trade rows ──────────────────────────────────────────
-  const userSells = autoSells.filter((s) => !s.isHedge);
   const seenUsers = new Set<string>();
-  for (const sell of userSells) {
+  for (const sell of autoSells) {
     if (seenUsers.has(sell.userId)) continue;
     seenUsers.add(sell.userId);
 
@@ -360,7 +350,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
     });
 
     const verifiedUsers = new Set<string>();
-    for (const sell of userSells) {
+    for (const sell of autoSells) {
       if (verifiedUsers.has(sell.userId)) continue;
       verifiedUsers.add(sell.userId);
       pendingVerifications.push({
@@ -429,54 +419,6 @@ async function verifyPendingResolutions(prisma: PrismaClient): Promise<void> {
           : null;
 
       const userLabel = v.userId ? `[${v.userId.slice(0, 8)}]` : '[shared]';
-
-      // ── Hedge bets: skip DB update, only auto-sell ────────────────
-      if (v.isHedge) {
-        if (!v.userId) { toRemove.push(i); continue; }
-
-        const hedgeLabel = `HEDGE ${v.predictionDirection} $${amt}`;
-        if (isCorrect) {
-          log.info(`Oracle ${userLabel}: ${hedgeLabel} → WIN (PnL +$${simulatedPnl?.toFixed(2)}) | ${v.slug}`);
-        } else {
-          log.info(`Oracle ${userLabel}: ${hedgeLabel} → LOSS (PnL $${simulatedPnl?.toFixed(2)}) | ${v.slug}`);
-        }
-
-        if (isCorrect && v.tokenId && v.betAmount && v.executionPrice) {
-          const sellResult = await sellWinningTokens(prisma, v.userId, v.tokenId, v.betAmount, v.executionPrice, 0.80);
-          if (sellResult.success) {
-            log.info(`HEDGE auto-sell OK ${userLabel}: $${sellResult.usdcReceived?.toFixed(2)} USDC from ${v.slug}`);
-          } else if (sellResult.error?.includes('Market closed') || sellResult.error?.includes('orderbook')) {
-            const conditionId = await fetchConditionId(v.slug);
-            if (conditionId) {
-              const redeemResult = await redeemWinningTokens(prisma, v.userId, conditionId, v.betAmount, v.executionPrice);
-              if (redeemResult.success) {
-                log.info(`HEDGE CTF redeem OK ${userLabel}: ~$${redeemResult.usdcReceived?.toFixed(2)} USDC from ${v.slug}`);
-              } else {
-                log.warn(`HEDGE CTF redeem failed ${userLabel} for ${v.slug}: ${redeemResult.error} — claim manually`);
-              }
-            } else {
-              log.warn(`HEDGE ${userLabel}: no conditionId for ${v.slug} — claim manually`);
-            }
-          } else {
-            const alreadyQueued = unredeemedTokens.some((u) => u.windowStart === v.windowStart && u.tokenId === v.tokenId && u.userId === v.userId);
-            if (!alreadyQueued) {
-              unredeemedTokens.push({
-                userId: v.userId,
-                symbol: v.symbol,
-                windowStart: v.windowStart, slug: v.slug, tokenId: v.tokenId,
-                betAmount: v.betAmount, executionPrice: v.executionPrice,
-                direction: v.predictionDirection ?? 'UP', isHedge: true,
-                addedAt: Date.now(), attempts: 0, lastAttemptAt: 0,
-                giveUpAt: Date.now() + 30 * 60 * 1000,
-              });
-              log.info(`HEDGE UNREDEEMED ${userLabel}: queued ${v.slug} for retry`);
-            }
-          }
-        }
-
-        toRemove.push(i);
-        continue;
-      }
 
       // ── Virtual bets: update DB with PnL, skip auto-sell/redeem ────
       if (v.isVirtual) {
@@ -596,7 +538,7 @@ function queueUnredeemed(v: PendingVerification): void {
       symbol: v.symbol,
       windowStart: v.windowStart, slug: v.slug, tokenId: v.tokenId,
       betAmount: v.betAmount, executionPrice: v.executionPrice,
-      direction: v.predictionDirection ?? 'UP', isHedge: false,
+      direction: v.predictionDirection ?? 'UP',
       addedAt: Date.now(), attempts: 0, lastAttemptAt: 0,
       giveUpAt: Date.now() + 30 * 60 * 1000,
     });
@@ -630,19 +572,17 @@ async function processUnredeemedTokens(prisma: PrismaClient): Promise<void> {
       const sellResult = await sellWinningTokens(prisma, u.userId, u.tokenId, u.betAmount, u.executionPrice, 0.50);
       if (sellResult.success) {
         log.info(`UNREDEEMED SOLD ${uLabel}: ${u.slug} — $${sellResult.usdcReceived?.toFixed(2)} USDC @ ${sellResult.sellPrice?.toFixed(3)} (attempt ${u.attempts})`);
-        if (!u.isHedge) {
-          const realPnl = (sellResult.usdcReceived ?? 0) - u.betAmount;
-          const dbWhere = { windowStart: new Date(u.windowStart), symbol: u.symbol, userId: u.userId };
-          await prisma.polymarketPrediction.updateMany({
-            where: dbWhere,
-            data: {
-              usdcReceived: sellResult.usdcReceived,
-              sellPrice: sellResult.sellPrice,
-              soldAt: new Date(),
-              realPnl,
-            },
-          }).catch(() => {});
-        }
+        const realPnl = (sellResult.usdcReceived ?? 0) - u.betAmount;
+        const dbWhere = { windowStart: new Date(u.windowStart), symbol: u.symbol, userId: u.userId };
+        await prisma.polymarketPrediction.updateMany({
+          where: dbWhere,
+          data: {
+            usdcReceived: sellResult.usdcReceived,
+            sellPrice: sellResult.sellPrice,
+            soldAt: new Date(),
+            realPnl,
+          },
+        }).catch(() => {});
         toRemove.push(i);
       } else {
         log.info(`UNREDEEMED ${uLabel}: CLOB sell failed for ${u.slug} (${sellResult.error}), trying CTF redeem...`);
@@ -651,19 +591,17 @@ async function processUnredeemedTokens(prisma: PrismaClient): Promise<void> {
           const redeemResult = await redeemWinningTokens(prisma, u.userId, conditionId, u.betAmount, u.executionPrice);
           if (redeemResult.success) {
             log.info(`UNREDEEMED REDEEMED ${uLabel}: ${u.slug} — ~$${redeemResult.usdcReceived?.toFixed(2)} USDC via CTF`);
-            if (!u.isHedge) {
-              const realPnl = (redeemResult.usdcReceived ?? 0) - u.betAmount;
-              const dbWhere = { windowStart: new Date(u.windowStart), symbol: u.symbol, userId: u.userId };
-              await prisma.polymarketPrediction.updateMany({
-                where: dbWhere,
-                data: {
-                  usdcReceived: redeemResult.usdcReceived,
-                  sellPrice: 1.0,
-                  soldAt: new Date(),
-                  realPnl,
-                },
-              }).catch(() => {});
-            }
+            const realPnl = (redeemResult.usdcReceived ?? 0) - u.betAmount;
+            const dbWhere = { windowStart: new Date(u.windowStart), symbol: u.symbol, userId: u.userId };
+            await prisma.polymarketPrediction.updateMany({
+              where: dbWhere,
+              data: {
+                usdcReceived: redeemResult.usdcReceived,
+                sellPrice: 1.0,
+                soldAt: new Date(),
+                realPnl,
+              },
+            }).catch(() => {});
             toRemove.push(i);
           } else {
             log.warn(`CTF redeem failed ${uLabel} for ${u.slug}: ${redeemResult.error} — claim manually on Polymarket`);
@@ -748,7 +686,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
           if (sellResult.success) {
             s.sold = true;
             log.info(`[${sym}] FINAL SELL OK [${s.userId.slice(0, 8)}]: ${s.direction} — $${sellResult.usdcReceived?.toFixed(2)} USDC @ ${sellResult.sellPrice?.toFixed(3)}`);
-            if (!s.isHedge && currentWindow) {
+            if (currentWindow) {
               const realPnl = (sellResult.usdcReceived ?? 0) - s.betAmount;
               await prisma.polymarketPrediction.updateMany({
                 where: { windowStart: new Date(currentWindow.windowStart), symbol: sym, userId: s.userId },
@@ -774,13 +712,12 @@ async function tick(prisma: PrismaClient): Promise<void> {
               betAmount: s.betAmount,
               executionPrice: s.executionPrice,
               direction: s.direction,
-              isHedge: s.isHedge,
               addedAt: Date.now(),
               attempts: 0,
               lastAttemptAt: 0,
               giveUpAt: Date.now() + 30 * 60 * 1000,
             });
-            log.info(`UNREDEEMED [${s.userId.slice(0, 8)}]: queued ${s.isHedge ? 'HEDGE' : 'Early Bird'} ${s.direction} ${sym} from ${slug} for retry`);
+            log.info(`UNREDEEMED [${s.userId.slice(0, 8)}]: queued ${s.direction} ${sym} from ${slug} for retry`);
           }
         }
       }
@@ -795,7 +732,6 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
       // Reset per-symbol flags
       decisionMadeBySymbol.set(sym, false);
-      reversalCheckedBySymbol.set(sym, false);
       lastPreSellBySymbol.set(sym, 0);
       lastTpCheckBySymbol.set(sym, 0);
       resolutionDoneBySymbol.set(sym, false);
@@ -948,7 +884,6 @@ async function tick(prisma: PrismaClient): Promise<void> {
               betAmount: liveConfig.amount,
               executionPrice: betResult.executionPrice,
               direction: result.direction,
-              isHedge: false,
               sold: false,
               tpOrderId: null,
               tpTargetPrice: null,
@@ -1054,146 +989,13 @@ async function tick(prisma: PrismaClient): Promise<void> {
     }
   }
 
-  // ── 6. Per-symbol: reversal/hedge, pre-sell, TP check ──────────────────
+  // ── 6. Per-symbol: observation, pre-sell, TP check ─────────────────────
   for (const sym of ALL_POLYMARKET_SYMBOLS) {
     const w = windowBySymbol.get(sym);
     if (!w) continue;
     const autoSells = getAutoSells(sym);
     const binSym = BINANCE_SYMBOL(sym);
     const klines = getKlines1m(binSym);
-
-    // ── Last-second reversal / hedge (T+4:00) ─────────────────────────
-    if (elapsed >= REVERSAL_OFFSET_MS && !reversalCheckedBySymbol.get(sym)) {
-      reversalCheckedBySymbol.set(sym, true);
-
-      const trend: 'UP' | 'DOWN' = w.currentPrice >= w.startPrice ? 'UP' : 'DOWN';
-      const reverseDir: 'UP' | 'DOWN' = trend === 'UP' ? 'DOWN' : 'UP';
-
-      let lotterySignalOk = false;
-      const recentCandles = klines
-        .filter((k) => k.isFinal && k.timestamp >= start)
-        .slice(-2);
-
-      if (recentCandles.length >= 2) {
-        const allReversed = recentCandles.every((c) =>
-          reverseDir === 'UP' ? c.close > c.open : c.close < c.open,
-        );
-        const bodiesStrong = recentCandles.every((c) => {
-          const range = c.high - c.low;
-          return range > 0 && Math.abs(c.close - c.open) / range > 0.5;
-        });
-        const moveStart = recentCandles[0].open;
-        const moveEnd = recentCandles[recentCandles.length - 1].close;
-        const moveRocPct = Math.abs((moveEnd - moveStart) / moveStart) * 100;
-
-        lotterySignalOk = allReversed && bodiesStrong && moveRocPct >= REVERSAL_MIN_ROC_PCT;
-
-        if (lotterySignalOk) {
-          log.info(`[${sym}] LOTTERY signal: trend=${trend}, reverse=${reverseDir}, ROC=${moveRocPct.toFixed(3)}%`);
-        }
-      }
-
-      const slug = buildSlug(sym, start);
-      const odds = await fetchPolymarketOdds(slug);
-      const reverseTokenId = reverseDir === 'UP' ? odds.upTokenId : odds.downTokenId;
-      const reverseEntryOdds = reverseDir === 'UP' ? odds.upPrice : odds.downPrice;
-
-      const activeUsers = await getActivePolymarketUserIds(prisma);
-      for (const userId of activeUsers) {
-        const uLabel = `[${userId.slice(0, 8)}]`;
-        const pmConfig = await getPolymarketConfig(prisma, userId);
-        if (!pmConfig.symbols.includes(sym)) continue;
-
-        const liveConfig = await getLiveTradingConfig(prisma, userId);
-        if (!liveConfig) continue;
-
-        const betKey = activeBetKey(userId, sym);
-        const hasEarlyBird = activeLiveBetByUser.get(betKey) === start;
-
-        // V5.124: LOTTERY disabled (0% WR on 5 trades, -25$). Only HEDGE remains.
-        if (!hasEarlyBird) continue;
-
-        const mode = hasEarlyBird ? 'HEDGE' : 'LOTTERY';
-        const betAmount = hasEarlyBird ? pmConfig.hedgeAmount : liveConfig.amount;
-
-        if (!reverseTokenId) continue;
-
-        const clobAsk = await getClobAskPrice(prisma, userId, reverseTokenId);
-        const maxPrice = hasEarlyBird ? MAX_CLOB_PRICE : REVERSAL_MAX_TOKEN_PRICE;
-
-        if (clobAsk !== null && clobAsk > 0 && clobAsk <= maxPrice) {
-          const potentialWin = betAmount / clobAsk;
-          log.info(
-            `[${sym}] ${mode} ${uLabel}: ${reverseDir} @ CLOB ${clobAsk.toFixed(3)} ($${betAmount} → potential $${potentialWin.toFixed(2)} if WIN)`,
-          );
-
-          const { balance } = await getPolymarketBalance(prisma, userId);
-          if (balance < betAmount) {
-            log.warn(`[${sym}] ${mode} ${uLabel}: insufficient balance $${balance.toFixed(2)} — skipping`);
-            continue;
-          }
-
-          if (!hasEarlyBird) {
-            activeLiveBetByUser.set(betKey, start);
-            w.prediction = {
-              direction: reverseDir,
-              confidence: 0,
-              score: { volumeSpike: 0, microRoc: 0, bodyRatio: 0, wickRejection: 0, candleAlignment: 0, preWindowMomentum: 0, total: 0 },
-              microRocPct: 0,
-            };
-            w.entryOdds = reverseEntryOdds;
-            w.tokenId = reverseTokenId;
-            w.betAmount = betAmount;
-            w.status = 'predicted';
-          }
-
-          const betResult = await placePolymarketBet(prisma, userId, reverseDir, reverseTokenId, betAmount, reverseEntryOdds, hasEarlyBird);
-          if (betResult.success) {
-            log.info(`[${sym}] ${mode} OK ${uLabel}: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)}`);
-            if (!hasEarlyBird && betResult.executionPrice) {
-              w.executionPrice = betResult.executionPrice;
-            }
-
-            if (betResult.executionPrice) {
-              getAutoSells(sym).push({
-                userId,
-                symbol: sym,
-                tokenId: reverseTokenId,
-                betAmount,
-                executionPrice: betResult.executionPrice,
-                direction: reverseDir,
-                isHedge: hasEarlyBird,
-                sold: false,
-                tpOrderId: null,
-                tpTargetPrice: null,
-              });
-            }
-
-            if (hasEarlyBird) {
-              pendingVerifications.push({
-                userId,
-                symbol: sym,
-                windowStart: start,
-                slug,
-                predictionDirection: reverseDir,
-                entryOdds: reverseEntryOdds,
-                executionPrice: betResult.executionPrice ?? null,
-                betAmount,
-                tokenId: reverseTokenId,
-                verifyAfterMs: Date.now() + 3 * 60 * 1000,
-                giveUpAfterMs: Date.now() + 60 * 60 * 1000,
-                isHedge: true,
-              });
-            }
-          } else {
-            log.error(`[${sym}] ${mode} FAILED ${uLabel}: ${betResult.error}`);
-            if (!hasEarlyBird) activeLiveBetByUser.delete(betKey);
-          }
-        } else if (clobAsk !== null) {
-          log.info(`[${sym}] ${mode} ${uLabel}: ${reverseDir} token @ ${clobAsk.toFixed(3)} > ${maxPrice} — too expensive`);
-        }
-      }
-    }
 
     // ── Observation mode: poll GTC limit buy (V5.124) ──────────────────
     const obs = observationOrderBySymbol.get(sym);
@@ -1224,7 +1026,6 @@ async function tick(prisma: PrismaClient): Promise<void> {
             betAmount: obs.amount,
             executionPrice: obs.limitPrice,
             direction: obs.direction,
-            isHedge: false,
             sold: false,
             tpOrderId: null,
             tpTargetPrice: null,
@@ -1311,16 +1112,14 @@ async function tick(prisma: PrismaClient): Promise<void> {
               const realPnl = usdcReceived - sell.betAmount;
 
               log.info(
-                `[${sym}] TP FILLED [${sell.userId.slice(0, 8)}]: ${sell.isHedge ? 'HEDGE' : 'Early Bird'} ${sell.direction} — ` +
+                `[${sym}] TP FILLED [${sell.userId.slice(0, 8)}]: ${sell.direction} — ` +
                 `$${usdcReceived.toFixed(2)} USDC @ ${((sell.tpTargetPrice ?? 0) * 100).toFixed(0)}c (entry ${(sell.executionPrice * 100).toFixed(0)}c, profit +$${realPnl.toFixed(2)})`,
               );
 
-              if (!sell.isHedge) {
-                await prisma.polymarketPrediction.updateMany({
-                  where: { windowStart: new Date(w.windowStart), symbol: sym, userId: sell.userId },
-                  data: { usdcReceived, sellPrice: sell.tpTargetPrice, soldAt: new Date(), realPnl },
-                }).catch(() => {});
-              }
+              await prisma.polymarketPrediction.updateMany({
+                where: { windowStart: new Date(w.windowStart), symbol: sym, userId: sell.userId },
+                data: { usdcReceived, sellPrice: sell.tpTargetPrice, soldAt: new Date(), realPnl },
+              }).catch(() => {});
 
               sell.tpOrderId = null;
             } else if (status === 'CANCELED' || status === 'CANCELLED' || status === 'EXPIRED') {
@@ -1348,22 +1147,20 @@ async function tick(prisma: PrismaClient): Promise<void> {
             if (sellResult.success) {
               sell.sold = true;
               log.info(
-                `[${sym}] PRE-SELL OK [${sell.userId.slice(0, 8)}]: ${sell.isHedge ? 'HEDGE' : 'Early Bird'} ${sell.direction} — ` +
+                `[${sym}] PRE-SELL OK [${sell.userId.slice(0, 8)}]: ${sell.direction} — ` +
                 `$${sellResult.usdcReceived?.toFixed(2)} USDC @ ${sellResult.sellPrice?.toFixed(3)}`,
               );
 
-              if (!sell.isHedge) {
-                const realPnl = (sellResult.usdcReceived ?? 0) - sell.betAmount;
-                await prisma.polymarketPrediction.updateMany({
-                  where: { windowStart: new Date(w.windowStart), symbol: sym, userId: sell.userId },
-                  data: {
-                    usdcReceived: sellResult.usdcReceived,
-                    sellPrice: sellResult.sellPrice,
-                    soldAt: new Date(),
-                    realPnl,
-                  },
-                });
-              }
+              const realPnl = (sellResult.usdcReceived ?? 0) - sell.betAmount;
+              await prisma.polymarketPrediction.updateMany({
+                where: { windowStart: new Date(w.windowStart), symbol: sym, userId: sell.userId },
+                data: {
+                  usdcReceived: sellResult.usdcReceived,
+                  sellPrice: sellResult.sellPrice,
+                  soldAt: new Date(),
+                  realPnl,
+                },
+              });
             }
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -1461,9 +1258,13 @@ async function recoverPendingVerifications(prisma: PrismaClient): Promise<void> 
 
   if (unverified.length === 0) return;
 
+  // Detect virtual users so recovered verifications don't go through live sell path
+  const virtualUserIds = new Set(await getVirtualPolymarketUserIds(prisma));
+
   for (const p of unverified) {
+    const uid = p.userId ?? null;
     pendingVerifications.push({
-      userId: p.userId ?? null,
+      userId: uid,
       symbol: p.symbol,
       windowStart: p.windowStart.getTime(),
       slug: p.polymarketSlug!,
@@ -1474,10 +1275,11 @@ async function recoverPendingVerifications(prisma: PrismaClient): Promise<void> 
       tokenId: p.tokenId,
       verifyAfterMs: Date.now(),
       giveUpAfterMs: Date.now() + 60 * 60 * 1000,
+      isVirtual: uid !== null && virtualUserIds.has(uid),
     });
   }
 
-  log.info(`Recovery: re-queued ${unverified.length} unverified predictions for oracle check`);
+  log.info(`Recovery: re-queued ${unverified.length} unverified predictions for oracle check (${virtualUserIds.size} virtual users)`);
 }
 
 /**
@@ -1496,7 +1298,6 @@ export function stopPolymarketWorker(): void {
   // Clear all per-symbol state
   windowBySymbol.clear();
   decisionMadeBySymbol.clear();
-  reversalCheckedBySymbol.clear();
   lastPreSellBySymbol.clear();
   lastTpCheckBySymbol.clear();
   resolutionDoneBySymbol.clear();
