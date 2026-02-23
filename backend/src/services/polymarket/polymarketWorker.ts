@@ -781,14 +781,6 @@ async function tick(prisma: PrismaClient): Promise<void> {
     if (elapsed >= DECISION_OFFSET_MS && !decisionMadeBySymbol.get(sym)) {
       decisionMadeBySymbol.set(sym, true);
 
-      // V5.124: Dead hours filter — 2h-7h UTC has ~50% WR
-      const hourUtc = new Date(nowMs).getUTCHours();
-      if (hourUtc >= 2 && hourUtc < 7) {
-        w.status = 'skipped';
-        log.info(`[${sym}] Skipping — dead hours (${hourUtc}h UTC)`);
-        continue;
-      }
-
       readyForDecision.push({ sym, klines, startPrice: w.startPrice });
     }
   }
