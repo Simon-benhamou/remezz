@@ -810,9 +810,38 @@ async function tick(prisma: PrismaClient): Promise<void> {
     }));
 
     // ── 5. SERIAL betting (shared wallet) — sorted by confidence DESC ──
-    const tradeable = scoringResults
-      .filter((r) => r.result !== null)
-      .sort((a, b) => (b.result?.confidence ?? 0) - (a.result?.confidence ?? 0));
+    const scored = scoringResults.filter((r) => r.result !== null);
+
+    // ── Consensus filter: only trade if 3+ symbols predict the same direction ──
+    const upCount = scored.filter(r => r.result!.direction === 'UP').length;
+    const downCount = scored.filter(r => r.result!.direction === 'DOWN').length;
+    const consensusDir: 'UP' | 'DOWN' = upCount >= downCount ? 'UP' : 'DOWN';
+    const consensusCount = Math.max(upCount, downCount);
+
+    let tradeable: typeof scored;
+    if (consensusCount >= 3) {
+      tradeable = scored
+        .filter(r => r.result!.direction === consensusDir)
+        .sort((a, b) => (b.result?.confidence ?? 0) - (a.result?.confidence ?? 0));
+
+      const rejected = scored.filter(r => r.result!.direction !== consensusDir);
+      for (const { sym } of rejected) {
+        const w = windowBySymbol.get(sym);
+        if (w) w.status = 'skipped';
+        log.info(`[${sym}] Skipped — against consensus (${consensusDir} ${consensusCount}/${scored.length})`);
+      }
+      log.info(`Consensus: ${consensusDir} ${consensusCount}/${scored.length} — trading ${tradeable.length} symbols`);
+    } else {
+      tradeable = [];
+      for (const { sym } of scored) {
+        const w = windowBySymbol.get(sym);
+        if (w) w.status = 'skipped';
+        log.info(`[${sym}] Skipped — no consensus (UP=${upCount}, DOWN=${downCount}, need 3+)`);
+      }
+      if (scored.length > 0) {
+        log.info(`No consensus: UP=${upCount}, DOWN=${downCount} — skipping all`);
+      }
+    }
 
     for (const { sym, result, odds, slug } of tradeable) {
       if (!result || !odds) continue;
