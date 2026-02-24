@@ -2369,8 +2369,8 @@ function runOnWorker(input: BacktestComputationInput): Promise<BacktestResult> {
 
     const timeout = setTimeout(() => {
       worker.terminate();
-      reject(new Error('Backtest worker timeout (15min)'));
-    }, 15 * 60 * 1000);
+      reject(new Error('Backtest worker timeout (45min)'));
+    }, 45 * 60 * 1000);
 
     worker.on('message', (msg: { success: boolean; result?: BacktestResult; error?: string }) => {
       clearTimeout(timeout);
@@ -2458,16 +2458,10 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   };
 
   // Run computation on worker thread to avoid blocking the event loop.
-  // Falls back to inline execution if worker fails (e.g. tsx dev mode).
-  let result: BacktestResult;
-  try {
-    console.log(`[Backtest] Starting computation on worker thread...`);
-    result = await runOnWorker(input);
-    console.log(`[Backtest] Worker completed: ${result.trades.length} trades, ROI: ${result.summary.totalPnlPct.toFixed(1)}%`);
-  } catch (workerError) {
-    console.warn(`[Backtest] Worker thread unavailable, running on main thread:`, workerError);
-    result = await runBacktestComputation(input);
-  }
+  // NO fallback to main thread — it blocks the entire app (event loop, WS, API).
+  console.log(`[Backtest] Starting computation on worker thread...`);
+  let result: BacktestResult = await runOnWorker(input);
+  console.log(`[Backtest] Worker completed: ${result.trades.length} trades, ROI: ${result.summary.totalPnlPct.toFixed(1)}%`);
 
   // V5.113: Post-process trailing exits at 1m resolution (opt-in, takes ~5min for API fetches)
   if (params.postProcess1m === true) {
