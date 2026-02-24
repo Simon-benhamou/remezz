@@ -2458,10 +2458,20 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   };
 
   // Run computation on worker thread to avoid blocking the event loop.
-  // NO fallback to main thread — it blocks the entire app (event loop, WS, API).
-  console.log(`[Backtest] Starting computation on worker thread...`);
-  let result: BacktestResult = await runOnWorker(input);
-  console.log(`[Backtest] Worker completed: ${result.trades.length} trades, ROI: ${result.summary.totalPnlPct.toFixed(1)}%`);
+  // Fallback to main thread ONLY for CLI scripts (tsx can't resolve .js workers).
+  // In production (compiled .js), worker always works.
+  let result: BacktestResult;
+  try {
+    console.log(`[Backtest] Starting computation on worker thread...`);
+    result = await runOnWorker(input);
+    console.log(`[Backtest] Worker completed: ${result.trades.length} trades, ROI: ${result.summary.totalPnlPct.toFixed(1)}%`);
+  } catch (workerError) {
+    const errStr = workerError instanceof Error ? `${workerError.message} ${(workerError as NodeJS.ErrnoException).code || ''}` : String(workerError);
+    const isWorkerMissing = errStr.includes('ERR_MODULE_NOT_FOUND') || errStr.includes('Worker URL not available');
+    if (!isWorkerMissing) throw workerError;
+    console.warn(`[Backtest] Worker unavailable (tsx/dev mode), running inline. Do NOT use this in production.`);
+    result = await runBacktestComputation(input);
+  }
 
   // V5.113: Post-process trailing exits at 1m resolution (opt-in, takes ~5min for API fetches)
   if (params.postProcess1m === true) {
