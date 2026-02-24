@@ -487,6 +487,13 @@ Strategy improvements tracked with version tags (V5.60+). Current features:
   - **Alignment**: All code paths (live/paper/backtest/parity/symbolEngine) read from unified `MomentumConfig.ENTRY_SHORT` — single source of truth. Parity auto-aligned via backtest engine.
   - **Files**: `momentumConfig.ts`, `momentumSignal.ts`, `orchestrator.ts`, `agentState.ts`, `scripts/sweep-short-filters.ts`, `scripts/sweep-long-filters.ts`
 
+- V5.125b: Comment/variable cleanup — eliminate misleading "1h" references + SHORT confidence fix:
+  - **Regime variable naming**: All `btcCloses1h` → `btcClosesRegime`, `btcSma200_1h` → `btcSma200Regime`, `btcNow1h` → `btcNowRegime`, `cachedBtcCandles1hWindow` → `cachedBtcCandlesRegimeWindow`. Since V5.102 regime uses 15m by default — "1h" in variable names was confusing.
+  - **Regime comments updated**: `// V5.82: Use 1h candles for SMA200 regime` → `// V5.102: Use regime-timeframe candles (default 15m, configurable via BTC_REGIME_TIMEFRAME)` in `getMarketConditions()`, `checkMomentumSignal()`, and `shouldExitPosition()`.
+  - **SHORT confidence fix**: `distanceFromLower` (distance below BB Lower) replaced with `distanceBelowMa20` (distance below MA20). BB Lower filter was removed in V5.125 but the confidence calculation still used it — gave 0 or negative values since price is no longer required to be below BB Lower. MA20 is always positive here (filter `priceBelowMa20` guarantees it). Reason string: `dist=` → `dist_ma20=`.
+  - **Zero behavioral change**: `confidence` field is informational only (never read downstream). Variable renames are cosmetic.
+  - **Files**: `momentumSignal.ts`, `exitLogic.ts`, `backtestService.ts`
+
 ## Multi-User Scaling
 
 System designed for 40+ users × 20 agents (800+ concurrent agents) with single Binance IP.

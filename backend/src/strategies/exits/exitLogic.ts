@@ -95,14 +95,14 @@ export function shouldExitPosition(
       opts?.btcCandles &&
       opts.btcCandles.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
 
-    // V5.82: Use 1h candles for regime SMA200 (more stable, less whipsaw)
+    // V5.102: Use regime-timeframe candles for SMA200 (default 15m, configurable via BTC_REGIME_TIMEFRAME)
     let btcSma200: number;
     let btcNow: number;
     const btcCandlesRegimeExit = opts.btcCandlesRegime;
     if (btcCandlesRegimeExit && btcCandlesRegimeExit.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
-      const btcCloses1h = btcCandlesRegimeExit.map(c => c.close);
-      btcSma200 = calcSMA(btcCloses1h, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
-      btcNow = btcCloses1h[btcCloses1h.length - 1];
+      const btcClosesRegime = btcCandlesRegimeExit.map(c => c.close);
+      btcSma200 = calcSMA(btcClosesRegime, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
+      btcNow = btcClosesRegime[btcClosesRegime.length - 1];
     } else {
       const btcCloses15m = opts.btcCandles.map(c => c.close);
       btcSma200 = calcSMA(btcCloses15m, MomentumConfig.ENTRY.BTC_SMA_PERIOD);

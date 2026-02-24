@@ -43,13 +43,13 @@ export function getMarketConditions(btcCandles: Candle[], btcCandlesRegime?: Can
   const btcCloses = btcCandles.map(c => c.close);
   const btcNow15m = btcCloses[btcCloses.length - 1];
 
-  // V5.82: Use 1h candles for SMA200 regime (more stable)
+  // V5.102: Use regime-timeframe candles for SMA200 (default 15m since V5.102, configurable via BTC_REGIME_TIMEFRAME)
   let btcSma200: number;
   let btcNow: number;
   if (btcCandlesRegime && btcCandlesRegime.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
-    const btcCloses1h = btcCandlesRegime.map(c => c.close);
-    btcSma200 = calcSMA(btcCloses1h, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
-    btcNow = btcCloses1h[btcCloses1h.length - 1];
+    const btcClosesRegime = btcCandlesRegime.map(c => c.close);
+    btcSma200 = calcSMA(btcClosesRegime, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
+    btcNow = btcClosesRegime[btcClosesRegime.length - 1];
   } else {
     btcSma200 = calcMA(btcCloses, 200);
     btcNow = btcNow15m;
@@ -372,17 +372,17 @@ export function checkMomentumSignal(
 
   // ========== REGIME FILTER: BTC vs SMA200 ==========
   // V5.82: Use 1h candles for regime SMA200 (200h = ~8 days) — much more stable
-  // than 15m (200 × 15m = 50h) which whipsaws around SMA200 intraday.
-  // Falls back to 15m if 1h candles not available.
+  // V5.102: Use regime-timeframe candles (default 15m) for SMA200.
+  // Falls back to symbol 15m candles if regime candles not available.
   let btcSma200: number;
   let btcNow: number;
   const btcCandlesRegime = opts?.btcCandlesRegime;
   if (btcCandlesRegime && btcCandlesRegime.length >= MomentumConfig.ENTRY.BTC_SMA_PERIOD) {
-    const btcCloses1h = btcCandlesRegime.map(c => c.close);
-    btcSma200 = calcSMA(btcCloses1h, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
-    btcNow = btcCloses1h[btcCloses1h.length - 1];
+    const btcClosesRegime = btcCandlesRegime.map(c => c.close);
+    btcSma200 = calcSMA(btcClosesRegime, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
+    btcNow = btcClosesRegime[btcClosesRegime.length - 1];
   } else {
-    // Fallback to 15m if 1h not available (startup, insufficient data)
+    // Fallback to 15m if regime candles not available (startup, insufficient data)
     btcSma200 = calcSMA(btcCloses, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
     btcNow = btcCloses[btcCloses.length - 1];
   }
@@ -407,6 +407,16 @@ export function checkMomentumSignal(
   } else {
     btcInBullRegime = btcNow > btcSma200;
     btcInBearRegime = btcNow < btcSma200;
+  }
+
+  // V5.129: Skip entries when BTC is too close to SMA200 (regime uncertainty zone)
+  // Data shows: when |dist| < 1%, 268 trades at 56% WR and -$14,462 total PnL
+  const skipZonePct = (MomentumConfig.ENTRY as any).BTC_SMA200_SKIP_ZONE_PCT ?? 0;
+  if (skipZonePct > 0 && btcSma200 > 0) {
+    const distFromSma200Pct = Math.abs((btcNow - btcSma200) / btcSma200) * 100;
+    if (distFromSma200Pct < skipZonePct) {
+      return { valid: false, reason: `sma200_skip_zone(dist=${distFromSma200Pct.toFixed(2)}%<${skipZonePct}%)` };
+    }
   }
 
   // Calcul legacy pour compatibilité features — timestamp-based to handle candle gaps
@@ -722,12 +732,12 @@ export function checkMomentumSignal(
     }
 
     // ✅ ALL SHORT CONDITIONS MET
-    const distanceFromLower = bb.lower > 0 ? (bb.lower - close) / bb.lower : 0;
-    const confidence = Math.min(1, (volRatio / 4) * 0.3 + (Math.abs(roc5) / 0.04) * 0.3 + (distanceFromLower * 50) * 0.2 + 0.2);
+    const distanceBelowMa20 = ma20 > 0 ? (ma20 - close) / ma20 : 0;
+    const confidence = Math.min(1, (volRatio / 4) * 0.3 + (Math.abs(roc5) / 0.04) * 0.3 + (distanceBelowMa20 * 50) * 0.2 + 0.2);
     return {
       valid: true,
       side: 'short',
-      reason: `v5.98_bear_short_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|dist=${(distanceFromLower*100).toFixed(2)}%`,
+      reason: `v5.98_bear_short_confirmed|mtf_aligned|btc_vol_ok|pattern_ok|dist_ma20=${(distanceBelowMa20*100).toFixed(2)}%`,
       confidence,
       features
     };
