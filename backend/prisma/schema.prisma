@@ -380,6 +380,7 @@ model PolymarketPrediction {
   scoreBreakdown  Json?
   isCorrect       Boolean?
   skipped         Boolean  @default(false)
+  skipReason      String?
   polymarketSlug  String?
   user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 

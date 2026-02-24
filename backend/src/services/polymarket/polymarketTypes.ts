@@ -54,6 +54,7 @@ export interface WindowState {
   observationBestAsk: number | null;
   observationTrigger: string | null;  // 'dip' | 'bounce' | 'rising' | 'deadline' | 'window_end'
   status: 'accumulating' | 'predicted' | 'resolved' | 'skipped';
+  skipReason: string | null;
 }
 
 export interface PredictionStats {
