@@ -132,6 +132,7 @@ interface PredictionRow {
   scoreBreakdown: Record<string, number> | null;
   isCorrect: boolean | null;
   skipped: boolean;
+  skipReason: string | null;
   tradeType: 'prediction' | 'virtual' | 'live';
 }
 
@@ -480,7 +481,7 @@ function HistoryTable({ predictions }: HistoryTableProps) {
       size: 50,
       cell: ({ row }) => {
         const p = row.original;
-        if (p.skipped) return <span className="text-muted-foreground">{'\u2014'}</span>;
+        if (p.skipped && !p.prediction) return <span className="text-muted-foreground">{'\u2014'}</span>;
         return p.prediction === 'UP'
           ? <ArrowUp className="h-3.5 w-3.5 text-success" />
           : p.prediction === 'DOWN'
@@ -494,7 +495,7 @@ function HistoryTable({ predictions }: HistoryTableProps) {
       size: 50,
       cell: ({ row }) => {
         const p = row.original;
-        if (p.skipped) return <span className="text-muted-foreground">{'\u2014'}</span>;
+        if (p.skipped && p.isCorrect === null && !p.prediction) return <span className="text-muted-foreground">{'\u2014'}</span>;
         const awaiting = p.prediction && p.isCorrect === null;
         if (awaiting) return <span className="text-yellow-500">{'\u23F3'}</span>;
         if (p.isCorrect === true) return <CheckCircle className="h-3.5 w-3.5 text-success" />;
@@ -566,6 +567,30 @@ function HistoryTable({ predictions }: HistoryTableProps) {
         if (t === 'live') return <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold', 'bg-emerald-500/15 text-emerald-500')}>LIVE</span>;
         if (t === 'virtual') return <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold', 'bg-blue-500/15 text-blue-500')}>VIRTUAL</span>;
         return <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold', 'bg-muted text-muted-foreground')}>SIGNAL</span>;
+      },
+    },
+    {
+      accessorKey: 'skipReason',
+      header: 'Skip',
+      size: 80,
+      cell: ({ row }) => {
+        const p = row.original;
+        if (!p.skipped || !p.skipReason) return null;
+        const labels: Record<string, { label: string; color: string }> = {
+          low_score: { label: 'LOW SCORE', color: 'bg-yellow-500/15 text-yellow-500' },
+          no_candles: { label: 'NO DATA', color: 'bg-gray-500/15 text-gray-400' },
+          against_consensus: { label: 'VS CONS.', color: 'bg-orange-500/15 text-orange-500' },
+          no_consensus: { label: 'NO CONS.', color: 'bg-orange-500/15 text-orange-400' },
+          market_filter: { label: 'MKT FILT', color: 'bg-purple-500/15 text-purple-500' },
+          cooldown: { label: 'COOLDOWN', color: 'bg-red-500/15 text-red-400' },
+          toxic_hour: { label: 'TOXIC HR', color: 'bg-red-500/15 text-red-500' },
+        };
+        const info = labels[p.skipReason] ?? { label: p.skipReason.toUpperCase(), color: 'bg-muted text-muted-foreground' };
+        return (
+          <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold', info.color)}>
+            {info.label}
+          </span>
+        );
       },
     },
   ], []);
