@@ -31,7 +31,7 @@ const BINANCE_SYMBOL = (s: string) => `${s}USDT`;
 const MIN_SCORE = 50;
 
 // ─── Market condition filter (V5.128: calibrated on backtest) ────────────────
-const MARKET_FILTER_ENABLED = true;
+const MARKET_FILTER_ENABLED = false;  // V5.131: disabled — BT 30d shows +174% PnL without (79.1% WR, $731 vs $266)
 const FLAT_THRESHOLD = 0.02; // roc5m below this = "flat" (passes mean-reversion)
 
 /**

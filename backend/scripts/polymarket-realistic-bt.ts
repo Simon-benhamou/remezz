@@ -31,7 +31,7 @@ const BET = parseFloat(parseArg('bet') ?? '5');
 const SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP'];
 const WINDOW_MS = 5 * 60_000;
 const PRE_WINDOW_CANDLES = 5;
-const MIN_SCORE = 40;
+const MIN_SCORE = 50;  // V5.130: production threshold raised from 40 to 50
 const FLAT_THRESHOLD = 0.02;
 
 // ─── CLOB price model (calibrated on 98 live virtual trades) ─────────────────
@@ -209,18 +209,20 @@ async function main() {
   };
 
   const configs: Config[] = [
-    { name: 'A) Tout (prod: cons3+mktF)',   minConsensus: 3, marketFilter: true,  minClob: 0.55, maxClob: 0.90, minScore: 40 },
-    { name: 'B) Cons3 only',                minConsensus: 3, marketFilter: false, minClob: 0.55, maxClob: 0.90, minScore: 40 },
-    { name: 'C) MktFilter only',            minConsensus: 1, marketFilter: true,  minClob: 0.55, maxClob: 0.90, minScore: 40 },
-    { name: 'D) Score only',                minConsensus: 1, marketFilter: false, minClob: 0.55, maxClob: 0.90, minScore: 40 },
-    { name: 'E) Prod + CLOB max 0.72',      minConsensus: 3, marketFilter: true,  minClob: 0.55, maxClob: 0.72, minScore: 40 },
-    { name: 'F) Prod + CLOB max 0.65',      minConsensus: 3, marketFilter: true,  minClob: 0.55, maxClob: 0.65, minScore: 40 },
-    { name: 'G) Prod + score>=50',          minConsensus: 3, marketFilter: true,  minClob: 0.55, maxClob: 0.90, minScore: 50 },
-    { name: 'H) Prod + score>=60',          minConsensus: 3, marketFilter: true,  minClob: 0.55, maxClob: 0.90, minScore: 60 },
-    { name: 'I) Cons3 + CLOB max 0.65',     minConsensus: 3, marketFilter: false, minClob: 0.55, maxClob: 0.65, minScore: 40 },
-    { name: 'J) MktF + CLOB max 0.65',      minConsensus: 1, marketFilter: true,  minClob: 0.55, maxClob: 0.65, minScore: 40 },
-    { name: 'K) Score only + CLOB max 0.65', minConsensus: 1, marketFilter: false, minClob: 0.55, maxClob: 0.65, minScore: 40 },
-    { name: 'L) Cons3 + CLOB 0.55-0.60',    minConsensus: 3, marketFilter: false, minClob: 0.55, maxClob: 0.60, minScore: 40 },
+    // ─── Key comparison: A (prod with MktF) vs B (prod without MktF) ─────────
+    { name: 'A) PROD (cons3+mktF, s>=50)',   minConsensus: 3, marketFilter: true,  minClob: 0.55, maxClob: 0.90, minScore: 50 },
+    { name: 'B) NO MKT FILT (cons3, s>=50)', minConsensus: 3, marketFilter: false, minClob: 0.55, maxClob: 0.90, minScore: 50 },
+    // ─── Other combos ────────────────────────────────────────────────────────
+    { name: 'C) MktFilter only (s>=50)',     minConsensus: 1, marketFilter: true,  minClob: 0.55, maxClob: 0.90, minScore: 50 },
+    { name: 'D) Score only (s>=50)',         minConsensus: 1, marketFilter: false, minClob: 0.55, maxClob: 0.90, minScore: 50 },
+    { name: 'E) Prod + CLOB max 0.72',      minConsensus: 3, marketFilter: true,  minClob: 0.55, maxClob: 0.72, minScore: 50 },
+    { name: 'F) Prod + CLOB max 0.65',      minConsensus: 3, marketFilter: true,  minClob: 0.55, maxClob: 0.65, minScore: 50 },
+    { name: 'G) Prod + score>=60',          minConsensus: 3, marketFilter: true,  minClob: 0.55, maxClob: 0.90, minScore: 60 },
+    { name: 'H) NoProd + score>=60',        minConsensus: 3, marketFilter: false, minClob: 0.55, maxClob: 0.90, minScore: 60 },
+    { name: 'I) Cons3 + CLOB max 0.65',     minConsensus: 3, marketFilter: false, minClob: 0.55, maxClob: 0.65, minScore: 50 },
+    { name: 'J) MktF + CLOB max 0.65',      minConsensus: 1, marketFilter: true,  minClob: 0.55, maxClob: 0.65, minScore: 50 },
+    { name: 'K) Score only + CLOB max 0.65', minConsensus: 1, marketFilter: false, minClob: 0.55, maxClob: 0.65, minScore: 50 },
+    { name: 'L) Cons3 + CLOB 0.55-0.60',    minConsensus: 3, marketFilter: false, minClob: 0.55, maxClob: 0.60, minScore: 50 },
   ];
 
   function runConfig(cfg: Config): { trades: Trade[]; summary: string } {
@@ -388,7 +390,7 @@ async function main() {
   // ─── Score distribution for production trades ──────────────────────────────
 
   console.log(`── SCORE DISTRIBUTION (Production) ──\n`);
-  for (const [lo, hi, label] of [[40, 49, 'LOW'], [50, 59, 'MID'], [60, 69, 'HIGH'], [70, 100, 'VHIGH']] as const) {
+  for (const [lo, hi, label] of [[50, 59, 'LOW'], [60, 69, 'MID'], [70, 79, 'HIGH'], [80, 100, 'VHIGH']] as const) {
     const tier = prodTrades.filter(t => t.score >= lo && t.score <= hi);
     if (tier.length === 0) continue;
     const w = tier.filter(t => t.isCorrect).length;
