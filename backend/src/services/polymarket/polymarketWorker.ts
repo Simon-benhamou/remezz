@@ -317,6 +317,7 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
           : undefined,
         isCorrect: null,
         skipped,
+        skipReason: w.skipReason ?? null,
         polymarketSlug: w.prediction ? slug : null,
       },
     });
@@ -853,6 +854,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
         observationBestAsk: null,
         observationTrigger: null,
         status: 'accumulating',
+        skipReason: null,
       };
       windowBySymbol.set(sym, newWindow);
 
@@ -913,17 +915,17 @@ async function tick(prisma: PrismaClient): Promise<void> {
         .sort((a, b) => (b.result?.confidence ?? 0) - (a.result?.confidence ?? 0));
 
       const rejected = scored.filter(r => r.result!.direction !== consensusDir);
-      for (const { sym } of rejected) {
+      for (const { sym, result } of rejected) {
         const w = windowBySymbol.get(sym);
-        if (w) w.status = 'skipped';
+        if (w) { w.status = 'skipped'; w.skipReason = 'against_consensus'; if (result) w.prediction = result; }
         log.info(`[${sym}] Skipped — against consensus (${consensusDir} ${consensusCount}/${scored.length})`);
       }
       log.info(`Consensus: ${consensusDir} ${consensusCount}/${scored.length} — trading ${tradeable.length} symbols`);
     } else {
       tradeable = [];
-      for (const { sym } of scored) {
+      for (const { sym, result } of scored) {
         const w = windowBySymbol.get(sym);
-        if (w) w.status = 'skipped';
+        if (w) { w.status = 'skipped'; w.skipReason = 'no_consensus'; if (result) w.prediction = result; }
         log.info(`[${sym}] Skipped — no consensus (UP=${upCount}, DOWN=${downCount}, need 3+)`);
       }
       if (scored.length > 0) {
@@ -938,9 +940,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
       if (ctx) {
         if (!passesMarketFilter(ctx, consensusDir)) {
           log.info(`Market filter REJECT: roc5m=${ctx.roc5m.toFixed(3)}% roc15m=${ctx.roc15m.toFixed(3)}% bodyRatio=${ctx.bodyRatio.toFixed(2)} dir=${consensusDir}`);
-          for (const { sym } of tradeable) {
+          for (const { sym, result } of tradeable) {
             const w = windowBySymbol.get(sym);
-            if (w) w.status = 'skipped';
+            if (w) { w.status = 'skipped'; w.skipReason = 'market_filter'; if (result) w.prediction = result; }
           }
           tradeable = [];
         } else {
@@ -953,9 +955,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
     if (cooldownSkipRemaining > 0 && tradeable.length > 0) {
       log.warn(`Cooldown ACTIVE: skipping this window (${cooldownSkipRemaining} remaining)`);
       cooldownSkipRemaining--;
-      for (const { sym } of tradeable) {
+      for (const { sym, result } of tradeable) {
         const w = windowBySymbol.get(sym);
-        if (w) w.status = 'skipped';
+        if (w) { w.status = 'skipped'; w.skipReason = 'cooldown'; if (result) w.prediction = result; }
       }
       tradeable = [];
     }
@@ -965,9 +967,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
       const windowHourUtc = new Date(start).getUTCHours();
       if (TOXIC_HOURS_UTC.has(windowHourUtc)) {
         log.info(`Toxic hour filter: ${windowHourUtc}h UTC — skipping`);
-        for (const { sym } of tradeable) {
+        for (const { sym, result } of tradeable) {
           const w = windowBySymbol.get(sym);
-          if (w) w.status = 'skipped';
+          if (w) { w.status = 'skipped'; w.skipReason = 'toxic_hour'; if (result) w.prediction = result; }
         }
         tradeable = [];
       }
@@ -1142,12 +1144,15 @@ async function tick(prisma: PrismaClient): Promise<void> {
         const w = windowBySymbol.get(sym);
         if (w) {
           w.status = 'skipped';
+          w.skipReason = 'no_candles';
           log.info(`[${sym}] Window skipped (no score — insufficient candles)`);
         }
       } else if (belowThreshold) {
         const w = windowBySymbol.get(sym);
         if (w) {
           w.status = 'skipped';
+          w.skipReason = 'low_score';
+          w.prediction = result;
           const { total, volumeSpike, microRoc, bodyRatio, wickRejection, candleAlignment, preWindowMomentum } = result.score;
           log.info(
             `[${sym}] Score ${total}/${MIN_SCORE} ${result.direction} — vol=${volumeSpike} roc=${microRoc} body=${bodyRatio} wick=${wickRejection} align=${candleAlignment} pre=${preWindowMomentum}`
