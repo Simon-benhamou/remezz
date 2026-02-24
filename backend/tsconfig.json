@@ -29,6 +29,7 @@
     "scripts/bt-all-signals.ts",
     "scripts/bt-vs-live*.ts",
     "scripts/candle-ws-vs-rest.ts",
-    "scripts/debug-sessions.ts"
+    "scripts/debug-sessions.ts",
+    "scripts/poly-*.ts"
   ]
 }
