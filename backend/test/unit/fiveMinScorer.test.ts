@@ -45,7 +45,7 @@ describe('computeFiveMinScore', () => {
     expect(result!.microRocPct).toBeGreaterThan(0);
   });
 
-  it('flat candles with no volume → null (skip)', () => {
+  it('flat candles with no volume → low score', () => {
     const windowOpen = 100;
     // Tiny moves, low volume, doji-like candles
     const windowCandles: Candle1m[] = [
@@ -59,8 +59,9 @@ describe('computeFiveMinScore', () => {
     ];
 
     const result = computeFiveMinScore(windowCandles, preWindowCandles, windowOpen);
-    // Total score should be well below 60 → null
-    expect(result).toBeNull();
+    // Scorer always returns a result; threshold filtering is in the worker
+    expect(result).not.toBeNull();
+    expect(result!.score.total).toBeLessThan(30);
   });
 
   it('strong downtrend → DOWN direction', () => {
@@ -142,10 +143,12 @@ describe('computeFiveMinScore', () => {
     // wickRejection: each has upper wick ratio like (101.5-100.3)/2 = 0.6 → >=0.4 → -5 × 5 = clamped -15
     // alignment: all close > open → 15
     // preMomentum: (100-99)/99 = 1% → aligned → 10
-    // Total: 25 + 20 + 0 - 15 + 15 + 10 = 55 → still null
+    // Total: 25 + 20 + 0 - 15 + 15 + 10 = 55 → below production threshold (65)
 
     // The test validates that heavy wick rejection drags the score below threshold
-    expect(boostedResult).toBeNull();
+    expect(boostedResult).not.toBeNull();
+    expect(boostedResult!.score.total).toBeLessThan(60);
+    expect(boostedResult!.score.wickRejection).toBe(-15);
 
     // Also verify that without wick rejection these candles would score high enough:
     // Let's use clean candles (no opposing wicks) with same volume/ROC

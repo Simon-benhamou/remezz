@@ -6,7 +6,7 @@ import type { Candle1m, PredictionResult, ScoreBreakdown } from './polymarketTyp
  * @param windowCandles   - 1m candles within the current 5-min window
  * @param preWindowCandles - 1m candles preceding the window (context)
  * @param windowOpenPrice  - price at the start of the 5-min window
- * @returns PredictionResult if score >= 60, null otherwise (skip)
+ * @returns PredictionResult always (null only if no candles). Threshold filtering done in worker.
  */
 export function computeFiveMinScore(
   windowCandles: Candle1m[],
@@ -97,8 +97,6 @@ export function computeFiveMinScore(
   // --- Total ---
   const total =
     volumeSpike + microRoc + bodyRatio + wickRejection + candleAlignment + preWindowMomentum;
-
-  if (total < 65) return null;
 
   const score: ScoreBreakdown = {
     volumeSpike,

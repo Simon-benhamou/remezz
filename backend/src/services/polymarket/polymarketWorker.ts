@@ -882,15 +882,21 @@ async function tick(prisma: PrismaClient): Promise<void> {
         .slice(-20);
 
       const result = computeFiveMinScore(windowCandles, preWindowCandles, startPrice);
-      if (!result) return { sym, result: null, odds: null, slug: '' };
+      if (!result) return { sym, result: null, odds: null, slug: '', belowThreshold: false };
+
+      // V5.129: Score threshold check — keep result for logging even when below threshold
+      const MIN_SCORE = 65;
+      if (result.confidence < MIN_SCORE) {
+        return { sym, result, odds: null, slug: '', belowThreshold: true };
+      }
 
       const slug = buildSlug(sym, start);
       const odds = await fetchPolymarketOdds(slug);
-      return { sym, result, odds, slug };
+      return { sym, result, odds, slug, belowThreshold: false };
     }));
 
     // ── 5. SERIAL betting (shared wallet) — sorted by confidence DESC ──
-    const scored = scoringResults.filter((r) => r.result !== null);
+    const scored = scoringResults.filter((r) => r.result !== null && !r.belowThreshold);
 
     // ── Consensus filter: only trade if 3+ symbols predict the same direction ──
     const upCount = scored.filter(r => r.result!.direction === 'UP').length;
@@ -1128,13 +1134,22 @@ async function tick(prisma: PrismaClient): Promise<void> {
       }
     }
 
-    // Mark symbols that scored below threshold
-    for (const { sym, result } of scoringResults) {
+    // Mark symbols that scored below threshold (or no score at all)
+    for (const { sym, result, belowThreshold } of scoringResults) {
       if (result === null) {
         const w = windowBySymbol.get(sym);
         if (w) {
           w.status = 'skipped';
-          log.info(`[${sym}] Window skipped (score < 65)`);
+          log.info(`[${sym}] Window skipped (no score — insufficient candles)`);
+        }
+      } else if (belowThreshold) {
+        const w = windowBySymbol.get(sym);
+        if (w) {
+          w.status = 'skipped';
+          const { total, volumeSpike, microRoc, bodyRatio, wickRejection, candleAlignment, preWindowMomentum } = result.score;
+          log.info(
+            `[${sym}] Score ${total}/65 ${result.direction} — vol=${volumeSpike} roc=${microRoc} body=${bodyRatio} wick=${wickRejection} align=${candleAlignment} pre=${preWindowMomentum}`
+          );
         }
       }
     }
