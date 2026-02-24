@@ -37,6 +37,7 @@ const SEED_SYMBOLS = [
   'SEI/USDT:USDT',
   'SUI/USDT:USDT',
   'XRP/USDT:USDT',
+  'RENDER/USDT:USDT',
 ];
 
 // How many candles to fetch
