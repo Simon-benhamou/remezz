@@ -146,6 +146,19 @@ interface ObservationOrder {
 }
 const observationOrderBySymbol = new Map<string, ObservationOrder>();
 
+// ─── Cooldown: skip windows after consecutive losses (V5.129) ────────────────
+// After COOLDOWN_TRIGGER consecutive losses, skip COOLDOWN_SKIP_WINDOWS windows.
+// Losses tracked on preliminary result (per-window consensus, not per-symbol).
+const COOLDOWN_TRIGGER = 2;        // 2 consecutive losses → trigger
+const COOLDOWN_SKIP_WINDOWS = 2;   // skip next 2 windows
+let consecutiveWindowLosses = 0;
+let cooldownSkipRemaining = 0;
+const cooldownTrackedWindows = new Set<number>(); // prevent double-counting per window
+
+// ─── Toxic hours: skip windows during low-WR hours (V5.129) ─────────────────
+// 21h UTC = 69.6% WR, 0h = 73.9%, 19h = 77% — all below profitable threshold.
+const TOXIC_HOURS_UTC = new Set([21]); // Only skip the worst hour for now
+
 // ─── Global state (not per-symbol) ──────────────────────────────────────────
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
@@ -389,6 +402,24 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
   log.info(
     `[${sym}] Resolved (PRELIMINARY): actual=${preliminaryResult} | ${correctStr} | ${w.startPrice.toFixed(2)} → ${endPrice.toFixed(2)}`,
   );
+
+  // ── Cooldown tracking (V5.129): track consecutive losses per-window ────
+  // Only count once per window (use first resolved symbol with a prediction)
+  if (preliminaryMatch !== null && !cooldownTrackedWindows.has(w.windowStart)) {
+    cooldownTrackedWindows.add(w.windowStart);
+    if (preliminaryMatch) {
+      consecutiveWindowLosses = 0;
+      log.info(`Cooldown: WIN — streak reset (skipRemaining=${cooldownSkipRemaining})`);
+    } else {
+      consecutiveWindowLosses++;
+      log.info(`Cooldown: LOSS — streak=${consecutiveWindowLosses}/${COOLDOWN_TRIGGER}`);
+      if (consecutiveWindowLosses >= COOLDOWN_TRIGGER) {
+        cooldownSkipRemaining = COOLDOWN_SKIP_WINDOWS;
+        consecutiveWindowLosses = 0;
+        log.warn(`Cooldown TRIGGERED: skipping next ${COOLDOWN_SKIP_WINDOWS} windows`);
+      }
+    }
+  }
 
   // Schedule Polymarket oracle verification
   if (!skipped) {
@@ -910,6 +941,30 @@ async function tick(prisma: PrismaClient): Promise<void> {
       }
     }
 
+    // ── V5.129: Cooldown — skip windows after consecutive losses ──────────
+    if (cooldownSkipRemaining > 0 && tradeable.length > 0) {
+      log.warn(`Cooldown ACTIVE: skipping this window (${cooldownSkipRemaining} remaining)`);
+      cooldownSkipRemaining--;
+      for (const { sym } of tradeable) {
+        const w = windowBySymbol.get(sym);
+        if (w) w.status = 'skipped';
+      }
+      tradeable = [];
+    }
+
+    // ── V5.129: Toxic hours — skip windows during low-WR hours ────────────
+    if (tradeable.length > 0) {
+      const windowHourUtc = new Date(start).getUTCHours();
+      if (TOXIC_HOURS_UTC.has(windowHourUtc)) {
+        log.info(`Toxic hour filter: ${windowHourUtc}h UTC — skipping`);
+        for (const { sym } of tradeable) {
+          const w = windowBySymbol.get(sym);
+          if (w) w.status = 'skipped';
+        }
+        tradeable = [];
+      }
+    }
+
     for (const { sym, result, odds, slug } of tradeable) {
       if (!result || !odds) continue;
 
@@ -1079,7 +1134,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
         const w = windowBySymbol.get(sym);
         if (w) {
           w.status = 'skipped';
-          log.info(`[${sym}] Window skipped (score < 40)`);
+          log.info(`[${sym}] Window skipped (score < 65)`);
         }
       }
     }
@@ -1403,6 +1458,11 @@ export function stopPolymarketWorker(): void {
   observationOrderBySymbol.clear();
   liveStateBySymbol.clear();
   unredeemedTokens = [];
+
+  // Reset cooldown state
+  consecutiveWindowLosses = 0;
+  cooldownSkipRemaining = 0;
+  cooldownTrackedWindows.clear();
 }
 
 /**

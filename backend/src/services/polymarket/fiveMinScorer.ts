@@ -98,7 +98,7 @@ export function computeFiveMinScore(
   const total =
     volumeSpike + microRoc + bodyRatio + wickRejection + candleAlignment + preWindowMomentum;
 
-  if (total < 40) return null;
+  if (total < 65) return null;
 
   const score: ScoreBreakdown = {
     volumeSpike,

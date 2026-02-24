@@ -63,25 +63,24 @@ const CTF_REDEEM_ABI = [
 const RELAYER_URL = 'https://relayer-v2.polymarket.com/';
 
 // Confidence-tiered pricing: higher score → accept higher CLOB price.
-// Data-driven (30-day backtest, 3854 predictions, 86% overall WR — updated 2026-02-22):
-//   Score 40-49: 80.1% WR (1572 samples) → breakeven 0.801 → cap 0.78
-//   Score 50-59: 87.4% WR (1084 samples) → breakeven 0.874 → cap 0.85
-//   Score 60+:   92.7% WR (1199 samples) → breakeven 0.927 → cap 0.90
-// Strategy: no hedge, aggressive caps. EV remains positive at these prices.
+// Recalibrated on 30-day realistic backtest (1-candle scorer, no look-ahead):
+//   Score 65-69: ~80% WR → cap 0.78
+//   Score 70-79: ~83% WR → cap 0.82
+//   Score 80+:   ~85% WR → cap 0.85
+// Min score raised to 65 (V5.129) — below 65, WR < 80% which is unprofitable
+// given win/loss asymmetry (win +$1-2, loss -$5 at typical CLOB prices).
 export const CLOB_PRICE_TIERS = [
-  { minScore: 60, maxPrice: 0.90 },
-  { minScore: 50, maxPrice: 0.85 },
-  { minScore: 40, maxPrice: 0.78 },
+  { minScore: 80, maxPrice: 0.85 },
+  { minScore: 70, maxPrice: 0.82 },
+  { minScore: 65, maxPrice: 0.78 },
 ] as const;
 
 /** Get the maximum acceptable CLOB price for a given confidence score. */
 export function getMaxPriceForScore(score: number): number {
-  // V5.124: VHigh (70+) = 50% WR at avg 0.794 = -EV. Cap at 0.82 to limit overpaying.
-  if (score >= 70) return 0.82;
   for (const tier of CLOB_PRICE_TIERS) {
     if (score >= tier.minScore) return tier.maxPrice;
   }
-  return 0.50; // fallback — should never hit (scorer returns null for score < 40)
+  return 0.50; // fallback — should never hit (scorer returns null for score < 65)
 }
 
 // Keep MAX_CLOB_PRICE for hedge bets (they don't have a score — use the lowest tier)
