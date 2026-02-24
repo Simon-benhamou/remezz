@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   Trophy,
   DollarSign,
@@ -18,9 +18,25 @@ import {
   Eye,
   EyeOff,
   RotateCcw,
+  ChevronLeft,
+  ChevronRight,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/api';
+import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  flexRender,
+  type ColumnDef,
+  type SortingState,
+  type ColumnFiltersState,
+} from '@tanstack/react-table';
 
 // ============================================================================
 // TYPES
@@ -408,162 +424,366 @@ function MiniChart({ klines, startPrice }: MiniChartProps) {
 }
 
 // ============================================================================
-// HISTORY TABLE
+// HISTORY TABLE (TanStack React Table)
 // ============================================================================
 
 interface HistoryTableProps {
   predictions: PredictionRow[];
 }
 
-function HistoryTable({ predictions }: HistoryTableProps) {
-  const gridCols = 'grid-cols-[70px_36px_44px_44px_32px_70px_60px_70px_80px]';
+const SYMBOL_COLORS: Record<string, string> = {
+  BTC: 'bg-amber-500/15 text-amber-500',
+  ETH: 'bg-indigo-500/15 text-indigo-500',
+  SOL: 'bg-purple-500/15 text-purple-500',
+  XRP: 'bg-cyan-500/15 text-cyan-500',
+};
 
-  const formatWindowTime = (ts: string) => {
-    const d = new Date(ts);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+function HistoryTable({ predictions }: HistoryTableProps) {
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [symbolFilter, setSymbolFilter] = useState<Set<string>>(new Set(ALL_SYMBOLS));
+  const [resultFilter, setResultFilter] = useState<Set<string>>(new Set(['win', 'loss', 'pending']));
+  const [showSkipped, setShowSkipped] = useState(false);
+
+  const columns = useMemo<ColumnDef<PredictionRow>[]>(() => [
+    {
+      accessorKey: 'windowStart',
+      header: 'Date',
+      size: 90,
+      cell: ({ getValue }) => {
+        const d = new Date(getValue<string>());
+        return (
+          <span className="font-mono text-muted-foreground">
+            {String(d.getDate()).padStart(2, '0')}/{String(d.getMonth() + 1).padStart(2, '0')}{' '}
+            {String(d.getHours()).padStart(2, '0')}:{String(d.getMinutes()).padStart(2, '0')}
+          </span>
+        );
+      },
+      sortingFn: (a, b) =>
+        new Date(a.original.windowStart).getTime() - new Date(b.original.windowStart).getTime(),
+    },
+    {
+      accessorKey: 'symbol',
+      header: 'Sym',
+      size: 50,
+      cell: ({ getValue }) => {
+        const sym = getValue<string>();
+        return (
+          <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold', SYMBOL_COLORS[sym] ?? 'bg-muted text-muted-foreground')}>
+            {sym}
+          </span>
+        );
+      },
+    },
+    {
+      accessorKey: 'prediction',
+      header: 'Dir',
+      size: 50,
+      cell: ({ row }) => {
+        const p = row.original;
+        if (p.skipped) return <span className="text-muted-foreground">{'\u2014'}</span>;
+        return p.prediction === 'UP'
+          ? <ArrowUp className="h-3.5 w-3.5 text-success" />
+          : p.prediction === 'DOWN'
+            ? <ArrowDown className="h-3.5 w-3.5 text-destructive" />
+            : <span className="text-muted-foreground">{'\u2014'}</span>;
+      },
+    },
+    {
+      accessorKey: 'isCorrect',
+      header: 'Result',
+      size: 50,
+      cell: ({ row }) => {
+        const p = row.original;
+        if (p.skipped) return <span className="text-muted-foreground">{'\u2014'}</span>;
+        const awaiting = p.prediction && p.isCorrect === null;
+        if (awaiting) return <span className="text-yellow-500">{'\u23F3'}</span>;
+        if (p.isCorrect === true) return <CheckCircle className="h-3.5 w-3.5 text-success" />;
+        if (p.isCorrect === false) return <XCircle className="h-3.5 w-3.5 text-destructive" />;
+        return <span className="text-muted-foreground">{'\u2014'}</span>;
+      },
+      sortingFn: (a, b) => {
+        const v = (p: PredictionRow) => p.isCorrect === true ? 2 : p.isCorrect === false ? 1 : 0;
+        return v(a.original) - v(b.original);
+      },
+    },
+    {
+      accessorKey: 'confidence',
+      header: 'Score',
+      size: 50,
+      cell: ({ getValue }) => {
+        const c = getValue<number | null>();
+        return <span className="font-mono text-muted-foreground">{c != null ? c : '\u2014'}</span>;
+      },
+    },
+    {
+      id: 'clob',
+      header: 'CLOB',
+      size: 60,
+      accessorFn: (row) => row.executionPrice ?? row.entryOdds ?? null,
+      cell: ({ row }) => {
+        const p = row.original;
+        if (p.skipped) return <span className="font-mono text-muted-foreground">{'\u2014'}</span>;
+        const isTrade = p.tradeType === 'virtual' || p.tradeType === 'live';
+        if (isTrade && p.executionPrice) {
+          return <span className="font-mono text-muted-foreground">{(p.executionPrice * 100).toFixed(1)}c</span>;
+        }
+        if (p.entryOdds != null) {
+          return <span className="font-mono text-muted-foreground">{(p.entryOdds * 100).toFixed(0)}c*</span>;
+        }
+        return <span className="font-mono text-muted-foreground">{'\u2014'}</span>;
+      },
+    },
+    {
+      id: 'pnl',
+      header: 'P&L',
+      size: 70,
+      accessorFn: (row) => row.realPnl ?? row.simulatedPnl ?? 0,
+      cell: ({ row }) => {
+        const p = row.original;
+        const isTrade = p.tradeType === 'virtual' || p.tradeType === 'live';
+        const pnl = p.realPnl ?? p.simulatedPnl ?? 0;
+        if (!isTrade || p.skipped || pnl === 0) {
+          return <span className="font-mono text-muted-foreground">{'\u2014'}</span>;
+        }
+        return (
+          <span className={cn('font-mono font-semibold', pnl > 0 ? 'text-success' : 'text-destructive')}>
+            {pnl > 0 ? '+' : ''}${pnl.toFixed(2)}
+          </span>
+        );
+      },
+      sortingFn: (a, b) => {
+        const va = a.original.realPnl ?? a.original.simulatedPnl ?? 0;
+        const vb = b.original.realPnl ?? b.original.simulatedPnl ?? 0;
+        return va - vb;
+      },
+    },
+    {
+      accessorKey: 'tradeType',
+      header: 'Mode',
+      size: 70,
+      cell: ({ getValue }) => {
+        const t = getValue<string>();
+        if (t === 'live') return <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold', 'bg-emerald-500/15 text-emerald-500')}>LIVE</span>;
+        if (t === 'virtual') return <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold', 'bg-blue-500/15 text-blue-500')}>VIRTUAL</span>;
+        return <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold', 'bg-muted text-muted-foreground')}>SIGNAL</span>;
+      },
+    },
+  ], []);
+
+  // Apply custom filters
+  const filteredData = useMemo(() => {
+    return predictions.filter((p) => {
+      // Symbol filter
+      if (!symbolFilter.has(p.symbol)) return false;
+      // Skipped filter
+      if (p.skipped && !showSkipped) return false;
+      // Result filter
+      if (!p.skipped) {
+        const awaiting = p.prediction && p.isCorrect === null;
+        if (p.isCorrect === true && !resultFilter.has('win')) return false;
+        if (p.isCorrect === false && !resultFilter.has('loss')) return false;
+        if (awaiting && !resultFilter.has('pending')) return false;
+      }
+      return true;
+    });
+  }, [predictions, symbolFilter, resultFilter, showSkipped]);
+
+  const table = useReactTable({
+    data: filteredData,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    initialState: { pagination: { pageSize: 50 } },
+  });
+
+  const toggleSymbol = (sym: string) => {
+    setSymbolFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(sym)) {
+        if (next.size > 1) next.delete(sym);
+      } else {
+        next.add(sym);
+      }
+      return next;
+    });
   };
+
+  const toggleResult = (key: string) => {
+    setResultFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        if (next.size > 1) next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const pageIdx = table.getState().pagination.pageIndex;
+  const pageCount = table.getPageCount();
 
   return (
     <div className="rounded-2xl border border-border bg-card overflow-hidden">
-      <div className="px-4 py-3 border-b border-border">
-        <span className="text-sm font-semibold text-foreground">Prediction History</span>
-        <span className="text-xs text-muted-foreground ml-2">({predictions.length})</span>
-      </div>
-
-      {/* Header */}
-      <div className={cn('grid gap-2 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border', gridCols)}>
-        <span>Window</span>
-        <span>Sym</span>
-        <span>Pred</span>
-        <span>Real</span>
-        <span></span>
-        <span>Mode</span>
-        <span>CLOB</span>
-        <span>P&L</span>
-        <span>Sell</span>
-      </div>
-
-      {/* Rows */}
-      <div className="max-h-[400px] overflow-y-auto">
-        {predictions.length === 0 && (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            No predictions yet
+      {/* Header + Filters */}
+      <div className="px-4 py-3 border-b border-border space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-sm font-semibold text-foreground">Prediction History</span>
+            <span className="text-xs text-muted-foreground ml-2">
+              ({filteredData.length} prediction{filteredData.length !== 1 ? 's' : ''})
+            </span>
           </div>
-        )}
-        {predictions.map((p) => {
-          const isSkipped = p.skipped;
-          const correct = p.isCorrect;
-          const awaiting = !isSkipped && p.prediction && correct === null;
-          const scoreIcon = isSkipped ? '\u2014' : awaiting ? '\u23F3' : correct === true ? '\u2713' : correct === false ? '\u2717' : '\u2014';
-          const scoreColor = isSkipped ? 'text-muted-foreground' : awaiting ? 'text-yellow-500' : correct === true ? 'text-success' : correct === false ? 'text-destructive' : 'text-muted-foreground';
+          {pageCount > 1 && (
+            <span className="text-[10px] text-muted-foreground font-mono">
+              Page {pageIdx + 1}/{pageCount}
+            </span>
+          )}
+        </div>
 
-          const pnl = p.realPnl ?? p.simulatedPnl ?? 0;
-          const isTrade = p.tradeType === 'virtual' || p.tradeType === 'live';
+        {/* Filter bar */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Symbol chips */}
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider mr-1">Sym</span>
+            {ALL_SYMBOLS.map((sym) => (
+              <button
+                key={sym}
+                onClick={() => toggleSymbol(sym)}
+                className={cn(
+                  'rounded px-2 py-0.5 text-[10px] font-semibold transition-colors cursor-pointer',
+                  symbolFilter.has(sym)
+                    ? SYMBOL_COLORS[sym] ?? 'bg-muted text-foreground'
+                    : 'bg-muted/40 text-muted-foreground/50',
+                )}
+              >
+                {sym}
+              </button>
+            ))}
+          </div>
 
-          // Mode badge
-          let modeLabel: string;
-          let modeBg: string;
-          let modeText: string;
-          if (p.tradeType === 'live') {
-            modeLabel = 'LIVE';
-            modeBg = 'bg-emerald-500/15';
-            modeText = 'text-emerald-500';
-          } else if (p.tradeType === 'virtual') {
-            modeLabel = 'VIRTUAL';
-            modeBg = 'bg-blue-500/15';
-            modeText = 'text-blue-500';
-          } else {
-            modeLabel = 'SIGNAL';
-            modeBg = 'bg-muted';
-            modeText = 'text-muted-foreground';
-          }
+          {/* Separator */}
+          <div className="w-px h-4 bg-border" />
 
-          // Sell status (live trades only)
-          let sellLabel = '\u2014';
-          let sellColor = 'text-muted-foreground';
-          if (p.tradeType === 'live' && correct === true) {
-            if (p.soldAt) {
-              sellLabel = `$${(p.usdcReceived ?? 0).toFixed(2)}`;
-              sellColor = 'text-success';
-            } else {
-              sellLabel = 'Stuck';
-              sellColor = 'text-amber-500';
-            }
-          } else if (p.tradeType === 'live' && correct === false) {
-            sellLabel = 'Lost';
-            sellColor = 'text-destructive';
-          }
+          {/* Result chips */}
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider mr-1">Result</span>
+            {[
+              { key: 'win', label: 'Win', active: 'bg-success/15 text-success', inactive: 'bg-muted/40 text-muted-foreground/50' },
+              { key: 'loss', label: 'Loss', active: 'bg-destructive/15 text-destructive', inactive: 'bg-muted/40 text-muted-foreground/50' },
+              { key: 'pending', label: 'Pending', active: 'bg-yellow-500/15 text-yellow-500', inactive: 'bg-muted/40 text-muted-foreground/50' },
+            ].map(({ key, label, active, inactive }) => (
+              <button
+                key={key}
+                onClick={() => toggleResult(key)}
+                className={cn(
+                  'rounded px-2 py-0.5 text-[10px] font-semibold transition-colors cursor-pointer',
+                  resultFilter.has(key) ? active : inactive,
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
-          return (
-            <div
-              key={p.id}
-              className={cn(
-                'grid gap-2 px-4 py-2 text-[11px] items-center hover:bg-muted/30 transition-colors border-b border-border/50 last:border-b-0',
-                gridCols,
-              )}
-            >
-              {/* Window */}
-              <span className="font-mono text-muted-foreground">
-                {formatWindowTime(p.windowStart)}
-              </span>
+          {/* Separator */}
+          <div className="w-px h-4 bg-border" />
 
-              {/* Symbol */}
-              <span className="font-mono text-xs font-semibold text-foreground">
-                {p.symbol}
-              </span>
-
-              {/* Pred */}
-              <span className={cn(
-                'font-mono font-semibold',
-                isSkipped ? 'text-muted-foreground' : p.prediction === 'UP' ? 'text-success' : p.prediction === 'DOWN' ? 'text-destructive' : 'text-muted-foreground',
-              )}>
-                {isSkipped ? '\u2014' : p.prediction ?? '\u2014'}
-              </span>
-
-              {/* Real */}
-              <span className={cn(
-                'font-mono font-semibold',
-                isSkipped ? 'text-muted-foreground' : p.actualResult === 'UP' ? 'text-success' : p.actualResult === 'DOWN' ? 'text-destructive' : 'text-muted-foreground',
-              )}>
-                {isSkipped ? '\u2014' : p.actualResult ?? '\u2014'}
-              </span>
-
-              {/* Result icon */}
-              <span className={cn('font-bold', scoreColor)}>
-                {scoreIcon}
-              </span>
-
-              {/* Mode badge */}
-              <span className={cn(
-                'inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[9px] font-semibold w-fit',
-                modeBg, modeText,
-              )}>
-                {modeLabel}
-              </span>
-
-              {/* CLOB price */}
-              <span className="font-mono text-muted-foreground">
-                {isSkipped ? '\u2014' : isTrade && p.executionPrice
-                  ? `${(p.executionPrice * 100).toFixed(0)}c`
-                  : p.entryOdds != null ? `${(p.entryOdds * 100).toFixed(0)}c*` : '\u2014'}
-              </span>
-
-              {/* P&L */}
-              <span className={cn(
-                'font-mono font-semibold',
-                !isTrade || isSkipped ? 'text-muted-foreground' : pnl > 0 ? 'text-success' : pnl < 0 ? 'text-destructive' : 'text-muted-foreground',
-              )}>
-                {!isTrade || isSkipped || pnl === 0 ? '\u2014' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`}
-              </span>
-
-              {/* Sell status (live only) */}
-              <span className={cn('text-[10px] font-medium', sellColor)}>
-                {sellLabel}
-              </span>
-            </div>
-          );
-        })}
+          {/* Skipped toggle */}
+          <button
+            onClick={() => setShowSkipped((v) => !v)}
+            className={cn(
+              'rounded px-2 py-0.5 text-[10px] font-semibold transition-colors cursor-pointer',
+              showSkipped ? 'bg-muted text-foreground' : 'bg-muted/40 text-muted-foreground/50',
+            )}
+          >
+            Skipped
+          </button>
+        </div>
       </div>
+
+      {/* Table header */}
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            {table.getHeaderGroups().map((hg) => (
+              <tr key={hg.id} className="border-b border-border">
+                {hg.headers.map((header) => (
+                  <th
+                    key={header.id}
+                    onClick={header.column.getToggleSortingHandler()}
+                    className={cn(
+                      'px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
+                      header.column.getCanSort() && 'cursor-pointer select-none hover:text-foreground transition-colors',
+                    )}
+                    style={{ width: header.getSize() }}
+                  >
+                    <div className="flex items-center gap-1">
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {header.column.getCanSort() && (
+                        header.column.getIsSorted() === 'asc'
+                          ? <ArrowUp className="h-3 w-3" />
+                          : header.column.getIsSorted() === 'desc'
+                            ? <ArrowDown className="h-3 w-3" />
+                            : <ArrowUpDown className="h-3 w-3 opacity-30" />
+                      )}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            ))}
+          </thead>
+          <tbody>
+            {table.getRowModel().rows.length === 0 && (
+              <tr>
+                <td colSpan={columns.length} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  No predictions match filters
+                </td>
+              </tr>
+            )}
+            {table.getRowModel().rows.map((row) => (
+              <tr key={row.id} className="border-b border-border/50 last:border-b-0 hover:bg-muted/30 transition-colors">
+                {row.getVisibleCells().map((cell) => (
+                  <td key={cell.id} className="px-3 py-2 text-[11px]" style={{ width: cell.column.getSize() }}>
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      {pageCount > 1 && (
+        <div className="flex items-center justify-between px-4 py-2 border-t border-border">
+          <span className="text-[10px] text-muted-foreground font-mono">
+            {filteredData.length} prediction{filteredData.length !== 1 ? 's' : ''}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => table.previousPage()}
+              disabled={!table.getCanPreviousPage()}
+              className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="text-xs text-muted-foreground font-mono px-2">
+              {pageIdx + 1} / {pageCount}
+            </span>
+            <button
+              onClick={() => table.nextPage()}
+              disabled={!table.getCanNextPage()}
+              className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -604,7 +824,7 @@ export default function PolymarketPage() {
       const [statusRes, statsRes, historyRes, settingsRes] = await Promise.all([
         api.polymarket.getStatus().catch(() => null),
         api.polymarket.getStats().catch(() => null),
-        api.polymarket.getHistory(50).catch(() => null),
+        api.polymarket.getHistory(5000).catch(() => null),
         api.polymarket.getSettings().catch(() => null),
       ]);
       if (statusRes) setStatus(statusRes);
@@ -1015,8 +1235,8 @@ export default function PolymarketPage() {
         );
       })()}
 
-      {/* History Table — only show actual predictions, not skipped windows */}
-      <HistoryTable predictions={(history?.predictions ?? []).filter((p) => !p.skipped)} />
+      {/* History Table — filterable with TanStack React Table */}
+      <HistoryTable predictions={history?.predictions ?? []} />
     </div>
   );
 }

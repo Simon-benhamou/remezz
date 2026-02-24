@@ -44,11 +44,9 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
   // (e.g. EV too low) still appear in history.
   router.get('/history', authenticateUser, async (req: AuthenticatedRequest, res) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
       const allRows = await prisma.polymarketPrediction.findMany({
         where: { OR: [{ userId: req.user!.id }, { userId: null }] },
         orderBy: { windowStart: 'desc' },
-        take: limit * 2, // fetch extra to account for duplicates before dedup
       });
 
       // Deduplicate by windowStart:symbol: prefer per-user row (has execution data) over shared row
@@ -67,7 +65,6 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
       const config = await getPolymarketConfig(prisma, req.user!.id);
       const predictions = [...byWindowSymbol.values()]
         .sort((a, b) => b.windowStart.getTime() - a.windowStart.getTime())
-        .slice(0, limit)
         .map((row) => {
           let tradeType: 'prediction' | 'virtual' | 'live';
           if (row.userId === null || row.executionPrice == null) {
