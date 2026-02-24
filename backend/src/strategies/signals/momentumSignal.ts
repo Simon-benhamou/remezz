@@ -415,7 +415,30 @@ export function checkMomentumSignal(
   if (skipZonePct > 0 && btcSma200 > 0) {
     const distFromSma200Pct = Math.abs((btcNow - btcSma200) / btcSma200) * 100;
     if (distFromSma200Pct < skipZonePct) {
-      return { valid: false, reason: `sma200_skip_zone(dist=${distFromSma200Pct.toFixed(2)}%<${skipZonePct}%)` };
+      // Quality bypass: allow high-quality signals through the skip zone
+      const qualityBypass = (MomentumConfig.ENTRY as any).BTC_SMA200_SKIP_ZONE_QUALITY_BYPASS ?? 0;
+      if (qualityBypass > 0 && candles.length >= 20) {
+        const vols = candles.map(c => c.volume);
+        const volR = calcVolRatio(vols);
+        const roc10 = calcROC(closes, 10);
+        const roc5 = calcROC(closes, 5);
+        const sma20now = calcSMA(closes, 20);
+        const sma20prev = closes.length >= 21 ? calcSMA(closes.slice(0, -1), 20) : sma20now;
+        const smaSlope = sma20prev > 0 ? ((sma20now - sma20prev) / sma20prev) * 100 : 0;
+        // Composite score 0-100: volRatio(25) + ROC10(25) + ROC5(25) + SMA slope(25)
+        const volScore = Math.min(volR / 3.0, 1) * 25;       // 3x avg volume = max
+        const roc10Score = Math.min(Math.abs(roc10) / 4.0, 1) * 25;  // 4% ROC10 = max
+        const roc5Score = Math.min(Math.abs(roc5) / 3.0, 1) * 25;    // 3% ROC5 = max
+        const slopeScore = Math.min(Math.abs(smaSlope) / 0.3, 1) * 25; // 0.3% slope = max
+        const qualityScore = volScore + roc10Score + roc5Score + slopeScore;
+        if (qualityScore >= qualityBypass) {
+          // Bypass: quality signal allowed through skip zone
+        } else {
+          return { valid: false, reason: `sma200_skip_zone(dist=${distFromSma200Pct.toFixed(2)}%<${skipZonePct}%,Q=${qualityScore.toFixed(0)}<${qualityBypass})` };
+        }
+      } else {
+        return { valid: false, reason: `sma200_skip_zone(dist=${distFromSma200Pct.toFixed(2)}%<${skipZonePct}%)` };
+      }
     }
   }
 

@@ -72,7 +72,7 @@ import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
 import { ipWeightTracker } from './ipWeightTracker.js';
 
 // V5.22: Import shared signal scoring function (ensures backtest = production)
-import { calculateSignalScore } from '../strategies/signalRanker.js';
+import { calculateSignalScore, getSignalTier } from '../strategies/signalRanker.js';
 
 import {
   EXIT_TRAIL, EXIT_TRAIL_NFS_HIGH, EXIT_TRAIL_NFS_MED, EXIT_TRAIL_NFS_LOW,
@@ -1961,8 +1961,13 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           // This matches live behavior where first valid signal triggers entry
           signalCandidates.sort((a, b) => a.idx - b.idx);
         } else {
-          // NORMAL: RANK by score (highest first) for optimal entries
-          signalCandidates.sort((a, b) => b.score - a.score);
+          // NORMAL: V5.130 — RANK by tier first (A before B), then by score (highest first)
+          signalCandidates.sort((a, b) => {
+            const tierA = getSignalTier(a.symbol);
+            const tierB = getSignalTier(b.symbol);
+            if (tierA !== tierB) return tierA === 'A' ? -1 : 1;
+            return b.score - a.score;
+          });
         }
         
         // Take top N signals that fit available slots

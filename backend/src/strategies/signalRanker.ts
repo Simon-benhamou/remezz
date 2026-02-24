@@ -11,8 +11,11 @@
  */
 
 import { createLogger } from '../utils/logger.js';
+import { MomentumConfig } from './config/momentumConfig.js';
 
 const logger = createLogger('signal-ranker');
+
+export type SignalTier = 'A' | 'B';
 
 export interface RankedSignal {
   symbol: string;
@@ -23,8 +26,18 @@ export interface RankedSignal {
   roc5: number;
   volumeRatio: number;
   reason: string;
+  tier: SignalTier;            // V5.130: Tier A prioritized over Tier B in ranking
   mode?: 'live' | 'paper';  // Track which mode the signal is from
   userId?: string;           // V-MULTI: Isolate signals per user for multi-user support
+}
+
+/**
+ * V5.130: Determine signal tier from symbol
+ * Tier A symbols (high Sharpe, high PF) are prioritized in ranking
+ */
+export function getSignalTier(symbol: string): SignalTier {
+  const tierA = MomentumConfig.SIGNAL_TIER_A as string[];
+  return tierA.includes(symbol) ? 'A' : 'B';
 }
 
 /**
@@ -287,8 +300,11 @@ class SignalRanker {
     const keySignals = this.getOrCreateSignalMap(key);
     const signals = Array.from(keySignals.values());
 
-    // Sort by score descending
-    signals.sort((a, b) => b.score - a.score);
+    // V5.130: Sort by tier first (A before B), then by score descending
+    signals.sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier === 'A' ? -1 : 1;
+      return b.score - a.score;
+    });
 
     // Take top N
     return signals.slice(0, maxCount);

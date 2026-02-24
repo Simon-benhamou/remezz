@@ -29,31 +29,40 @@ import { api } from '../api';
 import type { AppMode } from '../store';
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CRYPTOS V5.93 - Classées par PnL combiné backtest 12 mois (Jan - Dec 2025)
-// Combined: +1308% ROI, 61% WR, 29.8% DD ($2000, 4.5x, 710 trades)
+// CRYPTOS V5.130 - 26 symbols tested individually (Jan-Dec 2025, $2000, 5x)
+// Tier A: Sharpe>=2, PF>=1.3 | Tier B: Sharpe>=1, PF>=1.1
+// Combined individual PnL: $93,447
 // ═══════════════════════════════════════════════════════════════════════════
 
 const V5_RECOMMENDED_CRYPTOS = [
-  { symbol: 'AVAX/USDT', name: 'Avalanche', category: 'TOP 1', icon: '\u{1F53A}', roi: '+$4,850', badge: 'gold', recommended: true },
-  { symbol: 'FET/USDT', name: 'Fetch.ai', category: 'TOP 2', icon: '\u{1F916}', roi: '+$4,558', badge: 'gold', recommended: true },
-  { symbol: 'WIF/USDT', name: 'dogwifhat', category: 'TOP 3', icon: '\u{1F3A9}', roi: '+$3,686', badge: 'gold', recommended: true },
-  { symbol: 'DOT/USDT', name: 'Polkadot', category: 'TOP 4', icon: '\u{1F30C}', roi: '+$3,630', badge: 'gold', recommended: true },
-  { symbol: 'TIA/USDT', name: 'Celestia', category: 'Excellent', icon: '\u{2728}', roi: '+$3,087', badge: 'green', recommended: true },
-  { symbol: 'IMX/USDT', name: 'Immutable X', category: 'Excellent', icon: '\u{1F537}', roi: '+$2,552', badge: 'green', recommended: true },
-  { symbol: 'STX/USDT', name: 'Stacks', category: 'Bon', icon: '\u{1F4E6}', roi: '+$1,761', badge: 'blue', recommended: true },
-  { symbol: 'DOGE/USDT', name: 'Dogecoin', category: 'Bon', icon: '\u{1F415}', roi: '+$1,617', badge: 'blue', recommended: true },
-  { symbol: 'ADA/USDT', name: 'Cardano', category: 'Bon', icon: '\u{20B3}', roi: '+$1,241', badge: 'blue', recommended: true },
-  { symbol: 'BTC/USDT', name: 'Bitcoin', category: 'Stable', icon: '\u{20BF}', roi: '+$339', badge: 'cyan', recommended: true },
+  // Tier A — 9 symbols, $73,730 combined
+  { symbol: 'WIF/USDT', name: 'dogwifhat', category: 'Tier A', icon: '\u{1F3A9}', roi: '+$28,969', badge: 'gold', recommended: true },
+  { symbol: 'UNI/USDT', name: 'Uniswap', category: 'Tier A', icon: '\u{1F984}', roi: '+$8,275', badge: 'gold', recommended: true },
+  { symbol: 'FET/USDT', name: 'Fetch.ai', category: 'Tier A', icon: '\u{1F916}', roi: '+$7,727', badge: 'gold', recommended: true },
+  { symbol: 'STX/USDT', name: 'Stacks', category: 'Tier A', icon: '\u{1F4E6}', roi: '+$7,674', badge: 'gold', recommended: true },
+  { symbol: 'IMX/USDT', name: 'Immutable X', category: 'Tier A', icon: '\u{1F537}', roi: '+$6,374', badge: 'gold', recommended: true },
+  { symbol: 'ARB/USDT', name: 'Arbitrum', category: 'Tier A', icon: '\u{1F535}', roi: '+$4,077', badge: 'gold', recommended: true },
+  { symbol: 'SEI/USDT', name: 'Sei', category: 'Tier A', icon: '\u{1F30A}', roi: '+$3,675', badge: 'green', recommended: true },
+  { symbol: 'SUI/USDT', name: 'Sui', category: 'Tier A', icon: '\u{1F4A7}', roi: '+$3,504', badge: 'green', recommended: true },
+  { symbol: 'NEAR/USDT', name: 'NEAR Protocol', category: 'Tier A', icon: '\u{1F310}', roi: '+$3,456', badge: 'green', recommended: true },
+  // Tier B — 10 symbols, $19,717 combined
+  { symbol: 'ADA/USDT', name: 'Cardano', category: 'Tier B', icon: '\u{20B3}', roi: '+$3,220', badge: 'blue', recommended: true },
+  { symbol: 'APT/USDT', name: 'Aptos', category: 'Tier B', icon: '\u{1F7E2}', roi: '+$2,615', badge: 'blue', recommended: true },
+  { symbol: 'ETH/USDT', name: 'Ethereum', category: 'Tier B', icon: '\u{039E}', roi: '+$2,503', badge: 'blue', recommended: true },
+  { symbol: 'SONIC/USDT', name: 'Sonic', category: 'Tier B', icon: '\u{26A1}', roi: '+$2,321', badge: 'blue', recommended: true },
+  { symbol: 'RENDER/USDT', name: 'Render', category: 'Tier B', icon: '\u{1F3A8}', roi: '+$1,997', badge: 'blue', recommended: true },
+  { symbol: 'XRP/USDT', name: 'Ripple', category: 'Tier B', icon: '\u{2715}', roi: '+$1,575', badge: 'blue', recommended: true },
+  { symbol: 'DOGE/USDT', name: 'Dogecoin', category: 'Tier B', icon: '\u{1F415}', roi: '+$1,508', badge: 'blue', recommended: true },
+  { symbol: 'DOT/USDT', name: 'Polkadot', category: 'Tier B', icon: '\u{1F30C}', roi: '+$1,491', badge: 'blue', recommended: true },
+  { symbol: 'BCH/USDT', name: 'Bitcoin Cash', category: 'Tier B', icon: '\u{1F4B0}', roi: '+$1,276', badge: 'blue', recommended: true },
+  { symbol: 'SOL/USDT', name: 'Solana', category: 'Tier B', icon: '\u{25CE}', roi: '+$1,212', badge: 'blue', recommended: true },
 ];
 
 const NON_RECOMMENDED_CRYPTOS = [
-  { symbol: 'RENDER/USDT', name: 'Render', category: 'OK solo', icon: '\u{1F3A8}', roi: '+15%', badge: 'default', recommended: false },
-  { symbol: 'SOL/USDT', name: 'Solana', category: 'OK solo', icon: '\u{25CE}', roi: '+25%', badge: 'default', recommended: false },
-  { symbol: 'XRP/USDT', name: 'Ripple', category: 'OK solo', icon: '\u{2715}', roi: '+12%', badge: 'default', recommended: false },
-  { symbol: 'NEAR/USDT', name: 'NEAR Protocol', category: 'OK solo', icon: '\u{1F310}', roi: '+19%', badge: 'default', recommended: false },
-  { symbol: 'LINK/USDT', name: 'Chainlink', category: 'OK solo', icon: '\u{1F517}', roi: '+7%', badge: 'default', recommended: false },
-  { symbol: 'ETH/USDT', name: 'Ethereum', category: 'Marginal', icon: '\u{039E}', roi: '~0%', badge: 'default', recommended: false },
-  { symbol: 'SEI/USDT', name: 'Sei', category: 'Neg. combine', icon: '\u{1F30A}', roi: '-$1,160', badge: 'default', recommended: false },
+  { symbol: 'OP/USDT', name: 'Optimism', category: 'Marginal', icon: '\u{1F534}', roi: '+$1,078', badge: 'default', recommended: false },
+  { symbol: 'LINK/USDT', name: 'Chainlink', category: 'Marginal', icon: '\u{1F517}', roi: '+$955', badge: 'default', recommended: false },
+  { symbol: 'AVAX/USDT', name: 'Avalanche', category: 'Marginal', icon: '\u{1F53A}', roi: '+$767', badge: 'default', recommended: false },
+  { symbol: 'BTC/USDT', name: 'Bitcoin', category: 'Low freq', icon: '\u{20BF}', roi: 'peu de trades', badge: 'default', recommended: false },
 ];
 
 interface AgentCreationModalProps {
@@ -214,7 +223,7 @@ export default function AgentCreationModal({
             <Sparkles className="h-4 w-4 text-blue-400 mt-0.5 shrink-0" />
             <div>
               <div className="font-semibold text-sm bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400 bg-clip-text text-transparent">
-                Cryptos Backtestees V5.93 (12 mois)
+                Cryptos Backtestees V5.130 (12 mois)
               </div>
               <p className="text-slate-400 text-[13px] mt-0.5">
                 Classees par PnL combine sur 12 mois (Jan - Dec 2025). V5 Momentum Simple.

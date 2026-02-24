@@ -31,7 +31,7 @@ import {
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger, runWithUserId } from '../utils/logger.js';
-import { globalSignalRanker } from './signalRanker.js';
+import { globalSignalRanker, getSignalTier } from './signalRanker.js';
 
 import {
   getBinanceWebSocket,
@@ -997,6 +997,7 @@ export class AgentOrchestrator {
           roc5,
           volumeRatio,
           reason: signal.reason || 'momentum_signal',
+          tier: getSignalTier(symbol),
           mode: this.config.mode,
           userId: this.config.userId,
         });

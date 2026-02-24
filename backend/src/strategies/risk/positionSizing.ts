@@ -171,10 +171,10 @@ export const LIQUIDITY_CONFIG = {
     LOW: {
       symbols: [
         'SEI/USDT:USDT', 'IMX/USDT:USDT', 'DOT/USDT:USDT', 'SUI/USDT:USDT',
-        // V5.30: Added missing low-liquidity cryptos from scanner
         'FIL/USDT:USDT', 'ETC/USDT:USDT', 'WLD/USDT:USDT', 'ORDI/USDT:USDT', 'STX/USDT:USDT', 'JUP/USDT:USDT',
-        // V5.93: New winners
         'FET/USDT:USDT', 'WIF/USDT:USDT', 'RENDER/USDT:USDT',
+        // V5.130: New symbols
+        'SONIC/USDT:USDT',
       ],
       maxPositionUsd: 25_000,  // $25K max - beyond this, massive slippage
       minVolume24h: 50_000_000,

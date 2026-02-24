@@ -707,6 +707,18 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Files**: `parityVerificationServiceV2.ts`, `backtestService.ts`, `ReportsPage.tsx`
   - **Parity impact**: Should resolve most NO_SIGNAL results. Fixed SL + entryAtrPct should reduce EXIT_MISMATCH and DURATION_MISMATCH. Pending end-to-end validation (requires running server).
 
+- V5.130: Symbol tier system + SMA200 skip zone activation + signal ranker tier priority:
+  - **Symbol selection overhaul**: Ran individual backtests for 26 symbols (Jan-Dec 2025, $2K, 5x). Classified into Tier A (9 symbols, Sharpe>=2, PF>=1.3) and Tier B (10 symbols, Sharpe>=1, PF>=1.1). Combined individual PnL: $93,447.
+  - **Tier A**: WIF ($28,969), UNI ($8,275), FET ($7,727), STX ($7,674), IMX ($6,374), ARB ($4,077), SEI ($3,675), SUI ($3,504), NEAR ($3,456)
+  - **Tier B**: ADA ($3,220), APT ($2,615), ETH ($2,503), SONIC ($2,321), RENDER ($1,997), XRP ($1,575), DOGE ($1,508), DOT ($1,491), BCH ($1,276), SOL ($1,212)
+  - **Not compatible**: LTC, FTM, OP, LINK, AVAX, TIA, ATOM, BTC (negative or marginal individually), INJ, JUP, BNB
+  - **SMA200 skip zone activated**: `BTC_SMA200_SKIP_ZONE_PCT: 1.0` (was 0/disabled). Skips entries when BTC is within 1% of SMA200. Validated: Sharpe 3.21 (+0.19), DD 37.1% (-17.8pp), PnL -9% (acceptable trade-off for risk reduction).
+  - **Quality bypass**: Tested composite quality score (volRatio+ROC+smaSlope) to let high-quality signals through skip zone. Result: USELESS — no signals in skip zone have quality >= 55. Disabled: `BTC_SMA200_SKIP_ZONE_QUALITY_BYPASS: 0`.
+  - **Signal ranker tier priority**: `getTopSignals()` now sorts by tier first (A before B), then by score. When capital is limited (maxPositions), Tier A symbols get priority. `getSignalTier()` function added to `signalRanker.ts`. `RankedSignal` interface extended with `tier: SignalTier` field. Both live (orchestrator.ts) and backtest (backtestService.ts) use tier-first sorting.
+  - **Config**: `SIGNAL_TIER_A` array added to `MomentumConfig` for Tier A symbol list. `SYMBOLS` updated to 19 (9 Tier A + 10 Tier B).
+  - **Files updated** (8 files): `momentumConfig.ts` (symbols, tiers, skip zone, leverage), `momentumSignal.ts` (quality bypass logic), `signalRanker.ts` (tier field, tier-first sorting), `orchestrator.ts` (tier in addSignal), `backtestService.ts` (tier-first ranking), `candleCache.ts` (20 seed symbols), `positionSizing.ts` (SONIC liquidity), `exchangeOrderManager.ts` (new symbol precisions), `backtest.ts` (defaults, presets, walk-forward/optimize symbols via MomentumConfig.SYMBOLS), `AgentCreationModal.tsx` (19 recommended symbols, banner V5.130)
+  - **Parity**: Skip zone + quality bypass in shared `checkMomentumSignal()` → auto-aligned across live/paper/backtest/parity. Signal ranking tier-first in both live and backtest.
+
 - V5.126: Fix BTC 15m stale cache when no agents active:
   - **Problem**: `btcDataService.ts` reads WS kline cache every 5s but never called `subscribeToKline()`. Agents keep the subscription alive via `candleFetcher.ts:130`, but with 0 active sessions, the 10-min TTL pruned the `btcusdt@kline_15m` stream → cache stale after 45min → STALE_CACHE warnings every 5s.
   - **Fix**: Added `getBinanceWebSocket().subscribeToKline('BTCUSDT', '15m')` in `refresh()`. Since refresh runs every 5s, TTL (10min) is never reached.

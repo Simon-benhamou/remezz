@@ -211,6 +211,8 @@ export const MomentumConfig = {
     BTC_SMA_PERIOD: 200,         // SMA 200 (on 15m = 50h = ~2 days — fast regime for momentum breakout)
     BTC_REGIME_TIMEFRAME: '15m' as const,  // V5.102: Use 15m for regime SMA200 (validated: +2325% ROI, +0.19 Sharpe on 9 symbols)
     BTC_REGIME_TOLERANCE_PCT: 0.2, // V5.113: Dead zone ±0.2% around SMA200 — when price is in band, use SMA slope to determine regime (prevents whipsaw). Validated: +$4.4K PnL, -2.7pp DD, +0.09 Sharpe
+    BTC_SMA200_SKIP_ZONE_PCT: 1.0,  // V5.129: Skip entries when BTC is within X% of SMA200. Data: -17.8pp DD, +0.19 Sharpe, -9% PnL. Sweet spot validated on 2025 full year.
+    BTC_SMA200_SKIP_ZONE_QUALITY_BYPASS: 0, // V5.129: Quality score threshold to bypass skip zone (0 = no bypass). Composite from volRatio+ROC10+ROC5+BTC_ADX+SMA_slope.
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -334,13 +336,13 @@ export const MomentumConfig = {
 
     // TIER 2: Most altcoins (P90 0.8-1.2%)
     // SOL, SEI, DOGE, AVAX, XRP, LINK, ADA, ATOM, DOT, ARB, NEAR, SUI, APT
-    TIER2_SYMBOLS: ['SOL', 'SEI', 'DOGE', 'AVAX', 'XRP', 'LINK', 'ADA', 'ATOM', 'DOT', 'ARB', 'NEAR', 'SUI', 'APT', 'STX', 'TIA'],
+    TIER2_SYMBOLS: ['SOL', 'SEI', 'DOGE', 'AVAX', 'XRP', 'LINK', 'ADA', 'ATOM', 'DOT', 'ARB', 'NEAR', 'SUI', 'APT', 'STX', 'TIA', 'UNI', 'SONIC', 'BCH'],
     TIER2_SL_LOW_VOL_PCT: 2.0,       // Low vol: 2.0% (was 1.5% - too tight!)
     TIER2_SL_MED_VOL_PCT: 2.5,       // Med vol: 2.5%
     TIER2_SL_HIGH_VOL_PCT: 3.0,      // High vol: 3.0%
 
     // TIER 3: High volatility alts (P90 > 1.2%)
-    TIER3_SYMBOLS: ['IMX', 'OP', 'FTM', 'FET', 'WIF'],
+    TIER3_SYMBOLS: ['IMX', 'OP', 'FTM', 'FET', 'WIF', 'RENDER'],
     TIER3_SL_LOW_VOL_PCT: 2.5,       // Low vol: 2.5%
     TIER3_SL_MED_VOL_PCT: 3.0,       // Med vol: 3.0%
     TIER3_SL_HIGH_VOL_PCT: 3.5,      // High vol: 3.5%
@@ -577,54 +579,79 @@ export const MomentumConfig = {
   // ASSETS V5.6 - Backtest 24 mois (Nov 2023 - Nov 2025) - Tous ROI positifs
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // V5.92: All tested symbols (Jan-Dec 2025, individual backtest)
+  // V5.130: All 26 symbols tested individually (Jan-Dec 2025, $2000, 5x)
+  // Tier A = Sharpe>=2, PF>=1.3 | Tier B = Sharpe>=1, PF>=1.1 | Tier C = Marginal | X = Negative
   SYMBOLS_V5_COMPATIBLE: [
-    'IMX/USDT:USDT',   // STRONG: +264%, 70.2% WR, Sharpe 2.74
-    'AVAX/USDT:USDT',  // STRONG: +155%, 69.7% WR, Sharpe 2.61
-    'SEI/USDT:USDT',   // STRONG: +98%, 61.1% WR, Sharpe 1.61
-    'ADA/USDT:USDT',   // STRONG: +92%, 61.1% WR, Sharpe 1.58
-    'DOT/USDT:USDT',   // STRONG: +50%, 55.8% WR, Sharpe 1.23
-    'DOGE/USDT:USDT',  // STRONG: +33%, 58.1% WR, Sharpe 0.88
-    'BTC/USDT:USDT',   // STRONG: +29%, 71.4% WR, Sharpe 1.58
-    'APT/USDT:USDT',   // STRONG: +27%, 59.3% WR, Sharpe 0.80
-    'OP/USDT:USDT',    // STRONG: +30%, 57.4% WR, Sharpe 0.76
-    'SUI/USDT:USDT',   // OK: +33%, 54.5% WR
-    'SOL/USDT:USDT',   // OK: +25%, 59.1% WR
-    'XRP/USDT:USDT',   // OK: +12%, 58.6% WR
-    'NEAR/USDT:USDT',  // OK: +19%, 56.8% WR
-    'ATOM/USDT:USDT',  // OK: +16%, 54.0% WR
-    'LINK/USDT:USDT',  // OK: +7%, 50.6% WR
+    // TIER A (9 symbols) — $73,730 combined individual PnL
+    'WIF/USDT:USDT',    // A: $28,969, 71.5% WR, Sharpe 4.40, PF 2.15
+    'UNI/USDT:USDT',    // A: $8,275, 62.8% WR, Sharpe 2.69, PF 1.40
+    'FET/USDT:USDT',    // A: $7,727, 63.0% WR, Sharpe 2.58, PF 1.44
+    'STX/USDT:USDT',    // A: $7,674, 66.2% WR, Sharpe 3.06, PF 1.86
+    'IMX/USDT:USDT',    // A: $6,374, 67.5% WR, Sharpe 2.40, PF 1.47
+    'ARB/USDT:USDT',    // A: $4,077, 62.1% WR, Sharpe 2.08, PF 1.34
+    'SEI/USDT:USDT',    // A: $3,675, 59.3% WR, Sharpe 2.16, PF 1.34
+    'SUI/USDT:USDT',    // A: $3,504, 64.0% WR, Sharpe 2.08, PF 1.43
+    'NEAR/USDT:USDT',   // A: $3,456, 61.1% WR, Sharpe 2.03, PF 1.31
+    // TIER B (10 symbols) — $19,717 combined individual PnL
+    'ADA/USDT:USDT',    // B: $3,220, 59.5% WR, Sharpe 1.69, PF 1.34
+    'APT/USDT:USDT',    // B: $2,615, 59.3% WR, Sharpe 1.79, PF 1.25
+    'ETH/USDT:USDT',    // B: $2,503, 56.7% WR, Sharpe 1.99, PF 1.39
+    'SONIC/USDT:USDT',  // B: $2,321, 60.7% WR, Sharpe 1.56, PF 1.28
+    'RENDER/USDT:USDT', // B: $1,997, 58.6% WR, Sharpe 1.58, PF 1.22
+    'XRP/USDT:USDT',    // B: $1,575, 61.3% WR, Sharpe 1.35, PF 1.29
+    'DOGE/USDT:USDT',   // B: $1,508, 59.6% WR, Sharpe 1.29, PF 1.20
+    'DOT/USDT:USDT',    // B: $1,491, 59.9% WR, Sharpe 1.38, PF 1.28
+    'BCH/USDT:USDT',    // B: $1,276, 62.5% WR, Sharpe 1.47, PF 1.29
+    'SOL/USDT:USDT',    // B: $1,212, 61.7% WR, Sharpe 1.19, PF 1.19
   ],
 
-  // V5.93: AVOID — negative or marginal PnL in combined backtests
+  // V5.130: AVOID — negative, marginal, or no data
   SYMBOLS_NOT_COMPATIBLE: [
-    'ETH/USDT:USDT',   // MARGINAL: ~0% ROI, 49.4% WR (worse than coin flip)
-    'SEI/USDT:USDT',   // NEGATIVE in combined: -$1,160 (positive solo but loses slots to better symbols)
-    'ARB/USDT:USDT',   // MARGINAL: -3%, 49.5% WR (negative PnL)
-    'FTM/USDT:USDT',   // N/A: only 1 trade in 12 months
-    'INJ/USDT:USDT',   // MARGINAL: +0.3% ROI, not worth a slot
-    'JUP/USDT:USDT',   // AVOID: -29% ROI, 52.6% WR
-    'APT/USDT:USDT',   // NEGATIVE in combined: -$319 (ok solo but loses in competition)
-    'OP/USDT:USDT',    // NEGATIVE in combined: -$389 (ok solo but loses in competition)
+    'LTC/USDT:USDT',   // X: -$375, 55.6% WR (negative PnL)
+    'FTM/USDT:USDT',   // X: -$6, 40% WR (only 5 trades — rebranded to SONIC)
+    'OP/USDT:USDT',    // C: $1,078, Sharpe 1.01 (marginal, DD 40.8%)
+    'LINK/USDT:USDT',  // C: $955, Sharpe 0.98 (marginal)
+    'AVAX/USDT:USDT',  // C: $767, Sharpe 0.83 (marginal, DD 41.4%)
+    'TIA/USDT:USDT',   // C: $321, Sharpe 0.57 (marginal, DD 43.5%)
+    'ATOM/USDT:USDT',  // C: $80, Sharpe 0.31 (barely positive)
+    'BTC/USDT:USDT',   // Not included: too few trades (low momentum frequency)
+    'INJ/USDT:USDT',   // Not tested in V5.130
+    'JUP/USDT:USDT',   // Not tested in V5.130
     'BNB/USDT:USDT',   // Not tested
-    'UNI/USDT:USDT',   // Not tested
-    'LTC/USDT:USDT',   // Not tested
-    'BCH/USDT:USDT',   // Not tested
   ],
 
-  // V5.93: Combined backtest 11 symbols (Jan-Dec 2025, $2000, 4.5x) → +1308% ROI, 61% WR, 29.8% DD
-  // Ranked by combined PnL — SEI/APT/OP dropped (negative in combined mode)
+  // V5.130: Signal tier classification for ranking priority
+  // Tier A symbols are prioritized over Tier B when capital is limited (maxPositions)
+  SIGNAL_TIER_A: [
+    'WIF/USDT:USDT', 'UNI/USDT:USDT', 'FET/USDT:USDT', 'STX/USDT:USDT',
+    'IMX/USDT:USDT', 'ARB/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'NEAR/USDT:USDT',
+  ] as string[],
+
+  // V5.130: 19 symbols Tier A + Tier B (Jan-Dec 2025, $2000, 5x individual backtests)
+  // Signal ranker prioritizes Tier A. More symbols = more opportunities.
+  // Combined individual PnL: $93,447
   SYMBOLS: [
-    'AVAX/USDT:USDT',  // #1 PnL=$4,850, 54 trades, avg=$89.81
-    'FET/USDT:USDT',   // #2 PnL=$4,558, 81 trades, avg=$56.28 (NEW - AI narrative)
-    'WIF/USDT:USDT',   // #3 PnL=$3,686, 86 trades, avg=$42.86 (NEW - meme momentum)
-    'DOT/USDT:USDT',   // #4 PnL=$3,630, 49 trades, avg=$74.07
-    'TIA/USDT:USDT',   // #5 PnL=$3,087, 79 trades, avg=$39.07 (NEW - L1 volatile)
-    'IMX/USDT:USDT',   // #6 PnL=$2,552, 69 trades, avg=$36.98
-    'STX/USDT:USDT',   // #7 PnL=$1,761, 50 trades, avg=$35.23 (NEW - Bitcoin L2)
-    'DOGE/USDT:USDT',  // #8 PnL=$1,617, 84 trades, avg=$19.25
-    'ADA/USDT:USDT',   // #9 PnL=$1,241, 66 trades, avg=$18.81
-    'BTC/USDT:USDT',   // #10 PnL=$339, 25 trades, avg=$13.56
+    // Tier A — high Sharpe, high PF
+    'WIF/USDT:USDT',    // A: $28,969, 71.5% WR, Sharpe 4.40
+    'UNI/USDT:USDT',    // A: $8,275, 62.8% WR, Sharpe 2.69
+    'FET/USDT:USDT',    // A: $7,727, 63.0% WR, Sharpe 2.58
+    'STX/USDT:USDT',    // A: $7,674, 66.2% WR, Sharpe 3.06
+    'IMX/USDT:USDT',    // A: $6,374, 67.5% WR, Sharpe 2.40
+    'ARB/USDT:USDT',    // A: $4,077, 62.1% WR, Sharpe 2.08
+    'SEI/USDT:USDT',    // A: $3,675, 59.3% WR, Sharpe 2.16
+    'SUI/USDT:USDT',    // A: $3,504, 64.0% WR, Sharpe 2.08
+    'NEAR/USDT:USDT',   // A: $3,456, 61.1% WR, Sharpe 2.03
+    // Tier B — positive, solid
+    'ADA/USDT:USDT',    // B: $3,220, 59.5% WR, Sharpe 1.69
+    'APT/USDT:USDT',    // B: $2,615, 59.3% WR, Sharpe 1.79
+    'ETH/USDT:USDT',    // B: $2,503, 56.7% WR, Sharpe 1.99
+    'SONIC/USDT:USDT',  // B: $2,321, 60.7% WR, Sharpe 1.56
+    'RENDER/USDT:USDT', // B: $1,997, 58.6% WR, Sharpe 1.58
+    'XRP/USDT:USDT',    // B: $1,575, 61.3% WR, Sharpe 1.35
+    'DOGE/USDT:USDT',   // B: $1,508, 59.6% WR, Sharpe 1.29
+    'DOT/USDT:USDT',    // B: $1,491, 59.9% WR, Sharpe 1.38
+    'BCH/USDT:USDT',    // B: $1,276, 62.5% WR, Sharpe 1.47
+    'SOL/USDT:USDT',    // B: $1,212, 61.7% WR, Sharpe 1.19
   ],
 
   // V5.8: Leverage 5x uniforme - Validé sûr (SL max 4.5% × 5 = 22.5% << 80% liquidation)
@@ -649,6 +676,11 @@ export const MomentumConfig = {
     'WIF/USDT:USDT': 5,
     'TIA/USDT:USDT': 5,
     'STX/USDT:USDT': 5,
+    'UNI/USDT:USDT': 5,
+    'ARB/USDT:USDT': 5,
+    'SONIC/USDT:USDT': 5,
+    'BCH/USDT:USDT': 5,
+    'RENDER/USDT:USDT': 5,
   } as Record<string, number>,
 
   // ═══════════════════════════════════════════════════════════════════════════

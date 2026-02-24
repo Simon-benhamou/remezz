@@ -5,6 +5,7 @@ import { authenticateUser, AuthenticatedRequest } from "../middleware/auth.js";
 import { verifyTradeV2, verifyAllTradesV2, getParityResultsV2 } from "../services/parityVerificationServiceV2.js";
 import { runWalkForward, type WalkForwardConfig } from "../services/walkForwardService.js";
 import { runOptimization, type ParameterGrid, type OptimizationConfig } from "../services/optimizationService.js";
+import { MomentumConfig } from "../strategies/config/momentumConfig.js";
 import crypto from 'node:crypto';
 
 export const router = Router();
@@ -126,8 +127,8 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
       startDate, 
       endDate, 
       initialCapital = 2000,
-      // V5.93: Default to 10 winners (+1308% ROI combined)
-      symbols = ['AVAX/USDT:USDT', 'FET/USDT:USDT', 'WIF/USDT:USDT', 'DOT/USDT:USDT', 'TIA/USDT:USDT', 'IMX/USDT:USDT', 'STX/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'BTC/USDT:USDT'],
+      // V5.130: Default to 19 Tier A+B symbols
+      symbols = ['WIF/USDT:USDT', 'UNI/USDT:USDT', 'FET/USDT:USDT', 'STX/USDT:USDT', 'IMX/USDT:USDT', 'ARB/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'NEAR/USDT:USDT', 'ADA/USDT:USDT', 'APT/USDT:USDT', 'ETH/USDT:USDT', 'SONIC/USDT:USDT', 'RENDER/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'DOT/USDT:USDT', 'BCH/USDT:USDT', 'SOL/USDT:USDT'],
       leverage = 4.5,
       postProcess1m = false,
     } = req.body;
@@ -190,28 +191,37 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
  */
 router.get('/presets', authenticateUser, (req, res) => {
   res.json({
-    // V5.93: Combined backtest ranked (Jan-Dec 2025, $2000, 4.5x) → +1308% ROI
+    // V5.130: 26 symbols tested individually (Jan-Dec 2025, $2000, 5x)
     symbols: [
-      // STRONG — top 10 winners in combined backtest
-      { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT', tier: 'MEDIUM', roi24m: '+$4,850' },
-      { value: 'FET/USDT:USDT', label: 'FET/USDT', tier: 'LOW', roi24m: '+$4,558' },
-      { value: 'WIF/USDT:USDT', label: 'WIF/USDT', tier: 'LOW', roi24m: '+$3,686' },
-      { value: 'DOT/USDT:USDT', label: 'DOT/USDT', tier: 'LOW', roi24m: '+$3,630' },
-      { value: 'TIA/USDT:USDT', label: 'TIA/USDT', tier: 'LOW', roi24m: '+$3,087' },
-      { value: 'IMX/USDT:USDT', label: 'IMX/USDT', tier: 'LOW', roi24m: '+$2,552' },
-      { value: 'STX/USDT:USDT', label: 'STX/USDT', tier: 'LOW', roi24m: '+$1,761' },
-      { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT', tier: 'MEDIUM', roi24m: '+$1,617' },
-      { value: 'ADA/USDT:USDT', label: 'ADA/USDT', tier: 'MEDIUM', roi24m: '+$1,241' },
-      { value: 'BTC/USDT:USDT', label: 'BTC/USDT', tier: 'HIGH', roi24m: '+$339' },
-      // OK — available but not in default set
-      { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT', tier: 'LOW', roi24m: '+15%' },
-      { value: 'SOL/USDT:USDT', label: 'SOL/USDT', tier: 'MEDIUM', roi24m: '+25%' },
-      { value: 'XRP/USDT:USDT', label: 'XRP/USDT', tier: 'MEDIUM', roi24m: '+12%' },
-      { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT', tier: 'LOW', roi24m: '+19%' },
-      { value: 'LINK/USDT:USDT', label: 'LINK/USDT', tier: 'MEDIUM', roi24m: '+7%' },
+      // TIER A — Sharpe>=2, PF>=1.3
+      { value: 'WIF/USDT:USDT', label: 'WIF/USDT', tier: 'A', roi24m: '+$28,969' },
+      { value: 'UNI/USDT:USDT', label: 'UNI/USDT', tier: 'A', roi24m: '+$8,275' },
+      { value: 'FET/USDT:USDT', label: 'FET/USDT', tier: 'A', roi24m: '+$7,727' },
+      { value: 'STX/USDT:USDT', label: 'STX/USDT', tier: 'A', roi24m: '+$7,674' },
+      { value: 'IMX/USDT:USDT', label: 'IMX/USDT', tier: 'A', roi24m: '+$6,374' },
+      { value: 'ARB/USDT:USDT', label: 'ARB/USDT', tier: 'A', roi24m: '+$4,077' },
+      { value: 'SEI/USDT:USDT', label: 'SEI/USDT', tier: 'A', roi24m: '+$3,675' },
+      { value: 'SUI/USDT:USDT', label: 'SUI/USDT', tier: 'A', roi24m: '+$3,504' },
+      { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT', tier: 'A', roi24m: '+$3,456' },
+      // TIER B — Sharpe>=1, PF>=1.1
+      { value: 'ADA/USDT:USDT', label: 'ADA/USDT', tier: 'B', roi24m: '+$3,220' },
+      { value: 'APT/USDT:USDT', label: 'APT/USDT', tier: 'B', roi24m: '+$2,615' },
+      { value: 'ETH/USDT:USDT', label: 'ETH/USDT', tier: 'B', roi24m: '+$2,503' },
+      { value: 'SONIC/USDT:USDT', label: 'SONIC/USDT', tier: 'B', roi24m: '+$2,321' },
+      { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT', tier: 'B', roi24m: '+$1,997' },
+      { value: 'XRP/USDT:USDT', label: 'XRP/USDT', tier: 'B', roi24m: '+$1,575' },
+      { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT', tier: 'B', roi24m: '+$1,508' },
+      { value: 'DOT/USDT:USDT', label: 'DOT/USDT', tier: 'B', roi24m: '+$1,491' },
+      { value: 'BCH/USDT:USDT', label: 'BCH/USDT', tier: 'B', roi24m: '+$1,276' },
+      { value: 'SOL/USDT:USDT', label: 'SOL/USDT', tier: 'B', roi24m: '+$1,212' },
+      // TIER C — Marginal (available but not recommended)
+      { value: 'OP/USDT:USDT', label: 'OP/USDT', tier: 'C', roi24m: '+$1,078' },
+      { value: 'LINK/USDT:USDT', label: 'LINK/USDT', tier: 'C', roi24m: '+$955' },
+      { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT', tier: 'C', roi24m: '+$767' },
+      { value: 'BTC/USDT:USDT', label: 'BTC/USDT', tier: 'C', roi24m: 'low freq' },
     ],
-    // V5.93: Default = 10 combined winners (+1308% ROI, 61% WR, 29.8% DD)
-    defaultSymbols: ['AVAX/USDT:USDT', 'FET/USDT:USDT', 'WIF/USDT:USDT', 'DOT/USDT:USDT', 'TIA/USDT:USDT', 'IMX/USDT:USDT', 'STX/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'BTC/USDT:USDT'],
+    // V5.130: Default = 19 Tier A+B symbols
+    defaultSymbols: ['WIF/USDT:USDT', 'UNI/USDT:USDT', 'FET/USDT:USDT', 'STX/USDT:USDT', 'IMX/USDT:USDT', 'ARB/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'NEAR/USDT:USDT', 'ADA/USDT:USDT', 'APT/USDT:USDT', 'ETH/USDT:USDT', 'SONIC/USDT:USDT', 'RENDER/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'DOT/USDT:USDT', 'BCH/USDT:USDT', 'SOL/USDT:USDT'],
     leverageOptions: [3, 4, 4.5, 5],
     capitalPresets: [1000, 2000, 5000, 10000, 50000, 100000],
     periods: [
@@ -316,7 +326,7 @@ router.post('/walk-forward', authenticateUser, async (req, res) => {
       fullStartDate: new Date(startDate),
       fullEndDate: new Date(endDate),
       trainWindowMonths, testWindowMonths, stepMonths,
-      symbols: symbols || ['AVAX/USDT:USDT', 'FET/USDT:USDT', 'WIF/USDT:USDT', 'DOT/USDT:USDT', 'TIA/USDT:USDT', 'IMX/USDT:USDT', 'STX/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'BTC/USDT:USDT'],
+      symbols: symbols || MomentumConfig.SYMBOLS,
       initialCapital, leverage, signalOverrides,
     };
 
@@ -351,7 +361,7 @@ router.post('/optimize', authenticateUser, async (req, res) => {
         fullStartDate: new Date(startDate),
         fullEndDate: new Date(endDate),
         trainWindowMonths, testWindowMonths, stepMonths,
-        symbols: symbols || ['AVAX/USDT:USDT', 'FET/USDT:USDT', 'WIF/USDT:USDT', 'DOT/USDT:USDT', 'TIA/USDT:USDT', 'IMX/USDT:USDT', 'STX/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'BTC/USDT:USDT'],
+        symbols: symbols || MomentumConfig.SYMBOLS,
         initialCapital, leverage,
       },
       topN,

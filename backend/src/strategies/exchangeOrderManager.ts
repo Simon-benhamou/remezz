@@ -69,6 +69,11 @@ export class ExchangeOrderManager {
       'DOGE/USDT:USDT': 1, 'XRP/USDT:USDT': 0.1, 'ADA/USDT:USDT': 0.1,
       'DOT/USDT:USDT': 0.1, 'LINK/USDT:USDT': 0.01, 'AVAX/USDT:USDT': 0.01,
       'SOL/USDT:USDT': 0.01, 'ETH/USDT:USDT': 0.001, 'BTC/USDT:USDT': 0.001,
+      // V5.130: New symbols
+      'UNI/USDT:USDT': 0.1, 'ARB/USDT:USDT': 0.1, 'NEAR/USDT:USDT': 0.1,
+      'APT/USDT:USDT': 0.01, 'STX/USDT:USDT': 0.1, 'FET/USDT:USDT': 0.1,
+      'WIF/USDT:USDT': 1, 'RENDER/USDT:USDT': 0.1, 'BCH/USDT:USDT': 0.001,
+      'SONIC/USDT:USDT': 1,
     };
 
     const stepSize = knownPrecision[symbol];
