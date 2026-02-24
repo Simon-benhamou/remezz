@@ -706,3 +706,9 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Timezone fix** (`ReportsPage.tsx`): Parity timestamps in frontend were displayed in browser locale (Israel UTC+2), while Telegram report used UTC. Added `dayjs.extend(utc)` and switched all parity timestamp displays to `.utc().format()`.
   - **Files**: `parityVerificationServiceV2.ts`, `backtestService.ts`, `ReportsPage.tsx`
   - **Parity impact**: Should resolve most NO_SIGNAL results. Fixed SL + entryAtrPct should reduce EXIT_MISMATCH and DURATION_MISMATCH. Pending end-to-end validation (requires running server).
+
+- V5.126: Fix BTC 15m stale cache when no agents active:
+  - **Problem**: `btcDataService.ts` reads WS kline cache every 5s but never called `subscribeToKline()`. Agents keep the subscription alive via `candleFetcher.ts:130`, but with 0 active sessions, the 10-min TTL pruned the `btcusdt@kline_15m` stream → cache stale after 45min → STALE_CACHE warnings every 5s.
+  - **Fix**: Added `getBinanceWebSocket().subscribeToKline('BTCUSDT', '15m')` in `refresh()`. Since refresh runs every 5s, TTL (10min) is never reached.
+  - **Pattern**: Any service that reads WS kline cache (`getKlinesWithMeta`/`getKlines`) MUST also re-subscribe periodically to prevent TTL pruning. The WS subscription is not permanent — it has a 10-min TTL (`klineSubscriptionTtlMs`) and gets pruned by `pruneStaleKlineSubscriptions()` if no caller refreshes `lastRequestedAt`.
+  - **File**: `btcDataService.ts`
