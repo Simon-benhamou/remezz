@@ -426,8 +426,8 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
     }
   }
 
-  // Schedule Polymarket oracle verification
-  if (!skipped) {
+  // Schedule Polymarket oracle verification (including skipped — for hypothetical WR analysis)
+  if (w.prediction?.direction) {
     pendingVerifications.push({
       userId: null,
       symbol: sym,
@@ -441,7 +441,9 @@ async function resolveWindow(w: WindowState, prisma: PrismaClient): Promise<void
       verifyAfterMs: Date.now() + 3 * 60 * 1000,
       giveUpAfterMs: Date.now() + 60 * 60 * 1000,
     });
+  }
 
+  if (!skipped) {
     const verifiedUsers = new Set<string>();
     for (const sell of autoSells) {
       if (verifiedUsers.has(sell.userId)) continue;
