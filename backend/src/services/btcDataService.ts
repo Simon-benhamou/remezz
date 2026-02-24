@@ -11,7 +11,7 @@
  *   - Singleton access via getBtcDataService() for live
  */
 
-import { getKlinesWithMeta } from './binanceWebSocket.js';
+import { getKlinesWithMeta, getBinanceWebSocket } from './binanceWebSocket.js';
 import { MomentumConfig, type Candle, type MarketConditions, calcSMA, getMarketConditions as getMC } from '../strategies/momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -143,6 +143,9 @@ export class LiveBtcDataService implements BtcDataProvider {
    * Read WS cache, filter closed, recompute regime on candle close.
    */
   refresh(): void {
+    // 0. Keep WS subscription alive (TTL=10min, refresh every 5s → never pruned)
+    try { getBinanceWebSocket().subscribeToKline('BTCUSDT', '15m'); } catch {}
+
     // 1. Read BTC 15m from WS cache
     const raw15m = getKlinesWithMeta('BTCUSDT', '15m');
     if (!raw15m || raw15m.length < MIN_CANDLES_15M) return;
