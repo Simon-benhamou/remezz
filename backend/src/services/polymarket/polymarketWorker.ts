@@ -26,6 +26,10 @@ const POLL_INTERVAL_MS = 1000;               // 1 second
 /** Map short symbol → Binance pair */
 const BINANCE_SYMBOL = (s: string) => `${s}USDT`;
 
+// ─── Scoring threshold ───────────────────────────────────────────────────────
+// V5.130: Lowered from 65 → 50 (backtest 30d: 80.6% WR, +7.6pp edge over CLOB breakeven, all buckets +EV)
+const MIN_SCORE = 50;
+
 // ─── Market condition filter (V5.128: calibrated on backtest) ────────────────
 const MARKET_FILTER_ENABLED = true;
 const FLAT_THRESHOLD = 0.02; // roc5m below this = "flat" (passes mean-reversion)
@@ -884,8 +888,6 @@ async function tick(prisma: PrismaClient): Promise<void> {
       const result = computeFiveMinScore(windowCandles, preWindowCandles, startPrice);
       if (!result) return { sym, result: null, odds: null, slug: '', belowThreshold: false };
 
-      // V5.129: Score threshold check — keep result for logging even when below threshold
-      const MIN_SCORE = 65;
       if (result.confidence < MIN_SCORE) {
         return { sym, result, odds: null, slug: '', belowThreshold: true };
       }
@@ -1148,7 +1150,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
           w.status = 'skipped';
           const { total, volumeSpike, microRoc, bodyRatio, wickRejection, candleAlignment, preWindowMomentum } = result.score;
           log.info(
-            `[${sym}] Score ${total}/65 ${result.direction} — vol=${volumeSpike} roc=${microRoc} body=${bodyRatio} wick=${wickRejection} align=${candleAlignment} pre=${preWindowMomentum}`
+            `[${sym}] Score ${total}/${MIN_SCORE} ${result.direction} — vol=${volumeSpike} roc=${microRoc} body=${bodyRatio} wick=${wickRejection} align=${candleAlignment} pre=${preWindowMomentum}`
           );
         }
       }

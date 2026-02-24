@@ -63,16 +63,15 @@ const CTF_REDEEM_ABI = [
 const RELAYER_URL = 'https://relayer-v2.polymarket.com/';
 
 // Confidence-tiered pricing: higher score → accept higher CLOB price.
-// Recalibrated on 30-day realistic backtest (1-candle scorer, no look-ahead):
+// V5.130: Min score lowered to 50 (backtest 30d: 80.6% WR, +7.6pp edge, all CLOB buckets +EV)
+//   Score 50-64: ~80% WR → cap 0.78 (same as 65-69, backtest confirms +EV across all CLOB bands)
 //   Score 65-69: ~80% WR → cap 0.78
 //   Score 70-79: ~83% WR → cap 0.82
 //   Score 80+:   ~85% WR → cap 0.85
-// Min score raised to 65 (V5.129) — below 65, WR < 80% which is unprofitable
-// given win/loss asymmetry (win +$1-2, loss -$5 at typical CLOB prices).
 export const CLOB_PRICE_TIERS = [
   { minScore: 80, maxPrice: 0.85 },
   { minScore: 70, maxPrice: 0.82 },
-  { minScore: 65, maxPrice: 0.78 },
+  { minScore: 50, maxPrice: 0.78 },
 ] as const;
 
 /** Get the maximum acceptable CLOB price for a given confidence score. */
@@ -80,7 +79,7 @@ export function getMaxPriceForScore(score: number): number {
   for (const tier of CLOB_PRICE_TIERS) {
     if (score >= tier.minScore) return tier.maxPrice;
   }
-  return 0.50; // fallback — should never hit (scorer returns null for score < 65)
+  return 0.50; // fallback — should never hit (MIN_SCORE = 50 in worker)
 }
 
 // Keep MAX_CLOB_PRICE for hedge bets (they don't have a score — use the lowest tier)
