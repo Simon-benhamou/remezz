@@ -26,6 +26,63 @@ const POLL_INTERVAL_MS = 1000;               // 1 second
 /** Map short symbol → Binance pair */
 const BINANCE_SYMBOL = (s: string) => `${s}USDT`;
 
+// ─── Market condition filter (V5.128: calibrated on backtest) ────────────────
+const MARKET_FILTER_ENABLED = true;
+const FLAT_THRESHOLD = 0.02; // roc5m below this = "flat" (passes mean-reversion)
+
+/**
+ * Compute BTC market context from 1m candles for market condition filters.
+ * Uses final candles BEFORE the current window start.
+ */
+function computeBtcContext(btcKlines: Candle1m[], windowStart: number): {
+  roc5m: number; roc15m: number; bodyRatio: number;
+} | null {
+  const final = btcKlines
+    .filter(k => k.isFinal && k.timestamp < windowStart)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (final.length < 15) return null;
+
+  const last15 = final.slice(-15);
+  const last10 = final.slice(-10);
+  const last5 = final.slice(-5);
+  const last = final[final.length - 1];
+
+  const roc5m = (last.close - last5[0].open) / last5[0].open * 100;
+  const roc15m = (last.close - last15[0].open) / last15[0].open * 100;
+
+  const bodyRatio = last10.reduce((s, c) => {
+    const range = c.high - c.low;
+    return range === 0 ? s : s + Math.abs(c.close - c.open) / range;
+  }, 0) / last10.length;
+
+  return { roc5m, roc15m, bodyRatio };
+}
+
+/**
+ * Check all 3 market condition filters (mean-reversion + trend alignment + body ratio).
+ * Returns true if the trade should proceed.
+ */
+function passesMarketFilter(
+  ctx: { roc5m: number; roc15m: number; bodyRatio: number },
+  consensusDir: 'UP' | 'DOWN',
+): boolean {
+  // 1. Mean-reversion: prediction AGAINST roc5m (or roc5m flat)
+  const roc5mFlat = Math.abs(ctx.roc5m) < FLAT_THRESHOLD;
+  const meanReversion = roc5mFlat ||
+    (consensusDir === 'UP' && ctx.roc5m < 0) ||
+    (consensusDir === 'DOWN' && ctx.roc5m > 0);
+  if (!meanReversion) return false;
+
+  // 2. Trend alignment: roc5m & roc15m same sign
+  const trendAlign = ctx.roc5m !== 0 && Math.sign(ctx.roc5m) === Math.sign(ctx.roc15m);
+  if (!trendAlign && !roc5mFlat) return false;
+
+  // 3. Body ratio > 0.5 (clean candles)
+  if (ctx.bodyRatio <= 0.5) return false;
+
+  return true;
+}
+
 // ─── Pre-sell constants ──────────────────────────────────────────────────────
 const PRE_SELL_START_MS = 3 * 60 * 1000;        // T+3:00 — start attempting sells (V5.124: was T+4:00)
 const PRE_SELL_RETRY_MS = 10 * 1000;             // Retry every 10 seconds
@@ -832,6 +889,24 @@ async function tick(prisma: PrismaClient): Promise<void> {
       }
       if (scored.length > 0) {
         log.info(`No consensus: UP=${upCount}, DOWN=${downCount} — skipping all`);
+      }
+    }
+
+    // ── V5.128: Market condition filter (mean-reversion + trend + body ratio) ──
+    if (MARKET_FILTER_ENABLED && tradeable.length > 0) {
+      const btcKlines = getKlines1m('BTCUSDT');
+      const ctx = computeBtcContext(btcKlines, start);
+      if (ctx) {
+        if (!passesMarketFilter(ctx, consensusDir)) {
+          log.info(`Market filter REJECT: roc5m=${ctx.roc5m.toFixed(3)}% roc15m=${ctx.roc15m.toFixed(3)}% bodyRatio=${ctx.bodyRatio.toFixed(2)} dir=${consensusDir}`);
+          for (const { sym } of tradeable) {
+            const w = windowBySymbol.get(sym);
+            if (w) w.status = 'skipped';
+          }
+          tradeable = [];
+        } else {
+          log.info(`Market filter PASS: roc5m=${ctx.roc5m.toFixed(3)}% roc15m=${ctx.roc15m.toFixed(3)}% bodyRatio=${ctx.bodyRatio.toFixed(2)} dir=${consensusDir}`);
+        }
       }
     }
 
