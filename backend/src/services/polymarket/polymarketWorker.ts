@@ -66,6 +66,20 @@ function computeBtcContext(btcKlines: Candle1m[], windowStart: number): {
  * Check all 3 market condition filters (mean-reversion + trend alignment + body ratio).
  * Returns true if the trade should proceed.
  */
+/**
+ * V5.133: Check if BTC 60-minute range exceeds post-breakout threshold.
+ * Returns the range in %, or -1 if insufficient data.
+ * Uses final (closed) candles only — no look-ahead.
+ */
+function calcBtcRange60m(btcKlines: Candle1m[], windowStart: number): number {
+  const final = btcKlines
+    .filter(k => k.isFinal && k.timestamp < windowStart && k.timestamp >= windowStart - 60 * 60_000);
+  if (final.length < 30) return -1; // not enough data (need ~60 of 60 candles)
+  const high = Math.max(...final.map(c => c.high));
+  const low = Math.min(...final.map(c => c.low));
+  return (high - low) / low * 100;
+}
+
 function passesMarketFilter(
   ctx: { roc5m: number; roc15m: number; bodyRatio: number },
   consensusDir: 'UP' | 'DOWN',
@@ -162,6 +176,13 @@ const cooldownTrackedWindows = new Set<number>(); // prevent double-counting per
 // ─── Toxic hours: skip windows during low-WR hours (V5.129) ─────────────────
 // 21h UTC = 69.6% WR, 0h = 73.9%, 19h = 77% — all below profitable threshold.
 const TOXIC_HOURS_UTC = new Set([21]); // Only skip the worst hour for now
+
+// ─── Post-breakout cooldown filter (V5.133) ─────────────────────────────────
+// Skip windows when BTC has moved > threshold in the last 60 minutes.
+// Backtest 30d: +59% PnL ($654→$1041), +1.3pp WR, Max DD /3.6 ($232→$64).
+// After a big move, momentum is exhausted and follow-through is unreliable.
+const POST_BREAKOUT_FILTER_ENABLED = true;
+const POST_BREAKOUT_MAX_RANGE_60M_PCT = 1.20; // skip when BTC 60m range > 1.20%
 
 // ─── Global state (not per-symbol) ──────────────────────────────────────────
 
@@ -950,6 +971,22 @@ async function tick(prisma: PrismaClient): Promise<void> {
         } else {
           log.info(`Market filter PASS: roc5m=${ctx.roc5m.toFixed(3)}% roc15m=${ctx.roc15m.toFixed(3)}% bodyRatio=${ctx.bodyRatio.toFixed(2)} dir=${consensusDir}`);
         }
+      }
+    }
+
+    // ── V5.133: Post-breakout cooldown filter ─────────────────────────────
+    if (POST_BREAKOUT_FILTER_ENABLED && tradeable.length > 0) {
+      const btcKlines = getKlines1m('BTCUSDT');
+      const range60m = calcBtcRange60m(btcKlines, start);
+      if (range60m >= 0 && range60m > POST_BREAKOUT_MAX_RANGE_60M_PCT) {
+        log.info(`Post-breakout filter REJECT: BTC 60m range=${range60m.toFixed(3)}% > ${POST_BREAKOUT_MAX_RANGE_60M_PCT}% — market exhausted`);
+        for (const { sym, result } of tradeable) {
+          const w = windowBySymbol.get(sym);
+          if (w) { w.status = 'skipped'; w.skipReason = 'post_breakout'; if (result) w.prediction = result; }
+        }
+        tradeable = [];
+      } else if (range60m >= 0) {
+        log.info(`Post-breakout filter PASS: BTC 60m range=${range60m.toFixed(3)}% <= ${POST_BREAKOUT_MAX_RANGE_60M_PCT}%`);
       }
     }
 
