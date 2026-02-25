@@ -1,6 +1,7 @@
 import type { PrismaClient } from '.prisma/client';
 import { getBinanceWebSocket, getKlinesWithMeta } from '../binanceWebSocket.js';
 import { createLogger } from '../../utils/logger.js';
+import { notifySystemAlert } from '../../utils/notifications.js';
 import { computeFiveMinScore } from './fiveMinScorer.js';
 import { buildSlug, fetchPolymarketOdds, fetchPolymarketResult, fetchConditionId } from './polymarketClient.js';
 import {
@@ -671,8 +672,10 @@ async function processUnredeemedTokens(prisma: PrismaClient): Promise<void> {
     const u = unredeemedTokens[i];
 
     if (now > u.giveUpAt) {
-      log.warn(`UNREDEEMED: gave up on ${u.slug} after ${u.attempts} attempts — $${(u.betAmount / u.executionPrice).toFixed(2)} tokens stuck`);
+      const tokenValue = (u.betAmount / u.executionPrice).toFixed(2);
+      log.warn(`UNREDEEMED: in-memory gave up on ${u.slug} after ${u.attempts} attempts — $${tokenValue} tokens (DB sweep will continue)`);
       toRemove.push(i);
+      // No alarm here — DB sweep will pick it up and keep retrying
       continue;
     }
 
@@ -720,12 +723,12 @@ async function processUnredeemedTokens(prisma: PrismaClient): Promise<void> {
             }).catch(() => {});
             toRemove.push(i);
           } else {
-            log.warn(`CTF redeem failed ${uLabel} for ${u.slug}: ${redeemResult.error} — claim manually on Polymarket`);
-            toRemove.push(i);
+            log.warn(`CTF redeem failed ${uLabel} for ${u.slug}: ${redeemResult.error} — will retry (DB sweep as backup)`);
+            // Don't remove — keep retrying in-memory. DB sweep is the safety net.
           }
         } else {
-          log.warn(`No conditionId found ${uLabel} for ${u.slug} — claim manually on Polymarket`);
-          toRemove.push(i);
+          log.warn(`No conditionId found ${uLabel} for ${u.slug} — will retry (DB sweep as backup)`);
+          // Don't remove — conditionId may appear later once oracle resolves.
         }
       }
     } catch (err: unknown) {
@@ -736,6 +739,119 @@ async function processUnredeemedTokens(prisma: PrismaClient): Promise<void> {
 
   for (let i = toRemove.length - 1; i >= 0; i--) {
     unredeemedTokens.splice(toRemove[i], 1);
+  }
+}
+
+// ─── DB-based unredeemed token sweep (survives restarts) ─────────────────────
+
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const SWEEP_LOOKBACK_MS = 48 * 60 * 60 * 1000; // 48h
+const SWEEP_ALERT_AFTER_MS = 60 * 60 * 1000; // alert if stuck > 1h
+let lastSweepAt = 0;
+const sweepAlertSent = new Set<number>(); // prediction IDs already alerted
+
+async function sweepUnredeemedFromDb(prisma: PrismaClient): Promise<void> {
+  const now = Date.now();
+  if (now - lastSweepAt < SWEEP_INTERVAL_MS) return;
+  lastSweepAt = now;
+
+  // Find winning trades that were never redeemed
+  const unredeemed = await prisma.polymarketPrediction.findMany({
+    where: {
+      isCorrect: true,
+      usdcReceived: null,
+      betAmount: { gt: 0 },
+      tokenId: { not: null },
+      userId: { not: null },
+      createdAt: { gte: new Date(now - SWEEP_LOOKBACK_MS) },
+    },
+    select: {
+      id: true,
+      userId: true,
+      symbol: true,
+      windowStart: true,
+      polymarketSlug: true,
+      tokenId: true,
+      betAmount: true,
+      executionPrice: true,
+      createdAt: true,
+    },
+  });
+
+  if (unredeemed.length === 0) return;
+
+  // Skip virtual users
+  const virtualUserIds = new Set(await getVirtualPolymarketUserIds(prisma));
+
+  let redeemed = 0;
+  for (const row of unredeemed) {
+    if (!row.userId || !row.tokenId || !row.betAmount || !row.executionPrice || !row.polymarketSlug) continue;
+    if (virtualUserIds.has(row.userId)) continue;
+
+    // Skip if already in the in-memory retry queue (avoid double attempts)
+    const inMemory = unredeemedTokens.some(
+      (u) => u.windowStart === row.windowStart.getTime() && u.tokenId === row.tokenId && u.userId === row.userId,
+    );
+    if (inMemory) continue;
+
+    const uLabel = `[${row.userId.slice(0, 8)}]`;
+    const ageMs = now - row.createdAt.getTime();
+    const ageMin = Math.round(ageMs / 60_000);
+
+    // 1. Try CLOB sell
+    try {
+      const sellResult = await sellWinningTokens(prisma, row.userId, row.tokenId, row.betAmount, row.executionPrice, 0.50);
+      if (sellResult.success) {
+        const realPnl = (sellResult.usdcReceived ?? 0) - row.betAmount;
+        await prisma.polymarketPrediction.updateMany({
+          where: { id: row.id },
+          data: { usdcReceived: sellResult.usdcReceived, sellPrice: sellResult.sellPrice, soldAt: new Date(), realPnl },
+        });
+        log.info(`SWEEP SOLD ${uLabel}: ${row.symbol} ${row.polymarketSlug} — $${sellResult.usdcReceived?.toFixed(2)} USDC (age ${ageMin}min)`);
+        sweepAlertSent.delete(row.id);
+        redeemed++;
+        continue;
+      }
+    } catch { /* fall through to CTF */ }
+
+    // 2. Try CTF redeem
+    try {
+      const conditionId = await fetchConditionId(row.polymarketSlug);
+      if (conditionId) {
+        const redeemResult = await redeemWinningTokens(prisma, row.userId, conditionId, row.betAmount, row.executionPrice);
+        if (redeemResult.success) {
+          const realPnl = (redeemResult.usdcReceived ?? 0) - row.betAmount;
+          await prisma.polymarketPrediction.updateMany({
+            where: { id: row.id },
+            data: { usdcReceived: redeemResult.usdcReceived, sellPrice: 1.0, soldAt: new Date(), realPnl },
+          });
+          log.info(`SWEEP REDEEMED ${uLabel}: ${row.symbol} ${row.polymarketSlug} — ~$${redeemResult.usdcReceived?.toFixed(2)} USDC via CTF (age ${ageMin}min)`);
+          sweepAlertSent.delete(row.id);
+          redeemed++;
+          continue;
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`SWEEP CTF error ${uLabel} for ${row.polymarketSlug}: ${msg}`);
+    }
+
+    // 3. Alert if stuck > 1h (once per prediction)
+    if (ageMs > SWEEP_ALERT_AFTER_MS && !sweepAlertSent.has(row.id)) {
+      sweepAlertSent.add(row.id);
+      const tokenValue = (row.betAmount / row.executionPrice).toFixed(2);
+      notifySystemAlert({
+        level: 'warning',
+        title: 'Polymarket tokens non réclamés',
+        message: `${row.symbol} | ${row.polymarketSlug}\nUser: ${row.userId.slice(0, 8)}…\nTokens: ~$${tokenValue} USDC\nAge: ${ageMin} min\n\nLe sweep auto continue de réessayer.`,
+      }).catch(() => {});
+    }
+  }
+
+  if (redeemed > 0) {
+    log.info(`SWEEP: redeemed ${redeemed}/${unredeemed.length} winning trades`);
+  } else if (unredeemed.length > 0) {
+    log.info(`SWEEP: ${unredeemed.length} winning trades still unredeemed, will retry in 5min`);
   }
 }
 
@@ -763,6 +879,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
   if (unredeemedTokens.length > 0) {
     await processUnredeemedTokens(prisma);
   }
+
+  // ── 2b. DB-based sweep for unredeemed winning tokens (every 5min) ─────
+  await sweepUnredeemedFromDb(prisma);
 
   // ── 3. Per-symbol window management ─────────────────────────────────────
   interface ReadyForDecision { sym: string; klines: Candle1m[]; startPrice: number }
@@ -1519,6 +1638,8 @@ export function stopPolymarketWorker(): void {
   observationOrderBySymbol.clear();
   liveStateBySymbol.clear();
   unredeemedTokens = [];
+  sweepAlertSent.clear();
+  lastSweepAt = 0;
 
   // Reset cooldown state
   consecutiveWindowLosses = 0;
