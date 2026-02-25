@@ -136,8 +136,12 @@ async function main() {
   console.log(`  Sharpe Ratio:    ${f(s.sharpeRatio, 2)}`);
   console.log(`  Profit Factor:   ${f(s.profitFactor, 2)}`);
   console.log(`  Avg Hold (min):  ${f(s.avgHoldMinutes, 0)}`);
-  console.log(`  LONG trades:     ${s.longTrades} (${f(s.longWinRate)}% WR)`);
-  console.log(`  SHORT trades:    ${s.shortTrades} (${f(s.shortWinRate)}% WR)`);
+  const longWins = result.trades.filter(t => t.side === 'long' && t.netPnlUsd > 0).length;
+  const longTotal = result.trades.filter(t => t.side === 'long').length;
+  const shortWins = result.trades.filter(t => t.side === 'short' && t.netPnlUsd > 0).length;
+  const shortTotal = result.trades.filter(t => t.side === 'short').length;
+  console.log(`  LONG trades:     ${longTotal} (${f(longTotal > 0 ? longWins / longTotal * 100 : 0)}% WR)`);
+  console.log(`  SHORT trades:    ${shortTotal} (${f(shortTotal > 0 ? shortWins / shortTotal * 100 : 0)}% WR)`);
 
   // Per-symbol breakdown
   console.log(`\n--- Per-Symbol Breakdown ---\n`);
