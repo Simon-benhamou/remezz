@@ -127,8 +127,8 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
       startDate, 
       endDate, 
       initialCapital = 2000,
-      // V5.130: Default to 19 Tier A+B symbols
-      symbols = ['WIF/USDT:USDT', 'UNI/USDT:USDT', 'FET/USDT:USDT', 'STX/USDT:USDT', 'IMX/USDT:USDT', 'ARB/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'NEAR/USDT:USDT', 'ADA/USDT:USDT', 'APT/USDT:USDT', 'ETH/USDT:USDT', 'SONIC/USDT:USDT', 'RENDER/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'DOT/USDT:USDT', 'BCH/USDT:USDT', 'SOL/USDT:USDT'],
+      // V5.131: Default to 12 H1/H2-consistent symbols
+      symbols = MomentumConfig.SYMBOLS,
       leverage = 4.5,
       postProcess1m = false,
     } = req.body;
@@ -191,37 +191,29 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
  */
 router.get('/presets', authenticateUser, (req, res) => {
   res.json({
-    // V5.130: 26 symbols tested individually (Jan-Dec 2025, $2000, 5x)
+    // V5.131: 11 combined-BT validated symbols + marginal options
     symbols: [
-      // TIER A — Sharpe>=2, PF>=1.3
-      { value: 'WIF/USDT:USDT', label: 'WIF/USDT', tier: 'A', roi24m: '+$28,969' },
-      { value: 'UNI/USDT:USDT', label: 'UNI/USDT', tier: 'A', roi24m: '+$8,275' },
-      { value: 'FET/USDT:USDT', label: 'FET/USDT', tier: 'A', roi24m: '+$7,727' },
-      { value: 'STX/USDT:USDT', label: 'STX/USDT', tier: 'A', roi24m: '+$7,674' },
-      { value: 'IMX/USDT:USDT', label: 'IMX/USDT', tier: 'A', roi24m: '+$6,374' },
-      { value: 'ARB/USDT:USDT', label: 'ARB/USDT', tier: 'A', roi24m: '+$4,077' },
-      { value: 'SEI/USDT:USDT', label: 'SEI/USDT', tier: 'A', roi24m: '+$3,675' },
-      { value: 'SUI/USDT:USDT', label: 'SUI/USDT', tier: 'A', roi24m: '+$3,504' },
-      { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT', tier: 'A', roi24m: '+$3,456' },
-      // TIER B — Sharpe>=1, PF>=1.1
-      { value: 'ADA/USDT:USDT', label: 'ADA/USDT', tier: 'B', roi24m: '+$3,220' },
-      { value: 'APT/USDT:USDT', label: 'APT/USDT', tier: 'B', roi24m: '+$2,615' },
-      { value: 'ETH/USDT:USDT', label: 'ETH/USDT', tier: 'B', roi24m: '+$2,503' },
-      { value: 'SONIC/USDT:USDT', label: 'SONIC/USDT', tier: 'B', roi24m: '+$2,321' },
-      { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT', tier: 'B', roi24m: '+$1,997' },
-      { value: 'XRP/USDT:USDT', label: 'XRP/USDT', tier: 'B', roi24m: '+$1,575' },
-      { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT', tier: 'B', roi24m: '+$1,508' },
-      { value: 'DOT/USDT:USDT', label: 'DOT/USDT', tier: 'B', roi24m: '+$1,491' },
-      { value: 'BCH/USDT:USDT', label: 'BCH/USDT', tier: 'B', roi24m: '+$1,276' },
-      { value: 'SOL/USDT:USDT', label: 'SOL/USDT', tier: 'B', roi24m: '+$1,212' },
-      // TIER C — Marginal (available but not recommended)
-      { value: 'OP/USDT:USDT', label: 'OP/USDT', tier: 'C', roi24m: '+$1,078' },
-      { value: 'LINK/USDT:USDT', label: 'LINK/USDT', tier: 'C', roi24m: '+$955' },
-      { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT', tier: 'C', roi24m: '+$767' },
+      { value: 'FET/USDT:USDT', label: 'FET/USDT', tier: 'A', roi24m: 'top combined' },
+      { value: 'UNI/USDT:USDT', label: 'UNI/USDT', tier: 'A', roi24m: 'top combined' },
+      { value: 'ARB/USDT:USDT', label: 'ARB/USDT', tier: 'A', roi24m: 'top combined' },
+      { value: 'WIF/USDT:USDT', label: 'WIF/USDT', tier: 'A', roi24m: 'top combined' },
+      { value: 'STX/USDT:USDT', label: 'STX/USDT', tier: 'A', roi24m: 'top combined' },
+      { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT', tier: 'A', roi24m: 'top combined' },
+      { value: 'APT/USDT:USDT', label: 'APT/USDT', tier: 'B', roi24m: '>$1K combined' },
+      { value: 'ETH/USDT:USDT', label: 'ETH/USDT', tier: 'B', roi24m: '>$1K combined' },
+      { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT', tier: 'B', roi24m: '>$1K combined' },
+      { value: 'XRP/USDT:USDT', label: 'XRP/USDT', tier: 'B', roi24m: '>$1K combined' },
+      { value: 'DOT/USDT:USDT', label: 'DOT/USDT', tier: 'B', roi24m: '>$1K combined' },
+      // Marginal in combined — available for testing
+      { value: 'IMX/USDT:USDT', label: 'IMX/USDT', tier: 'C', roi24m: 'marginal' },
+      { value: 'SEI/USDT:USDT', label: 'SEI/USDT', tier: 'C', roi24m: 'marginal' },
+      { value: 'SUI/USDT:USDT', label: 'SUI/USDT', tier: 'C', roi24m: 'marginal' },
+      { value: 'ADA/USDT:USDT', label: 'ADA/USDT', tier: 'C', roi24m: 'marginal' },
+      { value: 'SOL/USDT:USDT', label: 'SOL/USDT', tier: 'C', roi24m: 'marginal' },
       { value: 'BTC/USDT:USDT', label: 'BTC/USDT', tier: 'C', roi24m: 'low freq' },
     ],
-    // V5.130: Default = 19 Tier A+B symbols
-    defaultSymbols: ['WIF/USDT:USDT', 'UNI/USDT:USDT', 'FET/USDT:USDT', 'STX/USDT:USDT', 'IMX/USDT:USDT', 'ARB/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'NEAR/USDT:USDT', 'ADA/USDT:USDT', 'APT/USDT:USDT', 'ETH/USDT:USDT', 'SONIC/USDT:USDT', 'RENDER/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'DOT/USDT:USDT', 'BCH/USDT:USDT', 'SOL/USDT:USDT'],
+    // V5.131: Default = 11 combined-BT validated symbols
+    defaultSymbols: MomentumConfig.SYMBOLS,
     leverageOptions: [3, 4, 4.5, 5],
     capitalPresets: [1000, 2000, 5000, 10000, 50000, 100000],
     periods: [

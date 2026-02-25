@@ -23,30 +23,20 @@ const logger = createLogger('CandleSeeder');
 // Extra symbols (SOL, XRP, etc.) are seeded on-demand when an agent is created for them
 // Seed all actively traded symbols + BTC (for regime detection)
 // Must include all symbols from MomentumConfig.SYMBOLS to avoid WS-only warmup delays
-// V5.130: All 19 Tier A+B symbols + BTC for regime detection
+// V5.131: 11 combined-BT validated symbols + BTC for regime detection
 const SEED_SYMBOLS = [
   'BTC/USDT:USDT',
-  // Tier A
-  'WIF/USDT:USDT',
-  'UNI/USDT:USDT',
   'FET/USDT:USDT',
-  'STX/USDT:USDT',
-  'IMX/USDT:USDT',
+  'UNI/USDT:USDT',
   'ARB/USDT:USDT',
-  'SEI/USDT:USDT',
-  'SUI/USDT:USDT',
+  'WIF/USDT:USDT',
+  'STX/USDT:USDT',
   'NEAR/USDT:USDT',
-  // Tier B
-  'ADA/USDT:USDT',
   'APT/USDT:USDT',
   'ETH/USDT:USDT',
-  'SONIC/USDT:USDT',
   'RENDER/USDT:USDT',
   'XRP/USDT:USDT',
-  'DOGE/USDT:USDT',
   'DOT/USDT:USDT',
-  'BCH/USDT:USDT',
-  'SOL/USDT:USDT',
 ];
 
 // How many candles to fetch

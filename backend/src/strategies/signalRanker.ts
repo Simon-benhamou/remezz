@@ -300,11 +300,8 @@ class SignalRanker {
     const keySignals = this.getOrCreateSignalMap(key);
     const signals = Array.from(keySignals.values());
 
-    // V5.130: Sort by tier first (A before B), then by score descending
-    signals.sort((a, b) => {
-      if (a.tier !== b.tier) return a.tier === 'A' ? -1 : 1;
-      return b.score - a.score;
-    });
+    // V5.131: Sort by score only (tier-first sorting removed — hurt combined PnL)
+    signals.sort((a, b) => b.score - a.score);
 
     // Take top N
     return signals.slice(0, maxCount);

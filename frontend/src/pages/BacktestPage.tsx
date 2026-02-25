@@ -338,40 +338,32 @@ export default function BacktestPage() {
   const [monthlySortField, setMonthlySortField] = useState<'pnlUsd' | null>(null);
   const [monthlySortDir, setMonthlySortDir] = useState<'asc' | 'desc'>('desc');
 
-  // V5.130: 19 Tier A+B symbols (Jan-Dec 2025, $2000, 5x individual backtests)
+  // V5.131: 11 symbols validated via combined multi-symbol BT (>$1K PnL each)
   const defaultSymbols = [
-    'WIF/USDT:USDT', 'UNI/USDT:USDT', 'FET/USDT:USDT', 'STX/USDT:USDT', 'IMX/USDT:USDT',
-    'ARB/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'NEAR/USDT:USDT',
-    'ADA/USDT:USDT', 'APT/USDT:USDT', 'ETH/USDT:USDT', 'SONIC/USDT:USDT', 'RENDER/USDT:USDT',
-    'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'DOT/USDT:USDT', 'BCH/USDT:USDT', 'SOL/USDT:USDT',
+    'FET/USDT:USDT', 'UNI/USDT:USDT', 'ARB/USDT:USDT', 'WIF/USDT:USDT',
+    'STX/USDT:USDT', 'NEAR/USDT:USDT', 'APT/USDT:USDT', 'ETH/USDT:USDT',
+    'RENDER/USDT:USDT', 'XRP/USDT:USDT', 'DOT/USDT:USDT',
   ];
   const symbolOptions = [
-    // Tier A — Sharpe >= 2, PF >= 1.3
-    { value: 'WIF/USDT:USDT', label: 'WIF/USDT [A] (+$28,969)' },
-    { value: 'UNI/USDT:USDT', label: 'UNI/USDT [A] (+$8,275)' },
-    { value: 'FET/USDT:USDT', label: 'FET/USDT [A] (+$7,727)' },
-    { value: 'STX/USDT:USDT', label: 'STX/USDT [A] (+$7,674)' },
-    { value: 'IMX/USDT:USDT', label: 'IMX/USDT [A] (+$6,374)' },
-    { value: 'ARB/USDT:USDT', label: 'ARB/USDT [A] (+$4,077)' },
-    { value: 'SEI/USDT:USDT', label: 'SEI/USDT [A] (+$3,675)' },
-    { value: 'SUI/USDT:USDT', label: 'SUI/USDT [A] (+$3,504)' },
-    { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT [A] (+$3,456)' },
-    // Tier B — Sharpe >= 1, PF >= 1.1
-    { value: 'ADA/USDT:USDT', label: 'ADA/USDT [B] (+$3,220)' },
-    { value: 'APT/USDT:USDT', label: 'APT/USDT [B] (+$2,615)' },
-    { value: 'ETH/USDT:USDT', label: 'ETH/USDT [B] (+$2,503)' },
-    { value: 'SONIC/USDT:USDT', label: 'SONIC/USDT [B] (+$2,321)' },
-    { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT [B] (+$1,997)' },
-    { value: 'XRP/USDT:USDT', label: 'XRP/USDT [B] (+$1,575)' },
-    { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT [B] (+$1,508)' },
-    { value: 'DOT/USDT:USDT', label: 'DOT/USDT [B] (+$1,491)' },
-    { value: 'BCH/USDT:USDT', label: 'BCH/USDT [B] (+$1,276)' },
-    { value: 'SOL/USDT:USDT', label: 'SOL/USDT [B] (+$1,212)' },
-    // Marginal — available but not in defaults
-    { value: 'OP/USDT:USDT', label: 'OP/USDT [C] (+$1,078)' },
-    { value: 'LINK/USDT:USDT', label: 'LINK/USDT [C] (+$955)' },
-    { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT [C] (+$767)' },
-    { value: 'BTC/USDT:USDT', label: 'BTC/USDT [C] (low freq)' },
+    // Combined BT validated (>$1K PnL)
+    { value: 'FET/USDT:USDT', label: 'FET/USDT [top]' },
+    { value: 'UNI/USDT:USDT', label: 'UNI/USDT [top]' },
+    { value: 'ARB/USDT:USDT', label: 'ARB/USDT [top]' },
+    { value: 'WIF/USDT:USDT', label: 'WIF/USDT [top]' },
+    { value: 'STX/USDT:USDT', label: 'STX/USDT [top]' },
+    { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT [top]' },
+    { value: 'APT/USDT:USDT', label: 'APT/USDT [solid]' },
+    { value: 'ETH/USDT:USDT', label: 'ETH/USDT [solid]' },
+    { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT [solid]' },
+    { value: 'XRP/USDT:USDT', label: 'XRP/USDT [solid]' },
+    { value: 'DOT/USDT:USDT', label: 'DOT/USDT [solid]' },
+    // Marginal in combined BT — available for testing
+    { value: 'IMX/USDT:USDT', label: 'IMX/USDT [marginal]' },
+    { value: 'SEI/USDT:USDT', label: 'SEI/USDT [marginal]' },
+    { value: 'SUI/USDT:USDT', label: 'SUI/USDT [marginal]' },
+    { value: 'ADA/USDT:USDT', label: 'ADA/USDT [marginal]' },
+    { value: 'SOL/USDT:USDT', label: 'SOL/USDT [marginal]' },
+    { value: 'BTC/USDT:USDT', label: 'BTC/USDT (low freq)' },
   ];
 
   const form = useForm<BacktestFormValues>({

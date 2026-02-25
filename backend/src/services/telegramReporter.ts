@@ -77,10 +77,11 @@ let heartbeatInterval: NodeJS.Timeout | null = null;
 let dailyReportInterval: NodeJS.Timeout | null = null;
 
 // Daily BT vs Live report config
+// V5.131: Top combined-BT contributors
 const REPORT_SYMBOLS = [
-  'AVAX/USDT:USDT', 'FET/USDT:USDT', 'WIF/USDT:USDT', 'DOT/USDT:USDT',
-  'TIA/USDT:USDT', 'IMX/USDT:USDT', 'STX/USDT:USDT', 'DOGE/USDT:USDT',
-  'ADA/USDT:USDT', 'BTC/USDT:USDT',
+  'FET/USDT:USDT', 'UNI/USDT:USDT', 'ARB/USDT:USDT', 'WIF/USDT:USDT',
+  'STX/USDT:USDT', 'NEAR/USDT:USDT', 'APT/USDT:USDT', 'ETH/USDT:USDT',
+  'RENDER/USDT:USDT', 'BTC/USDT:USDT',
 ];
 const WARMUP_DAYS = 14; // SMA200 on 1h needs 200h ~8.3d, use 14d
 

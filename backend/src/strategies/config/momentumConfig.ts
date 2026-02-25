@@ -605,82 +605,69 @@ export const MomentumConfig = {
     'SOL/USDT:USDT',    // B: $1,212, 61.7% WR, Sharpe 1.19, PF 1.19
   ],
 
-  // V5.130: AVOID — negative, marginal, or no data
+  // V5.131: NOT COMPATIBLE — marginal or negative in combined multi-symbol backtest
   SYMBOLS_NOT_COMPATIBLE: [
-    'LTC/USDT:USDT',   // X: -$375, 55.6% WR (negative PnL)
-    'FTM/USDT:USDT',   // X: -$6, 40% WR (only 5 trades — rebranded to SONIC)
-    'OP/USDT:USDT',    // C: $1,078, Sharpe 1.01 (marginal, DD 40.8%)
-    'LINK/USDT:USDT',  // C: $955, Sharpe 0.98 (marginal)
-    'AVAX/USDT:USDT',  // C: $767, Sharpe 0.83 (marginal, DD 41.4%)
-    'TIA/USDT:USDT',   // C: $321, Sharpe 0.57 (marginal, DD 43.5%)
-    'ATOM/USDT:USDT',  // C: $80, Sharpe 0.31 (barely positive)
-    'BTC/USDT:USDT',   // Not included: too few trades (low momentum frequency)
-    'INJ/USDT:USDT',   // Not tested in V5.130
-    'JUP/USDT:USDT',   // Not tested in V5.130
+    'IMX/USDT:USDT',   // <$1000 in combined BT (good solo, loses signal competition)
+    'SEI/USDT:USDT',   // Negative in combined BT (good solo, loses signal competition)
+    'SUI/USDT:USDT',   // Marginal in combined BT
+    'ADA/USDT:USDT',   // <$1000 in combined BT
+    'SONIC/USDT:USDT', // <$1000 in combined BT
+    'DOGE/USDT:USDT',  // <$1000 in combined BT
+    'BCH/USDT:USDT',   // <$1000 in combined BT
+    'SOL/USDT:USDT',   // <$1000 in combined BT
+    'LTC/USDT:USDT',   // Negative full year
+    'FTM/USDT:USDT',   // Rebranded to SONIC, 5 trades
+    'OP/USDT:USDT',    // Marginal
+    'LINK/USDT:USDT',  // Marginal
+    'AVAX/USDT:USDT',  // Marginal
+    'TIA/USDT:USDT',   // Marginal
+    'ATOM/USDT:USDT',  // Negative
+    'BTC/USDT:USDT',   // Too few trades
+    'INJ/USDT:USDT',   // Not tested
+    'JUP/USDT:USDT',   // Not tested
     'BNB/USDT:USDT',   // Not tested
   ],
 
-  // V5.130: Signal tier classification for ranking priority
-  // Tier A symbols are prioritized over Tier B when capital is limited (maxPositions)
+  // V5.131: Signal tier classification for ranking priority
+  // Tier A = top combined-backtest PnL contributors (>$1000/year in multi-symbol BT)
   SIGNAL_TIER_A: [
-    'WIF/USDT:USDT', 'UNI/USDT:USDT', 'FET/USDT:USDT', 'STX/USDT:USDT',
-    'IMX/USDT:USDT', 'ARB/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'NEAR/USDT:USDT',
+    'WIF/USDT:USDT', 'FET/USDT:USDT', 'UNI/USDT:USDT', 'STX/USDT:USDT',
+    'ARB/USDT:USDT', 'NEAR/USDT:USDT',
   ] as string[],
 
-  // V5.130: 19 symbols Tier A + Tier B (Jan-Dec 2025, $2000, 5x individual backtests)
-  // Signal ranker prioritizes Tier A. More symbols = more opportunities.
-  // Combined individual PnL: $93,447
+  // V5.131: 11 symbols — validated via COMBINED multi-symbol backtest (2025, $2K, 5x)
+  // Only symbols that contribute >$1000 PnL when running together (signal competition)
+  // Removed 8 marginal/negative in combined: IMX, SEI, SUI, ADA, SONIC, DOGE, BCH, SOL
   SYMBOLS: [
-    // Tier A — high Sharpe, high PF
-    'WIF/USDT:USDT',    // A: $28,969, 71.5% WR, Sharpe 4.40
-    'UNI/USDT:USDT',    // A: $8,275, 62.8% WR, Sharpe 2.69
-    'FET/USDT:USDT',    // A: $7,727, 63.0% WR, Sharpe 2.58
-    'STX/USDT:USDT',    // A: $7,674, 66.2% WR, Sharpe 3.06
-    'IMX/USDT:USDT',    // A: $6,374, 67.5% WR, Sharpe 2.40
-    'ARB/USDT:USDT',    // A: $4,077, 62.1% WR, Sharpe 2.08
-    'SEI/USDT:USDT',    // A: $3,675, 59.3% WR, Sharpe 2.16
-    'SUI/USDT:USDT',    // A: $3,504, 64.0% WR, Sharpe 2.08
-    'NEAR/USDT:USDT',   // A: $3,456, 61.1% WR, Sharpe 2.03
-    // Tier B — positive, solid
-    'ADA/USDT:USDT',    // B: $3,220, 59.5% WR, Sharpe 1.69
-    'APT/USDT:USDT',    // B: $2,615, 59.3% WR, Sharpe 1.79
-    'ETH/USDT:USDT',    // B: $2,503, 56.7% WR, Sharpe 1.99
-    'SONIC/USDT:USDT',  // B: $2,321, 60.7% WR, Sharpe 1.56
-    'RENDER/USDT:USDT', // B: $1,997, 58.6% WR, Sharpe 1.58
-    'XRP/USDT:USDT',    // B: $1,575, 61.3% WR, Sharpe 1.35
-    'DOGE/USDT:USDT',   // B: $1,508, 59.6% WR, Sharpe 1.29
-    'DOT/USDT:USDT',    // B: $1,491, 59.9% WR, Sharpe 1.38
-    'BCH/USDT:USDT',    // B: $1,276, 62.5% WR, Sharpe 1.47
-    'SOL/USDT:USDT',    // B: $1,212, 61.7% WR, Sharpe 1.19
+    'FET/USDT:USDT',    // Combined BT contributor
+    'UNI/USDT:USDT',    // Combined BT contributor
+    'ARB/USDT:USDT',    // Combined BT contributor
+    'WIF/USDT:USDT',    // Combined BT contributor
+    'STX/USDT:USDT',    // Combined BT contributor
+    'NEAR/USDT:USDT',   // Combined BT contributor
+    'APT/USDT:USDT',    // Combined BT contributor
+    'ETH/USDT:USDT',    // Combined BT contributor
+    'RENDER/USDT:USDT', // Combined BT contributor
+    'XRP/USDT:USDT',    // Combined BT contributor
+    'DOT/USDT:USDT',    // Combined BT contributor
   ],
 
   // V5.8: Leverage 5x uniforme - Validé sûr (SL max 4.5% × 5 = 22.5% << 80% liquidation)
   // Backtest 24 mois: Gains augmentés, pas de risque de liquidation
+  // V5.131: Leverage 5x for all active symbols
   LEVERAGE: {
     'BTC/USDT:USDT': 5,
-    'ETH/USDT:USDT': 5,
-    'SOL/USDT:USDT': 5,
-    'XRP/USDT:USDT': 5,
-    'SEI/USDT:USDT': 5,
-    'IMX/USDT:USDT': 5,
-    'DOT/USDT:USDT': 5,
-    'DOGE/USDT:USDT': 5,
-    'SUI/USDT:USDT': 5,
-    'ADA/USDT:USDT': 5,
-    'LINK/USDT:USDT': 5,
-    'AVAX/USDT:USDT': 5,
-    'APT/USDT:USDT': 5,
-    'OP/USDT:USDT': 5,
-    'NEAR/USDT:USDT': 5,
     'FET/USDT:USDT': 5,
-    'WIF/USDT:USDT': 5,
-    'TIA/USDT:USDT': 5,
-    'STX/USDT:USDT': 5,
     'UNI/USDT:USDT': 5,
     'ARB/USDT:USDT': 5,
-    'SONIC/USDT:USDT': 5,
-    'BCH/USDT:USDT': 5,
+    'WIF/USDT:USDT': 5,
+    'STX/USDT:USDT': 5,
+    'NEAR/USDT:USDT': 5,
+    'APT/USDT:USDT': 5,
+    'ETH/USDT:USDT': 5,
     'RENDER/USDT:USDT': 5,
+    'XRP/USDT:USDT': 5,
+    'DOT/USDT:USDT': 5,
   } as Record<string, number>,
 
   // ═══════════════════════════════════════════════════════════════════════════

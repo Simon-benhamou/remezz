@@ -714,10 +714,21 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Not compatible**: LTC, FTM, OP, LINK, AVAX, TIA, ATOM, BTC (negative or marginal individually), INJ, JUP, BNB
   - **SMA200 skip zone activated**: `BTC_SMA200_SKIP_ZONE_PCT: 1.0` (was 0/disabled). Skips entries when BTC is within 1% of SMA200. Validated: Sharpe 3.21 (+0.19), DD 37.1% (-17.8pp), PnL -9% (acceptable trade-off for risk reduction).
   - **Quality bypass**: Tested composite quality score (volRatio+ROC+smaSlope) to let high-quality signals through skip zone. Result: USELESS — no signals in skip zone have quality >= 55. Disabled: `BTC_SMA200_SKIP_ZONE_QUALITY_BYPASS: 0`.
-  - **Signal ranker tier priority**: `getTopSignals()` now sorts by tier first (A before B), then by score. When capital is limited (maxPositions), Tier A symbols get priority. `getSignalTier()` function added to `signalRanker.ts`. `RankedSignal` interface extended with `tier: SignalTier` field. Both live (orchestrator.ts) and backtest (backtestService.ts) use tier-first sorting.
-  - **Config**: `SIGNAL_TIER_A` array added to `MomentumConfig` for Tier A symbol list. `SYMBOLS` updated to 19 (9 Tier A + 10 Tier B).
+  - **Signal ranker tier priority**: `getTopSignals()` sorted by tier first (A before B), then by score. **NOTE: Reverted in V5.131** — tier-first sorting hurt combined PnL. Pure score-based sorting restored.
+  - **Config**: `SIGNAL_TIER_A` array added to `MomentumConfig` for Tier A symbol list. `SYMBOLS` updated to 19 (9 Tier A + 10 Tier B). **NOTE: Updated in V5.131** — reduced to 11 symbols based on combined BT.
   - **Files updated** (8 files): `momentumConfig.ts` (symbols, tiers, skip zone, leverage), `momentumSignal.ts` (quality bypass logic), `signalRanker.ts` (tier field, tier-first sorting), `orchestrator.ts` (tier in addSignal), `backtestService.ts` (tier-first ranking), `candleCache.ts` (20 seed symbols), `positionSizing.ts` (SONIC liquidity), `exchangeOrderManager.ts` (new symbol precisions), `backtest.ts` (defaults, presets, walk-forward/optimize symbols via MomentumConfig.SYMBOLS), `AgentCreationModal.tsx` (19 recommended symbols, banner V5.130)
   - **Parity**: Skip zone + quality bypass in shared `checkMomentumSignal()` → auto-aligned across live/paper/backtest/parity. Signal ranking tier-first in both live and backtest.
+
+- V5.131: Combined-BT symbol validation + tier-first sort removal:
+  - **CRITICAL INSIGHT: Individual BT ≠ Combined BT**: Per-symbol backtests give misleading results because they don't model signal competition for limited capital (max 2 positions). A symbol can be excellent solo (e.g., SEI $3,675 individual) but negative in combined BT because its signals coincide with higher-scoring symbols (WIF/FET fire simultaneously). XRP/DOT contribute in combined BT because their signals fill temporal gaps when top symbols are idle. **Always validate symbol selection with combined multi-symbol backtest.**
+  - **Symbols reduced from 19 to 11** based on combined BT results:
+    - Tier A (top combined contributors): FET, UNI, ARB, WIF, STX, NEAR
+    - Tier B (>$1K in combined): APT, ETH, RENDER, XRP, DOT
+    - Removed (marginal/negative in combined): IMX, SEI, SUI, ADA, SONIC, DOGE, BCH, SOL
+  - **Tier-first sorting REMOVED from signalRanker**: V5.130 added sorting by tier (A before B) then score. Combined BT showed this HURTS PnL — pure score-based sorting performs better. `getTopSignals()` now sorts by `score` only.
+  - **Market filter disabled**: BT shows +174% PnL without market filter.
+  - **Files updated**: `momentumConfig.ts` (SYMBOLS 11, SIGNAL_TIER_A 6, LEVERAGE), `signalRanker.ts` (score-only sort), `candleCache.ts` (SEED_SYMBOLS 12), `telegramReporter.ts` (REPORT_SYMBOLS), `backtest.ts` (presets/defaults via MomentumConfig.SYMBOLS), `AgentCreationModal.tsx` (V5.131 banner), `BacktestPage.tsx` (11 defaults)
+  - **Data files cleaned**: Deleted 15m/1h JSON files for removed symbols from `backend/data/`
 
 - V5.126: Fix BTC 15m stale cache when no agents active:
   - **Problem**: `btcDataService.ts` reads WS kline cache every 5s but never called `subscribeToKline()`. Agents keep the subscription alive via `candleFetcher.ts:130`, but with 0 active sessions, the 10-min TTL pruned the `btcusdt@kline_15m` stream → cache stale after 45min → STALE_CACHE warnings every 5s.
