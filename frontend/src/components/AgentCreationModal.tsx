@@ -29,29 +29,27 @@ import { api } from '../api';
 import type { AppMode } from '../store';
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CRYPTOS V5.131 - 11 symbols validated via combined multi-symbol backtest
-// Only symbols that contribute >$1000 PnL in the combined BT (2025, $2K, 5x)
+// CRYPTOS V5.132 - 9 symbols validated via combined multi-symbol backtest
+// $86,524 PnL, 65.9% WR, 33.2% DD, Sharpe 3.53 (2025, $2K, 5x)
 // ═══════════════════════════════════════════════════════════════════════════
 
 const V5_RECOMMENDED_CRYPTOS = [
-  { symbol: 'FET/USDT', name: 'Fetch.ai', category: 'Top', icon: '\u{1F916}', roi: 'top combined', badge: 'gold', recommended: true },
-  { symbol: 'UNI/USDT', name: 'Uniswap', category: 'Top', icon: '\u{1F984}', roi: 'top combined', badge: 'gold', recommended: true },
-  { symbol: 'ARB/USDT', name: 'Arbitrum', category: 'Top', icon: '\u{1F535}', roi: 'top combined', badge: 'gold', recommended: true },
-  { symbol: 'WIF/USDT', name: 'dogwifhat', category: 'Top', icon: '\u{1F3A9}', roi: 'top combined', badge: 'gold', recommended: true },
-  { symbol: 'STX/USDT', name: 'Stacks', category: 'Top', icon: '\u{1F4E6}', roi: 'top combined', badge: 'gold', recommended: true },
-  { symbol: 'NEAR/USDT', name: 'NEAR Protocol', category: 'Top', icon: '\u{1F310}', roi: 'top combined', badge: 'green', recommended: true },
-  { symbol: 'APT/USDT', name: 'Aptos', category: 'Solid', icon: '\u{1F7E2}', roi: '>$1K combined', badge: 'green', recommended: true },
-  { symbol: 'ETH/USDT', name: 'Ethereum', category: 'Solid', icon: '\u{039E}', roi: '>$1K combined', badge: 'green', recommended: true },
-  { symbol: 'RENDER/USDT', name: 'Render', category: 'Solid', icon: '\u{1F3A8}', roi: '>$1K combined', badge: 'blue', recommended: true },
-  { symbol: 'XRP/USDT', name: 'Ripple', category: 'Solid', icon: '\u{2715}', roi: '>$1K combined', badge: 'blue', recommended: true },
-  { symbol: 'DOT/USDT', name: 'Polkadot', category: 'Solid', icon: '\u{1F30C}', roi: '>$1K combined', badge: 'blue', recommended: true },
+  { symbol: 'WIF/USDT', name: 'dogwifhat', category: 'TOP 1', icon: '\u{1F3A9}', roi: '+$17,122', badge: 'gold', recommended: true },
+  { symbol: 'AVAX/USDT', name: 'Avalanche', category: 'TOP 2', icon: '\u{1F53A}', roi: '+$15,725', badge: 'gold', recommended: true },
+  { symbol: 'FET/USDT', name: 'Fetch.ai', category: 'TOP 3', icon: '\u{1F916}', roi: '+$14,058', badge: 'gold', recommended: true },
+  { symbol: 'ADA/USDT', name: 'Cardano', category: 'TOP 4', icon: '\u{20B3}', roi: '+$10,502', badge: 'gold', recommended: true },
+  { symbol: 'STX/USDT', name: 'Stacks', category: 'TOP 5', icon: '\u{1F4E6}', roi: '+$10,145', badge: 'gold', recommended: true },
+  { symbol: 'XRP/USDT', name: 'Ripple', category: 'Solid', icon: '\u{2715}', roi: '+$5,713', badge: 'green', recommended: true },
+  { symbol: 'DOT/USDT', name: 'Polkadot', category: 'Solid', icon: '\u{1F30C}', roi: '+$5,170', badge: 'green', recommended: true },
+  { symbol: 'RENDER/USDT', name: 'Render', category: 'Solid', icon: '\u{1F3A8}', roi: '+$4,179', badge: 'blue', recommended: true },
+  { symbol: 'IMX/USDT', name: 'Immutable X', category: 'Solid', icon: '\u{1F537}', roi: '+$3,910', badge: 'blue', recommended: true },
 ];
 
 const NON_RECOMMENDED_CRYPTOS = [
-  { symbol: 'IMX/USDT', name: 'Immutable X', category: 'Marginal', icon: '\u{1F537}', roi: '<$1K combined', badge: 'default', recommended: false },
-  { symbol: 'SEI/USDT', name: 'Sei', category: 'Marginal', icon: '\u{1F30A}', roi: 'negative combined', badge: 'default', recommended: false },
-  { symbol: 'SOL/USDT', name: 'Solana', category: 'Marginal', icon: '\u{25CE}', roi: '<$1K combined', badge: 'default', recommended: false },
-  { symbol: 'ADA/USDT', name: 'Cardano', category: 'Marginal', icon: '\u{20B3}', roi: '<$1K combined', badge: 'default', recommended: false },
+  { symbol: 'UNI/USDT', name: 'Uniswap', category: 'Dilutes', icon: '\u{1F984}', roi: 'dilutes PnL', badge: 'default', recommended: false },
+  { symbol: 'ARB/USDT', name: 'Arbitrum', category: 'Dilutes', icon: '\u{1F535}', roi: 'dilutes PnL', badge: 'default', recommended: false },
+  { symbol: 'NEAR/USDT', name: 'NEAR Protocol', category: 'Dilutes', icon: '\u{1F310}', roi: 'dilutes PnL', badge: 'default', recommended: false },
+  { symbol: 'ETH/USDT', name: 'Ethereum', category: 'Dilutes', icon: '\u{039E}', roi: 'dilutes PnL', badge: 'default', recommended: false },
   { symbol: 'BTC/USDT', name: 'Bitcoin', category: 'Low freq', icon: '\u{20BF}', roi: 'peu de trades', badge: 'default', recommended: false },
 ];
 
@@ -213,7 +211,7 @@ export default function AgentCreationModal({
             <Sparkles className="h-4 w-4 text-blue-400 mt-0.5 shrink-0" />
             <div>
               <div className="font-semibold text-sm bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400 bg-clip-text text-transparent">
-                Cryptos V5.131 — Combined BT Validated
+                Cryptos V5.132 — $86K Combined BT
               </div>
               <p className="text-slate-400 text-[13px] mt-0.5">
                 11 symbols: &gt;$1K PnL dans le backtest combine multi-symbol (2025, $2K, 5x).

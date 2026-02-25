@@ -628,46 +628,42 @@ export const MomentumConfig = {
     'BNB/USDT:USDT',   // Not tested
   ],
 
-  // V5.131: Signal tier classification for ranking priority
-  // Tier A = top combined-backtest PnL contributors (>$1000/year in multi-symbol BT)
+  // V5.132: Signal tier classification for ranking priority
+  // Tier A = top combined-backtest PnL contributors (>$5K in combined BT)
   SIGNAL_TIER_A: [
-    'WIF/USDT:USDT', 'FET/USDT:USDT', 'UNI/USDT:USDT', 'STX/USDT:USDT',
-    'ARB/USDT:USDT', 'NEAR/USDT:USDT',
+    'WIF/USDT:USDT', 'AVAX/USDT:USDT', 'FET/USDT:USDT', 'ADA/USDT:USDT',
+    'STX/USDT:USDT',
   ] as string[],
 
-  // V5.131: 11 symbols — validated via COMBINED multi-symbol backtest (2025, $2K, 5x)
-  // Only symbols that contribute >$1000 PnL when running together (signal competition)
-  // Removed 8 marginal/negative in combined: IMX, SEI, SUI, ADA, SONIC, DOGE, BCH, SOL
+  // V5.132: 9 symbols — validated via COMBINED multi-symbol backtest (2025, $2K, 5x)
+  // Combined BT: $86,524 PnL, 65.9% WR, 33.2% DD, Sharpe 3.53
+  // Beats V5.131 baseline ($59,018) by +47%. AVAX, ADA, IMX added back; UNI, ARB, NEAR, APT, ETH removed.
   SYMBOLS: [
-    'FET/USDT:USDT',    // Combined BT contributor
-    'UNI/USDT:USDT',    // Combined BT contributor
-    'ARB/USDT:USDT',    // Combined BT contributor
-    'WIF/USDT:USDT',    // Combined BT contributor
-    'STX/USDT:USDT',    // Combined BT contributor
-    'NEAR/USDT:USDT',   // Combined BT contributor
-    'APT/USDT:USDT',    // Combined BT contributor
-    'ETH/USDT:USDT',    // Combined BT contributor
-    'RENDER/USDT:USDT', // Combined BT contributor
-    'XRP/USDT:USDT',    // Combined BT contributor
-    'DOT/USDT:USDT',    // Combined BT contributor
+    'AVAX/USDT:USDT',   // $15,725 combined — Tier A
+    'FET/USDT:USDT',    // $14,058 combined — Tier A
+    'WIF/USDT:USDT',    // $17,122 combined — Tier A
+    'DOT/USDT:USDT',    // $5,170 combined — Tier B
+    'IMX/USDT:USDT',    // $3,910 combined — Tier B
+    'STX/USDT:USDT',    // $10,145 combined — Tier A
+    'ADA/USDT:USDT',    // $10,502 combined — Tier A
+    'RENDER/USDT:USDT', // $4,179 combined — Tier B
+    'XRP/USDT:USDT',    // $5,713 combined — Tier B
   ],
 
   // V5.8: Leverage 5x uniforme - Validé sûr (SL max 4.5% × 5 = 22.5% << 80% liquidation)
   // Backtest 24 mois: Gains augmentés, pas de risque de liquidation
-  // V5.131: Leverage 5x for all active symbols
+  // V5.132: Leverage 5x for all active symbols
   LEVERAGE: {
     'BTC/USDT:USDT': 5,
+    'AVAX/USDT:USDT': 5,
     'FET/USDT:USDT': 5,
-    'UNI/USDT:USDT': 5,
-    'ARB/USDT:USDT': 5,
     'WIF/USDT:USDT': 5,
+    'DOT/USDT:USDT': 5,
+    'IMX/USDT:USDT': 5,
     'STX/USDT:USDT': 5,
-    'NEAR/USDT:USDT': 5,
-    'APT/USDT:USDT': 5,
-    'ETH/USDT:USDT': 5,
+    'ADA/USDT:USDT': 5,
     'RENDER/USDT:USDT': 5,
     'XRP/USDT:USDT': 5,
-    'DOT/USDT:USDT': 5,
   } as Record<string, number>,
 
   // ═══════════════════════════════════════════════════════════════════════════

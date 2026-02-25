@@ -191,28 +191,26 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
  */
 router.get('/presets', authenticateUser, (req, res) => {
   res.json({
-    // V5.131: 11 combined-BT validated symbols + marginal options
+    // V5.132: 9 combined-BT validated symbols ($86K PnL, 65.9% WR, Sharpe 3.53)
     symbols: [
-      { value: 'FET/USDT:USDT', label: 'FET/USDT', tier: 'A', roi24m: 'top combined' },
-      { value: 'UNI/USDT:USDT', label: 'UNI/USDT', tier: 'A', roi24m: 'top combined' },
-      { value: 'ARB/USDT:USDT', label: 'ARB/USDT', tier: 'A', roi24m: 'top combined' },
-      { value: 'WIF/USDT:USDT', label: 'WIF/USDT', tier: 'A', roi24m: 'top combined' },
-      { value: 'STX/USDT:USDT', label: 'STX/USDT', tier: 'A', roi24m: 'top combined' },
-      { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT', tier: 'A', roi24m: 'top combined' },
-      { value: 'APT/USDT:USDT', label: 'APT/USDT', tier: 'B', roi24m: '>$1K combined' },
-      { value: 'ETH/USDT:USDT', label: 'ETH/USDT', tier: 'B', roi24m: '>$1K combined' },
-      { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT', tier: 'B', roi24m: '>$1K combined' },
-      { value: 'XRP/USDT:USDT', label: 'XRP/USDT', tier: 'B', roi24m: '>$1K combined' },
-      { value: 'DOT/USDT:USDT', label: 'DOT/USDT', tier: 'B', roi24m: '>$1K combined' },
-      // Marginal in combined — available for testing
-      { value: 'IMX/USDT:USDT', label: 'IMX/USDT', tier: 'C', roi24m: 'marginal' },
-      { value: 'SEI/USDT:USDT', label: 'SEI/USDT', tier: 'C', roi24m: 'marginal' },
-      { value: 'SUI/USDT:USDT', label: 'SUI/USDT', tier: 'C', roi24m: 'marginal' },
-      { value: 'ADA/USDT:USDT', label: 'ADA/USDT', tier: 'C', roi24m: 'marginal' },
-      { value: 'SOL/USDT:USDT', label: 'SOL/USDT', tier: 'C', roi24m: 'marginal' },
+      { value: 'WIF/USDT:USDT', label: 'WIF/USDT', tier: 'A', roi24m: '$17,122 combined' },
+      { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT', tier: 'A', roi24m: '$15,725 combined' },
+      { value: 'FET/USDT:USDT', label: 'FET/USDT', tier: 'A', roi24m: '$14,058 combined' },
+      { value: 'ADA/USDT:USDT', label: 'ADA/USDT', tier: 'A', roi24m: '$10,502 combined' },
+      { value: 'STX/USDT:USDT', label: 'STX/USDT', tier: 'A', roi24m: '$10,145 combined' },
+      { value: 'XRP/USDT:USDT', label: 'XRP/USDT', tier: 'B', roi24m: '$5,713 combined' },
+      { value: 'DOT/USDT:USDT', label: 'DOT/USDT', tier: 'B', roi24m: '$5,170 combined' },
+      { value: 'RENDER/USDT:USDT', label: 'RENDER/USDT', tier: 'B', roi24m: '$4,179 combined' },
+      { value: 'IMX/USDT:USDT', label: 'IMX/USDT', tier: 'B', roi24m: '$3,910 combined' },
+      // Available for testing — not in optimal 9
+      { value: 'UNI/USDT:USDT', label: 'UNI/USDT', tier: 'C', roi24m: 'dilutes combined' },
+      { value: 'ARB/USDT:USDT', label: 'ARB/USDT', tier: 'C', roi24m: 'dilutes combined' },
+      { value: 'NEAR/USDT:USDT', label: 'NEAR/USDT', tier: 'C', roi24m: 'dilutes combined' },
+      { value: 'ETH/USDT:USDT', label: 'ETH/USDT', tier: 'C', roi24m: 'dilutes combined' },
+      { value: 'APT/USDT:USDT', label: 'APT/USDT', tier: 'C', roi24m: 'dilutes combined' },
       { value: 'BTC/USDT:USDT', label: 'BTC/USDT', tier: 'C', roi24m: 'low freq' },
     ],
-    // V5.131: Default = 11 combined-BT validated symbols
+    // V5.132: Default = 9 combined-BT validated symbols
     defaultSymbols: MomentumConfig.SYMBOLS,
     leverageOptions: [3, 4, 4.5, 5],
     capitalPresets: [1000, 2000, 5000, 10000, 50000, 100000],

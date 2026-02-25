@@ -721,14 +721,27 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
 
 - V5.131: Combined-BT symbol validation + tier-first sort removal:
   - **CRITICAL INSIGHT: Individual BT ≠ Combined BT**: Per-symbol backtests give misleading results because they don't model signal competition for limited capital (max 2 positions). A symbol can be excellent solo (e.g., SEI $3,675 individual) but negative in combined BT because its signals coincide with higher-scoring symbols (WIF/FET fire simultaneously). XRP/DOT contribute in combined BT because their signals fill temporal gaps when top symbols are idle. **Always validate symbol selection with combined multi-symbol backtest.**
-  - **Symbols reduced from 19 to 11** based on combined BT results:
-    - Tier A (top combined contributors): FET, UNI, ARB, WIF, STX, NEAR
-    - Tier B (>$1K in combined): APT, ETH, RENDER, XRP, DOT
-    - Removed (marginal/negative in combined): IMX, SEI, SUI, ADA, SONIC, DOGE, BCH, SOL
+  - **Symbols reduced from 19 to 11** based on combined BT results (later superseded by V5.132).
   - **Tier-first sorting REMOVED from signalRanker**: V5.130 added sorting by tier (A before B) then score. Combined BT showed this HURTS PnL — pure score-based sorting performs better. `getTopSignals()` now sorts by `score` only.
   - **Market filter disabled**: BT shows +174% PnL without market filter.
-  - **Files updated**: `momentumConfig.ts` (SYMBOLS 11, SIGNAL_TIER_A 6, LEVERAGE), `signalRanker.ts` (score-only sort), `candleCache.ts` (SEED_SYMBOLS 12), `telegramReporter.ts` (REPORT_SYMBOLS), `backtest.ts` (presets/defaults via MomentumConfig.SYMBOLS), `AgentCreationModal.tsx` (V5.131 banner), `BacktestPage.tsx` (11 defaults)
-  - **Data files cleaned**: Deleted 15m/1h JSON files for removed symbols from `backend/data/`
+
+- V5.132: Optimized 9-symbol portfolio — +47% PnL vs V5.131:
+  - **Methodology**: Systematic combined-BT sweep testing 8 combinations (baseline 11, user combo 9, union 14, C9+UNI, C9+ARB, C9+NEAR, C9+UNI+ARB, B11+AVAX, B11+ADA). All on 2025 full year, $2K, 5x leverage.
+  - **Winner: 9 symbols** (AVAX, FET, WIF, DOT, IMX, STX, ADA, RENDER, XRP):
+    - **$86,524 PnL** (+47% vs V5.131 $59,018)
+    - **65.9% WR** (+2.3pp vs 63.6%)
+    - **33.2% DD** (-3.1pp vs 36.3%)
+    - **Sharpe 3.53**, PF 1.51, 1043 trades
+  - **Key findings from sweep**:
+    - Adding ANY symbol to the 9 dilutes PnL: C9+NEAR $85,687, C9+UNI+ARB $85,381, C9+ARB $80,591, C9+UNI $75,307
+    - UNION_14 (all symbols): $68,867 — more symbols = more signal competition = worse
+    - B11+AVAX: $66,953, B11+ADA: $64,600 — baseline can't be saved by adding symbols
+  - **Per-symbol combined PnL**: WIF $17,122, AVAX $15,725, FET $14,058, ADA $10,502, STX $10,145, XRP $5,713, DOT $5,170, RENDER $4,179, IMX $3,910
+  - **Tier A** (>$5K): WIF, AVAX, FET, ADA, STX
+  - **Tier B** (<$5K): XRP, DOT, RENDER, IMX
+  - **Removed from V5.131** (dilute combined PnL): UNI, ARB, NEAR, APT, ETH
+  - **Files updated**: `momentumConfig.ts` (SYMBOLS 9, SIGNAL_TIER_A 5, LEVERAGE), `candleCache.ts` (SEED_SYMBOLS 10), `telegramReporter.ts` (REPORT_SYMBOLS 9), `backtest.ts` (presets/defaults), `AgentCreationModal.tsx` (V5.132 banner, 9 recommended), `BacktestPage.tsx` (9 defaults)
+  - **Data files cleaned**: Deleted 15m/1h JSON files for APT, ARB, ETH, NEAR, UNI, BTC_1h, FET_1h, WIF_1h. Restored AVAX, IMX, ADA from git (deleted in V5.131).
 
 - V5.126: Fix BTC 15m stale cache when no agents active:
   - **Problem**: `btcDataService.ts` reads WS kline cache every 5s but never called `subscribeToKline()`. Agents keep the subscription alive via `candleFetcher.ts:130`, but with 0 active sessions, the 10-min TTL pruned the `btcusdt@kline_15m` stream → cache stale after 45min → STALE_CACHE warnings every 5s.

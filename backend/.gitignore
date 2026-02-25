@@ -46,3 +46,4 @@ data/ccxt_cache/nonexistent_*
 # Multi-agent test output (changes on each run)
 multi-agent-pool-test-results.json
 multi-agent-test-output.txt
+data/2024/

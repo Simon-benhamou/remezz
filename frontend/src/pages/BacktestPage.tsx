@@ -338,11 +338,11 @@ export default function BacktestPage() {
   const [monthlySortField, setMonthlySortField] = useState<'pnlUsd' | null>(null);
   const [monthlySortDir, setMonthlySortDir] = useState<'asc' | 'desc'>('desc');
 
-  // V5.131: 11 symbols validated via combined multi-symbol BT (>$1K PnL each)
+  // V5.132: 9 symbols validated via combined multi-symbol BT ($86K PnL, 65.9% WR, Sharpe 3.53)
   const defaultSymbols = [
-    'FET/USDT:USDT', 'UNI/USDT:USDT', 'ARB/USDT:USDT', 'WIF/USDT:USDT',
-    'STX/USDT:USDT', 'NEAR/USDT:USDT', 'APT/USDT:USDT', 'ETH/USDT:USDT',
-    'RENDER/USDT:USDT', 'XRP/USDT:USDT', 'DOT/USDT:USDT',
+    'AVAX/USDT:USDT', 'FET/USDT:USDT', 'WIF/USDT:USDT', 'DOT/USDT:USDT',
+    'IMX/USDT:USDT', 'STX/USDT:USDT', 'ADA/USDT:USDT', 'RENDER/USDT:USDT',
+    'XRP/USDT:USDT',
   ];
   const symbolOptions = [
     // Combined BT validated (>$1K PnL)
