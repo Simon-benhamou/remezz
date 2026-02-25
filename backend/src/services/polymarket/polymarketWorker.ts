@@ -20,7 +20,7 @@ const log = createLogger('polymarket');
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const WINDOW_MS = 5 * 60 * 1000;           // 5 minutes
-const DECISION_OFFSET_MS = 1 * 60 * 1000;   // 1 minute into the window ("Early Bird")
+const DECISION_OFFSET_MS = 65 * 1000;        // 65s into window (wait for 1m candle isFinal)
 const POLL_INTERVAL_MS = 1000;               // 1 second
 
 /** Map short symbol → Binance pair */
