@@ -1,0 +1,157 @@
+[2026-02-24T16:17:20.078Z] [WARN] [telegram] [Telegram] Notifications disabled - missing TELEGRAM_BOT_TOKEN in .env
+[2026-02-24T16:17:20.081Z] [INFO] [RestQueue] BinanceRestQueue initialized (unified with ipWeightTracker) { minDelayMs: 100 }
+[GlobalRestCircuitBreaker] Initialized with thresholds: { failureThreshold: 5, cooldownMs: 60000, failureWindowMs: 30000 }
+=== Deep Symbol Analysis (2025) ===
+
+Loading ALL available symbol data...
+  BTC 15m: 35290 candles
+  Symbols: 26 → ADA, APT, ARB, ATOM, AVAX, BCH, DOGE, DOT, ETH, FET, FTM, IMX, LINK, LTC, NEAR, OP, RENDER, SEI, SOL, SONIC, STX, SUI, TIA, UNI, WIF, XRP
+
+Running per-symbol backtests...
+
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 205 trades, 122 wins, ROI: 161.0%
+  [1/26] ADA      205 trades, $3220, 59.5% WR, DD 19.1%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 204 trades, 121 wins, ROI: 130.7%
+  [2/26] APT      204 trades, $2615, 59.3% WR, DD 47.7%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 219 trades, 136 wins, ROI: 203.8%
+  [3/26] ARB      219 trades, $4077, 62.1% WR, DD 34.2%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 154 trades, 88 wins, ROI: 4.0%
+  [4/26] ATOM     154 trades, $80, 57.1% WR, DD 41.0%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 185 trades, 104 wins, ROI: 38.3%
+  [5/26] AVAX     185 trades, $767, 56.2% WR, DD 41.4%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 120 trades, 75 wins, ROI: 63.8%
+  [6/26] BCH      120 trades, $1276, 62.5% WR, DD 15.6%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 208 trades, 124 wins, ROI: 75.4%
+  [7/26] DOGE     208 trades, $1508, 59.6% WR, DD 20.4%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 172 trades, 103 wins, ROI: 74.6%
+  [8/26] DOT      172 trades, $1491, 59.9% WR, DD 32.3%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 157 trades, 89 wins, ROI: 125.1%
+  [9/26] ETH      157 trades, $2503, 56.7% WR, DD 20.3%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 238 trades, 150 wins, ROI: 386.3%
+  [10/26] FET      238 trades, $7727, 63.0% WR, DD 28.2%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 5 trades, 2 wins, ROI: -0.3%
+  [11/26] FTM      5 trades, $-6, 40.0% WR, DD 5.1%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 240 trades, 162 wins, ROI: 318.7%
+  [12/26] IMX      240 trades, $6374, 67.5% WR, DD 43.3%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 191 trades, 107 wins, ROI: 47.8%
+  [13/26] LINK     191 trades, $955, 56.0% WR, DD 25.7%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 169 trades, 94 wins, ROI: -18.7%
+  [14/26] LTC      169 trades, $-375, 55.6% WR, DD 48.2%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 229 trades, 140 wins, ROI: 172.8%
+  [15/26] NEAR     229 trades, $3456, 61.1% WR, DD 24.3%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 241 trades, 142 wins, ROI: 53.9%
+  [16/26] OP       241 trades, $1078, 58.9% WR, DD 40.8%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 232 trades, 136 wins, ROI: 99.9%
+  [17/26] RENDER   232 trades, $1997, 58.6% WR, DD 26.6%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 226 trades, 134 wins, ROI: 183.8%
+  [18/26] SEI      226 trades, $3675, 59.3% WR, DD 39.8%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 196 trades, 121 wins, ROI: 60.6%
+  [19/26] SOL      196 trades, $1212, 61.7% WR, DD 25.3%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 201 trades, 122 wins, ROI: 116.0%
+  [20/26] SONIC    201 trades, $2321, 60.7% WR, DD 30.1%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 204 trades, 135 wins, ROI: 383.7%
+  [21/26] STX      204 trades, $7674, 66.2% WR, DD 16.1%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 225 trades, 144 wins, ROI: 175.2%
+  [22/26] SUI      225 trades, $3504, 64.0% WR, DD 24.2%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 249 trades, 142 wins, ROI: 16.1%
+  [23/26] TIA      249 trades, $321, 57.0% WR, DD 43.5%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 218 trades, 137 wins, ROI: 413.7%
+  [24/26] UNI      218 trades, $8275, 62.8% WR, DD 37.3%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 277 trades, 198 wins, ROI: 1448.5%
+  [25/26] WIF      277 trades, $28969, 71.5% WR, DD 22.4%
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 160 trades, 98 wins, ROI: 78.8%
+  [26/26] XRP      160 trades, $1575, 61.3% WR, DD 27.7%
+
+==================================================================================================================================
+FULL SYMBOL RANKING (2025)
+==================================================================================================================================
+Symbol   |  Trades |       L/S |    WR% |  L-WR% |  S-WR% |      PnL $ |     L-PnL |     S-PnL |    $/tr |    DD% |  Sharpe |    PF
+----------------------------------------------------------------------------------------------------------------------------------
+A WIF     |     277 |    76/201 |   71.5 |   72.4 |   71.1 |     $28969 |     $6539 |    $22430 |    $105 |   22.4 |    4.40 |  2.15
+A UNI     |     218 |    63/155 |   62.8 |   68.3 |   60.6 |      $8275 |     $3353 |     $4922 |     $38 |   37.3 |    2.69 |  1.40
+A FET     |     238 |    57/181 |   63.0 |   68.4 |   61.3 |      $7727 |     $3864 |     $3863 |     $32 |   28.2 |    2.58 |  1.44
+A STX     |     204 |    55/149 |   66.2 |   65.5 |   66.4 |      $7674 |     $2478 |     $5196 |     $38 |   16.1 |    3.06 |  1.86
+A IMX     |     240 |    55/185 |   67.5 |   61.8 |   69.2 |      $6374 |      $677 |     $5697 |     $27 |   43.3 |    2.40 |  1.47
+A ARB     |     219 |    54/165 |   62.1 |   72.2 |   58.8 |      $4077 |     $1988 |     $2089 |     $19 |   34.2 |    2.08 |  1.34
+A SEI     |     226 |    62/164 |   59.3 |   58.1 |   59.8 |      $3675 |      $410 |     $3265 |     $16 |   39.8 |    2.16 |  1.34
+A SUI     |     225 |    56/169 |   64.0 |   58.9 |   65.7 |      $3504 |       $66 |     $3438 |     $16 |   24.2 |    2.08 |  1.43
+A NEAR    |     229 |    70/159 |   61.1 |   60.0 |   61.6 |      $3456 |      $151 |     $3305 |     $15 |   24.3 |    2.03 |  1.31
+B ADA     |     205 |    54/151 |   59.5 |   63.0 |   58.3 |      $3220 |     $1294 |     $1926 |     $16 |   19.1 |    1.69 |  1.34
+B APT     |     204 |    39/165 |   59.3 |   69.2 |   57.0 |      $2615 |     $1326 |     $1289 |     $13 |   47.7 |    1.79 |  1.25
+B ETH     |     157 |    30/127 |   56.7 |   66.7 |   54.3 |      $2503 |      $819 |     $1684 |     $16 |   20.3 |    1.99 |  1.39
+B SONIC   |     201 |    45/156 |   60.7 |   53.3 |   62.8 |      $2321 |     $-566 |     $2887 |     $12 |   30.1 |    1.56 |  1.28
+B RENDER  |     232 |    53/179 |   58.6 |   50.9 |   60.9 |      $1997 |      $-74 |     $2071 |      $9 |   26.6 |    1.58 |  1.22
+B XRP     |     160 |    37/123 |   61.3 |   64.9 |   60.2 |      $1575 |      $859 |      $716 |     $10 |   27.7 |    1.35 |  1.29
+B DOGE    |     208 |    58/150 |   59.6 |   51.7 |   62.7 |      $1508 |     $-369 |     $1877 |      $7 |   20.4 |    1.29 |  1.20
+B DOT     |     172 |    38/134 |   59.9 |   57.9 |   60.4 |      $1491 |      $268 |     $1224 |      $9 |   32.3 |    1.38 |  1.28
+B BCH     |     120 |     31/89 |   62.5 |   67.7 |   60.7 |      $1276 |      $949 |      $327 |     $11 |   15.6 |    1.47 |  1.29
+B SOL     |     196 |    49/147 |   61.7 |   69.4 |   59.2 |      $1212 |      $837 |      $375 |      $6 |   25.3 |    1.19 |  1.19
+C OP      |     241 |    61/180 |   58.9 |   59.0 |   58.9 |      $1078 |      $-17 |     $1095 |      $4 |   40.8 |    1.01 |  1.09
+C LINK    |     191 |    53/138 |   56.0 |   56.6 |   55.8 |       $955 |      $130 |      $826 |      $5 |   25.7 |    0.98 |  1.13
+C AVAX    |     185 |    47/138 |   56.2 |   53.2 |   57.2 |       $767 |     $-273 |     $1039 |      $4 |   41.4 |    0.83 |  1.12
+C TIA     |     249 |    65/184 |   57.0 |   58.5 |   56.5 |       $321 |     $-132 |      $454 |      $1 |   43.5 |    0.57 |  1.04
+C ATOM    |     154 |    33/121 |   57.1 |   60.6 |   56.2 |        $80 |      $106 |      $-26 |      $1 |   41.0 |    0.31 |  1.02
+X FTM     |       5 |       4/1 |   40.0 |   50.0 |    0.0 |        $-6 |       $40 |      $-46 |     $-1 |    5.1 |   -0.01 |  0.96
+X LTC     |     169 |    43/126 |   55.6 |   41.9 |   60.3 |      $-375 |     $-970 |      $595 |     $-2 |   48.2 |   -0.19 |  0.91
+----------------------------------------------------------------------------------------------------------------------------------
+A = Tier 1 (Sharpe>=2, PF>=1.3), B = Tier 2 (Sharpe>=1, PF>=1.1), C = Marginal, X = Negative PnL
+
+
+--- LONG vs SHORT Performance Split ---
+
+  LONG dominant:  FET(L:$3864 S:$3863), APT(L:$1326 S:$1289), XRP(L:$859 S:$716), BCH(L:$949 S:$327), SOL(L:$837 S:$375), ATOM(L:$106 S:$-26), FTM(L:$40 S:$-46)
+  SHORT dominant: WIF(L:$6539 S:$22430), UNI(L:$3353 S:$4922), STX(L:$2478 S:$5196), IMX(L:$677 S:$5697), ARB(L:$1988 S:$2089), SEI(L:$410 S:$3265), SUI(L:$66 S:$3438), NEAR(L:$151 S:$3305), ADA(L:$1294 S:$1926), ETH(L:$819 S:$1684), SONIC(L:$-566 S:$2887), RENDER(L:$-74 S:$2071), DOGE(L:$-369 S:$1877), DOT(L:$268 S:$1224), OP(L:$-17 S:$1095), LINK(L:$130 S:$826), AVAX(L:$-273 S:$1039), TIA(L:$-132 S:$454), LTC(L:$-970 S:$595)
+  Balanced:       UNI, FET, ARB, ADA, APT, XRP
+
+
+--- What Makes a Good Crypto for Our Strategy? ---
+
+  Metric             |      Good (N=9) |       Bad (N=7) |                        Insight
+  -------------------------------------------------------------------------------------
+  Avg Trades         |           230.7 |           170.6 |             More opportunities
+  Win Rate %         |            64.2 |            54.4 |               WR matters a lot
+  LONG WR %          |            65.1 |            54.2 |                               
+  SHORT WR %         |            63.8 |            49.3 |              SHORT edge is key
+  $/trade            |            33.9 |             1.7 |                               
+  Max DD %           |            30.0 |            35.1 |                Good = lower DD
+  Avg Hold (min)     |            88.5 |            98.5 |              Good exits faster
+  Est. Daily Vol $   |      90363567.2 |      91990712.2 |            Volume not decisive
+
+
+--- Portfolio Recommendations ---
+
+  TIER 1 only (9 symbols): WIF, UNI, FET, STX, IMX, ARB, SEI, SUI, NEAR
+    Combined PnL (individual sum): $73730
+  TIER 1+2 (19 symbols): WIF, UNI, FET, STX, IMX, ARB, SEI, SUI, NEAR, ADA, APT, ETH, SONIC, RENDER, XRP, DOGE, DOT, BCH, SOL
+    Combined PnL (individual sum): $93447
+  All positive (24 symbols): WIF, UNI, FET, STX, IMX, ARB, SEI, SUI, NEAR, ADA, APT, ETH, SONIC, RENDER, XRP, DOGE, DOT, BCH, SOL, OP, LINK, AVAX, TIA, ATOM
+    Combined PnL (individual sum): $96648
+
+
+Done.

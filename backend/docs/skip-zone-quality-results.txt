@@ -1,0 +1,243 @@
+[2026-02-24T17:05:33.148Z] [WARN] [telegram] [Telegram] Notifications disabled - missing TELEGRAM_BOT_TOKEN in .env
+[2026-02-24T17:05:33.152Z] [INFO] [RestQueue] BinanceRestQueue initialized (unified with ipWeightTracker) { minDelayMs: 100 }
+[GlobalRestCircuitBreaker] Initialized with thresholds: { failureThreshold: 5, cooldownMs: 60000, failureWindowMs: 30000 }
+=== SMA200 Skip Zone Filter Test (with Quality Bypass) ===
+
+╔══ PHASE 1: Skip Zone Sweep ══╗
+Skip zone values: 0%, 0.5%, 0.75%, 1%, 1.25%, 1.5%, 2%, 2.5%
+Symbols: 9, Capital: $2000, Leverage: 5x
+
+
+Loading data for 2025 (in-sample)...
+  BTC 15m: 35290 candles, Symbols: 9
+
+[1/16] SkipZone 0% on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1392 trades, 876 wins, ROI: 3239.9%
+  -> 1392 trades, $64797 PnL, 62.9% WR, DD 54.9%, 709.8s
+[2/16] SkipZone 0.5% on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1240 trades, 780 wins, ROI: 2339.0%
+  -> 1240 trades, $46780 PnL, 62.9% WR, DD 53.5%, 620.9s
+[3/16] SkipZone 0.75% on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1150 trades, 739 wins, ROI: 2881.6%
+  -> 1150 trades, $57633 PnL, 64.3% WR, DD 40.7%, 500.1s
+[4/16] SkipZone 1% on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1031 trades, 661 wins, ROI: 2943.5%
+  -> 1031 trades, $58871 PnL, 64.1% WR, DD 37.1%, 444.4s
+[5/16] SkipZone 1.25% on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 910 trades, 586 wins, ROI: 1983.4%
+  -> 910 trades, $39669 PnL, 64.4% WR, DD 30.6%, 418.1s
+[6/16] SkipZone 1.5% on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 824 trades, 514 wins, ROI: 1069.6%
+  -> 824 trades, $21392 PnL, 62.4% WR, DD 33.9%, 413.6s
+[7/16] SkipZone 2% on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 631 trades, 388 wins, ROI: 684.5%
+  -> 631 trades, $13691 PnL, 61.5% WR, DD 32.9%, 313.9s
+[8/16] SkipZone 2.5% on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 473 trades, 285 wins, ROI: 338.8%
+  -> 473 trades, $6775 PnL, 60.3% WR, DD 27.3%, 154.0s
+
+Loading data for 2024 (OOS)...
+  BTC 15m: 1454 candles, Symbols: 9
+
+[9/16] SkipZone 0% on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 63 trades, 30 wins, ROI: -31.0%
+  -> 63 trades, $-620 PnL, 47.6% WR, DD 34.1%, 4.5s
+[10/16] SkipZone 0.5% on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 56 trades, 27 wins, ROI: -26.5%
+  -> 56 trades, $-530 PnL, 48.2% WR, DD 32.3%, 3.2s
+[11/16] SkipZone 0.75% on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 52 trades, 23 wins, ROI: -36.2%
+  -> 52 trades, $-724 PnL, 44.2% WR, DD 38.7%, 3.1s
+[12/16] SkipZone 1% on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 50 trades, 22 wins, ROI: -34.2%
+  -> 50 trades, $-684 PnL, 44.0% WR, DD 36.8%, 2.9s
+[13/16] SkipZone 1.25% on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 49 trades, 22 wins, ROI: -34.3%
+  -> 49 trades, $-686 PnL, 44.9% WR, DD 34.6%, 2.1s
+[14/16] SkipZone 1.5% on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 43 trades, 18 wins, ROI: -33.3%
+  -> 43 trades, $-665 PnL, 41.9% WR, DD 31.7%, 1.9s
+[15/16] SkipZone 2% on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 35 trades, 12 wins, ROI: -34.9%
+  -> 35 trades, $-698 PnL, 34.3% WR, DD 32.0%, 1.5s
+[16/16] SkipZone 2.5% on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 25 trades, 10 wins, ROI: -17.5%
+  -> 25 trades, $-349 PnL, 40.0% WR, DD 17.5%, 1.0s
+
+PHASE 1: Skip Zone Sweep Results
+==========================================================================================================================
+Skip%   | QBP  | Period               |  Trades |       L/S |     WR% |      PnL $ |     ROI% |     DD% |  Sharpe |     PF
+--------------------------------------------------------------------------------------------------------------------------
+*0.0%   | -    | 2025 (in-sample)     |    1392 |   409/983 |    62.9 |      64797 |    3240% |    54.9 |    3.01 |   1.42
+ 0.5%   | -    | 2025 (in-sample)     |    1240 |   378/862 |    62.9 |      46780 |    2339% |    53.5 |    2.82 |   1.39
+ 0.8%   | -    | 2025 (in-sample)     |    1150 |   341/809 |    64.3 |      57633 |    2882% |    40.7 |    3.12 |   1.39
+ 1.0%   | -    | 2025 (in-sample)     |    1031 |   305/726 |    64.1 |      58871 |    2944% |    37.1 |    3.21 |   1.43
+ 1.3%   | -    | 2025 (in-sample)     |     910 |   270/640 |    64.4 |      39669 |    1983% |    30.6 |    3.11 |   1.37
+ 1.5%   | -    | 2025 (in-sample)     |     824 |   227/597 |    62.4 |      21392 |    1070% |    33.9 |    2.58 |   1.30
+ 2.0%   | -    | 2025 (in-sample)     |     631 |   172/459 |    61.5 |      13691 |     685% |    32.9 |    2.34 |   1.35
+ 2.5%   | -    | 2025 (in-sample)     |     473 |   133/340 |    60.3 |       6775 |     339% |    27.3 |    1.91 |   1.30
+--------------------------------------------------------------------------------------------------------------------------
+*0.0%   | -    | 2024 (OOS)           |      63 |      7/56 |    47.6 |       -620 |     -31% |    34.1 |   -5.68 |   0.64
+ 0.5%   | -    | 2024 (OOS)           |      56 |      5/51 |    48.2 |       -530 |     -27% |    32.3 |   -5.19 |   0.65
+ 0.8%   | -    | 2024 (OOS)           |      52 |      4/48 |    44.2 |       -724 |     -36% |    38.7 |   -9.89 |   0.49
+ 1.0%   | -    | 2024 (OOS)           |      50 |      4/46 |    44.0 |       -684 |     -34% |    36.8 |   -8.93 |   0.50
+ 1.3%   | -    | 2024 (OOS)           |      49 |      4/45 |    44.9 |       -686 |     -34% |    34.6 |  -10.30 |   0.48
+ 1.5%   | -    | 2024 (OOS)           |      43 |      3/40 |    41.9 |       -665 |     -33% |    31.7 |  -11.20 |   0.45
+ 2.0%   | -    | 2024 (OOS)           |      35 |      3/32 |    34.3 |       -698 |     -35% |    32.0 |  -11.41 |   0.40
+ 2.5%   | -    | 2024 (OOS)           |      25 |      1/24 |    40.0 |       -349 |     -17% |    17.5 |   -9.23 |   0.55
+--------------------------------------------------------------------------------------------------------------------------
+* = baseline (no filter)
+
+╔══ PHASE 2: Quality Bypass Sweep at SkipZone=1% ══╗
+Quality bypass values: OFF, 40, 50, 55, 60, 65, 70
+
+
+Loading data for 2025 (in-sample)...
+  BTC 15m: 35290 candles, Symbols: 9
+
+[1/14] SkipZone 1% + QualityBypass OFF on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1031 trades, 661 wins, ROI: 2943.5%
+  -> 1031 trades, $58871 PnL, 64.1% WR, DD 37.1%, 280.5s
+[2/14] SkipZone 1% + QualityBypass 40 on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1107 trades, 698 wins, ROI: 2624.9%
+  -> 1107 trades, $52498 PnL, 63.1% WR, DD 46.8%, 216.6s
+[3/14] SkipZone 1% + QualityBypass 50 on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1047 trades, 663 wins, ROI: 2594.6%
+  -> 1047 trades, $51891 PnL, 63.3% WR, DD 48.9%, 217.4s
+[4/14] SkipZone 1% + QualityBypass 55 on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1031 trades, 661 wins, ROI: 2943.5%
+  -> 1031 trades, $58871 PnL, 64.1% WR, DD 37.1%, 215.8s
+[5/14] SkipZone 1% + QualityBypass 60 on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1031 trades, 661 wins, ROI: 2943.5%
+  -> 1031 trades, $58871 PnL, 64.1% WR, DD 37.1%, 210.8s
+[6/14] SkipZone 1% + QualityBypass 65 on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1031 trades, 661 wins, ROI: 2943.5%
+  -> 1031 trades, $58871 PnL, 64.1% WR, DD 37.1%, 227.2s
+[7/14] SkipZone 1% + QualityBypass 70 on 2025 (in-sample)...
+[Backtest] Starting simulation at index 250...
+[Backtest] Completed: 1031 trades, 661 wins, ROI: 2943.5%
+  -> 1031 trades, $58871 PnL, 64.1% WR, DD 37.1%, 222.9s
+
+Loading data for 2024 (OOS)...
+  BTC 15m: 1454 candles, Symbols: 9
+
+[8/14] SkipZone 1% + QualityBypass OFF on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 50 trades, 22 wins, ROI: -34.2%
+  -> 50 trades, $-684 PnL, 44.0% WR, DD 36.8%, 3.8s
+[9/14] SkipZone 1% + QualityBypass 40 on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 54 trades, 25 wins, ROI: -29.8%
+  -> 54 trades, $-595 PnL, 46.3% WR, DD 34.1%, 4.4s
+[10/14] SkipZone 1% + QualityBypass 50 on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 52 trades, 22 wins, ROI: -39.6%
+  -> 52 trades, $-792 PnL, 42.3% WR, DD 42.0%, 2.4s
+[11/14] SkipZone 1% + QualityBypass 55 on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 50 trades, 22 wins, ROI: -34.2%
+  -> 50 trades, $-684 PnL, 44.0% WR, DD 36.8%, 3.1s
+[12/14] SkipZone 1% + QualityBypass 60 on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 50 trades, 22 wins, ROI: -34.2%
+  -> 50 trades, $-684 PnL, 44.0% WR, DD 36.8%, 3.1s
+[13/14] SkipZone 1% + QualityBypass 65 on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 50 trades, 22 wins, ROI: -34.2%
+  -> 50 trades, $-684 PnL, 44.0% WR, DD 36.8%, 4.0s
+[14/14] SkipZone 1% + QualityBypass 70 on 2024 (OOS)...
+[Backtest] Starting simulation at index 200...
+[Backtest] Completed: 50 trades, 22 wins, ROI: -34.2%
+  -> 50 trades, $-684 PnL, 44.0% WR, DD 36.8%, 4.3s
+
+PHASE 2: Quality Bypass Sweep (SkipZone=1%)
+==========================================================================================================================
+Skip%   | QBP  | Period               |  Trades |       L/S |     WR% |      PnL $ |     ROI% |     DD% |  Sharpe |     PF
+--------------------------------------------------------------------------------------------------------------------------
+ 1.0%   | -    | 2025 (in-sample)     |    1031 |   305/726 |    64.1 |      58871 |    2944% |    37.1 |    3.21 |   1.43
+ 1.0%   | 40   | 2025 (in-sample)     |    1107 |   330/777 |    63.1 |      52498 |    2625% |    46.8 |    3.03 |   1.40
+ 1.0%   | 50   | 2025 (in-sample)     |    1047 |   309/738 |    63.3 |      51891 |    2595% |    48.9 |    3.03 |   1.43
+ 1.0%   | 55   | 2025 (in-sample)     |    1031 |   305/726 |    64.1 |      58871 |    2944% |    37.1 |    3.21 |   1.43
+ 1.0%   | 60   | 2025 (in-sample)     |    1031 |   305/726 |    64.1 |      58871 |    2944% |    37.1 |    3.21 |   1.43
+ 1.0%   | 65   | 2025 (in-sample)     |    1031 |   305/726 |    64.1 |      58871 |    2944% |    37.1 |    3.21 |   1.43
+ 1.0%   | 70   | 2025 (in-sample)     |    1031 |   305/726 |    64.1 |      58871 |    2944% |    37.1 |    3.21 |   1.43
+--------------------------------------------------------------------------------------------------------------------------
+ 1.0%   | -    | 2024 (OOS)           |      50 |      4/46 |    44.0 |       -684 |     -34% |    36.8 |   -8.93 |   0.50
+ 1.0%   | 40   | 2024 (OOS)           |      54 |      4/50 |    46.3 |       -595 |     -30% |    34.1 |   -5.43 |   0.61
+ 1.0%   | 50   | 2024 (OOS)           |      52 |      4/48 |    42.3 |       -792 |     -40% |    42.0 |  -10.80 |   0.45
+ 1.0%   | 55   | 2024 (OOS)           |      50 |      4/46 |    44.0 |       -684 |     -34% |    36.8 |   -8.93 |   0.50
+ 1.0%   | 60   | 2024 (OOS)           |      50 |      4/46 |    44.0 |       -684 |     -34% |    36.8 |   -8.93 |   0.50
+ 1.0%   | 65   | 2024 (OOS)           |      50 |      4/46 |    44.0 |       -684 |     -34% |    36.8 |   -8.93 |   0.50
+ 1.0%   | 70   | 2024 (OOS)           |      50 |      4/46 |    44.0 |       -684 |     -34% |    36.8 |   -8.93 |   0.50
+--------------------------------------------------------------------------------------------------------------------------
+* = baseline (no filter)
+
+--- Delta vs Baseline (skipZone=0%) ---
+
+  2025 (in-sample):
+    Config       |  dTrades |     dWR |      dPnL$ |     dDD |  dSharpe |    dPF
+    ---------------------------------------------------------------------------
+    SZ0.5%       |     -152 |    -0.0 |    -$18017 |    -1.4 |    -0.20 |  -0.03
+    SZ0.75%      |     -242 |    +1.3 |     -$7165 |   -14.2 |    +0.11 |  -0.03
+    SZ1%         |     -361 |    +1.2 |     -$5927 |   -17.7 |    +0.19 |  +0.00
+    SZ1.25%      |     -482 |    +1.5 |    -$25128 |   -24.3 |    +0.10 |  -0.05
+    SZ1.5%       |     -568 |    -0.6 |    -$43405 |   -21.0 |    -0.43 |  -0.12
+    SZ2%         |     -761 |    -1.4 |    -$51107 |   -21.9 |    -0.67 |  -0.07
+    SZ2.5%       |     -919 |    -2.7 |    -$58022 |   -27.6 |    -1.11 |  -0.13
+    SZ1%         |     -361 |    +1.2 |     -$5927 |   -17.7 |    +0.19 |  +0.00
+    SZ1+Q40      |     -285 |    +0.1 |    -$12300 |    -8.1 |    +0.01 |  -0.02
+    SZ1+Q50      |     -345 |    +0.4 |    -$12906 |    -6.0 |    +0.02 |  +0.00
+    SZ1+Q55      |     -361 |    +1.2 |     -$5927 |   -17.7 |    +0.19 |  +0.00
+    SZ1+Q60      |     -361 |    +1.2 |     -$5927 |   -17.7 |    +0.19 |  +0.00
+    SZ1+Q65      |     -361 |    +1.2 |     -$5927 |   -17.7 |    +0.19 |  +0.00
+    SZ1+Q70      |     -361 |    +1.2 |     -$5927 |   -17.7 |    +0.19 |  +0.00
+
+  2024 (OOS):
+    Config       |  dTrades |     dWR |      dPnL$ |     dDD |  dSharpe |    dPF
+    ---------------------------------------------------------------------------
+    SZ0.5%       |       -7 |    +0.6 |       +$90 |    -1.8 |    +0.49 |  +0.01
+    SZ0.75%      |      -11 |    -3.4 |      -$104 |    +4.7 |    -4.21 |  -0.15
+    SZ1%         |      -13 |    -3.6 |       -$65 |    +2.8 |    -3.25 |  -0.15
+    SZ1.25%      |      -14 |    -2.7 |       -$67 |    +0.5 |    -4.62 |  -0.16
+    SZ1.5%       |      -20 |    -5.8 |       -$45 |    -2.4 |    -5.52 |  -0.19
+    SZ2%         |      -28 |   -13.3 |       -$78 |    -2.1 |    -5.73 |  -0.24
+    SZ2.5%       |      -38 |    -7.6 |      +$270 |   -16.6 |    -3.54 |  -0.09
+    SZ1%         |      -13 |    -3.6 |       -$65 |    +2.8 |    -3.25 |  -0.15
+    SZ1+Q40      |       -9 |    -1.3 |       +$24 |    -0.0 |    +0.25 |  -0.03
+    SZ1+Q50      |      -11 |    -5.3 |      -$172 |    +7.9 |    -5.12 |  -0.19
+    SZ1+Q55      |      -13 |    -3.6 |       -$65 |    +2.8 |    -3.25 |  -0.15
+    SZ1+Q60      |      -13 |    -3.6 |       -$65 |    +2.8 |    -3.25 |  -0.15
+    SZ1+Q65      |      -13 |    -3.6 |       -$65 |    +2.8 |    -3.25 |  -0.15
+    SZ1+Q70      |      -13 |    -3.6 |       -$65 |    +2.8 |    -3.25 |  -0.15
+
+
+--- Best Config (highest Sharpe with DD improvement) ---
+
+  2025 (in-sample): SkipZone 1%
+    Sharpe 3.21 (+0.19), DD 37.1% (-17.7pp), PnL $58871 (-$5927), Trades 1031
+  2024 (OOS): SkipZone 0.5%
+    Sharpe -5.19 (+0.49), DD 32.3% (-1.8pp), PnL $-530 (+$90), Trades 56
+
+Done.

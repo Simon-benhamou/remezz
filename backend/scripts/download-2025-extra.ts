@@ -1,48 +1,45 @@
 /**
- * Download full year 2024 15m candle data for all symbols.
- * Saves to backend/data/2024/<SYMBOL>_15m.json (separate dir to not overwrite)
+ * Download 2025 15m candle data for symbols NOT already in main data/ directory.
+ * These symbols only exist in data/2024/ which stops at Jan 2025.
+ * Saves to backend/data/<SYMBOL>_USDT_15m.json (same format as existing files)
  *
- * Run: npx tsx scripts/download-2024-15m.ts
+ * Run: npx tsx scripts/download-2025-extra.ts
  */
 
 import * as ccxt from 'ccxt';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SYMBOLS = [
-  'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'DOGE/USDT:USDT',
-  'XRP/USDT:USDT', 'SUI/USDT:USDT', 'SEI/USDT:USDT', 'IMX/USDT:USDT',
-  'AVAX/USDT:USDT', 'LINK/USDT:USDT', 'ADA/USDT:USDT', 'DOT/USDT:USDT',
-  'LTC/USDT:USDT', 'UNI/USDT:USDT', 'FTM/USDT:USDT', 'SONIC/USDT:USDT',
-  'APT/USDT:USDT', 'ATOM/USDT:USDT', 'BCH/USDT:USDT', 'OP/USDT:USDT',
-  'NEAR/USDT:USDT', 'ARB/USDT:USDT',
-  // Strategy symbols missing from original list
-  'FET/USDT:USDT', 'WIF/USDT:USDT', 'TIA/USDT:USDT', 'STX/USDT:USDT',
-  'RENDER/USDT:USDT',
+// Symbols that exist in data/2024/ but NOT in main data/
+const EXTRA_SYMBOLS = [
+  'SOL/USDT:USDT', 'ETH/USDT:USDT', 'XRP/USDT:USDT',
+  'SEI/USDT:USDT', 'SUI/USDT:USDT', 'RENDER/USDT:USDT',
+  'LINK/USDT:USDT', 'NEAR/USDT:USDT', 'APT/USDT:USDT',
+  'ARB/USDT:USDT', 'OP/USDT:USDT', 'ATOM/USDT:USDT',
+  'BCH/USDT:USDT', 'LTC/USDT:USDT', 'UNI/USDT:USDT',
+  'FTM/USDT:USDT', 'SONIC/USDT:USDT',
 ];
 
-// Full 2024 + a bit of warmup from late 2023
-const START = new Date('2023-11-01').getTime(); // warmup for SMA200
-const END = new Date('2025-01-01').getTime();
+// Warmup from late 2024 for SMA200
+const START = new Date('2024-10-01').getTime();
+const END = new Date('2026-02-25').getTime(); // up to today
 
-const DATA_DIR = path.resolve(process.cwd(), 'data', '2024');
+const DATA_DIR = path.resolve(process.cwd(), 'data');
 
 function symbolToFilename(sym: string): string {
   return sym.toUpperCase().replace(':USDT', '').replace(/\//g, '_');
 }
 
 async function main() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
   const exchange = new ccxt.binanceusdm({ enableRateLimit: true });
   await exchange.loadMarkets();
 
-  for (const symbol of SYMBOLS) {
+  for (const symbol of EXTRA_SYMBOLS) {
     const fname = `${symbolToFilename(symbol)}_15m.json`;
     const fpath = path.join(DATA_DIR, fname);
 
-    // Skip if already downloaded
-    if (fs.existsSync(fpath) && fs.statSync(fpath).size > 1000000) {
+    // Skip if already exists with substantial data
+    if (fs.existsSync(fpath) && fs.statSync(fpath).size > 500000) {
       console.log(`⏭ ${symbol} already exists (${(fs.statSync(fpath).size/1024/1024).toFixed(1)}MB)`);
       continue;
     }
