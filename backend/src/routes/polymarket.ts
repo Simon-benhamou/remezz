@@ -16,6 +16,7 @@ import {
   deletePolymarketCredentials,
   validatePolymarketCredentials,
   getPolymarketBalance,
+  saveBuilderCredentials,
 } from '../services/polymarket/polymarketTrader.js';
 
 export function createPolymarketRouter(prisma: PrismaClient): Router {
@@ -163,6 +164,20 @@ export function createPolymarketRouter(prisma: PrismaClient): Router {
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Failed to delete credentials' });
+    }
+  });
+
+  // PUT /builder-credentials — save Builder API credentials (for relay-based CTF redemption)
+  router.put('/builder-credentials', authenticateUser, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { key, secret, passphrase } = req.body;
+      if (!key || !secret || !passphrase) {
+        return res.status(400).json({ error: 'Builder key, secret, and passphrase are all required' });
+      }
+      await saveBuilderCredentials(prisma, req.user!.id, key, secret, passphrase);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to save builder credentials' });
     }
   });
 

@@ -446,6 +446,11 @@ export const api = {
       },
     deleteCredentials: async () =>
       (await client.delete('/api/polymarket/credentials')).data,
+    saveBuilderCredentials: async (key: string, secret: string, passphrase: string) =>
+      (await client.put('/api/polymarket/builder-credentials', { key, secret, passphrase })).data as {
+        success: boolean;
+        error?: string;
+      },
     validateCredentials: async () =>
       (await client.post('/api/polymarket/validate-credentials')).data as {
         valid: boolean;

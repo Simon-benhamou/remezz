@@ -12,6 +12,7 @@
 import { ethers as ethers6 } from 'ethers'; // v6, used only for address validation
 import { Wallet } from 'ethers5'; // v5 alias, required by @polymarket/clob-client
 import { RelayClient, RelayerTxType } from '@polymarket/builder-relayer-client';
+import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { createWalletClient, http, encodeFunctionData } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { polygon } from 'viem/chains';
@@ -101,6 +102,9 @@ const SETTING_KEYS = {
   API_KEY: 'polymarket_api_key',
   API_SECRET: 'polymarket_api_secret',
   API_PASSPHRASE: 'polymarket_api_passphrase',
+  BUILDER_KEY: 'polymarket_builder_key',
+  BUILDER_SECRET: 'polymarket_builder_secret',
+  BUILDER_PASSPHRASE: 'polymarket_builder_passphrase',
 } as const;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -114,6 +118,13 @@ export interface PolymarketConfig {
   hedgeAmount: number; // USDC for T+4:00 hedge bet
   symbols: string[]; // Active symbols (e.g. ['BTC', 'ETH'])
   hasCredentials: boolean;
+  hasBuilderCredentials: boolean;
+}
+
+interface BuilderCreds {
+  key: string;
+  secret: string;
+  passphrase: string;
 }
 
 interface StoredCreds {
@@ -121,6 +132,7 @@ interface StoredCreds {
   address: string; // EOA address derived from private key
   proxyAddress?: string; // Magic.link proxy wallet (holds USDC)
   apiCreds: ApiKeyCreds; // { key, secret, passphrase } for L2 HMAC auth
+  builderCreds?: BuilderCreds; // Builder API creds for relay auth (from polymarket.com/settings?tab=builder)
 }
 
 // ─── In-memory credential cache (per-user) ──────────────────────────────────
@@ -180,7 +192,22 @@ function buildRelayClient(creds: StoredCreds): RelayClient {
   });
   // PROXY for Magic.link wallets (gasless, auto-deploy). SAFE for direct EOA.
   const txType = creds.proxyAddress ? RelayerTxType.PROXY : RelayerTxType.SAFE;
-  return new RelayClient(RELAYER_URL, CHAIN_ID, wallet, undefined, txType);
+
+  // Builder credentials required for relay auth (HMAC headers)
+  let builderConfig: BuilderConfig | undefined;
+  if (creds.builderCreds) {
+    builderConfig = new BuilderConfig({
+      localBuilderCreds: {
+        key: creds.builderCreds.key,
+        secret: creds.builderCreds.secret,
+        passphrase: creds.builderCreds.passphrase,
+      },
+    });
+  } else {
+    log.warn('No Builder credentials — relay redeem will fail (get them at polymarket.com/settings?tab=builder)');
+  }
+
+  return new RelayClient(RELAYER_URL, CHAIN_ID, wallet, builderConfig, txType);
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -193,7 +220,7 @@ export async function getPolymarketConfig(
   userId: string,
 ): Promise<PolymarketConfig> {
   const settings = await prisma.userSetting.findMany({
-    where: { userId, key: { in: [SETTING_KEYS.MODE, SETTING_KEYS.AMOUNT, SETTING_KEYS.HEDGE_AMOUNT, SETTING_KEYS.SYMBOLS, SETTING_KEYS.API_KEY] } },
+    where: { userId, key: { in: [SETTING_KEYS.MODE, SETTING_KEYS.AMOUNT, SETTING_KEYS.HEDGE_AMOUNT, SETTING_KEYS.SYMBOLS, SETTING_KEYS.API_KEY, SETTING_KEYS.BUILDER_KEY] } },
   });
   const map = new Map(settings.map((s) => [s.key, s.value]));
 
@@ -209,6 +236,7 @@ export async function getPolymarketConfig(
     hedgeAmount: parseFloat(map.get(SETTING_KEYS.HEDGE_AMOUNT) || '1'),
     symbols: symbols.length > 0 ? symbols : ['BTC'],
     hasCredentials: !!map.get(SETTING_KEYS.API_KEY),
+    hasBuilderCredentials: !!map.get(SETTING_KEYS.BUILDER_KEY),
   };
 }
 
@@ -355,6 +383,9 @@ export async function deletePolymarketCredentials(prisma: PrismaClient, userId: 
           SETTING_KEYS.API_KEY,
           SETTING_KEYS.API_SECRET,
           SETTING_KEYS.API_PASSPHRASE,
+          SETTING_KEYS.BUILDER_KEY,
+          SETTING_KEYS.BUILDER_SECRET,
+          SETTING_KEYS.BUILDER_PASSPHRASE,
         ],
       },
     },
@@ -366,6 +397,43 @@ export async function deletePolymarketCredentials(prisma: PrismaClient, userId: 
   });
   clearCredCache(userId);
   _balanceCacheByUser.delete(userId);
+}
+
+/**
+ * Save Builder API credentials (from polymarket.com/settings?tab=builder).
+ * Required for relay-based CTF redemption of winning tokens.
+ */
+export async function saveBuilderCredentials(
+  prisma: PrismaClient,
+  userId: string,
+  key: string,
+  secret: string,
+  passphrase: string,
+): Promise<void> {
+  const encKey = encryptApiKey(key.trim());
+  const encSecret = encryptApiKey(secret.trim());
+  const encPass = encryptApiKey(passphrase.trim());
+
+  await Promise.all([
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.BUILDER_KEY } },
+      create: { userId, key: SETTING_KEYS.BUILDER_KEY, value: encKey, category: 'polymarket' },
+      update: { value: encKey },
+    }),
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.BUILDER_SECRET } },
+      create: { userId, key: SETTING_KEYS.BUILDER_SECRET, value: encSecret, category: 'polymarket' },
+      update: { value: encSecret },
+    }),
+    prisma.userSetting.upsert({
+      where: { userId_key: { userId, key: SETTING_KEYS.BUILDER_PASSPHRASE } },
+      create: { userId, key: SETTING_KEYS.BUILDER_PASSPHRASE, value: encPass, category: 'polymarket' },
+      update: { value: encPass },
+    }),
+  ]);
+
+  clearCredCache(userId);
+  log.info(`Builder credentials saved for user=${userId}`);
 }
 
 /**
@@ -385,6 +453,9 @@ async function loadCredentials(prisma: PrismaClient, userId: string): Promise<St
           SETTING_KEYS.API_KEY,
           SETTING_KEYS.API_SECRET,
           SETTING_KEYS.API_PASSPHRASE,
+          SETTING_KEYS.BUILDER_KEY,
+          SETTING_KEYS.BUILDER_SECRET,
+          SETTING_KEYS.BUILDER_PASSPHRASE,
         ],
       },
     },
@@ -403,7 +474,20 @@ async function loadCredentials(prisma: PrismaClient, userId: string): Promise<St
     const wallet = new ethers6.Wallet(privateKey);
     const proxyAddress = map.get(SETTING_KEYS.PROXY_ADDRESS) || undefined;
 
-    log.debug(`Credentials loaded for user=${userId} — address=${wallet.address}${proxyAddress ? ` proxy=${proxyAddress}` : ''}`);
+    // Builder credentials (optional — needed for relay-based CTF redemption)
+    const encBuilderKey = map.get(SETTING_KEYS.BUILDER_KEY);
+    const encBuilderSecret = map.get(SETTING_KEYS.BUILDER_SECRET);
+    const encBuilderPass = map.get(SETTING_KEYS.BUILDER_PASSPHRASE);
+    let builderCreds: BuilderCreds | undefined;
+    if (encBuilderKey && encBuilderSecret && encBuilderPass) {
+      builderCreds = {
+        key: decryptApiKey(encBuilderKey).trim(),
+        secret: decryptApiKey(encBuilderSecret).trim(),
+        passphrase: decryptApiKey(encBuilderPass).trim(),
+      };
+    }
+
+    log.debug(`Credentials loaded for user=${userId} — address=${wallet.address}${proxyAddress ? ` proxy=${proxyAddress}` : ''}${builderCreds ? ' builder=YES' : ' builder=NO'}`);
 
     const creds: StoredCreds = {
       privateKey,
@@ -414,6 +498,7 @@ async function loadCredentials(prisma: PrismaClient, userId: string): Promise<St
         secret: decryptApiKey(encSecret).trim(),
         passphrase: decryptApiKey(encPass).trim(),
       },
+      builderCreds,
     };
     _credCacheByUser.set(userId, creds);
     return creds;

@@ -981,6 +981,13 @@ function PolymarketTab() {
   const [savingCreds, setSavingCreds] = useState(false);
   const [showPrivateKey, setShowPrivateKey] = useState(false);
 
+  // Builder credentials state (for relay-based CTF redemption)
+  const [hasBuilderCreds, setHasBuilderCreds] = useState(false);
+  const [builderKey, setBuilderKey] = useState('');
+  const [builderSecret, setBuilderSecret] = useState('');
+  const [builderPassphrase, setBuilderPassphrase] = useState('');
+  const [savingBuilder, setSavingBuilder] = useState(false);
+
   // Validation & balance
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<{ valid: boolean; address?: string; error?: string } | null>(null);
@@ -996,6 +1003,7 @@ function PolymarketTab() {
         setAmount(config.amount.toString());
         setEnabledSymbols(config.symbols?.length ? config.symbols : ['BTC']);
         setHasCredentials(config.hasCredentials);
+        setHasBuilderCreds(config.hasBuilderCredentials ?? false);
       } catch {
         // ignore
       }
@@ -1082,6 +1090,26 @@ function PolymarketTab() {
       toast.error('Failed to fetch balance');
     } finally {
       setBalanceLoading(false);
+    }
+  };
+
+  const handleSaveBuilderCredentials = async () => {
+    if (!builderKey.trim() || !builderSecret.trim() || !builderPassphrase.trim()) {
+      toast.error('All 3 builder fields are required');
+      return;
+    }
+    setSavingBuilder(true);
+    try {
+      await api.polymarket.saveBuilderCredentials(builderKey.trim(), builderSecret.trim(), builderPassphrase.trim());
+      setHasBuilderCreds(true);
+      setBuilderKey('');
+      setBuilderSecret('');
+      setBuilderPassphrase('');
+      toast.success('Builder credentials saved — auto-redeem enabled');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to save builder credentials');
+    } finally {
+      setSavingBuilder(false);
     }
   };
 
@@ -1176,6 +1204,76 @@ function PolymarketTab() {
                 {savingCreds ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Key className="mr-2 h-4 w-4" />}
                 {savingCreds ? 'Deriving credentials...' : 'Connect Wallet'}
               </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Builder API Credentials (for CTF token redemption) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Shield className="h-5 w-5" />
+            Builder API Credentials
+          </CardTitle>
+          <CardDescription>
+            Required for automatic redemption of winning tokens after market resolution.
+            Get your credentials from{' '}
+            <a
+              href="https://polymarket.com/settings?tab=builder"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary underline"
+            >
+              polymarket.com/settings → Builder
+            </a>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {hasBuilderCreds ? (
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              <span className="text-sm text-emerald-500 font-medium">Builder credentials configured — auto-redeem active</span>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label className="text-xs">API Key</Label>
+                <Input
+                  type="text"
+                  placeholder="Builder API Key"
+                  value={builderKey}
+                  onChange={(e) => setBuilderKey(e.target.value)}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Secret</Label>
+                <Input
+                  type="password"
+                  placeholder="Builder Secret"
+                  value={builderSecret}
+                  onChange={(e) => setBuilderSecret(e.target.value)}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Passphrase</Label>
+                <Input
+                  type="password"
+                  placeholder="Builder Passphrase"
+                  value={builderPassphrase}
+                  onChange={(e) => setBuilderPassphrase(e.target.value)}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <Button onClick={handleSaveBuilderCredentials} disabled={savingBuilder}>
+                {savingBuilder ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Shield className="mr-2 h-4 w-4" />}
+                {savingBuilder ? 'Saving...' : 'Save Builder Credentials'}
+              </Button>
+              <p className="text-[11px] text-muted-foreground">
+                Without these credentials, winning tokens must be claimed manually on Polymarket.
+              </p>
             </div>
           )}
         </CardContent>
