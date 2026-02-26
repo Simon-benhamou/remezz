@@ -1000,8 +1000,15 @@ export async function redeemWinningTokens(
     const response = await relay.execute([redeemTx], 'Redeem winning tokens');
     const result = await response.wait();
 
+    // SDK returns undefined when tx reverts onchain (STATE_FAILED) — does NOT throw
+    if (!result) {
+      const failedHash = response.transactionHash ?? '?';
+      log.error(`Relay redeem REVERTED onchain: conditionId=${conditionId.slice(0, 12)}… | tx=${failedHash.slice(0, 14)}… — tokens may already be redeemed`);
+      return { success: false, error: `Transaction reverted onchain (${failedHash.slice(0, 14)}…)` };
+    }
+
     const expectedUsdc = betAmount / executionPrice; // tokens held × $1.00
-    const txHash = result?.transactionHash ?? response.transactionHash ?? '?';
+    const txHash = result.transactionHash ?? response.transactionHash ?? '?';
 
     log.info(`Relay redeem OK: conditionId=${conditionId.slice(0, 12)}… | tx=${txHash.slice(0, 14)}… | ~$${expectedUsdc.toFixed(2)} USDC`);
     return { success: true, usdcReceived: expectedUsdc };
