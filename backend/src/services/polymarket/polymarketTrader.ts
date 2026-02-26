@@ -964,6 +964,9 @@ export async function getLiveTradingConfig(
   return { live: true, amount: config.amount };
 }
 
+// Global relay cooldown: when 429 is received, skip all relay calls until reset
+let relayCooldownUntil = 0;
+
 /**
  * Redeem winning tokens on-chain via CTF contract after market resolution.
  * Uses Polymarket's Builder Relayer for gasless execution through the proxy wallet.
@@ -980,6 +983,12 @@ export async function redeemWinningTokens(
   betAmount: number,
   executionPrice: number,
 ): Promise<{ success: boolean; usdcReceived?: number; error?: string }> {
+  // Skip relay calls while rate-limited (429 cooldown)
+  if (Date.now() < relayCooldownUntil) {
+    const remainMin = Math.round((relayCooldownUntil - Date.now()) / 60000);
+    return { success: false, error: `Relay rate limited (${remainMin}min remaining)` };
+  }
+
   const creds = await loadCredentials(prisma, userId);
   if (!creds) return { success: false, error: 'No credentials' };
 
@@ -1020,6 +1029,16 @@ export async function redeemWinningTokens(
     return { success: true, usdcReceived: expectedUsdc };
   } catch (err: any) {
     const msg = err?.message ?? String(err);
+    // Detect 429 rate limit and set global cooldown to avoid hammering
+    const status = err?.status ?? err?.response?.status;
+    const dataErr = err?.data?.error ?? err?.response?.data?.error ?? msg;
+    if (status === 429 || msg.includes('429') || dataErr.includes('quota exceeded')) {
+      const resetMatch = dataErr.match(/resets in (\d+)/);
+      const resetSec = resetMatch ? parseInt(resetMatch[1], 10) : 3600;
+      relayCooldownUntil = Date.now() + resetSec * 1000;
+      log.error(`Relay 429 rate limited — cooldown until ${new Date(relayCooldownUntil).toISOString()} (${Math.round(resetSec / 60)}min)`);
+      return { success: false, error: `Rate limited (resets in ${Math.round(resetSec / 60)}min)` };
+    }
     log.error(`Relay redeem failed: ${msg}`);
     return { success: false, error: msg };
   }
