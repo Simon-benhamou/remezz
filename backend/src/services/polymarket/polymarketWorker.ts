@@ -1057,9 +1057,11 @@ async function tick(prisma: PrismaClient): Promise<void> {
     // ── 5. SERIAL betting (shared wallet) — sorted by confidence DESC ──
     const scored = scoringResults.filter((r) => r.result !== null && !r.belowThreshold);
 
-    // ── Consensus filter: only trade if 3+ symbols predict the same direction ──
-    const upCount = scored.filter(r => r.result!.direction === 'UP').length;
-    const downCount = scored.filter(r => r.result!.direction === 'DOWN').length;
+    // ── Consensus filter: count ALL symbols (including low-score) for direction,
+    //    but only trade symbols with score >= MIN_SCORE (V5.135) ──
+    const withResult = scoringResults.filter((r) => r.result !== null);
+    const upCount = withResult.filter(r => r.result!.direction === 'UP').length;
+    const downCount = withResult.filter(r => r.result!.direction === 'DOWN').length;
     const consensusDir: 'UP' | 'DOWN' = upCount >= downCount ? 'UP' : 'DOWN';
     const consensusCount = Math.max(upCount, downCount);
 
@@ -1073,9 +1075,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
       for (const { sym, result } of rejected) {
         const w = windowBySymbol.get(sym);
         if (w) { w.status = 'skipped'; w.skipReason = 'against_consensus'; if (result) w.prediction = result; }
-        log.info(`[${sym}] Skipped — against consensus (${consensusDir} ${consensusCount}/${scored.length})`);
+        log.info(`[${sym}] Skipped — against consensus (${consensusDir} ${consensusCount}/${withResult.length})`);
       }
-      log.info(`Consensus: ${consensusDir} ${consensusCount}/${scored.length} — trading ${tradeable.length} symbols`);
+      log.info(`Consensus: ${consensusDir} ${consensusCount}/${withResult.length} (${scored.length} above threshold) — trading ${tradeable.length} symbols`);
     } else {
       tradeable = [];
       for (const { sym, result } of scored) {
