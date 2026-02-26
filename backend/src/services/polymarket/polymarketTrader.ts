@@ -728,7 +728,7 @@ export async function placeGtcLimitBuy(
   tokenId: string,
   amount: number,
   limitPrice: number,
-): Promise<{ success: boolean; orderId?: string; error?: string }> {
+): Promise<{ success: boolean; orderId?: string; actualAmount?: number; error?: string }> {
   const creds = await loadCredentials(prisma, userId);
   if (!creds) return { success: false, error: 'No credentials' };
 
@@ -758,7 +758,7 @@ export async function placeGtcLimitBuy(
 
     const orderId = result?.orderID ?? result?.id ?? 'unknown';
     log.info(`GTC LIMIT placed: BUY $${amount} @ ${limitPrice.toFixed(3)} | orderId=${orderId}`);
-    return { success: true, orderId };
+    return { success: true, orderId, actualAmount: amount };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`Failed to place GTC limit: ${msg}`);

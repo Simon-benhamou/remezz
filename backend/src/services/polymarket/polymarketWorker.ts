@@ -1255,9 +1255,10 @@ async function tick(prisma: PrismaClient): Promise<void> {
           if (clobAsk && clobAsk <= tierMax + OBSERVATION_MAX_OVERSHOOT && !observationOrderBySymbol.has(sym)) {
             const gtcResult = await placeGtcLimitBuy(prisma, userId, tokenId, liveConfig.amount, tierMax);
             if (gtcResult.success && gtcResult.orderId) {
+              const obsAmount = gtcResult.actualAmount ?? liveConfig.amount;
               observationOrderBySymbol.set(sym, {
                 userId, orderId: gtcResult.orderId, tokenId, sym,
-                limitPrice: tierMax, amount: liveConfig.amount, direction: result.direction,
+                limitPrice: tierMax, amount: obsAmount, direction: result.direction,
                 initialAsk: clobAsk, bestAsk: clobAsk, startedAt: Date.now(),
               });
               w.observationStatus = 'observing';
