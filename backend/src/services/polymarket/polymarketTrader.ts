@@ -615,11 +615,12 @@ export async function placePolymarketBet(
       return { success: false, error: 'CLOB price unavailable — skipping bet' };
     }
 
-    // V5.124: Minimum CLOB price floor — prices < 0.55 have 42.9% WR (market already reversed)
-    const MIN_CLOB_PRICE = 0.55;
+    // V5.135: Lowered floor from 0.55 to 0.40 — prices near 50c have the BEST risk/reward
+    // (breakeven at 50% WR). Scoring already filters weak signals. Only reject aberrant prices.
+    const MIN_CLOB_PRICE = 0.40;
     if (!skipEvCheck && clobAsk < MIN_CLOB_PRICE) {
-      log.warn(`Price too low: CLOB=${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE} — momentum likely reversed, skipping`);
-      return { success: false, error: `Price too low (${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE}) — momentum likely reversed` };
+      log.warn(`Price too low: CLOB=${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE} — aberrant price, skipping`);
+      return { success: false, error: `Price too low (${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE})` };
     }
 
     // 1. Confidence-tiered EV cap: higher score → accept higher price
@@ -1111,8 +1112,8 @@ export async function simulatePolymarketBet(
       return { success: false, error: 'CLOB price unavailable' };
     }
 
-    // Same guards as placePolymarketBet:
-    const MIN_CLOB_PRICE = 0.55;
+    // Same guards as placePolymarketBet (V5.135: lowered from 0.55 to 0.40):
+    const MIN_CLOB_PRICE = 0.40;
     if (clobAsk < MIN_CLOB_PRICE) {
       return { success: false, clobAsk, error: `Price too low (${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE})` };
     }
