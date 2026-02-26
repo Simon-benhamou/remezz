@@ -1214,19 +1214,21 @@ async function tick(prisma: PrismaClient): Promise<void> {
         );
 
         if (betResult.success) {
+          // actualAmount may differ from liveConfig.amount due to CLOB minimum token size (5 tokens)
+          const realAmount = betResult.actualAmount ?? liveConfig.amount;
           // Deduct locally so next symbols see reduced balance (no extra API call)
-          userBalanceCache.set(userId, cachedBalance - liveConfig.amount);
-          log.info(`LIVE BET OK ${uLabel} [${sym}]: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)} (score=${score}, cap=${tierMax}) | remaining≈$${(cachedBalance - liveConfig.amount).toFixed(2)}`);
+          userBalanceCache.set(userId, cachedBalance - realAmount);
+          log.info(`LIVE BET OK ${uLabel} [${sym}]: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)} (score=${score}, cap=${tierMax}) | spent=$${realAmount.toFixed(2)} | remaining≈$${(cachedBalance - realAmount).toFixed(2)}`);
           anyUserFilled = true;
           if (betResult.executionPrice) {
             w.executionPrice = betResult.executionPrice;
-            w.betAmount = liveConfig.amount;
+            w.betAmount = realAmount;
 
             const sell: PendingAutoSell = {
               userId,
               symbol: sym,
               tokenId,
-              betAmount: liveConfig.amount,
+              betAmount: realAmount,
               executionPrice: betResult.executionPrice,
               direction: result.direction,
               sold: false,
@@ -1237,7 +1239,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
             if (betResult.executionPrice < TP_MAX_ENTRY_PRICE) {
               const tpPrice = Math.min(betResult.executionPrice * TP_MULTIPLIER, 0.95);
-              const tpResult = await placeTakeProfitSell(prisma, userId, tokenId, liveConfig.amount, betResult.executionPrice, tpPrice);
+              const tpResult = await placeTakeProfitSell(prisma, userId, tokenId, realAmount, betResult.executionPrice, tpPrice);
               if (tpResult.success && tpResult.orderId) {
                 sell.tpOrderId = tpResult.orderId;
                 sell.tpTargetPrice = tpPrice;

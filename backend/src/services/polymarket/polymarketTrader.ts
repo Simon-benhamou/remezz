@@ -600,7 +600,7 @@ export async function placePolymarketBet(
   price: number,
   skipEvCheck = false,
   confidenceScore?: number,
-): Promise<{ success: boolean; orderId?: string; executionPrice?: number; error?: string }> {
+): Promise<{ success: boolean; orderId?: string; executionPrice?: number; actualAmount?: number; error?: string }> {
   const creds = await loadCredentials(prisma, userId);
   if (!creds) return { success: false, error: 'No credentials' };
 
@@ -687,7 +687,7 @@ export async function placePolymarketBet(
 
         if (status === 'MATCHED' || status === 'FILLED') {
           log.info(`GTC order FILLED: ${direction} $${amount} @ CLOB ${clobAsk.toFixed(3)} (${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
-          return { success: true, orderId, executionPrice: clobAsk };
+          return { success: true, orderId, executionPrice: clobAsk, actualAmount: amount };
         }
 
         if (status === 'CANCELED' || status === 'CANCELLED' || status === 'EXPIRED') {
