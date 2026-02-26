@@ -456,7 +456,7 @@ export const MomentumConfig = {
     EXHAUSTION_PLACEMENT_THRESHOLD: 25,       // V5.136: Lowered from 35 for earlier proactive STOP placement
     EXHAUSTION_CANCEL_THRESHOLD: 15,          // V5.136: Lowered from 20 (10pt hysteresis gap)
     EXHAUSTION_MIN_CANDLES: 10,               // Min candles needed for reliable calculation
-    EXHAUSTION_SHARP_REVERSAL_ENABLED: false,  // V5.135: 6th component — sharp reversal detection (test with analyze-rt-exit-gap.ts first)
+    EXHAUSTION_SHARP_REVERSAL_ENABLED: true,   // V5.136: Enabled — BT shows +$1K PnL, -3pp DD, +18 proactive exits vs OFF
     PRE_BREACH_DISTANCE_PCT: 1.5,             // V5.136: Widened from 0.6% for earlier exhaustion detection zone
     // V5.136: Crash safety STOP — permanent STOP_MARKET 3% below trailing as flash crash insurance
     CRASH_SAFETY_STOP_ENABLED: true,
