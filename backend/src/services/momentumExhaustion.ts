@@ -14,12 +14,21 @@
  * The exhaustion score IS the noise filter. If 5 independent indicators
  * all say "momentum is dying," the stop triggering is signal, not noise.
  *
- * Indicators (5 components, 100 points total):
- * 1. ROC Deceleration  (25pts) - Rate of change declining over 3 windows
- * 2. Volume Dry-Up     (25pts) - Volume declining while price still advancing
- * 3. Body Shrinkage    (20pts) - Candle bodies getting smaller (indecision)
- * 4. Rejection Wicks   (15pts) - Growing wicks against the move direction
- * 5. Proximity          (15pts) - How close price is to trailing stop
+ * Indicators (6 components, 100 points total):
+ * When SHARP_REVERSAL_ENABLED=false (default): 5 components, original weights
+ *   1. ROC Deceleration  (25pts) - Rate of change declining over 3 windows
+ *   2. Volume Dry-Up     (25pts) - Volume declining while price still advancing
+ *   3. Body Shrinkage    (20pts) - Candle bodies getting smaller (indecision)
+ *   4. Rejection Wicks   (15pts) - Growing wicks against the move direction
+ *   5. Proximity          (15pts) - How close price is to trailing stop
+ *
+ * When SHARP_REVERSAL_ENABLED=true: 6 components, redistributed weights
+ *   1. ROC Deceleration  (20pts)
+ *   2. Volume Dry-Up     (20pts)
+ *   3. Body Shrinkage    (17pts)
+ *   4. Rejection Wicks   (13pts)
+ *   5. Proximity          (15pts)
+ *   6. Sharp Reversal    (15pts) - Detects sudden opposite candle (not gradual)
  *
  * Used by: realtimeExitHandler.ts (live), backtestService.ts (backtest)
  */
@@ -42,11 +51,12 @@ export interface ExhaustionCandle {
 }
 
 export interface ExhaustionComponents {
-  rocDeceleration: number;      // 0-25: Rate of change declining
-  volumeDryUp: number;          // 0-25: Volume declining on advances
-  bodyShrinkage: number;        // 0-20: Candle bodies shrinking
-  rejectionWicks: number;       // 0-15: Rejection wicks growing
+  rocDeceleration: number;      // 0-25 (0-20 with sharp): Rate of change declining
+  volumeDryUp: number;          // 0-25 (0-20 with sharp): Volume declining on advances
+  bodyShrinkage: number;        // 0-20 (0-17 with sharp): Candle bodies shrinking
+  rejectionWicks: number;       // 0-15 (0-13 with sharp): Rejection wicks growing
   proximityToTrailing: number;  // 0-15: Distance to trailing stop
+  sharpReversal?: number;       // 0-15: Sharp reversal detection (when enabled)
 }
 
 export interface ExhaustionResult {
@@ -61,6 +71,7 @@ export interface ExhaustionConfig {
   PLACEMENT_THRESHOLD: number;  // Score to place STOP_MARKET (default 65)
   CANCEL_THRESHOLD: number;     // Score to cancel STOP (default 45, hysteresis)
   MIN_CANDLES: number;          // Minimum candles for calculation (default 10)
+  SHARP_REVERSAL_ENABLED?: boolean; // Enable 6th component: sharp reversal (default false)
 }
 
 export const DEFAULT_EXHAUSTION_CONFIG: ExhaustionConfig = {
@@ -105,19 +116,34 @@ export class MomentumExhaustionCalculator {
       };
     }
 
+    const sharpEnabled = this.config.SHARP_REVERSAL_ENABLED ?? false;
+
     const components: ExhaustionComponents = {
       rocDeceleration: this.calcRocDeceleration(candles, side),
       volumeDryUp: this.calcVolumeDryUp(candles, side),
       bodyShrinkage: this.calcBodyShrinkage(candles),
       rejectionWicks: this.calcRejectionWicks(candles, side),
       proximityToTrailing: this.calcProximity(currentPrice, trailingStopPrice, side),
+      ...(sharpEnabled ? { sharpReversal: this.calcSharpReversal(candles, side) } : {}),
     };
 
-    const score = components.rocDeceleration
-      + components.volumeDryUp
-      + components.bodyShrinkage
-      + components.rejectionWicks
-      + components.proximityToTrailing;
+    let score: number;
+    if (sharpEnabled) {
+      // Redistributed weights: ROC(20) + Vol(20) + Body(17) + Wick(13) + Prox(15) + Sharp(15) = 100
+      score = (components.rocDeceleration / 25) * 20
+        + (components.volumeDryUp / 25) * 20
+        + (components.bodyShrinkage / 20) * 17
+        + (components.rejectionWicks / 15) * 13
+        + components.proximityToTrailing  // stays at /15
+        + (components.sharpReversal ?? 0);
+    } else {
+      // Original weights: ROC(25) + Vol(25) + Body(20) + Wick(15) + Prox(15) = 100
+      score = components.rocDeceleration
+        + components.volumeDryUp
+        + components.bodyShrinkage
+        + components.rejectionWicks
+        + components.proximityToTrailing;
+    }
 
     const shouldPlaceStop = score >= this.config.PLACEMENT_THRESHOLD;
 
@@ -294,12 +320,65 @@ export class MomentumExhaustionCalculator {
       ? ((currentPrice - trailingStopPrice) / trailingStopPrice) * 100
       : ((trailingStopPrice - currentPrice) / trailingStopPrice) * 100;
 
+    // V5.136: Recalibrated for widened PRE_BREACH zone (1.5%)
     if (distancePct <= 0) return 15;       // Already breaching
-    if (distancePct < 0.3) return 15;      // Very close (< 0.3%)
-    if (distancePct < 0.6) return 12;      // Close (0.3-0.6%)
-    if (distancePct < 1.0) return 8;       // Approaching (0.6-1.0%)
-    if (distancePct < 1.5) return 4;       // Somewhat near (1.0-1.5%)
-    return 0;                               // Far (> 1.5%)
+    if (distancePct < 0.5) return 15;      // Very close (< 0.5%)
+    if (distancePct < 1.0) return 12;      // Close (0.5-1.0%)
+    if (distancePct < 1.5) return 8;       // Approaching (1.0-1.5%)
+    if (distancePct < 2.0) return 4;       // In outer zone (1.5-2.0%)
+    return 0;                               // Far (> 2.0%)
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // COMPONENT 6: Sharp Reversal (0-15 points)
+  // Detects sudden reversals that the 5 gradual components miss.
+  //
+  // The existing 5 components measure GRADUAL exhaustion (declining ROC,
+  // shrinking bodies, etc). A sharp reversal — one big candle in the
+  // opposite direction — scores 0 on those because there's no decline
+  // pattern. This component catches that case.
+  //
+  // LONG: bearish candle with body > 2x avg AND ROC_1 < -0.3%
+  // SHORT: bullish candle with body > 2x avg AND ROC_1 > 0.3%
+  // Also: momentum reversal (ROC_3 positive → ROC_1 negative, delta > 0.5%)
+  // ═════════════════════════════════════════════════════════════════════════
+
+  private calcSharpReversal(candles: ExhaustionCandle[], side: 'long' | 'short'): number {
+    if (candles.length < 6) return 0;
+
+    const last = candles[candles.length - 1];
+    const prev = candles[candles.length - 2];
+
+    // Body size of last candle vs avg of previous 5
+    const body = Math.abs(last.close - last.open);
+    const avgBody = candles.slice(-6, -1).reduce((s, c) => s + Math.abs(c.close - c.open), 0) / 5;
+    const bodyMult = avgBody > 0 ? body / avgBody : 0;
+
+    // 1-candle ROC
+    const roc1 = prev.close > 0 ? ((last.close - prev.close) / prev.close) * 100 : 0;
+
+    if (side === 'long') {
+      // LONG: bearish reversal — close < open, big body, negative ROC
+      if (last.close < last.open && bodyMult >= 2.0 && roc1 <= -0.3) return 15;
+
+      // Momentum reversal: ROC_3 was positive, ROC_1 turned negative, delta > 0.5%
+      if (candles.length >= 4) {
+        const roc3Start = candles[candles.length - 4].close;
+        const roc3 = roc3Start > 0 ? ((prev.close - roc3Start) / roc3Start) * 100 : 0;
+        if (roc3 > 0 && roc1 < 0 && (roc3 - roc1) > 0.5) return 10;
+      }
+    } else {
+      // SHORT: bullish reversal — close > open, big body, positive ROC
+      if (last.close > last.open && bodyMult >= 2.0 && roc1 >= 0.3) return 15;
+
+      if (candles.length >= 4) {
+        const roc3Start = candles[candles.length - 4].close;
+        const roc3 = roc3Start > 0 ? ((prev.close - roc3Start) / roc3Start) * 100 : 0;
+        if (roc3 < 0 && roc1 > 0 && (roc1 - roc3) > 0.5) return 10;
+      }
+    }
+
+    return 0;
   }
 
   // ═════════════════════════════════════════════════════════════════════════

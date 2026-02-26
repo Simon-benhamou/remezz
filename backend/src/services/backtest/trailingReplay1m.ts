@@ -498,9 +498,10 @@ export async function postProcess1mTrailingExits(
 
   const fetcher = new Candle1mFetcher(exchange);
   const exhaustionCalc = new MomentumExhaustionCalculator({
-    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 35,
-    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 20,
+    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 25,
+    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 15,
     MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
+    SHARP_REVERSAL_ENABLED: (MomentumConfig.EXIT as any).EXHAUSTION_SHARP_REVERSAL_ENABLED ?? false,
   });
 
   // Group by symbol, sort by entryTime (cache-friendly fetching)

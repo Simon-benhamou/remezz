@@ -17,6 +17,7 @@ export const EXIT_TRAIL_NFS_MED = 'TRAIL_NFS_MED';
 export const EXIT_TRAIL_NFS_LOW = 'TRAIL_NFS_LOW';
 export const EXIT_TRAIL_RT = 'TRAIL_RT';
 export const EXIT_TRAIL_PROACTIVE = 'TRAIL_PROACTIVE';
+export const EXIT_TRAIL_CRASH_SAFETY = 'TRAIL_CRASH_SAFETY';  // V5.136: Flash crash safety net
 
 // 15m candle-based trailing exits
 export const EXIT_TRAIL_NFS_HIGH_15M = 'TRAIL_NFS_HIGH_15M';
@@ -57,6 +58,7 @@ export const EXIT_UNKNOWN = 'UNKNOWN';
 const LEGACY_MAP: Record<string, string> = {
   // simpleAgent lowercase strings
   'trailing': EXIT_TRAIL,
+  'trail_crash_safety': EXIT_TRAIL_CRASH_SAFETY,
   'trailing_rt': EXIT_TRAIL_RT,
   'trailing_nfs_high': EXIT_TRAIL_NFS_HIGH,
   'trailing_nfs_medium': EXIT_TRAIL_NFS_MED,
@@ -84,6 +86,7 @@ const LEGACY_MAP: Record<string, string> = {
   'TRAILING_NFS_LOW': EXIT_TRAIL_NFS_LOW,
   'TRAILING_RT': EXIT_TRAIL_RT,
   'TRAILING_PROACTIVE_LIMIT': EXIT_TRAIL_PROACTIVE,
+  'TRAIL_CRASH_SAFETY': EXIT_TRAIL_CRASH_SAFETY,
   'STOPLOSS': EXIT_SL,
   'STOPLOSS_RT': EXIT_SL_RT,
   'STOP_LOSS_EXCHANGE': EXIT_SL_EXCHANGE,

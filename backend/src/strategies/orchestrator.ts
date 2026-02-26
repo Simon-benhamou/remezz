@@ -54,6 +54,7 @@ import { PositionPersistence } from './positionPersistence.js';
 import {
   EXIT_TRAIL, EXIT_TRAIL_NFS_HIGH_15M,
   EXIT_TRAIL_NFS_MED_15M, EXIT_TRAIL_NFS_LOW_15M, EXIT_TRAIL_PROACTIVE_15M,
+  EXIT_TRAIL_CRASH_SAFETY,
   EXIT_SL_EXCHANGE, EXIT_TRAIL_EXCHANGE,
   EXIT_STAGNANT,
   EXIT_SIGNAL_REASON_MAP, toCanonical,
@@ -1387,10 +1388,11 @@ export class AgentOrchestrator {
           );
 
           if (nfsResult.shouldExitImmediately) {
-            // HIGH confidence: Exit at trailing stop price (backtest) or candle close (paper realistic)
-            // V5.87: Paper now uses candle close to simulate market order execution (more realistic)
-            // Live will place market order anyway, so this just affects paper realism
-            // Proactive limit (when it works) will give both paper and live exact trailing price
+            // HIGH confidence: Exit at trailing stop price (target) or candle close (paper realistic)
+            // V5.87: Paper uses candle close to simulate market order execution (more realistic)
+            // V5.92/V5.134 lesson: trailingStopPrice is a TARGET the system strives for via
+            // exhaustion detector + proactive STOP_MARKET. Using currentPrice everywhere destroys
+            // the strategy ($86K → -$56 PnL). Paper gets realistic pricing; live/backtest get the target.
             const highExitPrice = this.config.mode === 'paper' ? currentPrice : trailingStopPrice;
             logger.info(`⚡⚡⚡ [${symbol}] 15m NFS HIGH EXIT | exec=${highExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)}, mode=${this.config.mode})`);
             await this.closePosition(this.position!, highExitPrice, EXIT_TRAIL_NFS_HIGH_15M);
@@ -1447,7 +1449,30 @@ export class AgentOrchestrator {
       // Emergency profit-protection (exchange-side): ratchet stop only after +2% PnL.
       // This is NOT the primary exit; trailing/app logic remains the priority.
       await this.updateEmergencyStopProfitProtectionIfNeeded(currentPrice, pnlPct);
-      
+
+      // ════════════════════════════════════════════════════════════════════════
+      // V5.136: Paper crash safety simulation
+      // In paper mode, simulate the crash safety STOP that live places on exchange.
+      // Check if candle wick breached crash safety price (3% below trailing).
+      // ════════════════════════════════════════════════════════════════════════
+      if (this.config.mode === 'paper' && this.position?.trailingActive && this.position?.appTrailingStop) {
+        const crashEnabled = (MomentumConfig.EXIT as any).CRASH_SAFETY_STOP_ENABLED ?? false;
+        if (crashEnabled) {
+          const crashDistPct = (MomentumConfig.EXIT as any).CRASH_SAFETY_DISTANCE_PCT ?? 3.0;
+          const crashPrice = this.position.side === 'long'
+            ? this.position.appTrailingStop * (1 - crashDistPct / 100)
+            : this.position.appTrailingStop * (1 + crashDistPct / 100);
+          const breached = this.position.side === 'long'
+            ? latestClosedCandle.low <= crashPrice
+            : latestClosedCandle.high >= crashPrice;
+          if (breached) {
+            logger.warn(`🚨🚨🚨 [${symbol}] PAPER CRASH SAFETY triggered | crashPrice=$${crashPrice.toFixed(4)} | trail=$${this.position.appTrailingStop.toFixed(4)} | low=$${latestClosedCandle.low.toFixed(4)}`);
+            await this.closePosition(this.position, crashPrice, EXIT_TRAIL_CRASH_SAFETY);
+            return;
+          }
+        }
+      }
+
       if (exitSignal.shouldExit) {
         // ════════════════════════════════════════════════════════════════════════
         // V5.81 PARITY FIX: Use SL price for SL/stagnant exits (matching backtest)

@@ -743,8 +743,27 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Files updated**: `momentumConfig.ts` (SYMBOLS 9, SIGNAL_TIER_A 5, LEVERAGE), `candleCache.ts` (SEED_SYMBOLS 10), `telegramReporter.ts` (REPORT_SYMBOLS 9), `backtest.ts` (presets/defaults), `AgentCreationModal.tsx` (V5.132 banner, 9 recommended), `BacktestPage.tsx` (9 defaults)
   - **Data files cleaned**: Deleted 15m/1h JSON files for APT, ARB, ETH, NEAR, UNI, BTC_1h, FET_1h, WIF_1h. Restored AVAX, IMX, ADA from git (deleted in V5.131).
 
+- V5.134: NFS HIGH exit price — REVERTED (trailingStopPrice is a target, not an illusion):
+  - **Investigation**: DOT trade parity gap (+6.95%: BT 11.2% vs paper 4.2%). NFS HIGH exits used `trailingStopPrice` in BT/live but paper got candle close. Analysis showed live places MARKET order → fills at ~candle close. Attempted fix: use `current.close` everywhere for "honest" pricing.
+  - **Backtest result**: **CATASTROPHIC**. $86,524 → -$56 PnL, 65.9% → 58.85% WR, 33.2% → 78.8% DD. NFS HIGH = 350 trades (most frequent exit) — degrading each by $200+ avg destroyed the entire edge.
+  - **LESSON (confirmed V5.92)**: `trailingStopPrice` is NOT optimistic — it's a **TARGET** the system achieves via: (1) exhaustion detector placing proactive STOP_MARKET at trailing price, (2) NFS filtering noise so breaches are real. The mechanism WORKS — most NFS HIGH exits DO get close to trailing price via the proactive stop. Paper uses candle close (no exchange orders) which explains the parity gap on DOT.
+  - **Resolution**: All 3 files reverted to `trailingStopPrice`. Paper 15m handler keeps `currentPrice` (realistic paper simulation). Comments updated with V5.92/V5.134 lesson. Drash skill asymmetry table restored.
+  - **Parity gap status**: NFS HIGH BT-vs-paper gap is ACCEPTED (paper can't simulate proactive stops). BT-vs-live gap is small (proactive stop fills at ~trailing price).
+  - **Files**: `realtimeExitHandler.ts`, `orchestrator.ts`, `backtestService.ts`, `.claude/skills/drash-chokhmah/skill.md`
+
 - V5.126: Fix BTC 15m stale cache when no agents active:
   - **Problem**: `btcDataService.ts` reads WS kline cache every 5s but never called `subscribeToKline()`. Agents keep the subscription alive via `candleFetcher.ts:130`, but with 0 active sessions, the 10-min TTL pruned the `btcusdt@kline_15m` stream → cache stale after 45min → STALE_CACHE warnings every 5s.
   - **Fix**: Added `getBinanceWebSocket().subscribeToKline('BTCUSDT', '15m')` in `refresh()`. Since refresh runs every 5s, TTL (10min) is never reached.
   - **Pattern**: Any service that reads WS kline cache (`getKlinesWithMeta`/`getKlines`) MUST also re-subscribe periodically to prevent TTL pruning. The WS subscription is not permanent — it has a 10-min TTL (`klineSubscriptionTtlMs`) and gets pruned by `pruneStaleKlineSubscriptions()` if no caller refreshes `lastRequestedAt`.
   - **File**: `btcDataService.ts`
+
+- V5.136: Optimised RT trailing exits — proactive STOP + crash safety:
+  - **PRE_BREACH zone widened (0.6% → 1.5%)**: NFS state machine starts monitoring earlier, giving the exhaustion detector more time to place proactive STOP_MARKET before trailing breach. Config: `PRE_BREACH_DISTANCE_PCT: 1.5` in both `momentumConfig.ts` and `nfsRealtimeExit.ts`.
+  - **Exhaustion proximity thresholds recalibrated**: In `momentumExhaustion.ts`, proximity scoring bands widened to match new PRE_BREACH zone: `<0.5%` (15pts), `<1.0%` (12pts), `<1.5%` (8pts), `<2.0%` (4pts), `>2.0%` (0pts).
+  - **Exhaustion thresholds lowered (35→25 placement, 20→15 cancel)**: Places proactive STOP_MARKET earlier/more often. At 25, proximity (15) + one partial component (10) suffices. 10-point hysteresis gap maintained. Fallback defaults aligned to 25/15 across all 3 code paths (V5.117 pattern).
+  - **Crash safety STOP (3% below trailing)**: Permanent STOP_MARKET as flash crash insurance. Never fires in normal conditions (data: 1.5% = 116 false exits, 3% = ~0). Lifecycle: placed when trailing activates, updated on ratchet (>0.1% move), re-placed after cancelAllOrders kills it (1s poll), cancelled on normal exit. Both exhaustion and crash safety stops coexist independently on exchange.
+  - **New exit reason**: `EXIT_TRAIL_CRASH_SAFETY` in `exitReasons.ts`, maps to `TRAIL` family via `normalizeToFamily()`.
+  - **Paper simulation**: Orchestrator checks 15m candle wicks against crash safety price for paper mode (live uses exchange STOP_MARKET via RT handler).
+  - **No backtest change**: Crash safety not simulated in BT (no exchange orders). Exhaustion thresholds auto-aligned via shared `MomentumConfig`.
+  - **Propagation**: PRE_BREACH → NFS state machine only (RT handler). Proximity → MomentumExhaustionCalculator (RT + BT + 1m replay, auto-aligned). Exhaustion 25/15 → config (auto-aligned). Crash safety → RT handler (live) + orchestrator (paper).
+  - **Files**: `momentumConfig.ts`, `nfsRealtimeExit.ts`, `momentumExhaustion.ts`, `exitReasons.ts`, `exchangeOrderManager.ts`, `realtimeExitHandler.ts`, `orchestrator.ts`, `backtestService.ts`, `trailingReplay1m.ts`

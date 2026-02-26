@@ -453,9 +453,14 @@ export const MomentumConfig = {
     // The exhaustion score IS the noise filter (replaces NFS partial-candle scoring).
     // ═══════════════════════════════════════════════════════════════════
     EXHAUSTION_STOP_ENABLED: true,            // Master switch for exhaustion detection
-    EXHAUSTION_PLACEMENT_THRESHOLD: 35,       // Score >= this → place STOP_MARKET (0-100)
-    EXHAUSTION_CANCEL_THRESHOLD: 20,          // Score < this → cancel STOP (hysteresis)
+    EXHAUSTION_PLACEMENT_THRESHOLD: 25,       // V5.136: Lowered from 35 for earlier proactive STOP placement
+    EXHAUSTION_CANCEL_THRESHOLD: 15,          // V5.136: Lowered from 20 (10pt hysteresis gap)
     EXHAUSTION_MIN_CANDLES: 10,               // Min candles needed for reliable calculation
+    EXHAUSTION_SHARP_REVERSAL_ENABLED: false,  // V5.135: 6th component — sharp reversal detection (test with analyze-rt-exit-gap.ts first)
+    PRE_BREACH_DISTANCE_PCT: 1.5,             // V5.136: Widened from 0.6% for earlier exhaustion detection zone
+    // V5.136: Crash safety STOP — permanent STOP_MARKET 3% below trailing as flash crash insurance
+    CRASH_SAFETY_STOP_ENABLED: true,
+    CRASH_SAFETY_DISTANCE_PCT: 3.0,           // Distance below trailing stop (3% = ~0 false exits based on 1m data)
     NFS_HIGH_SCORE_THRESHOLD: 70,             // Score >= this = immediate LIMIT exit
     NFS_MEDIUM_SCORE_THRESHOLD: 40,           // Score >= this = monitor closely
 

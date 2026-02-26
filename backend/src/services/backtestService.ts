@@ -658,8 +658,10 @@ function checkBacktestExit(
       // In live, the proactive limit order at trailing stop price SHOULD fill
       // before the candle closes. If it doesn't, the 15m handler exits at
       // market (candle close). Using trailingStopPrice here represents the
-      // INTENDED behavior. If live proactive limits aren't filling, the fix
-      // belongs in live execution, not in degrading the backtest.
+      // INTENDED behavior — it's a TARGET the system strives to achieve via
+      // exhaustion detector + proactive STOP_MARKET placement.
+      // V5.92/V5.134 lesson: using current.close here destroys the strategy
+      // ($86K → -$56 PnL). The trailing stop price IS the edge.
       if (nfsScore.confidence === 'HIGH') {
         return {
           shouldExit: true,
@@ -1079,9 +1081,10 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
   // V5.110: Exhaustion calculator for proactive trailing stop simulation
   const exhaustionEnabled = (MomentumConfig.EXIT as any).EXHAUSTION_STOP_ENABLED ?? true;
   const exhaustionCalc = exhaustionEnabled ? new MomentumExhaustionCalculator({
-    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 35,
-    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 20,
+    PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 25,
+    CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 15,
     MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
+    SHARP_REVERSAL_ENABLED: (MomentumConfig.EXIT as any).EXHAUSTION_SHARP_REVERSAL_ENABLED ?? false,
   }) : null;
 
   // V5.111: Per-symbol 1m candle cursor for efficient zoom-in lookup

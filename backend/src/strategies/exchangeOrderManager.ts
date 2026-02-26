@@ -24,6 +24,11 @@ export class ExchangeOrderManager {
   proactiveLimitPrice: number | null = null;
   private proactiveLimitPlacedAt: number = 0;
 
+  // V5.136: Crash safety STOP tracking (separate from proactive exhaustion stop)
+  private crashSafetyOrderId: string | null = null;
+  private crashSafetyPrice: number | null = null;
+  private crashSafetyPlacedAt: number = 0;
+
   constructor(
     private exchange: Exchange,
     private symbol: string,
@@ -449,6 +454,127 @@ export class ExchangeOrderManager {
     } catch (e: unknown) {
       logger.debug(`[${symbol}] Failed to check proactive LIMIT status: ${errMsg(e)}`);
     }
+    return null;
+  }
+
+  // ── V5.136: Crash Safety STOP ──────────────────────────────────────────
+  //
+  // Permanent STOP_MARKET placed 3% below trailing stop as flash crash insurance.
+  // Tracked separately from the proactive exhaustion stop — both can coexist.
+  // If cancelAllOrders kills it, the RT handler re-places it on next poll (1s).
+
+  getCrashSafetyOrderId(): string | null { return this.crashSafetyOrderId; }
+  getCrashSafetyPrice(): number | null { return this.crashSafetyPrice; }
+
+  async placeCrashSafetyStop(
+    symbol: string, orderSide: 'buy' | 'sell', qty: number, price: number,
+  ): Promise<string | null> {
+    if (this.mode === 'paper') {
+      const orderId = `paper_crash_${Date.now()}`;
+      logger.debug(`[${symbol}] PAPER crash safety STOP: ${orderSide} @ stop=$${price.toFixed(4)}`);
+      this.crashSafetyOrderId = orderId;
+      this.crashSafetyPrice = price;
+      this.crashSafetyPlacedAt = Date.now();
+      return orderId;
+    }
+    try {
+      const formattedQty = this.formatQtyForExchange(symbol, qty);
+      const order = await this.exchange.createOrder(
+        symbol, 'market', orderSide, formattedQty, undefined,
+        { stopLossPrice: price, reduceOnly: true, workingType: 'MARK_PRICE' },
+      );
+      ipWeightTracker.record(1, `crashSafety:${symbol}`);
+      this.crashSafetyOrderId = order.id || null;
+      this.crashSafetyPrice = price;
+      this.crashSafetyPlacedAt = Date.now();
+      logger.info(`🛡️ [${symbol}] Crash safety STOP placed @ $${price.toFixed(4)} (order: ${order.id})`);
+      return order.id || null;
+    } catch (e: unknown) {
+      logger.warn(`[${symbol}] Failed to place crash safety STOP: ${errMsg(e)}`);
+      return null;
+    }
+  }
+
+  async cancelCrashSafetyStop(symbol: string): Promise<void> {
+    const orderId = this.crashSafetyOrderId;
+    if (!orderId) return;
+
+    this.crashSafetyOrderId = null;
+    this.crashSafetyPrice = null;
+    this.crashSafetyPlacedAt = 0;
+
+    if (this.mode === 'paper') {
+      logger.debug(`[${symbol}] PAPER crash safety STOP cancelled: ${orderId}`);
+      return;
+    }
+
+    try {
+      if (this.exchange.cancelOrder) {
+        await this.exchange.cancelOrder(orderId, symbol);
+        ipWeightTracker.record(1, `cancelCrashSafety:${symbol}`);
+      }
+      logger.info(`[${symbol}] Crash safety STOP cancelled: ${orderId}`);
+    } catch (e: unknown) {
+      logger.debug(`[${symbol}] Crash safety cancel failed (may have filled): ${errMsg(e)}`);
+    }
+  }
+
+  async checkCrashSafetyFill(
+    symbol: string, position: Position | null, lastPrice: number,
+  ): Promise<{ filled: boolean; avgPrice: number } | null> {
+    const orderId = this.crashSafetyOrderId;
+    if (!orderId) return null;
+
+    if (this.mode === 'paper') {
+      if (this.crashSafetyPrice && position) {
+        const filled = position.side === 'long'
+          ? lastPrice <= this.crashSafetyPrice
+          : lastPrice >= this.crashSafetyPrice;
+        if (filled) return { filled: true, avgPrice: this.crashSafetyPrice };
+      }
+      return null;
+    }
+
+    // Live: WS ORDER_TRADE_UPDATE cache (0 weight)
+    if (this.userId) {
+      const wsUpdate = getOrderTradeUpdateByIdFromWebSocket(this.userId, orderId);
+      if (wsUpdate) {
+        const status = wsUpdate.orderStatus?.toUpperCase();
+        if (status === 'FILLED') {
+          const avgPrice = wsUpdate.averagePrice || wsUpdate.lastFilledPrice || this.crashSafetyPrice || 0;
+          return { filled: true, avgPrice };
+        }
+        if (status === 'CANCELED' || status === 'EXPIRED') {
+          // Order was killed (e.g. by cancelAllOrders) — clear state, RT handler will re-place
+          this.crashSafetyOrderId = null;
+          this.crashSafetyPrice = null;
+          return null;
+        }
+      }
+
+      // REST fallback after 10s
+      const elapsed = Date.now() - this.crashSafetyPlacedAt;
+      if (elapsed > 10_000 && this.exchange.fetchOrder) {
+        try {
+          const order = await this.exchange.fetchOrder(orderId, symbol);
+          ipWeightTracker.record(2, `fetchCrashSafety:${symbol}`);
+          const status = order.status?.toLowerCase();
+          if (status === 'closed' || status === 'filled') {
+            const avgPrice = order.average || order.price || this.crashSafetyPrice || 0;
+            return { filled: true, avgPrice };
+          }
+          if (status === 'canceled' || status === 'expired') {
+            this.crashSafetyOrderId = null;
+            this.crashSafetyPrice = null;
+            return null;
+          }
+          this.crashSafetyPlacedAt = Date.now();
+        } catch (e: unknown) {
+          logger.debug(`[${symbol}] Crash safety REST fallback failed: ${errMsg(e)}`);
+        }
+      }
+    }
+
     return null;
   }
 }

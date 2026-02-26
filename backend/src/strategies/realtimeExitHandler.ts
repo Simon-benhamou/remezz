@@ -34,6 +34,7 @@ import {
   EXIT_TRAIL_NFS_MED,
   EXIT_TRAIL_NFS_LOW,
   EXIT_TRAIL_PROACTIVE,
+  EXIT_TRAIL_CRASH_SAFETY,
   EXIT_SL_RT,
   EXIT_STAGNANT,
 } from '../types/exitReasons.js';
@@ -104,6 +105,10 @@ export class RealtimeExitHandler {
   proactiveLimitOrderId: string | null = null;
   proactiveLimitPrice: number | null = null;
 
+  // V5.136: Crash safety STOP state (permanent 3% below trailing)
+  private crashSafetyOrderId: string | null = null;
+  private crashSafetyPrice: number | null = null;
+
   constructor(private ctx: RealtimeExitContext) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -163,11 +168,12 @@ export class RealtimeExitHandler {
     const exhaustionEnabled = (MomentumConfig.EXIT as any).EXHAUSTION_STOP_ENABLED ?? true;
     if (exhaustionEnabled) {
       this.exhaustionCalculator = new MomentumExhaustionCalculator({
-        PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 35,
-        CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 20,
+        PLACEMENT_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 25,
+        CANCEL_THRESHOLD: (MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 15,
         MIN_CANDLES: (MomentumConfig.EXIT as any).EXHAUSTION_MIN_CANDLES ?? 10,
+        SHARP_REVERSAL_ENABLED: (MomentumConfig.EXIT as any).EXHAUSTION_SHARP_REVERSAL_ENABLED ?? false,
       });
-      logger.info(`[${this.ctx.symbol}] Exhaustion detector initialized | place=${(MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 35} cancel=${(MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 20}`);
+      logger.info(`[${this.ctx.symbol}] Exhaustion detector initialized | place=${(MomentumConfig.EXIT as any).EXHAUSTION_PLACEMENT_THRESHOLD ?? 25} cancel=${(MomentumConfig.EXIT as any).EXHAUSTION_CANCEL_THRESHOLD ?? 15}`);
     }
   }
 
@@ -243,6 +249,13 @@ export class RealtimeExitHandler {
     this.lastRtTrailingKlineTs = null;
     this.rtTrailingBreachCandles = 0;
     this.realtimeExitInProgress = false;
+
+    // V5.136: Cancel crash safety STOP on exit
+    if (this.crashSafetyOrderId) {
+      void this.ctx.orderManager.cancelCrashSafetyStop(this.ctx.symbol).catch(() => {});
+      this.crashSafetyOrderId = null;
+      this.crashSafetyPrice = null;
+    }
   }
 
   resetState(): void {
@@ -250,6 +263,8 @@ export class RealtimeExitHandler {
     this.lastNfsResult = null;
     this.proactiveLimitOrderId = null;
     this.proactiveLimitPrice = null;
+    this.crashSafetyOrderId = null;
+    this.crashSafetyPrice = null;
     if (this.nfsStateMachine) {
       this.nfsStateMachine.reset();
     }
@@ -304,6 +319,30 @@ export class RealtimeExitHandler {
     this.realtimeExitInProgress = true;
     try {
       const symbol = this.ctx.symbol;
+
+      // ═══════════════════════════════════════════════════════════════════
+      // V5.136: Check crash safety STOP fill FIRST (critical path)
+      // ═══════════════════════════════════════════════════════════════════
+      if (this.crashSafetyOrderId) {
+        const crashFill = await this.ctx.orderManager.checkCrashSafetyFill(symbol, position, 0);
+        if (crashFill?.filled) {
+          this.stop();
+          logger.warn(
+            `🚨🚨🚨 [${symbol}] CRASH SAFETY STOP FILLED @ $${crashFill.avgPrice.toFixed(4)} | ` +
+            `crashPrice=$${this.crashSafetyPrice?.toFixed(4)} | FLASH CRASH DETECTED`
+          );
+          this.crashSafetyOrderId = null;
+          this.crashSafetyPrice = null;
+          await this.ctx.closePosition(position, crashFill.avgPrice, EXIT_TRAIL_CRASH_SAFETY);
+          return;
+        }
+        // If order was cancelled (e.g. by cancelAllOrders), orderManager clears its state.
+        // Detect this and clear local state — will be re-placed below.
+        if (!this.ctx.orderManager.getCrashSafetyOrderId()) {
+          this.crashSafetyOrderId = null;
+          this.crashSafetyPrice = null;
+        }
+      }
 
       // WebSocket ticker is 0 weight; if WS is not receiving data we do nothing here.
       const ws = getBinanceWebSocket();
@@ -547,6 +586,47 @@ export class RealtimeExitHandler {
         }
 
         // ═══════════════════════════════════════════════════════════════════
+        // V5.136: CRASH SAFETY STOP — place/update when trailing is active
+        // Permanent STOP_MARKET 3% below trailing stop. Flash crash insurance.
+        // Re-placed on every trailing ratchet (>0.1% move) and after cancelAllOrders.
+        // ═══════════════════════════════════════════════════════════════════
+        if (updatedPosition.trailingActive && updatedPosition.appTrailingStop) {
+          const crashEnabled = (MomentumConfig.EXIT as any).CRASH_SAFETY_STOP_ENABLED ?? false;
+          if (crashEnabled) {
+            const crashDistPct = (MomentumConfig.EXIT as any).CRASH_SAFETY_DISTANCE_PCT ?? 3.0;
+            const side = updatedPosition.side;
+            const trailingStop = updatedPosition.appTrailingStop;
+            const newCrashPrice = side === 'long'
+              ? trailingStop * (1 - crashDistPct / 100)
+              : trailingStop * (1 + crashDistPct / 100);
+
+            if (!this.crashSafetyOrderId) {
+              // Place new crash safety (first time or after cancel)
+              const orderSide: 'buy' | 'sell' = side === 'long' ? 'sell' : 'buy';
+              const orderId = await this.ctx.orderManager.placeCrashSafetyStop(
+                symbol, orderSide, updatedPosition.qty, newCrashPrice,
+              );
+              if (orderId) {
+                this.crashSafetyOrderId = orderId;
+                this.crashSafetyPrice = newCrashPrice;
+                logger.info(`🛡️ [${symbol}] Crash safety STOP placed @ $${newCrashPrice.toFixed(4)} (trail=$${trailingStop.toFixed(4)} -${crashDistPct}%)`);
+              }
+            } else if (this.crashSafetyPrice && Math.abs(newCrashPrice - this.crashSafetyPrice) / this.crashSafetyPrice > 0.001) {
+              // Trailing ratcheted — update crash safety (cancel + re-place)
+              await this.ctx.orderManager.cancelCrashSafetyStop(symbol);
+              const orderSide: 'buy' | 'sell' = side === 'long' ? 'sell' : 'buy';
+              const orderId = await this.ctx.orderManager.placeCrashSafetyStop(
+                symbol, orderSide, updatedPosition.qty, newCrashPrice,
+              );
+              if (orderId) {
+                this.crashSafetyOrderId = orderId;
+                this.crashSafetyPrice = newCrashPrice;
+              }
+            }
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
         // V5.110: EXHAUSTION-BASED PROACTIVE STOP
         // Runs on CLOSED candles (reliable data, not partial candle noise).
         // When momentum exhaustion is detected, places STOP_MARKET at trailing.
@@ -725,7 +805,11 @@ export class RealtimeExitHandler {
           // V5.62: NFS_ADAPTIVE EXIT LOGIC (matches backtest)
           // ═══════════════════════════════════════════════════════════════════
           if (nfsResult.shouldExitImmediately) {
-            // HIGH confidence - exit immediately at trailing stop price
+            // HIGH confidence — exit immediately at trailing stop price (target).
+            // V5.92/V5.134 lesson: trailingStopPrice is the TARGET the system achieves via
+            // proactive STOP_MARKET placement. Exiting on 1m is faster than waiting for 15m,
+            // saving time. The exhaustion detector should have placed a STOP_MARKET at this
+            // price already; NFS HIGH confirms the breach is real, not noise.
             this.stop();
             const execPx = trailingStopPrice;
             logger.info(
