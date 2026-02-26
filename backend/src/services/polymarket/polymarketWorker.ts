@@ -679,6 +679,19 @@ async function processUnredeemedTokens(prisma: PrismaClient): Promise<void> {
       continue;
     }
 
+    // Check if oracle already confirmed this as a LOSS — tokens are worthless, stop retrying
+    if (u.attempts > 0 && u.attempts % 3 === 0) {
+      const dbRow = await prisma.polymarketPrediction.findFirst({
+        where: { windowStart: new Date(u.windowStart), symbol: u.symbol, userId: u.userId },
+        select: { isCorrect: true },
+      });
+      if (dbRow?.isCorrect === false) {
+        log.info(`UNREDEEMED [${u.userId.slice(0, 8)}]: ${u.slug} confirmed LOSS by oracle — removing from queue`);
+        toRemove.push(i);
+        continue;
+      }
+    }
+
     const age = now - u.addedAt;
     const retryInterval = age < 10 * 60 * 1000 ? 30_000 : 2 * 60 * 1000;
     if (now - u.lastAttemptAt < retryInterval) continue;
@@ -1133,6 +1146,16 @@ async function tick(prisma: PrismaClient): Promise<void> {
       }
     }
 
+    // Pre-fetch balances ONCE per user before the symbol loop (avoid per-symbol API calls + eventual consistency issues)
+    const userBalanceCache = new Map<string, number>();
+    {
+      const activeUsers = await getActivePolymarketUserIds(prisma);
+      for (const userId of activeUsers) {
+        const { balance } = await getPolymarketBalance(prisma, userId);
+        userBalanceCache.set(userId, balance);
+      }
+    }
+
     for (const { sym, result, odds, slug } of tradeable) {
       if (!result || !odds) continue;
 
@@ -1153,7 +1176,7 @@ async function tick(prisma: PrismaClient): Promise<void> {
       );
 
       // Per-user live trading
-      const activeUsers = await getActivePolymarketUserIds(prisma);
+      const activeUsers = [...userBalanceCache.keys()];
       let anyUserFilled = false;
 
       for (const userId of activeUsers) {
@@ -1175,9 +1198,10 @@ async function tick(prisma: PrismaClient): Promise<void> {
 
         activeLiveBetByUser.set(betKey, start);
 
-        const { balance } = await getPolymarketBalance(prisma, userId);
-        if (balance < liveConfig.amount) {
-          log.warn(`LIVE MODE ${uLabel} [${sym}]: insufficient balance $${balance.toFixed(2)} < $${liveConfig.amount} — skipping`);
+        // Use pre-fetched balance (avoids per-symbol API call + eventual consistency issues)
+        const cachedBalance = userBalanceCache.get(userId) ?? 0;
+        if (cachedBalance < liveConfig.amount) {
+          log.warn(`LIVE MODE ${uLabel} [${sym}]: insufficient balance $${cachedBalance.toFixed(2)} < $${liveConfig.amount} — skipping`);
           activeLiveBetByUser.delete(betKey);
           continue;
         }
@@ -1190,7 +1214,9 @@ async function tick(prisma: PrismaClient): Promise<void> {
         );
 
         if (betResult.success) {
-          log.info(`LIVE BET OK ${uLabel} [${sym}]: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)} (score=${score}, cap=${tierMax})`);
+          // Deduct locally so next symbols see reduced balance (no extra API call)
+          userBalanceCache.set(userId, cachedBalance - liveConfig.amount);
+          log.info(`LIVE BET OK ${uLabel} [${sym}]: orderId=${betResult.orderId} @ CLOB ${betResult.executionPrice?.toFixed(3)} (score=${score}, cap=${tierMax}) | remaining≈$${(cachedBalance - liveConfig.amount).toFixed(2)}`);
           anyUserFilled = true;
           if (betResult.executionPrice) {
             w.executionPrice = betResult.executionPrice;
