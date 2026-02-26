@@ -563,7 +563,14 @@ export async function placePolymarketBet(
     // FOK fails when the order book can't fill $10 at the ask price in one shot.
     // GTC sits in the book and fills as liquidity comes in.
     // Note: createAndPostOrder uses UserOrder (size in tokens), not UserMarketOrder (amount in USDC).
-    const tokenSize = amount / clobAsk; // Convert USDC amount to token quantity
+    const CLOB_MIN_TOKEN_SIZE = 5; // Polymarket CLOB minimum order size
+    let tokenSize = amount / clobAsk; // Convert USDC amount to token quantity
+    if (tokenSize < CLOB_MIN_TOKEN_SIZE) {
+      const adjustedAmount = Math.ceil(CLOB_MIN_TOKEN_SIZE * clobAsk * 100) / 100;
+      log.info(`Token size ${tokenSize.toFixed(2)} < ${CLOB_MIN_TOKEN_SIZE} min — bumping $${amount} → $${adjustedAmount}`);
+      amount = adjustedAmount;
+      tokenSize = CLOB_MIN_TOKEN_SIZE;
+    }
     const order = {
       tokenID: tokenId,
       price: clobAsk,
@@ -641,7 +648,14 @@ export async function placeGtcLimitBuy(
 
   try {
     const client = buildClient(creds);
-    const tokenSize = amount / limitPrice;
+    const CLOB_MIN_TOKEN_SIZE = 5;
+    let tokenSize = amount / limitPrice;
+    if (tokenSize < CLOB_MIN_TOKEN_SIZE) {
+      const adjustedAmount = Math.ceil(CLOB_MIN_TOKEN_SIZE * limitPrice * 100) / 100;
+      log.info(`Limit token size ${tokenSize.toFixed(2)} < ${CLOB_MIN_TOKEN_SIZE} min — bumping $${amount} → $${adjustedAmount}`);
+      amount = adjustedAmount;
+      tokenSize = CLOB_MIN_TOKEN_SIZE;
+    }
     const order = {
       tokenID: tokenId,
       price: limitPrice,
