@@ -801,6 +801,12 @@ export async function sellWinningTokens(
       throw priceErr;
     }
 
+    // Bid = 0 means CLOB SDK got 404 but didn't throw (logs error internally).
+    // Treat as market closed so caller falls through to CTF redeem immediately.
+    if (clobBid === 0) {
+      return { success: false, error: 'Market closed (orderbook removed after resolution)' };
+    }
+
     if (clobBid < minBid) {
       return { success: false, error: `Bid too low (${clobBid.toFixed(3)} < ${minBid})` };
     }
