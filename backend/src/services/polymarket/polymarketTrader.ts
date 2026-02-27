@@ -72,7 +72,7 @@ const RELAYER_URL = 'https://relayer-v2.polymarket.com/';
 export const CLOB_PRICE_TIERS = [
   { minScore: 80, maxPrice: 0.85 },
   { minScore: 70, maxPrice: 0.82 },
-  { minScore: 50, maxPrice: 0.78 },
+  { minScore: 65, maxPrice: 0.78 },
 ] as const;
 
 /** Get the maximum acceptable CLOB price for a given confidence score. */
@@ -80,7 +80,7 @@ export function getMaxPriceForScore(score: number): number {
   for (const tier of CLOB_PRICE_TIERS) {
     if (score >= tier.minScore) return tier.maxPrice;
   }
-  return 0.50; // fallback — should never hit (MIN_SCORE = 50 in worker)
+  return 0.50; // fallback — should never hit (MIN_SCORE = 65 in worker)
 }
 
 // Keep MAX_CLOB_PRICE for hedge bets (they don't have a score — use the lowest tier)
@@ -615,9 +615,9 @@ export async function placePolymarketBet(
       return { success: false, error: 'CLOB price unavailable — skipping bet' };
     }
 
-    // V5.135: Lowered floor from 0.55 to 0.40 — prices near 50c have the BEST risk/reward
-    // (breakeven at 50% WR). Scoring already filters weak signals. Only reject aberrant prices.
-    const MIN_CLOB_PRICE = 0.40;
+    // V5.138: Raised from 0.40 to 0.60 — live data (104 trades): 0.40-0.55 = 50% WR (coin flip),
+    // 0.55-0.65 = 50% WR/-$9.96. Only 0.65+ is profitable. Floor at 0.60 as safety margin.
+    const MIN_CLOB_PRICE = 0.60;
     if (!skipEvCheck && clobAsk < MIN_CLOB_PRICE) {
       log.warn(`Price too low: CLOB=${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE} — aberrant price, skipping`);
       return { success: false, error: `Price too low (${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE})` };
@@ -1112,8 +1112,8 @@ export async function simulatePolymarketBet(
       return { success: false, error: 'CLOB price unavailable' };
     }
 
-    // Same guards as placePolymarketBet (V5.135: lowered from 0.55 to 0.40):
-    const MIN_CLOB_PRICE = 0.40;
+    // Same guards as placePolymarketBet (V5.138: raised from 0.40 to 0.60):
+    const MIN_CLOB_PRICE = 0.60;
     if (clobAsk < MIN_CLOB_PRICE) {
       return { success: false, clobAsk, error: `Price too low (${clobAsk.toFixed(3)} < ${MIN_CLOB_PRICE})` };
     }

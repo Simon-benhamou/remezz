@@ -28,8 +28,8 @@ const POLL_INTERVAL_MS = 1000;               // 1 second
 const BINANCE_SYMBOL = (s: string) => `${s}USDT`;
 
 // ─── Scoring threshold ───────────────────────────────────────────────────────
-// V5.130: Lowered from 65 → 50 (backtest 30d: 80.6% WR, +7.6pp edge over CLOB breakeven, all buckets +EV)
-const MIN_SCORE = 50;
+// V5.138: Raised from 50 → 65 (104 live trades analysis: conf 55-64 = 60% WR/-$15.76 PnL, conf 65+ = 87% WR/+$22.28 PnL)
+const MIN_SCORE = 65;
 
 // ─── Market condition filter (V5.128: calibrated on backtest) ────────────────
 const MARKET_FILTER_ENABLED = false;  // V5.131: disabled — BT 30d shows +174% PnL without (79.1% WR, $731 vs $266)
