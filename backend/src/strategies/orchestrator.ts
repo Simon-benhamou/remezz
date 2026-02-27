@@ -1398,21 +1398,24 @@ export class AgentOrchestrator {
             await this.closePosition(this.position!, highExitPrice, EXIT_TRAIL_NFS_HIGH_15M);
             return;
           } else if (nfsResult.confidence === 'MEDIUM' && breachCount >= 1) {
-            // V5.81 PARITY FIX: Use best of trailing stop price or current price
-            // Parity data shows MED exits lose 3-5% vs backtest because candle close
-            // is worse than trailing stop price. Use trailing price when it's better.
-            const medExitPrice = this.position!.side === 'long'
-              ? Math.max(trailingStopPrice, currentPrice)
-              : Math.min(trailingStopPrice, currentPrice);
-            logger.info(`⚡⚡ [${symbol}] 15m NFS MEDIUM EXIT | exec=${medExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)})`);
+            // V5.137: Paper uses candle close (market order, no exchange orders).
+            // Live uses best of trailing/close (proactive STOP_MARKET may fill at trailing).
+            const medExitPrice = this.config.mode === 'paper'
+              ? currentPrice
+              : (this.position!.side === 'long'
+                ? Math.max(trailingStopPrice, currentPrice)
+                : Math.min(trailingStopPrice, currentPrice));
+            logger.info(`⚡⚡ [${symbol}] 15m NFS MEDIUM EXIT | exec=${medExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)}, mode=${this.config.mode})`);
             await this.closePosition(this.position!, medExitPrice, EXIT_TRAIL_NFS_MED_15M);
             return;
           } else if (breachCount >= 2) {
-            // V5.81: Same fix for LOW - use best of trailing stop or close
-            const lowExitPrice = this.position!.side === 'long'
-              ? Math.max(trailingStopPrice, currentPrice)
-              : Math.min(trailingStopPrice, currentPrice);
-            logger.info(`⚡ [${symbol}] 15m NFS LOW EXIT (2-close) | exec=${lowExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)})`);
+            // V5.137: Same paper realism fix for LOW exits
+            const lowExitPrice = this.config.mode === 'paper'
+              ? currentPrice
+              : (this.position!.side === 'long'
+                ? Math.max(trailingStopPrice, currentPrice)
+                : Math.min(trailingStopPrice, currentPrice));
+            logger.info(`⚡ [${symbol}] 15m NFS LOW EXIT (2-close) | exec=${lowExitPrice.toFixed(4)} (trail=${trailingStopPrice.toFixed(4)}, close=${currentPrice.toFixed(4)}, mode=${this.config.mode})`);
             await this.closePosition(this.position!, lowExitPrice, EXIT_TRAIL_NFS_LOW_15M);
             return;
           } else {

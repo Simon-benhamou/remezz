@@ -768,3 +768,13 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Propagation**: PRE_BREACH → NFS state machine only (RT handler). Proximity → MomentumExhaustionCalculator (RT + BT + 1m replay, auto-aligned). Exhaustion 25/15 → config (auto-aligned). Crash safety → RT handler (live) + orchestrator (paper).
   - **Sharp reversal enabled**: 6th exhaustion component (`EXHAUSTION_SHARP_REVERSAL_ENABLED: true`). Detects big opposite-direction candles (body > 2x avg + ROC threshold). BT validation: V136+Sharp vs V136: +$1K PnL ($87,721 vs $86,711), -2.9pp DD (38.0% vs 40.9%), +18 proactive exits (110 vs 92), Sharpe 3.44 vs 3.42. Net positive with no downside.
   - **Files**: `momentumConfig.ts`, `nfsRealtimeExit.ts`, `momentumExhaustion.ts`, `exitReasons.ts`, `exchangeOrderManager.ts`, `realtimeExitHandler.ts`, `orchestrator.ts`, `backtestService.ts`, `trailingReplay1m.ts`
+
+- V5.137: Paper realistic NFS MED/LOW exit pricing:
+  - **Problem**: Paper NFS MED and LOW exits used `Math.max(trailingStopPrice, currentPrice)` for LONG (and min for SHORT) — always picking the best price. This is unrealistic: paper has no exchange orders, so it can't achieve trailing stop price via proactive STOP_MARKET. Result: paper systematically better than BT (e.g., FET +7.98% paper vs +6% BT on same NFS MED exit).
+  - **Fix**: Paper now uses `currentPrice` (candle close = market order) for NFS MED and LOW exits, matching the existing NFS HIGH paper behavior (V5.87). Live keeps `max/min(trailing, close)` since proactive stops CAN fill at trailing price.
+  - **Pricing table**:
+    - NFS HIGH: paper=`currentPrice`, live=`trailingStopPrice`, BT=`trailingStopPrice`
+    - NFS MED: paper=`currentPrice` (was `max/min`), live=`max/min(trail,close)`, BT=`current.close`
+    - NFS LOW: paper=`currentPrice` (was `max/min`), live=`max/min(trail,close)`, BT=`current.close`
+  - **Impact**: Paper NFS MED/LOW results now aligned with BT (both use candle close). Paper is realistic; live is optimistic (justified by proactive stops).
+  - **File**: `orchestrator.ts`
