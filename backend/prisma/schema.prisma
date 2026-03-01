@@ -22,7 +22,6 @@ model User {
   reports                DailyReport[]
   apiKeys                UserApiKey[]
   settings               UserSetting[]
-  polymarketPredictions  PolymarketPrediction[]
 
   @@index([username])
   @@index([email])
@@ -356,39 +355,6 @@ model TradeParityResult {
   @@index([symbol, verifiedAt])
 }
 
-model PolymarketPrediction {
-  id              Int      @id @default(autoincrement())
-  userId          String?
-  createdAt       DateTime @default(now())
-  symbol          String   @default("BTC")
-  windowStart     DateTime
-  windowEnd       DateTime
-  startPrice      Float
-  endPrice        Float?
-  prediction      String?
-  confidence      Int?
-  actualResult    String?
-  entryOdds       Float?
-  executionPrice  Float?            // Actual CLOB price paid (differs from Gamma entryOdds)
-  tokenId         String?           // CLOB token ID (for auto-sell after WIN)
-  betAmount       Float?            // USDC amount bet (for dollar PnL calculation)
-  simulatedPnl    Float?
-  realPnl         Float?            // Actual USDC in - out (null = not settled)
-  usdcReceived    Float?            // USDC received from selling winning tokens
-  sellPrice       Float?            // CLOB bid price at time of sell
-  soldAt          DateTime?         // When the sell was executed
-  scoreBreakdown  Json?
-  isCorrect       Boolean?
-  skipped         Boolean  @default(false)
-  skipReason      String?
-  polymarketSlug  String?
-  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([windowStart])
-  @@index([createdAt])
-  @@index([symbol, createdAt])
-  @@index([userId, createdAt])
-}
 
 enum AgentActionStatus {
   pending

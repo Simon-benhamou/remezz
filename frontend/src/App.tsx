@@ -16,7 +16,6 @@ import ReportsPage from '@/pages/ReportsPage';
 import SessionCockpitPage from '@/pages/SessionCockpitPageNew';
 import FeedPage from '@/pages/FeedPage';
 import BacktestPage from '@/pages/BacktestPage';
-import PolymarketPage from '@/pages/PolymarketPage';
 import SettingsPage from '@/pages/SettingsPage';
 import { useAppStore } from '@/store';
 import { api } from '@/api';
@@ -94,7 +93,6 @@ function AuthenticatedApp() {
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/feed" element={<FeedPage />} />
           <Route path="/backtest" element={<BacktestPage />} />
-          <Route path="/predictions" element={<PolymarketPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/operations" replace />} />
         </Routes>

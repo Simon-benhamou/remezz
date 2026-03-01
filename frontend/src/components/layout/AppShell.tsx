@@ -19,7 +19,6 @@ import {
   Moon,
   Radio,
   Settings,
-  Sparkles,
   Sun,
   X,
 } from 'lucide-react';
@@ -84,7 +83,6 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/reports', label: 'Reports', icon: BarChart },
   { path: '/feed', label: 'Activity', icon: Radio },
   { path: '/backtest', label: 'Simulator', icon: LineChart },
-  { path: '/predictions', label: 'Predictions', icon: Sparkles },
 ];
 
 const SETTINGS_ITEM: NavItem = { path: '/settings', label: 'Settings', icon: Settings };
@@ -100,7 +98,6 @@ function resolveActiveKey(pathname: string): string {
   if (pathname.startsWith('/reports')) return '/reports';
   if (pathname.startsWith('/feed')) return '/feed';
   if (pathname.startsWith('/backtest')) return '/backtest';
-  if (pathname.startsWith('/predictions')) return '/predictions';
   if (pathname.startsWith('/settings')) return '/settings';
   return '/operations';
 }

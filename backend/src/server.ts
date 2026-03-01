@@ -30,8 +30,6 @@ import { router as perfRouter } from "./routes/perf.js";
 import { router as marketRouter } from "./routes/market.js";
 import portfolioRouter from "./routes/portfolio.js";
 import { router as backtestRouter } from "./routes/backtest.js";
-import { createPolymarketRouter } from "./routes/polymarket.js";
-import { startPolymarketWorker } from "./services/polymarket/polymarketWorker.js";
 
 // Services
 import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded, getBalanceFromWebSocket, seedKlinesFromWebSocket, toBinanceSymbolId } from "./services/binanceWebSocket.js";
@@ -309,7 +307,6 @@ app.use("/api/perf", perfRouter);
 app.use("/api/market", marketRouter);
 app.use("/api/portfolio", portfolioRouter);
 app.use("/api/backtest", backtestRouter);
-app.use("/api/polymarket", createPolymarketRouter(prisma));
 
 // ============================================
 // AGENT MANAGEMENT
@@ -4505,13 +4502,6 @@ async function runStartupSequence(): Promise<void> {
 
   logger.info('✅ Startup complete - BinanceRestQueue managing all REST calls');
   logger.info(`📊 Queue stats: ${JSON.stringify(binanceRestQueue.getStats())}`);
-  // Polymarket 5-min prediction experiment (must start after WS + markets are ready)
-  try {
-    startPolymarketWorker(prisma);
-  } catch (err: unknown) {
-    logger.error(`Polymarket worker failed to start: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
   // If we're using minimal markets, try to upgrade to full markets later when ban expires
   if (!marketsLoaded && isIpBanned()) {
     const banExpiry = getIpBanExpiry();
