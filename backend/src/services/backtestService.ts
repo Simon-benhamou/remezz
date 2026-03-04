@@ -223,6 +223,11 @@ export interface BacktestParams {
   // V5.113: Post-process trailing exits at 1m resolution (default true)
   // Fetches 1m candles per trailing trade window and replays exhaustion + STOP_MARKET
   postProcess1m?: boolean;
+  // V5.146: Circuit breaker — pause entries after N losses
+  // dailyLossLimit: max losses before triggering cooldown
+  // lossBreakHours: hours to pause (0 or undefined = rest of day)
+  dailyLossLimit?: number;
+  lossBreakHours?: number;
 }
 
 export interface BacktestTrade {
@@ -1080,6 +1085,13 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
   const TRADES_TO_SKIP = 1;               // Skip this many trades, then resume
   let tradeId = 0;
 
+  // V5.146: Circuit breaker — pause entries after N losses
+  const dailyLossLimit = params.dailyLossLimit ?? 0; // 0 = disabled
+  const lossBreakMs = (params.lossBreakHours ?? 0) * 3600_000; // 0 = rest of day
+  let dailyLossCount = 0;
+  let dailyLossDay = '';
+  let circuitBreakerUntil = 0; // timestamp until which entries are blocked
+
   // V5.110: Exhaustion calculator for proactive trailing stop simulation
   const exhaustionEnabled = (MomentumConfig.EXIT as any).EXHAUSTION_STOP_ENABLED ?? true;
   const exhaustionCalc = exhaustionEnabled ? new MomentumExhaustionCalculator({
@@ -1150,6 +1162,12 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
     // server main event loop. The ~50K yields added ~25s of overhead per run (37%).
 
     const day = new Date(btcCandle.timestamp).toISOString().slice(0, 10);
+
+    // V5.146: Reset daily circuit breaker on new day (only for day-mode)
+    if (dailyLossLimit > 0 && !lossBreakMs && day !== dailyLossDay) {
+      dailyLossCount = 0;
+      dailyLossDay = day;
+    }
 
     // Track equity
     const totalEquity = capital + capitalInUse;
@@ -1370,7 +1388,11 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
                     });
 
                     if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
-                    else { consecutiveLosers++; if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; } }
+                    else {
+                      consecutiveLosers++; dailyLossCount++;
+                      if (lossBreakMs && dailyLossLimit > 0 && dailyLossCount >= dailyLossLimit) { circuitBreakerUntil = btcCandle.timestamp + lossBreakMs; dailyLossCount = 0; }
+                      if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; }
+                    }
 
                     for (const multiPos of multiPositions[symbol]) {
                       const multiHoldBars = idx - multiPos.entryIdx;
@@ -1483,7 +1505,11 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
                 });
 
                 if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
-                else { consecutiveLosers++; if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; } }
+                else {
+                  consecutiveLosers++; dailyLossCount++;
+                  if (lossBreakMs && dailyLossLimit > 0 && dailyLossCount >= dailyLossLimit) { circuitBreakerUntil = btcCandle.timestamp + lossBreakMs; dailyLossCount = 0; }
+                  if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) { tradesToSkip = TRADES_TO_SKIP; consecutiveLosers = 0; }
+                }
 
                 for (const multiPos of multiPositions[symbol]) {
                   const multiHoldBars = idx - multiPos.entryIdx;
@@ -1659,6 +1685,8 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
             consecutiveLosers = 0;
           } else {
             consecutiveLosers++;
+            dailyLossCount++; // V5.146: Track losses for circuit breaker
+            if (lossBreakMs && dailyLossLimit > 0 && dailyLossCount >= dailyLossLimit) { circuitBreakerUntil = btcCandle.timestamp + lossBreakMs; dailyLossCount = 0; }
             // Trigger skip-N rule when threshold reached
             if (consecutiveLosers >= CONSECUTIVE_LOSER_THRESHOLD) {
               tradesToSkip = TRADES_TO_SKIP;
@@ -1957,6 +1985,18 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           // We're in skip mode - clear all candidates and decrement counter
           signalCandidates.length = 0;
           tradesToSkip--;
+        }
+
+        // V5.146: Circuit breaker — pause entries after N losses
+        if (!parityMode && dailyLossLimit > 0) {
+          // Time-based: check if still in cooldown window
+          if (lossBreakMs && btcCandle.timestamp < circuitBreakerUntil) {
+            signalCandidates.length = 0;
+          }
+          // Day-based (lossBreakMs=0): check daily count
+          if (!lossBreakMs && dailyLossCount >= dailyLossLimit) {
+            signalCandidates.length = 0;
+          }
         }
 
         // V5.52: In parity mode, enter on FIRST signal chronologically (like live does)

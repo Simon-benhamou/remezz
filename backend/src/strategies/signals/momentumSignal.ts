@@ -853,6 +853,30 @@ export function checkMomentumSignal(
       }
     }
 
+    // V5.146: Consecutive red BTC candles — require confirmed downtrend before shorting
+    const shortMinConsecRed = (eqConfigShort as any).SHORT_MIN_CONSEC_RED ?? 0;
+    if (shortMinConsecRed > 0 && btcCandles.length >= 10) {
+      let consecRed = 0;
+      for (let i = btcCandles.length - 1; i >= 1; i--) {
+        if (btcCandles[i].close < btcCandles[i].open) consecRed++;
+        else break;
+      }
+      if (consecRed < shortMinConsecRed) {
+        return { valid: false, reason: `v5.146_short_consec_red(${consecRed} < ${shortMinConsecRed})`, features };
+      }
+    }
+
+    // V5.146: BTC 24h drop filter — skip SHORT if BTC already crashed too much (exhausted move)
+    const shortBtcDrop24hMax = (eqConfigShort as any).SHORT_BTC_DROP_24H_MAX ?? 0;
+    if (shortBtcDrop24hMax < 0 && btcCandles.length >= 97) {
+      const btcNow = btcCandles[btcCandles.length - 1].close;
+      const btc24hAgo = btcCandles[btcCandles.length - 97].close;
+      const btcChange24h = (btcNow - btc24hAgo) / btc24hAgo * 100;
+      if (btcChange24h < shortBtcDrop24hMax) {
+        return { valid: false, reason: `v5.146_btc_drop_24h(${btcChange24h.toFixed(1)}% < ${shortBtcDrop24hMax}%)`, features };
+      }
+    }
+
     // V5.144: ROC Acceleration filter for SHORT — require downward momentum ACCELERATING
     const eqROCShort = MomentumConfig.ENTRY_QUALITY as any;
     if (eqROCShort.ROC_ACCEL_ENABLED) {

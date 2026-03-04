@@ -195,6 +195,18 @@ export const MomentumConfig = {
     WICK_REJECTION_SHORT_ENABLED: true,  // V5.145: ON
     WICK_REJECTION_SHORT_THRESHOLD: 0.6, // V5.145: Lower wick > 60% of range = rejection (was 0.4)
 
+    // V5.146: Consecutive red BTC candles before SHORT — require confirmed downtrend
+    // Analysis: consecRed=0 → 45% WR, -$6,472. consecRed≥4 → 84% WR, +$6,578.
+    // Shorting without prior red candles = shorting into bounces.
+    SHORT_MIN_CONSEC_RED: 0,           // V5.146: Min consecutive red BTC candles (0 = disabled)
+
+    // V5.146: BTC 24h price change filter for SHORT — skip if BTC already crashed too much
+    // Analysis: BTC Δ24h < -5% → 35% WR on shorts (exhausted move, violent bounces)
+    // Skipping these = +$2,675 PnL (63 trades removed, 41 losers vs 22 winners)
+    SHORT_BTC_DROP_24H_MAX: -5,        // V5.146: Skip SHORT when BTC dropped >5% in 24h (exhausted move, violent bounces)
+    // Sweep: $5,119→$9,782 PnL (+91%), DD 42.4%→36.0% (-6.4pp), Sharpe 1.81→2.39
+    // Walk-forward: H1 +$377 (Sharpe 1.01→1.30), H2 +$2,343 (Sharpe 2.73→3.57, DD 37.5%→22.7%)
+
     // V5.144: ROC Acceleration filter — require momentum to be INCREASING (not just positive)
     // ROC1 current vs ROC1 previous: if current > prev = accelerating = REAL breakout
     // Post-hoc Cohen's d = 0.698. HIGH ROC accel: 91.7% WR, LOW: 54% WR.

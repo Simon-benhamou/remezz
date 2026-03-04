@@ -771,3 +771,20 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Per-symbol**: WIF $2,445, STX $2,281, DOT $956, IMX $477, AVAX $384, ADA $226, FET $181. RENDER -$878, XRP -$953.
   - **Propagation**: Both filters in shared `checkMomentumSignal()` → auto-aligned live/paper/backtest/parity. BE in shared `shouldExitPosition()` → auto-aligned.
   - **Files**: `momentumConfig.ts` (3 config values), `momentumSignal.ts` (filter code added by V5.144 agent, configs activated in V5.145)
+
+- V5.146: BTC 24h crash filter for SHORT + daily circuit breaker (tested & rejected):
+  - **BTC 24h drop filter for SHORT** (`SHORT_BTC_DROP_24H_MAX: -5`): Skip SHORT entries when BTC has already dropped >5% in last 24h. Exhausted moves produce violent counter-trend bounces that trigger our stop losses (35% WR on shorts during >5% drops).
+  - **Discovery**: November 2025 analysis — BTC crashed -17.6% but our SHORTs lost $1,806. Root cause: choppy crash with 3-5% intraday bounces hitting SL before trend resumed. Post-hoc feature analysis identified BTC Δ24h as strongest discriminator (Cohen's d = 0.37, 35% WR when Δ24h < -5%).
+  - **Sweep results** (12 configs, real compounded BT, Jan-Dec 2025, $2K, 5x, 9 symbols):
+    - **BTC24h>-5% (winner)**: 552 trades, 65.4% WR, **$9,782 PnL** (+91%), **36.0% DD** (-6.4pp), **Sharpe 2.39** (+0.58). SHORT PnL: $2,806→$7,022 (+$4,216).
+    - BTC24h>-4%: $8,250, 38.9% DD, Sharpe 2.41
+    - BTC24h>-3%: $7,700, 31.9% DD (best DD), Sharpe 2.35
+    - ConsecRed alone: ALL configs worse than baseline (DD increases, PnL drops)
+    - CR≥1 + 24h>-4%: Sharpe 2.48 (marginal +0.09 vs -4% alone, extra complexity)
+  - **Walk-forward PASS (both halves)**:
+    - H1 (Jan-Jun): $623→$999 (+$377), DD 42.4%→36.0% (-6.4pp), Sharpe 1.01→1.30
+    - H2 (Jul-Dec): $3,429→$5,772 (+$2,343), DD 37.5%→22.7% (-14.9pp), Sharpe 2.73→3.57
+  - **Daily circuit breaker REJECTED**: Tested stop-after-N-losses (1,2,3 losses/day) and time-based cooldowns (2-8h). None reduced DD — losses come from SL on already-open positions, not from new entries. Circuit breaker just kills profitable late-day trades.
+  - **ConsecRed filter REJECTED**: Requiring N consecutive red BTC candles before SHORT destroyed PnL in all configs. Removed too many good shorts that enter on the first red candle.
+  - **Propagation**: BTC 24h filter in shared `checkMomentumSignal()` → auto-aligned live/paper/backtest/parity. Circuit breaker code in `backtestService.ts` only (testing infrastructure, not deployed to live).
+  - **Files**: `momentumConfig.ts` (SHORT_BTC_DROP_24H_MAX), `momentumSignal.ts` (filter code), `backtestService.ts` (dailyLossLimit + lossBreakHours params)
