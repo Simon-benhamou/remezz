@@ -182,6 +182,32 @@ export const MomentumConfig = {
     // ADX rising: require ADX to be increasing (trend strengthening)
     ADX_RISING_ENABLED: true,          // V5.141: ON — BT: SL trades -36%, stagnant -37%, Sharpe 0.07→1.14
     ADX_RISING_LOOKBACK: 3,           // Compare ADX now vs N candles ago
+
+    // V5.145: ADX minimum for SHORT — require minimum trend strength before shorting
+    // Sweep: ADX_MIN=15 removes 22 weak SHORT trades → +$985 PnL, -5.5pp DD, +0.26 Sharpe
+    // Walk-forward: PARTIAL (H2 great, H1 marginal) — but baseline SHORT is already -$63 in H1
+    ADX_MIN_SHORT: 15,                // V5.145: Minimum ADX(14) for SHORT entries (was 0)
+
+    // V5.145: Wick rejection filter for SHORT — skip if lower wick signals buying pressure
+    // If lower_wick / range > threshold → skip (potential reversal bounce)
+    // Combo ADX15+WICK60: $4,547 PnL (+$2,681), Sharpe 1.72 (+0.57), DD 38.7% (-7.4pp)
+    // SHORT PnL: $502 → $2,593 (+$2,091). Walk-forward: H2 dominant, H1 marginal.
+    WICK_REJECTION_SHORT_ENABLED: true,  // V5.145: ON
+    WICK_REJECTION_SHORT_THRESHOLD: 0.6, // V5.145: Lower wick > 60% of range = rejection (was 0.4)
+
+    // V5.144: ROC Acceleration filter — require momentum to be INCREASING (not just positive)
+    // ROC1 current vs ROC1 previous: if current > prev = accelerating = REAL breakout
+    // Post-hoc Cohen's d = 0.698. HIGH ROC accel: 91.7% WR, LOW: 54% WR.
+    // MUST validate with real BT (post-hoc overstates — V5.143 lesson).
+    ROC_ACCEL_ENABLED: false,           // Default OFF — sweep first
+
+    // V5.144: RSI Divergence filter — reject signals with bearish/bullish divergence
+    // LONG: price Higher High but RSI(14) Lower High = exhausted momentum
+    // SHORT: price Lower Low but RSI(14) Higher Low = exhausted selling
+    // Post-hoc Cohen's d = 0.312. No divergence: 64.2% WR, Divergence: 42.7% WR.
+    RSI_DIVERGENCE_ENABLED: false,      // Default OFF — sweep first
+    RSI_DIVERGENCE_LOOKBACK: 10,        // Candles to look back for divergence comparison
+    RSI_DIVERGENCE_BUFFER: 2,           // RSI points buffer to avoid noise
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -381,7 +407,7 @@ export const MomentumConfig = {
     // V5.81: Breakeven move — eliminate losses on trades that prove direction
     // When trade reaches +BREAKEVEN_TRIGGER_PCT, move SL to entry + fees
     BREAKEVEN_ENABLED: true,
-    BREAKEVEN_TRIGGER_PCT: 1.0,       // Move SL to breakeven when +1% profit reached
+    BREAKEVEN_TRIGGER_PCT: 0.7,       // V5.145: Move SL to breakeven when +0.7% profit reached (was 1.0%, sweep showed +$338/+0.09 Sharpe, walk-forward stable)
     BREAKEVEN_OFFSET_PCT: 0.1,        // Offset above entry to cover fees (0.1%)
 
     PROFIT_TARGET_PCT: 3.0,      // Take Profit 3% → 15% avec 5x leverage

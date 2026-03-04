@@ -610,6 +610,37 @@ export function checkMomentumSignal(
       }
     }
 
+    // V5.144: ROC Acceleration filter — require momentum to be INCREASING
+    const eqROCLong = MomentumConfig.ENTRY_QUALITY as any;
+    if (eqROCLong.ROC_ACCEL_ENABLED) {
+      const prevCandle = candles[candles.length - 2];
+      const prevPrevCandle = candles[candles.length - 3];
+      if (prevCandle && prevPrevCandle) {
+        const roc1Current = prevCandle.close > 0 ? (current.close - prevCandle.close) / prevCandle.close : 0;
+        const roc1Prev = prevPrevCandle.close > 0 ? (prevCandle.close - prevPrevCandle.close) / prevPrevCandle.close : 0;
+        if (roc1Current <= roc1Prev) {  // NOT accelerating
+          return { valid: false, reason: `v5.144_roc_not_accelerating`, features };
+        }
+      }
+    }
+
+    // V5.144: RSI Divergence filter — reject LONG if price HH but RSI LH (bearish divergence)
+    if (eqROCLong.RSI_DIVERGENCE_ENABLED) {
+      const divLookback = eqROCLong.RSI_DIVERGENCE_LOOKBACK ?? 10;
+      const divBuffer = eqROCLong.RSI_DIVERGENCE_BUFFER ?? 2;
+      if (candles.length >= 30 + divLookback) {
+        const currentCloses = candles.slice(-30).map(c => c.close);
+        const currentRSI = calcRSI(currentCloses, 14);
+        const pastCloses = candles.slice(-30 - divLookback, -divLookback).map(c => c.close);
+        const pastRSI = calcRSI(pastCloses, 14);
+        const pastPrice = candles[candles.length - 1 - divLookback]?.close ?? current.close;
+        // LONG divergence: price Higher High but RSI Lower High
+        if (currentRSI !== null && pastRSI !== null && current.close > pastPrice && currentRSI < pastRSI - divBuffer) {
+          return { valid: false, reason: `v5.144_rsi_divergence_long(rsi=${currentRSI.toFixed(1)}<${pastRSI.toFixed(1)})`, features };
+        }
+      }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // V5.36: PATTERN FILTERS (2-Year Validated: +22.4pp WR)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -679,6 +710,7 @@ export function checkMomentumSignal(
 
     // ✅ ALL LONG CONDITIONS MET
     const distanceFromUpper = bb.upper > 0 ? (close - bb.upper) / bb.upper : 0;
+
     const confidence = Math.min(1, (volRatio / 3) * 0.3 + (roc10 / 0.04) * 0.3 + (distanceFromUpper * 50) * 0.2 + 0.2);
     return {
       valid: true,
@@ -787,6 +819,69 @@ export function checkMomentumSignal(
           reason: `v5.141_adx_not_rising(${adxNow.toFixed(1)} <= ${adxPrev.toFixed(1)})`,
           features
         };
+      }
+    }
+
+    // V5.144: ADX minimum for SHORT — require minimum trend strength
+    const adxMinShort = (eqConfigShort as any).ADX_MIN_SHORT ?? 0;
+    if (adxMinShort > 0) {
+      const adxVal = calcADX(candles, 14);
+      if (adxVal < adxMinShort) {
+        return {
+          valid: false,
+          reason: `v5.144_adx_min_short(${adxVal.toFixed(1)} < ${adxMinShort})`,
+          features
+        };
+      }
+    }
+
+    // V5.144: Wick rejection filter for SHORT — skip if lower wick = buying pressure
+    const wickRejShortEnabled = (eqConfigShort as any).WICK_REJECTION_SHORT_ENABLED ?? false;
+    if (wickRejShortEnabled) {
+      const wickRejThreshold = (eqConfigShort as any).WICK_REJECTION_SHORT_THRESHOLD ?? 0.4;
+      const candleRange = current.high - current.low;
+      if (candleRange > 0) {
+        const lowerWick = Math.min(current.open, current.close) - current.low;
+        const lowerWickRatio = lowerWick / candleRange;
+        if (lowerWickRatio > wickRejThreshold) {
+          return {
+            valid: false,
+            reason: `v5.144_wick_rejection_short(${(lowerWickRatio*100).toFixed(0)}% > ${(wickRejThreshold*100).toFixed(0)}%)`,
+            features
+          };
+        }
+      }
+    }
+
+    // V5.144: ROC Acceleration filter for SHORT — require downward momentum ACCELERATING
+    const eqROCShort = MomentumConfig.ENTRY_QUALITY as any;
+    if (eqROCShort.ROC_ACCEL_ENABLED) {
+      const prevCandleShort = candles[candles.length - 2];
+      const prevPrevCandleShort = candles[candles.length - 3];
+      if (prevCandleShort && prevPrevCandleShort) {
+        const roc1CurrentShort = prevCandleShort.close > 0 ? (current.close - prevCandleShort.close) / prevCandleShort.close : 0;
+        const roc1PrevShort = prevPrevCandleShort.close > 0 ? (prevCandleShort.close - prevPrevCandleShort.close) / prevPrevCandleShort.close : 0;
+        // For SHORT: we want price drop to be ACCELERATING (roc1Current < roc1Prev = more negative)
+        if (roc1CurrentShort >= roc1PrevShort) {  // NOT accelerating downward
+          return { valid: false, reason: `v5.144_roc_not_accelerating_short`, features };
+        }
+      }
+    }
+
+    // V5.144: RSI Divergence filter — reject SHORT if price LL but RSI HL (bullish divergence)
+    if (eqROCShort.RSI_DIVERGENCE_ENABLED) {
+      const divLookbackShort = eqROCShort.RSI_DIVERGENCE_LOOKBACK ?? 10;
+      const divBufferShort = eqROCShort.RSI_DIVERGENCE_BUFFER ?? 2;
+      if (candles.length >= 30 + divLookbackShort) {
+        const currentClosesShort = candles.slice(-30).map(c => c.close);
+        const currentRSIShort = calcRSI(currentClosesShort, 14);
+        const pastClosesShort = candles.slice(-30 - divLookbackShort, -divLookbackShort).map(c => c.close);
+        const pastRSIShort = calcRSI(pastClosesShort, 14);
+        const pastPriceShort = candles[candles.length - 1 - divLookbackShort]?.close ?? current.close;
+        // SHORT divergence: price Lower Low but RSI Higher Low
+        if (currentRSIShort !== null && pastRSIShort !== null && current.close < pastPriceShort && currentRSIShort > pastRSIShort + divBufferShort) {
+          return { valid: false, reason: `v5.144_rsi_divergence_short(rsi=${currentRSIShort.toFixed(1)}>${pastRSIShort.toFixed(1)})`, features };
+        }
       }
     }
 

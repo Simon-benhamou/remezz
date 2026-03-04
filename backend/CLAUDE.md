@@ -736,3 +736,38 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Why live wasn't affected**: In live mode, `checkCrashSafetyFill()` checks WS ORDER_TRADE_UPDATE events (ignores `lastPrice` param). Only paper mode uses the `lastPrice` comparison.
   - **Fix**: Moved crash safety check block to AFTER `currentPrice` is computed from WS ticker. Now passes `currentPrice` instead of `0`. The check only runs when we have a valid, recent price from WebSocket.
   - **File**: `realtimeExitHandler.ts`
+
+- V5.143: BB Breakout Depth Filter — **TESTED & REJECTED**:
+  - **Hypothesis**: SL pattern analysis (Cohen's d = 0.82) showed losing trades enter too close to BB band. Filter requiring minimum BB breakout depth (close - BB.upper) before entry should eliminate shallow breakout losers.
+  - **Tested**: 8 thresholds (0.05% to 0.30%) via real compounded BT, full year Jan-Dec 2025.
+  - **Results**: MARGINAL. Best config (BB>=0.05%) = $1,956 vs baseline $1,866 (+$90 only). Post-hoc analysis inflated expected gain (+745%) because sum-of-trade-PnL% ≠ compounded BT.
+  - **Walk-forward FAIL**: ALL configs go NEGATIVE in H1 (Jan-Jun). Not regime-stable.
+  - **Monthly stability**: No improvement — still 5/12 positive months.
+  - **Decision**: REMOVED from code. Post-hoc SL feature analysis is unreliable for filter design. The compounding effect + signal competition make single-feature filters much less impactful than post-hoc PnL% sums suggest.
+  - **Lesson**: V5.140 confirmed again — always validate with `runBacktestComputation()`, never trust post-hoc PnL% simulation.
+
+- V5.144: MQS (Momentum Quality Score) — **TESTED & REJECTED**:
+  - **Hypothesis**: Post-hoc analysis showed ROC Acceleration (Cohen's d = 0.698, HIGH: 91.7% WR) and RSI Divergence (d = 0.312) strongly discriminate winners from losers. Composite MQS >= 0.70 bucket: 85.6% WR.
+  - **Tested**: 8 configs (ROC Accel alone, RSI Div at LB=5/10/15, combos) via real compounded BT.
+  - **Results**: ROC Accel alone **DESTROYS** $1,250 PnL (Sharpe 0.72 vs 1.14). RSI Div LB=15 marginal (+$223). Combo Accel+RSI(LB=15) best Sharpe (1.28) but -$72 PnL.
+  - **Walk-forward**: H1 NEGATIVE for all configs (RSI Div LB=15: -$116 H1). H2 excellent but regime-dependent.
+  - **Decision**: Both filters remain OFF (`ROC_ACCEL_ENABLED: false`, `RSI_DIVERGENCE_ENABLED: false`). Post-hoc Cohen's d is unreliable for filter design — 3rd confirmation after V5.143 and V5.140.
+
+- V5.144: Trailing Activation Sweep — **TESTED, only BE=0.7% kept**:
+  - **Trailing activation lowered (0.4-0.8%)**: ALL levels HURT PnL. Act=0.4%: -$2,383. Act=0.8%: -$796. Reason: trades "protected" early would have been winners at 1.0% activation. SL savings (-$8K) dwarfed by trailing profit destruction (-$14K).
+  - **Breakeven trigger**: BE=0.3% catastrophic (41.6% WR). BE=0.5% harmful. **BE=0.7% only winner**: +$338 PnL, +0.09 Sharpe, same DD, walk-forward stable (H1: Sharpe 1.20 vs 1.02, H2: identical).
+  - **Decision**: `BREAKEVEN_TRIGGER_PCT: 1.0 → 0.7` applied in V5.145.
+
+- V5.145: SHORT quality filters + breakeven optimization:
+  - **BREAKEVEN_TRIGGER_PCT: 1.0 → 0.7**: Protects trades reaching +0.7% that never hit trailing activation (1.0%) from falling to full SL. Exit at +0.1% instead. Walk-forward stable.
+  - **ADX_MIN_SHORT: 0 → 15**: Requires minimum ADX(14) >= 15 for SHORT entries. Rejects shorts in trendless markets. Sweep: +$985 PnL, -5.5pp DD, +0.26 Sharpe alone.
+  - **WICK_REJECTION_SHORT: OFF → ON (threshold 60%)**: Rejects SHORT entries when lower wick > 60% of candle range (buying pressure signal). Sweep: +$1,314 PnL, +0.7pp DD, +0.31 Sharpe alone.
+  - **Combo ADX15+WICK60 results** (full year Jan-Dec 2025, $2K, 5x, 9 symbols):
+    - 606 trades, 62.4% WR, **$5,119 PnL** (+$3,253 vs V5.141), **38.7% DD** (-7.4pp), **Sharpe 1.81** (+0.67)
+    - LONG: 170 trades, 67.6% WR, $2,313 PnL
+    - SHORT: 436 trades, 60.3% WR, $2,806 PnL (was $502 in V5.141 — **+$2,304**)
+    - Monthly: 8/12 positive months (was ~5-6)
+  - **Walk-forward**: H2 dominant (Sharpe 2.73, SHORT $2,785). H1 positive ($623) but SHORT is -$847 (LONG compensates at $1,469). Filters are regime-dependent but net-positive full year.
+  - **Per-symbol**: WIF $2,445, STX $2,281, DOT $956, IMX $477, AVAX $384, ADA $226, FET $181. RENDER -$878, XRP -$953.
+  - **Propagation**: Both filters in shared `checkMomentumSignal()` → auto-aligned live/paper/backtest/parity. BE in shared `shouldExitPosition()` → auto-aligned.
+  - **Files**: `momentumConfig.ts` (3 config values), `momentumSignal.ts` (filter code added by V5.144 agent, configs activated in V5.145)

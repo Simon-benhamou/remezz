@@ -78,7 +78,7 @@ These limits must NEVER be weakened without explicit user approval:
 ```
 MAX_HOLD:        2880 min (48h) -- prevents infinite bag-holding
 EMERGENCY_SL:    baseSlPct * 2.5, capped at 2.5% -- exchange-side safety net
-BREAKEVEN:       moves SL to entry+0.1% when maxPnl >= 1.0% -- protects winners
+BREAKEVEN:       moves SL to entry+0.1% when maxPnl >= 0.7% -- protects winners (V5.145: was 1.0%)
 SKIP_N:          after 2 consecutive losers, skip 1 trade -- immune response
 TOXIC_HOURS:     UTC 4,5,9,18,21 -- statistically bad entry times
 TRAILING_TIERS:  progressive widening at +3%, +4%, +6% HWM -- let winners run
