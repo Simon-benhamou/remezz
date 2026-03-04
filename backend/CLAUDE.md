@@ -678,6 +678,7 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Removed from V5.131** (dilute combined PnL): UNI, ARB, NEAR, APT, ETH
   - **Files updated**: `momentumConfig.ts` (SYMBOLS 9, SIGNAL_TIER_A 5, LEVERAGE), `candleCache.ts` (SEED_SYMBOLS 10), `telegramReporter.ts` (REPORT_SYMBOLS 9), `backtest.ts` (presets/defaults), `AgentCreationModal.tsx` (V5.132 banner, 9 recommended), `BacktestPage.tsx` (9 defaults)
   - **Data files cleaned**: Deleted 15m/1h JSON files for APT, ARB, ETH, NEAR, UNI, BTC_1h, FET_1h, WIF_1h. Restored AVAX, IMX, ADA from git (deleted in V5.131).
+  - **SYMBOLS_NOT_COMPATIBLE fix**: ADA, IMX, AVAX were incorrectly left in `SYMBOLS_NOT_COMPATIBLE` from V5.131 era, blocking trades on 3 of the 9 optimal symbols. Removed. The NOT_COMPATIBLE list now has a guard comment to prevent recurrence.
 
 - V5.134: NFS HIGH exit price — REVERTED (trailingStopPrice is a target, not an illusion):
   - **Investigation**: DOT trade parity gap (+6.95%: BT 11.2% vs paper 4.2%). NFS HIGH exits used `trailingStopPrice` in BT/live but paper got candle close. Analysis showed live places MARKET order → fills at ~candle close. Attempted fix: use `current.close` everywhere for "honest" pricing.
@@ -714,3 +715,10 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
     - NFS LOW: paper=`currentPrice` (was `max/min`), live=`max/min(trail,close)`, BT=`current.close`
   - **Impact**: Paper NFS MED/LOW results now aligned with BT (both use candle close). Paper is realistic; live is optimistic (justified by proactive stops).
   - **File**: `orchestrator.ts`
+
+- V5.142: Fix crash safety STOP false trigger in paper mode:
+  - **Problem**: After deploy, all open paper positions immediately closed via crash safety at prices far below market (e.g., RENDER at $1.3644 when market was $1.42, STX at $0.2552 when market was $0.2638). Logs showed `crashPrice=$undefined`.
+  - **Root cause**: `realtimeExitHandler.ts:327` passed hardcoded `0` as `lastPrice` to `checkCrashSafetyFill()`. In paper mode (`exchangeOrderManager.ts:528-535`), the check is `lastPrice <= crashSafetyPrice` for LONG. With `lastPrice=0`, this is **always true** → crash safety "fills" on every RT check cycle (every ~200ms). The crash safety block ran BEFORE `currentPrice` was obtained from the WS ticker (line 380).
+  - **Why live wasn't affected**: In live mode, `checkCrashSafetyFill()` checks WS ORDER_TRADE_UPDATE events (ignores `lastPrice` param). Only paper mode uses the `lastPrice` comparison.
+  - **Fix**: Moved crash safety check block to AFTER `currentPrice` is computed from WS ticker. Now passes `currentPrice` instead of `0`. The check only runs when we have a valid, recent price from WebSocket.
+  - **File**: `realtimeExitHandler.ts`

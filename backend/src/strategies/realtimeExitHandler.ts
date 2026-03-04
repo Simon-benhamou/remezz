@@ -320,30 +320,6 @@ export class RealtimeExitHandler {
     try {
       const symbol = this.ctx.symbol;
 
-      // ═══════════════════════════════════════════════════════════════════
-      // V5.136: Check crash safety STOP fill FIRST (critical path)
-      // ═══════════════════════════════════════════════════════════════════
-      if (this.crashSafetyOrderId) {
-        const crashFill = await this.ctx.orderManager.checkCrashSafetyFill(symbol, position, 0);
-        if (crashFill?.filled) {
-          this.stop();
-          logger.warn(
-            `🚨🚨🚨 [${symbol}] CRASH SAFETY STOP FILLED @ $${crashFill.avgPrice.toFixed(4)} | ` +
-            `crashPrice=$${this.crashSafetyPrice?.toFixed(4)} | FLASH CRASH DETECTED`
-          );
-          this.crashSafetyOrderId = null;
-          this.crashSafetyPrice = null;
-          await this.ctx.closePosition(position, crashFill.avgPrice, EXIT_TRAIL_CRASH_SAFETY);
-          return;
-        }
-        // If order was cancelled (e.g. by cancelAllOrders), orderManager clears its state.
-        // Detect this and clear local state — will be re-placed below.
-        if (!this.ctx.orderManager.getCrashSafetyOrderId()) {
-          this.crashSafetyOrderId = null;
-          this.crashSafetyPrice = null;
-        }
-      }
-
       // WebSocket ticker is 0 weight; if WS is not receiving data we do nothing here.
       const ws = getBinanceWebSocket();
       const wsConnected = ws.isConnectedAndReceiving();
@@ -381,6 +357,32 @@ export class RealtimeExitHandler {
       if (!Number.isFinite(currentPrice) || currentPrice <= 0) return;
 
       this.ctx.setLastPrice(currentPrice);
+
+      // ═══════════════════════════════════════════════════════════════════
+      // V5.136: Check crash safety STOP fill (needs currentPrice from WS)
+      // V5.142 FIX: Moved AFTER currentPrice — was passing lastPrice=0
+      // which made paper mode always trigger (0 <= any price = true)
+      // ═══════════════════════════════════════════════════════════════════
+      if (this.crashSafetyOrderId) {
+        const crashFill = await this.ctx.orderManager.checkCrashSafetyFill(symbol, position, currentPrice);
+        if (crashFill?.filled) {
+          this.stop();
+          logger.warn(
+            `🚨🚨🚨 [${symbol}] CRASH SAFETY STOP FILLED @ $${crashFill.avgPrice.toFixed(4)} | ` +
+            `crashPrice=$${this.crashSafetyPrice?.toFixed(4)} | FLASH CRASH DETECTED`
+          );
+          this.crashSafetyOrderId = null;
+          this.crashSafetyPrice = null;
+          await this.ctx.closePosition(position, crashFill.avgPrice, EXIT_TRAIL_CRASH_SAFETY);
+          return;
+        }
+        // If order was cancelled (e.g. by cancelAllOrders), orderManager clears its state.
+        // Detect this and clear local state — will be re-placed below.
+        if (!this.ctx.orderManager.getCrashSafetyOrderId()) {
+          this.crashSafetyOrderId = null;
+          this.crashSafetyPrice = null;
+        }
+      }
 
       const rtTrailingEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_TRAILING_ENABLED ?? false);
       const rtStoplossEnabled = Boolean(MomentumConfig.EXIT.REALTIME_APP_EXIT_STOPLOSS_ENABLED ?? true);
