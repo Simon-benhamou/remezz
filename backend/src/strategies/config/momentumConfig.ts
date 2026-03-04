@@ -158,6 +158,20 @@ export const MomentumConfig = {
     MAX_CONSEC_DOWN: 6,          // V5.93: Max 6 (was 4)
   },
 
+  // V5.140: RANGE POSITION FILTER — reject entries in the "death zone" of the recent range
+  // Enabled permanently with V5.140 realistic BT pricing (NFS HIGH → candle.close).
+  // Validated OOS: H1 +322% PnL, H2 +597% PnL (OOS stronger than IS = structural).
+  // L/W ratio 2.3 full year, 3.2 OOS — removes 2-3x more losers than winners.
+  // Mid 40-80% of 20-candle range = 28-33% WR (death zone). Extremes = 65-69% WR.
+  // WHY: breakout strategy MUST enter at range extremes (breakout imminent), not mid-range (indecision).
+  // Per-symbol: ALL 9 symbols improved. Works for both LONG (L/W 2.0) and SHORT (L/W 2.7).
+  RANGE_POSITION_FILTER: {
+    ENABLED: true,               // V5.140: ON — validated with realistic exit pricing
+    DEATH_ZONE_LOW: 0.40,       // Reject if range position >= 40%
+    DEATH_ZONE_HIGH: 0.80,      // Reject if range position < 80%
+    LOOKBACK_CANDLES: 20,       // Swing range lookback (20 × 15m = 5h)
+  },
+
   // ═══════════════════════════════════════════════════════════════════════════
   // V5.64: WICK BREAKOUT EARLY ENTRY (2-Year Validated: +0.48% PnL/trade)
   // ═══════════════════════════════════════════════════════════════════════════
@@ -610,12 +624,11 @@ export const MomentumConfig = {
     'SOL/USDT:USDT',    // B: $1,212, 61.7% WR, Sharpe 1.19, PF 1.19
   ],
 
-  // V5.131: NOT COMPATIBLE — marginal or negative in combined multi-symbol backtest
+  // V5.132: NOT COMPATIBLE — marginal or negative in combined multi-symbol backtest
+  // NOTE: V5.132 optimal 9 (AVAX, FET, WIF, DOT, IMX, STX, ADA, RENDER, XRP) must NOT be in this list
   SYMBOLS_NOT_COMPATIBLE: [
-    'IMX/USDT:USDT',   // <$1000 in combined BT (good solo, loses signal competition)
     'SEI/USDT:USDT',   // Negative in combined BT (good solo, loses signal competition)
     'SUI/USDT:USDT',   // Marginal in combined BT
-    'ADA/USDT:USDT',   // <$1000 in combined BT
     'SONIC/USDT:USDT', // <$1000 in combined BT
     'DOGE/USDT:USDT',  // <$1000 in combined BT
     'BCH/USDT:USDT',   // <$1000 in combined BT
@@ -624,7 +637,6 @@ export const MomentumConfig = {
     'FTM/USDT:USDT',   // Rebranded to SONIC, 5 trades
     'OP/USDT:USDT',    // Marginal
     'LINK/USDT:USDT',  // Marginal
-    'AVAX/USDT:USDT',  // Marginal
     'TIA/USDT:USDT',   // Marginal
     'ATOM/USDT:USDT',  // Negative
     'BTC/USDT:USDT',   // Too few trades
