@@ -88,6 +88,7 @@ import { ExchangeSync } from './agent/exchangeSync.js';
 import { PositionCloser } from './agent/positionCloser.js';
 import { buildAgentState, type AgentStateResult, type TradeEvent } from './agent/agentState.js';
 import { getBtcDataService } from '../services/btcDataService.js';
+import { saveSignal, type SignalContext } from './signalLogger.js';
 
 // CapitalPool extracted to capitalPool.ts
 
@@ -1038,7 +1039,16 @@ export class AgentOrchestrator {
         await globalSignalRanker.waitForBatch(this.config.mode, this.config.userId);
 
         this.lastRejectReason = '';
-        await this.openPosition(signal.side, candles);
+        const signalCtx: SignalContext = {
+          userId: this.config.userId,
+          sessionId: this.config.sessionId,
+          symbol,
+          signal,
+          candles,
+          btcCandles,
+          score: qualityScore,
+        };
+        await this.openPosition(signal.side, candles, signalCtx);
       } else {
         this.lastRejectReason = signal.reason || 'no_signal';
 
@@ -1073,8 +1083,8 @@ export class AgentOrchestrator {
     }
   }
   
-  private async openPosition(side: 'long' | 'short', candles: Candle[]): Promise<void> {
-    const result = await this.positionOpener.open(side, candles);
+  private async openPosition(side: 'long' | 'short', candles: Candle[], signalCtx?: SignalContext): Promise<void> {
+    const result = await this.positionOpener.open(side, candles, signalCtx);
     if (result.position) {
       this.position = result.position;
       this.additionalPositions = result.additionalPositions;

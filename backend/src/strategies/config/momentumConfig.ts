@@ -786,6 +786,7 @@ export interface SignalResult {
     bbUpper?: number;
     bbLower?: number;
     stochRsi?: number;  // V5.8
+    roc1?: number;      // V5.33: Current candle momentum (ROC 1-period %)
   };
 }
 

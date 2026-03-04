@@ -260,7 +260,7 @@ export class PositionPersistence {
       const leverage = position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4;
       const roePct = roiPct * leverage;
 
-      await (prisma as any).$transaction(async (tx: any) => {
+      const txResult = await (prisma as any).$transaction(async (tx: any) => {
         const order = await tx.order.create({
           data: {
             clientOrderId,
@@ -327,13 +327,31 @@ export class PositionPersistence {
           where: { sessionId, symbol: position.symbol },
         });
 
-        return { order };
+        return { order, trade };
       }, {
         maxWait: 5000,
         timeout: 10000,
       });
 
       logger.info(`✅ [${symbol}] Trade created (atomic): ${position.side.toUpperCase()} ${position.qty} PnL=$${pnlUsd.toFixed(2)}`);
+
+      // Link signal to trade
+      try {
+        const tradeId = txResult?.trade?.id;
+        if (tradeId) {
+          await (prisma as any).signal.updateMany({
+            where: {
+              sessionId,
+              symbol,
+              status: 'traded',
+              tradeId: null,
+            },
+            data: { tradeId },
+          });
+        }
+      } catch {
+        // Non-critical: signal logging should never block trade persistence
+      }
 
       // Trigger parity verification (async, non-blocking)
       if (process.env.AUTO_VERIFY_PARITY === 'true') {

@@ -22,6 +22,7 @@ model User {
   reports                DailyReport[]
   apiKeys                UserApiKey[]
   settings               UserSetting[]
+  signals                Signal[]
 
   @@index([username])
   @@index([email])
@@ -231,11 +232,83 @@ model Trade {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
   fills           Fill[]
+  signal          Signal?
   session         AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, exitTs])
   @@index([symbol, exitTs])
   @@index([exitTs])
+}
+
+model Signal {
+  id              String    @id @default(cuid())
+  userId          String?
+  sessionId       String?
+  symbol          String
+  side            String
+  status          String    // traded, filtered_blacklist, filtered_toxic_hour, filtered_regime_recheck, filtered_max_positions, filtered_ranking, filtered_capital, filtered_skip_rule, filtered_exchange_position, filtered_exchange_sync
+  score           Float?
+  reason          String?   // signal reason from checkMomentumSignal
+
+  // Temporal context
+  candleTs        DateTime? // signal candle OPEN timestamp
+  confidence      Float?    // 0-1 from checkMomentumSignal
+  hour            Int?      // UTC hour (0-23)
+  dayOfWeek       Int?      // UTC day (0-6)
+
+  // Signal features (from checkMomentumSignal)
+  roc10           Float?    // ROC 10-period % (renamed from roc)
+  roc5            Float?
+  roc1            Float?    // ROC 1-period %
+  volRatio        Float?
+  stochRsi        Float?
+  bbUpper         Float?
+  bbLower         Float?
+  bbMa20          Float?    // BB middle band (MA20)
+
+  // Computed features (from candles at signal time)
+  adx             Float?
+  greenRatio      Float?
+  alternation5    Int?
+  bbTouches       Int?
+  rangePosition   Float?    // BB position (0=lower, 1=upper)
+  atrPct          Float?
+  trendStrength   Float?
+  consecUp        Int?      // Consecutive up candles
+  consecDown      Int?      // Consecutive down candles
+  atr14           Float?    // Raw ATR value
+
+  // BTC context
+  btcPrice        Float?
+  btcRegime       String?   // BULL, BEAR, NEUTRAL
+  btcSma200       Float?
+  btcDistSma200   Float?    // % distance from SMA200
+  btcAtr          Float?    // BTC ATR as %
+  btcRoc1h        Float?    // BTC ROC 1h %
+
+  // Candle OHLCV (signal candle)
+  candleOpen      Float?
+  candleHigh      Float?
+  candleLow       Float?
+  candleClose     Float?
+  candleVolume    Float?
+
+  // Extensible extras
+  extras          Json?     // secondary features
+
+  // Trade link (populated for status='traded')
+  tradeId         String?   @unique
+  trade           Trade?    @relation(fields: [tradeId], references: [id])
+
+  // User relation
+  user            User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([symbol, candleTs])
+  @@index([status, createdAt])
+  @@index([sessionId, createdAt])
 }
 
 model Position {

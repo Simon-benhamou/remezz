@@ -38,6 +38,7 @@ import { ipWeightTracker } from '../services/ipWeightTracker.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { Exchange } from '../types/exchange.js';
 import type { CapitalPool } from './capitalPool.js';
+import { saveSignal, type SignalContext } from './signalLogger.js';
 
 const logger = createLogger('position-opener');
 
@@ -72,7 +73,7 @@ export interface OpenPositionResult {
 export class PositionOpener {
   constructor(private ctx: PositionOpenerContext) {}
 
-  async open(side: 'long' | 'short', candles: Candle[]): Promise<OpenPositionResult> {
+  async open(side: 'long' | 'short', candles: Candle[], signalCtx?: SignalContext): Promise<OpenPositionResult> {
     const symbol = this.ctx.symbol;
     const lastCandle = candles[candles.length - 1];
     const currentPrice = lastCandle.close;
@@ -86,6 +87,7 @@ export class PositionOpener {
     // 1. SYMBOL BLACKLIST - Prevent trading on untested/incompatible symbols
     if (MomentumConfig.SYMBOLS_NOT_COMPATIBLE.includes(symbol)) {
       logger.warn(`🚫 [${symbol}] BLOCKED: Symbol in NOT_COMPATIBLE list`);
+      if (signalCtx) saveSignal(signalCtx, 'filtered_blacklist');
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
@@ -96,6 +98,7 @@ export class PositionOpener {
     const hourUtc = new Date().getUTCHours();
     if (hourUtc === 4 || hourUtc === 5 || hourUtc === 9 || hourUtc === 18 || hourUtc === 21) {
       logger.warn(`🚫 [${symbol}] BLOCKED: Toxic hour ${hourUtc}:00 UTC (WR < 67% on 24mo)`);
+      if (signalCtx) saveSignal(signalCtx, 'filtered_toxic_hour');
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
@@ -108,10 +111,12 @@ export class PositionOpener {
         const diffPct = ((regime.btcNow - regime.btcSma200) / regime.btcSma200 * 100);
         if (side === 'short' && regime.trend === 'bullish') {
           logger.error(`🚫 [${symbol}] BLOCKED: SHORT in BULL regime! BTC=${regime.btcNow.toFixed(0)} vs SMA200=${regime.btcSma200.toFixed(0)} (${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(3)}%)`);
+          if (signalCtx) saveSignal(signalCtx, 'filtered_regime_recheck');
           return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
         }
         if (side === 'long' && regime.trend === 'bearish') {
           logger.error(`🚫 [${symbol}] BLOCKED: LONG in BEAR regime! BTC=${regime.btcNow.toFixed(0)} vs SMA200=${regime.btcSma200.toFixed(0)} (${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(3)}%)`);
+          if (signalCtx) saveSignal(signalCtx, 'filtered_regime_recheck');
           return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
         }
       }
@@ -125,6 +130,7 @@ export class PositionOpener {
     if (this.ctx.capitalPool.shouldSkipEntry()) {
       const skipState = this.ctx.capitalPool.getSkipState();
       logger.info(`🛑 [${symbol}] SKIPPED (skip rule active, ${skipState.tradesToSkip} more to skip after this)`);
+      if (signalCtx) saveSignal(signalCtx, 'filtered_skip_rule');
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
@@ -137,6 +143,7 @@ export class PositionOpener {
       // In live mode, don't open positions if we haven't successfully synced with exchange
       if (!this.ctx.capitalPool.isSynced()) {
         logger.error(`❌ [${symbol}] Cannot open live position - failed to sync with exchange balance. Please check API connection.`);
+        if (signalCtx) saveSignal(signalCtx, 'filtered_exchange_sync');
         return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
       }
 
@@ -155,6 +162,7 @@ export class PositionOpener {
             `unrealizedPnl=${existingPosition.unrealizedPnl.toFixed(2)} | ` +
             `SKIPPING new entry to prevent double position`
           );
+          if (signalCtx) saveSignal(signalCtx, 'filtered_exchange_position');
           return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
         }
       } catch (posCheckError) {
@@ -168,6 +176,7 @@ export class PositionOpener {
     const maxPositions = this.ctx.capitalPool.getMaxPositions();
     if (openPositionCount >= maxPositions) {
       logger.info(`⚠️ [${symbol}] Max positions reached (${openPositionCount}/${maxPositions}) - waiting for existing positions to close | mode=${this.ctx.mode}`);
+      if (signalCtx) saveSignal(signalCtx, 'filtered_max_positions');
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
@@ -191,6 +200,7 @@ export class PositionOpener {
       // V5.58 FIX: Remove deferred signal from pool to prevent stale signals
       // polluting future batches and causing paper/live mismatch
       globalSignalRanker.removeSignal(symbol, this.ctx.mode, this.ctx.userId);
+      if (signalCtx) saveSignal(signalCtx, 'filtered_ranking');
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
@@ -267,18 +277,21 @@ export class PositionOpener {
     const maxReasonableNotional = availableCapital * 10; // Max 10x leverage equivalent
     if (sizing.notionalUsd > maxReasonableNotional) {
       logger.error(`🚫 [${symbol}] POSITION REJECTED - Notional ($${sizing.notionalUsd.toFixed(2)}) exceeds 10x available capital ($${availableCapital.toFixed(2)}). Likely capital sync issue.`);
+      if (signalCtx) saveSignal(signalCtx, 'filtered_capital');
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
     // 🔧 SAFETY CHECK: Margin should not exceed 100% of capital
     if (sizing.marginUsd > availableCapital) {
       logger.error(`🚫 [${symbol}] POSITION REJECTED - Margin ($${sizing.marginUsd.toFixed(2)}) exceeds available capital ($${availableCapital.toFixed(2)}).`);
+      if (signalCtx) saveSignal(signalCtx, 'filtered_capital');
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
     // Check if position size is valid (minimum $20 notional)
     if (sizing.notionalUsd < 20) {
       logger.info(`⚠️ [${symbol}] Cannot open position - insufficient capital (available $${availableCapital.toFixed(2)}, min $20 notional required)`);
+      if (signalCtx) saveSignal(signalCtx, 'filtered_capital');
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
@@ -286,6 +299,7 @@ export class PositionOpener {
     // V5.65: reserve() is now async with atomic locking
     if (!await this.ctx.capitalPool.reserve(this.ctx.sessionId, sizing.marginUsd)) {
       logger.info(`⚠️ [${symbol}] Cannot open position - failed to reserve margin $${sizing.marginUsd.toFixed(2)}`);
+      if (signalCtx) saveSignal(signalCtx, 'filtered_capital');
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
 
@@ -339,9 +353,9 @@ export class PositionOpener {
     }
 
     if (this.ctx.mode === 'paper') {
-      return this.openPaper(side, symbol, entryPrice, lastCandle, sizing, slPct, multiPlan, wickBreakout, entryAtrPct);
+      return this.openPaper(side, symbol, entryPrice, lastCandle, sizing, slPct, multiPlan, wickBreakout, entryAtrPct, signalCtx);
     } else {
-      return this.openLive(side, symbol, entryPrice, currentPrice, lastCandle, candles, sizing, slPct, multiPlan, wickBreakout, entryAtrPct);
+      return this.openLive(side, symbol, entryPrice, currentPrice, lastCandle, candles, sizing, slPct, multiPlan, wickBreakout, entryAtrPct, signalCtx);
     }
   }
 
@@ -359,6 +373,7 @@ export class PositionOpener {
     multiPlan: ReturnType<typeof calculatePositionSize>['multiPositionPlan'],
     wickBreakout: ReturnType<typeof checkWickBreakout>,
     entryAtrPct?: number,
+    signalCtx?: SignalContext,
   ): Promise<OpenPositionResult> {
     // Paper trade
     // V5.46 FIX: Use candle.timestamp for entryTime (same as backtest)
@@ -395,6 +410,9 @@ export class PositionOpener {
       this.ctx.capitalPool.cancelReservation(this.ctx.sessionId);
       return { position: null, additionalPositions: [], lastProcessedExitCandleTs: null };
     }
+
+    // Log traded signal (no tradeId yet — Trade record is created at exit time)
+    if (signalCtx) saveSignal(signalCtx, 'traded');
 
     // Commit MARGIN (not notional)
     this.ctx.capitalPool.commit(this.ctx.sessionId, sizing.marginUsd);
@@ -510,6 +528,7 @@ export class PositionOpener {
     multiPlan: ReturnType<typeof calculatePositionSize>['multiPositionPlan'],
     wickBreakout: ReturnType<typeof checkWickBreakout>,
     entryAtrPct?: number,
+    signalCtx?: SignalContext,
   ): Promise<OpenPositionResult> {
     try {
       // 🚫 Check circuit breaker FIRST - don't attempt REST calls if IP is banned
@@ -895,6 +914,9 @@ export class PositionOpener {
 
       // Save to DB with fee
       await this.ctx.savePositionToDb(position, 'live_entry', liveEntryFee);
+
+      // Log traded signal (no tradeId yet — Trade record is created at exit time)
+      if (signalCtx) saveSignal(signalCtx, 'traded');
 
       // Realtime app-side exits (WS-based) for fast trailing/stoploss reaction.
       this.ctx.startRealtimeExitMonitorIfNeeded();
