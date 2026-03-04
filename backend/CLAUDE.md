@@ -716,6 +716,20 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Impact**: Paper NFS MED/LOW results now aligned with BT (both use candle close). Paper is realistic; live is optimistic (justified by proactive stops).
   - **File**: `orchestrator.ts`
 
+- V5.139-V5.141: Realistic NFS HIGH pricing + entry quality filters:
+  - **V5.139: Range Position Filter**: Rejects entries in "death zone" of 20-candle range (40-80%). Filters mid-range chop entries. Config: `RANGE_POSITION_FILTER.ENABLED: true`, `DEATH_ZONE_LOW: 0.40`, `DEATH_ZONE_HIGH: 0.80`. Added to both LONG and SHORT paths in `checkMomentumSignal()`.
+  - **V5.140: NFS HIGH = current.close (permanent)**: Backtest NFS HIGH exits use candle close instead of trailingStopPrice. Conservative: live can only do BETTER via proactive STOP_MARKET. Previous attempts (V5.91, V5.134) failed because they didn't have the Range Position Filter to remove death-zone entries.
+  - **V5.141: Entry quality filters — Vol 1.5x + ADX Rising**: New `ENTRY_QUALITY` config block in `momentumConfig.ts`. `ENTRY_LONG.VOL_MULTIPLIER: 1.5` (was 1.15) — requires stronger volume spike on LONG entries. `ADX_RISING_ENABLED: true` with lookback=3 — requires ADX(14) to be increasing vs 3 candles ago (trend strengthening). `BODY_RATIO_ENABLED: false` — proven useless in sweep.
+  - **Sweep results** (13 configs, real BT with compounding, Jan-Dec 2025, $2K, 5x, 9 symbols):
+    - Baseline (no filter): 964 trades, -$718, 77.6% DD, Sharpe 0.07
+    - Vol1.5+ADXRising3 (winner): 654 trades, 61.0% WR, +$1,866, 46.1% DD, Sharpe 1.14
+    - ADX Rising alone: +$1,843, Sharpe 1.14 (very close to combo)
+    - Body ratio: all configs NEGATIVE (doji candles don't predict bad trades)
+    - Vol 1.5x SHORT: HARMFUL (-$1,246) — low-volume SHORT entries work better
+  - **Confirmed Breakout + Retest strategy**: Standalone backtest script, 27-config sweep. ALL configs negative (-$775 to -$1,914). Strategy is definitively -EV (stagnant exits dominate 63%).
+  - **Propagation**: All entry filters in shared `checkMomentumSignal()` — auto-propagates to live/paper/backtest/parity. No exit/trailing/SL/sizing changes.
+  - **Files**: `momentumConfig.ts`, `momentumSignal.ts`, `backtestService.ts`
+
 - V5.142: Fix crash safety STOP false trigger in paper mode:
   - **Problem**: After deploy, all open paper positions immediately closed via crash safety at prices far below market (e.g., RENDER at $1.3644 when market was $1.42, STX at $0.2552 when market was $0.2638). Logs showed `crashPrice=$undefined`.
   - **Root cause**: `realtimeExitHandler.ts:327` passed hardcoded `0` as `lastPrice` to `checkCrashSafetyFill()`. In paper mode (`exchangeOrderManager.ts:528-535`), the check is `lastPrice <= crashSafetyPrice` for LONG. With `lastPrice=0`, this is **always true** → crash safety "fills" on every RT check cycle (every ~200ms). The crash safety block ran BEFORE `currentPrice` was obtained from the WS ticker (line 380).

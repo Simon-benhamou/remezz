@@ -20,6 +20,7 @@ import {
   calcAlternation5,
   calcBBTouchCount,
   calcRocAcceleration,
+  calcADX,
 } from '../indicators/technicalIndicators.js';
 
 export function getMarketConditions(btcCandles: Candle[], btcCandlesRegime?: Candle[]): MarketConditions {
@@ -565,6 +566,50 @@ export function checkMomentumSignal(
       };
     }
 
+    // V5.139: Range Position Filter — reject entries in the "death zone" of recent range
+    const rpf = MomentumConfig.RANGE_POSITION_FILTER;
+    if (rpf.ENABLED) {
+      const rpLookback = candles.slice(-rpf.LOOKBACK_CANDLES);
+      const rpHigh = Math.max(...rpLookback.map(c => c.high));
+      const rpLow = Math.min(...rpLookback.map(c => c.low));
+      const rangePos = rpHigh > rpLow ? (close - rpLow) / (rpHigh - rpLow) : 0.5;
+      if (rangePos >= rpf.DEATH_ZONE_LOW && rangePos < rpf.DEATH_ZONE_HIGH) {
+        return {
+          valid: false,
+          reason: `bull_regime:range_death_zone(pos=${(rangePos*100).toFixed(1)}% in [${rpf.DEATH_ZONE_LOW*100}-${rpf.DEATH_ZONE_HIGH*100}%])`,
+          features
+        };
+      }
+    }
+
+    // V5.141: Body ratio filter — reject doji/indecision candles
+    const eqConfigLong = MomentumConfig.ENTRY_QUALITY;
+    if (eqConfigLong.BODY_RATIO_ENABLED) {
+      const bodySize = Math.abs(current.close - current.open);
+      const candleRange = current.high - current.low;
+      const bodyRatio = candleRange > 0 ? bodySize / candleRange : 0;
+      if (bodyRatio < eqConfigLong.BODY_RATIO_MIN) {
+        return {
+          valid: false,
+          reason: `v5.141_body_ratio_low(${(bodyRatio*100).toFixed(0)}% < ${(eqConfigLong.BODY_RATIO_MIN*100).toFixed(0)}%)`,
+          features
+        };
+      }
+    }
+
+    // V5.141: ADX rising filter — require trend to be strengthening
+    if (eqConfigLong.ADX_RISING_ENABLED) {
+      const adxNow = calcADX(candles, 14);
+      const adxPrev = calcADX(candles.slice(0, -eqConfigLong.ADX_RISING_LOOKBACK), 14);
+      if (adxNow <= adxPrev) {
+        return {
+          valid: false,
+          reason: `v5.141_adx_not_rising(${adxNow.toFixed(1)} <= ${adxPrev.toFixed(1)})`,
+          features
+        };
+      }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // V5.36: PATTERN FILTERS (2-Year Validated: +22.4pp WR)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -700,6 +745,51 @@ export function checkMomentumSignal(
         features
       };
     }
+
+    // V5.139: Range Position Filter — reject entries in the "death zone" of recent range
+    const rpfShort = MomentumConfig.RANGE_POSITION_FILTER;
+    if (rpfShort.ENABLED) {
+      const rpLookbackShort = candles.slice(-rpfShort.LOOKBACK_CANDLES);
+      const rpHighShort = Math.max(...rpLookbackShort.map(c => c.high));
+      const rpLowShort = Math.min(...rpLookbackShort.map(c => c.low));
+      const rangePosShort = rpHighShort > rpLowShort ? (close - rpLowShort) / (rpHighShort - rpLowShort) : 0.5;
+      if (rangePosShort >= rpfShort.DEATH_ZONE_LOW && rangePosShort < rpfShort.DEATH_ZONE_HIGH) {
+        return {
+          valid: false,
+          reason: `bear_regime:range_death_zone(pos=${(rangePosShort*100).toFixed(1)}% in [${rpfShort.DEATH_ZONE_LOW*100}-${rpfShort.DEATH_ZONE_HIGH*100}%])`,
+          features
+        };
+      }
+    }
+
+    // V5.141: Body ratio filter — reject doji/indecision candles
+    const eqConfigShort = MomentumConfig.ENTRY_QUALITY;
+    if (eqConfigShort.BODY_RATIO_ENABLED) {
+      const bodySize = Math.abs(current.close - current.open);
+      const candleRange = current.high - current.low;
+      const bodyRatio = candleRange > 0 ? bodySize / candleRange : 0;
+      if (bodyRatio < eqConfigShort.BODY_RATIO_MIN) {
+        return {
+          valid: false,
+          reason: `v5.141_body_ratio_low(${(bodyRatio*100).toFixed(0)}% < ${(eqConfigShort.BODY_RATIO_MIN*100).toFixed(0)}%)`,
+          features
+        };
+      }
+    }
+
+    // V5.141: ADX rising filter — require trend to be strengthening
+    if (eqConfigShort.ADX_RISING_ENABLED) {
+      const adxNow = calcADX(candles, 14);
+      const adxPrev = calcADX(candles.slice(0, -eqConfigShort.ADX_RISING_LOOKBACK), 14);
+      if (adxNow <= adxPrev) {
+        return {
+          valid: false,
+          reason: `v5.141_adx_not_rising(${adxNow.toFixed(1)} <= ${adxPrev.toFixed(1)})`,
+          features
+        };
+      }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // V5.36: PATTERN FILTERS (2-Year Validated: +22.4pp WR)
     // ═══════════════════════════════════════════════════════════════════════════

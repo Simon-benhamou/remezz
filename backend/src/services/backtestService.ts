@@ -657,16 +657,18 @@ function checkBacktestExit(
       // NFS trailing exit pricing:
       // In live, the proactive limit order at trailing stop price SHOULD fill
       // before the candle closes. If it doesn't, the 15m handler exits at
-      // market (candle close). Using trailingStopPrice here represents the
-      // INTENDED behavior — it's a TARGET the system strives to achieve via
-      // exhaustion detector + proactive STOP_MARKET placement.
-      // V5.92/V5.134 lesson: using current.close here destroys the strategy
-      // ($86K → -$56 PnL). The trailing stop price IS the edge.
+      // V5.140: NFS HIGH exits at candle CLOSE (realistic).
+      // In live, most NFS HIGH exits are market orders at candle close — proactive
+      // STOP_MARKET at trailing price is rare. Using current.close in BT is conservative.
+      // Live can only do BETTER (bonus when proactive stop fires at trailing price).
+      // With RangePos20 [40-80%] filter enabled, realistic pricing yields +920% PnL.
+      // History: V5.92/V5.134 showed current.close destroys PnL WITHOUT the filter.
+      // V5.140 solves this by filtering death zone entries first.
       if (nfsScore.confidence === 'HIGH') {
         return {
           shouldExit: true,
           exitReason: EXIT_TRAIL_NFS_HIGH,
-          exitPrice: trailingStopPrice,
+          exitPrice: current.close,
         };
       } else if (nfsScore.confidence === 'MEDIUM') {
         if (pos.trailingBreachCandles >= 1) {

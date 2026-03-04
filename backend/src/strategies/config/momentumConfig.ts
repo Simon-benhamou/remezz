@@ -142,7 +142,7 @@ export const MomentumConfig = {
   ENTRY_LONG: {
     // Momentum confirmation - V5.13 OPTIMIZED (2024 backtest: +25% ROI vs V5.12)
     ROC_MIN: 0.0175,             // V5.13: ROC 10 > 1.75% (was 2.5%) - Earlier entries
-    VOL_MULTIPLIER: 1.15,        // V5.13: 1.15x (was 1.5) - +25% ROI, 62.2% win rate
+    VOL_MULTIPLIER: 1.5,         // V5.141: 1.5x (was 1.15) — BT sweep: +$1,866 PnL, Sharpe 1.14 (was -$718, 0.07)
     MAX_CONSEC_UP: 5,            // V5.12: 5 (was 3) - +34% PnL
     REQUIRE_BB_BREAKOUT: true,   // V5.125: Require close > BB upper (can be disabled for sweep)
   },
@@ -170,6 +170,18 @@ export const MomentumConfig = {
     DEATH_ZONE_LOW: 0.40,       // Reject if range position >= 40%
     DEATH_ZONE_HIGH: 0.80,      // Reject if range position < 80%
     LOOKBACK_CANDLES: 20,       // Swing range lookback (20 × 15m = 5h)
+  },
+
+  // V5.141: ENTRY QUALITY FILTERS — additional signal quality checks
+  // Body ratio rejects doji/indecision candles; ADX rising requires trend strengthening
+  ENTRY_QUALITY: {
+    // Body ratio: reject doji candles (body < X% of total range)
+    BODY_RATIO_ENABLED: false,         // V5.141: OFF by default
+    BODY_RATIO_MIN: 0.5,              // Minimum body/range ratio (0.5 = 50%)
+
+    // ADX rising: require ADX to be increasing (trend strengthening)
+    ADX_RISING_ENABLED: true,          // V5.141: ON — BT: SL trades -36%, stagnant -37%, Sharpe 0.07→1.14
+    ADX_RISING_LOOKBACK: 3,           // Compare ADX now vs N candles ago
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -218,7 +230,7 @@ export const MomentumConfig = {
 
     // Legacy fields for compatibility - V5.13 Moderate
     ROC_MIN: 0.0175,             // V5.13: 1.75% (was 2.5%)
-    VOL_MULTIPLIER: 1.15,        // V5.13: 1.15x (was 1.5x)
+    VOL_MULTIPLIER: 1.5,         // V5.141: 1.5x (was 1.15x) — aligned with ENTRY_LONG
     MAX_CONSEC_UP: 5,            // V5.12: 5
 
     // BTC Regime Filter
