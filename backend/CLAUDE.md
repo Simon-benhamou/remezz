@@ -789,8 +789,9 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Propagation**: BTC 24h filter in shared `checkMomentumSignal()` → auto-aligned live/paper/backtest/parity. Circuit breaker code in `backtestService.ts` only (testing infrastructure, not deployed to live).
   - **Files**: `momentumConfig.ts` (SHORT_BTC_DROP_24H_MAX), `momentumSignal.ts` (filter code), `backtestService.ts` (dailyLossLimit + lossBreakHours params)
 
-- V5.147: BTC 24h drop tolerance buffer for parity:
-  - **Problem**: Parity NO_SIGNAL when `btcChange24h = -5.2%` in backtest (REST candles) vs ~-4.9% in live (WS candles). WS/REST variance of 0.2-0.3% causes borderline values to flip across the -5% threshold.
-  - **Fix**: Added `SHORT_BTC_DROP_24H_TOLERANCE: 0.5` — effective threshold becomes `-5.5%` instead of `-5.0%`. Trades in the -5.0% to -5.5% zone (grey area) are no longer rejected, eliminating false parity NO_SIGNAL while still filtering genuine crash entries (<-5.5%).
+- V5.147: BTC 24h drop tolerance buffer + btcChange24h diagnostics:
+  - **Problem**: Parity NO_SIGNAL when btcChange24h differs between live (WS) and backtest (REST). Observed variance up to ~1% (live -4.8% vs BT -5.8%) due to WS/REST candle close differences.
+  - **Fix**: `SHORT_BTC_DROP_24H_TOLERANCE: 1.0` — effective threshold becomes `-6.0%` instead of `-5.0%`. Trades in -5.0% to -6.0% zone (grey area) pass through, only genuine crash entries (<-6%) are filtered.
+  - **Diagnostics**: Added `btcChange24h` to signal features + signal logger extras. Future parity NO_SIGNAL can be diagnosed by comparing live vs BT btcChange24h values.
   - **Parity impact**: Eliminates borderline NO_SIGNAL from WS/REST candle data variance.
-  - **Files**: `momentumConfig.ts` (SHORT_BTC_DROP_24H_TOLERANCE), `momentumSignal.ts` (tolerance applied to threshold)
+  - **Files**: `momentumConfig.ts` (SHORT_BTC_DROP_24H_TOLERANCE: 1.0), `momentumSignal.ts` (btcChange24h in features + tolerance), `signalLogger.ts` (btcChange24h in extras)

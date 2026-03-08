@@ -208,6 +208,7 @@ async function _saveSignalAsync(
       bbPosition: bbPosition ?? null,
       rocAcceleration: rocAcceleration ?? null,
       btcMomentum6h: f?.btcMomentum6h ?? null,
+      btcChange24h: (f as any)?.btcChange24h ?? null, // V5.147: BTC 24h % change for parity diagnostics
       signalReason: signal.reason ?? null,
     };
   } catch {

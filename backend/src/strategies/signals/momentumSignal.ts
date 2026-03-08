@@ -485,6 +485,14 @@ export function checkMomentumSignal(
     stochRsiConfig.STOCH_SMOOTH
   );
 
+  // V5.147: Pre-compute BTC 24h change for features + filter
+  let btcChange24h: number | null = null;
+  if (btcCandles.length >= 97) {
+    const btcNowPrice = btcCandles[btcCandles.length - 1].close;
+    const btc24hAgoPrice = btcCandles[btcCandles.length - 97].close;
+    btcChange24h = btc24hAgoPrice > 0 ? (btcNowPrice - btc24hAgoPrice) / btc24hAgoPrice * 100 : null;
+  }
+
   const features = {
     volRatio,
     isBullish,
@@ -502,6 +510,7 @@ export function checkMomentumSignal(
     bbUpper: bb.upper,
     bbLower: bb.lower,
     stochRsi: stochRsi ?? undefined,  // V5.8
+    btcChange24h,  // V5.147: BTC 24h % change for signal logging diagnostics
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -867,13 +876,10 @@ export function checkMomentumSignal(
     }
 
     // V5.146: BTC 24h drop filter — skip SHORT if BTC already crashed too much (exhausted move)
-    // V5.147: Added 0.5% tolerance buffer to avoid parity NO_SIGNAL from WS/REST candle variance
+    // V5.147: 1.0% tolerance buffer for WS/REST candle variance (effective threshold = -6%)
     const shortBtcDrop24hMax = (eqConfigShort as any).SHORT_BTC_DROP_24H_MAX ?? 0;
-    const btcDropTolerance = (eqConfigShort as any).SHORT_BTC_DROP_24H_TOLERANCE ?? 0.5;
-    if (shortBtcDrop24hMax < 0 && btcCandles.length >= 97) {
-      const btcNow = btcCandles[btcCandles.length - 1].close;
-      const btc24hAgo = btcCandles[btcCandles.length - 97].close;
-      const btcChange24h = (btcNow - btc24hAgo) / btc24hAgo * 100;
+    const btcDropTolerance = (eqConfigShort as any).SHORT_BTC_DROP_24H_TOLERANCE ?? 1.0;
+    if (shortBtcDrop24hMax < 0 && btcChange24h !== null) {
       if (btcChange24h < shortBtcDrop24hMax - btcDropTolerance) {
         return { valid: false, reason: `v5.147_btc_drop_24h(${btcChange24h.toFixed(1)}% < ${(shortBtcDrop24hMax - btcDropTolerance).toFixed(1)}%)`, features };
       }
