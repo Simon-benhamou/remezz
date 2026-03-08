@@ -810,3 +810,13 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Diagnostics**: Added `btcChange24h` to signal features + signal logger extras. Future parity NO_SIGNAL can be diagnosed by comparing live vs BT btcChange24h values.
   - **Parity impact**: Eliminates borderline NO_SIGNAL from WS/REST candle data variance.
   - **Files**: `momentumConfig.ts` (SHORT_BTC_DROP_24H_TOLERANCE: 1.0), `momentumSignal.ts` (btcChange24h in features + tolerance), `signalLogger.ts` (btcChange24h in extras)
+
+- V5.150: SL predictor analysis + sweep scripts — timestamp bug discovery:
+  - **Goal**: Find novel entry-time features that predict SL trades. Extract 20+ features per trade, compute Cohen's d effect size for SL vs WIN separation.
+  - **Scripts created**: `scripts/sl-predictor-analysis.ts` (feature extraction + statistical analysis), `scripts/sweep-sl-predictors.ts` (post-filter backtest with consecSameDir, btcCandleBody, volSurge filters), `scripts/analyze-exits.ts` (PnL breakdown by exit reason)
+  - **Exit analysis findings**: SL (-$16,481 in 2025, -$4,875 in 2024) and STAGNANT (-$7,319, -$1,676) are the real PnL killers. NFS HIGH/MED are both profitable exit types.
+  - **CRITICAL BUG FOUND**: Both analysis scripts used `trade.entryTime` directly for candle lookup. But `entryTime = candle.timestamp + 15min` (candle CLOSE, not OPEN — see V5.46 realisticTiming in backtestService.ts line 1041). `Math.floor(entryTime / grid) * grid` lands on the NEXT candle, not the signal candle. This caused: (1) features extracted from wrong candle (look-ahead bias), (2) consec >= 1 and >= 2 giving identical results (artifact), (3) inflated +222% PnL improvement (meaningless).
+  - **Fix**: `gridTs = Math.floor((entryTs - grid) / grid) * grid` — subtract 15min to recover signal candle's OPEN timestamp.
+  - **Lesson**: `trade.entryTime` in backtest is candle CLOSE time (V5.46 realisticTiming). Any script that maps trades back to candles must subtract one candle duration (15min) to find the signal candle. This applies to ALL post-hoc analysis scripts.
+  - **Status**: Scripts fixed, sweep re-running for valid results. Post-filter results may still differ from engine-integrated results due to slot replacement effect (see V5.149 DNA filter lesson).
+  - **Files**: `scripts/sl-predictor-analysis.ts`, `scripts/sweep-sl-predictors.ts`, `scripts/analyze-exits.ts`
