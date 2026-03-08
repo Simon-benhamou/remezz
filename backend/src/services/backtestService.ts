@@ -1066,6 +1066,15 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
   const symbolIdx: Record<string, number> = {};
   for (const symbol of symbols) symbolIdx[symbol] = -1;
 
+  // V5.149: BTC timestamp→index Map for DNA correlation (O(1) lookup)
+  const btcTsToIdx = new Map<number, number>();
+  const GRID_MS_BTC = 15 * 60 * 1000;
+  for (let i = 0; i < btcCandles.length; i++) {
+    btcTsToIdx.set(Math.floor(btcCandles[i].timestamp / GRID_MS_BTC) * GRID_MS_BTC, i);
+  }
+  // V5.149: DNA correlation cache (recomputed daily per symbol)
+  const dnaCorrCache = new Map<string, number>();
+
   // Initialize state
   let capital = initialCapital;
   let capitalInUse = 0;
@@ -1736,6 +1745,47 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
         }
         const isBullRegime = cachedIsBullRegime;
 
+        // V5.149: Pre-compute 30-day BTC correlation for DNA filter
+        // Recompute daily (every 96 candles) and cache per symbol
+        let btcCorr30d: number | undefined;
+        const CANDLES_PER_DAY_DNA = 96;
+        const DNA_ROLLING_DAYS = 30;
+        const dnaRollingCandles = DNA_ROLLING_DAYS * CANDLES_PER_DAY_DNA;
+        if (idx >= dnaRollingCandles) {
+          // Cache key: symbol + day index (recompute once per day)
+          const dayIdx = Math.floor(idx / CANDLES_PER_DAY_DNA);
+          const cacheKey = `${symbol}_${dayIdx}`;
+          if (!dnaCorrCache.has(cacheKey)) {
+            const GRID_MS = 15 * 60 * 1000;
+            const symR: number[] = [], btcR: number[] = [];
+            for (let d = 1; d < DNA_ROLLING_DAYS; d++) {
+              const tOff = idx - (DNA_ROLLING_DAYS - d) * CANDLES_PER_DAY_DNA;
+              const yOff = tOff - CANDLES_PER_DAY_DNA;
+              if (tOff < 0 || yOff < 0 || tOff >= candles.length) continue;
+              if (candles[yOff].close <= 0) continue;
+              const symTs = Math.floor(candles[tOff].timestamp / GRID_MS) * GRID_MS;
+              const symTsY = Math.floor(candles[yOff].timestamp / GRID_MS) * GRID_MS;
+              const bTIdx = btcTsToIdx.get(symTs);
+              const bYIdx = btcTsToIdx.get(symTsY);
+              if (bTIdx !== undefined && bYIdx !== undefined) {
+                const bT = btcCandles[bTIdx].close, bY = btcCandles[bYIdx].close;
+                if (bT > 0 && bY > 0) {
+                  symR.push((candles[tOff].close - candles[yOff].close) / candles[yOff].close);
+                  btcR.push((bT - bY) / bY);
+                }
+              }
+            }
+            if (symR.length >= 10) {
+              const n = symR.length;
+              let sX=0,sY=0,sXY=0,sX2=0,sY2=0;
+              for (let i=0;i<n;i++){sX+=symR[i];sY+=btcR[i];sXY+=symR[i]*btcR[i];sX2+=symR[i]*symR[i];sY2+=btcR[i]*btcR[i];}
+              const den=Math.sqrt((n*sX2-sX*sX)*(n*sY2-sY*sY));
+              dnaCorrCache.set(cacheKey, den > 0 ? (n*sXY-sX*sY)/den : 0);
+            }
+          }
+          btcCorr30d = dnaCorrCache.get(cacheKey);
+        }
+
         // V5.36: Use shared checkMomentumSignal (includes MTF + BTC Vol filters)
         // This ensures 100% parity with production signal logic
         const signal = checkMomentumSignal(
@@ -1745,6 +1795,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           {
             nowMs: btcCandle.timestamp,
             btcCandlesRegime: cachedBtcCandlesRegimeWindow,
+            btcCorr30d,
           }
         );
         if (!signal.valid || !signal.side) continue;

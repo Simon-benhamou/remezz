@@ -789,6 +789,21 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Propagation**: BTC 24h filter in shared `checkMomentumSignal()` → auto-aligned live/paper/backtest/parity. Circuit breaker code in `backtestService.ts` only (testing infrastructure, not deployed to live).
   - **Files**: `momentumConfig.ts` (SHORT_BTC_DROP_24H_MAX), `momentumSignal.ts` (filter code), `backtestService.ts` (dailyLossLimit + lossBreakHours params)
 
+- V5.149: DNA Correlation Filter — block trades when symbol BTC correlation > 0.85 (30d rolling):
+  - **Problem**: In bull/crash markets, alts become highly correlated with BTC (>0.85). Breakout signals lose independence — moves are herd-driven, not symbol-specific alpha.
+  - **Solution**: Rolling 30-day Pearson correlation between symbol and BTC daily returns. If corr > 0.85, block entry.
+  - **Validation**: Sweep on 2024+2025 (post-filter): baseline $7,874 → corr<0.85 $9,964 (+27%). 2025: $9,742→$11,506 (+18%), DD 30.9%→22.0%.
+  - **No look-ahead bias**: Correlation uses only PAST 30 days of daily returns at each entry timestamp.
+  - **Infrastructure**: Symbol candle window increased to 3000 in backtestService. WS kline cache already 3100 from V5.148.
+  - **Files**: `momentumConfig.ts` (DNA_CORR_FILTER_ENABLED, DNA_BTC_CORR_MAX: 0.85, DNA_ROLLING_DAYS: 30), `momentumSignal.ts` (correlation computation + filter), `backtestService.ts` (windowCandles 200→3000)
+
+- V5.148: Bull Run Detector — stop trading when BTC Δ30d > 10%:
+  - **Problem**: Strategy loses money in strong uptrends (2024: -$1,916). Breakouts in trending markets don't produce mean-reverting exits.
+  - **Solution**: Block all entries when BTC has risen >10% in last 30 days (2880 15m candles).
+  - **Validation**: Sweep 16 configs on 2024+2025. Δ30d>10% optimal. 2025: $6,173→$9,742 (+58%), DD 38.7%→28.1%, Sharpe 2.01→2.51. Combined: $4,257→$7,874 (+85%).
+  - **Infrastructure**: BTC candle window 201→3000 in backtestService, WS kline cache 500→3100, REST seed 300→1000, quick-single-bt lookback 250→3200.
+  - **Files**: `momentumConfig.ts`, `momentumSignal.ts`, `backtestService.ts`, `binanceWebSocket.ts`, `candleCache.ts`
+
 - V5.147: BTC 24h drop tolerance buffer + btcChange24h diagnostics:
   - **Problem**: Parity NO_SIGNAL when btcChange24h differs between live (WS) and backtest (REST). Observed variance up to ~1% (live -4.8% vs BT -5.8%) due to WS/REST candle close differences.
   - **Fix**: `SHORT_BTC_DROP_24H_TOLERANCE: 1.0` — effective threshold becomes `-6.0%` instead of `-5.0%`. Trades in -5.0% to -6.0% zone (grey area) pass through, only genuine crash entries (<-6%) are filtered.

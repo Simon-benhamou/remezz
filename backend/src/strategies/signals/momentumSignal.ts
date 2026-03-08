@@ -355,6 +355,7 @@ export function checkMomentumSignal(
   opts?: {
     nowMs?: number;
     btcCandlesRegime?: Candle[];  // V5.36: For MTF filter + V5.82: For regime SMA200
+    btcCorr30d?: number;          // V5.149: Pre-computed 30-day BTC correlation (backtest optimization)
   }
 ): SignalResult {
   // Need more data for SMA200
@@ -461,6 +462,54 @@ export function checkMomentumSignal(
           return { valid: false, reason: `v5.148_bull_run(Δ30d=${btcDelta30d.toFixed(1)}%>${bullRunDelta30dPct}%)` };
         }
       }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // V5.149: DNA CORRELATION FILTER — Block when symbol is too correlated with BTC
+  // Uses PAST 30-day rolling Pearson correlation (no look-ahead bias)
+  // High correlation = herd behavior = breakouts don't produce independent alpha
+  // ═══════════════════════════════════════════════════════════════════════════
+  const dnaCorrEnabled = (MomentumConfig.ENTRY as any).DNA_CORR_FILTER_ENABLED ?? false;
+  const dnaBtcCorrMax = (MomentumConfig.ENTRY as any).DNA_BTC_CORR_MAX ?? 0.85;
+  const dnaRollingDays = (MomentumConfig.ENTRY as any).DNA_ROLLING_DAYS ?? 30;
+  if (dnaCorrEnabled && dnaBtcCorrMax > 0) {
+    // Use pre-computed correlation from backtest (opts.btcCorr30d) or compute for live
+    let btcCorr: number | null = opts?.btcCorr30d ?? null;
+    if (btcCorr === null) {
+      // Live mode: compute from candles (called infrequently — once per 15m candle close)
+      const CANDLES_PER_DAY = 96;
+      const rollingCandles = dnaRollingDays * CANDLES_PER_DAY;
+      if (candles.length >= rollingCandles && btcCandles.length >= rollingCandles) {
+        const GRID_MS = 15 * 60 * 1000;
+        const btcCloseByGrid = new Map<number, number>();
+        for (let i = 0; i < btcCandles.length; i++) {
+          btcCloseByGrid.set(Math.floor(btcCandles[i].timestamp / GRID_MS) * GRID_MS, btcCandles[i].close);
+        }
+        const symR: number[] = [], btcR: number[] = [];
+        for (let d = 1; d < dnaRollingDays; d++) {
+          const tOff = candles.length - (dnaRollingDays - d) * CANDLES_PER_DAY;
+          const yOff = tOff - CANDLES_PER_DAY;
+          if (tOff < 0 || yOff < 0 || tOff >= candles.length) continue;
+          if (candles[yOff].close <= 0) continue;
+          const bT = btcCloseByGrid.get(Math.floor(candles[tOff].timestamp / GRID_MS) * GRID_MS);
+          const bY = btcCloseByGrid.get(Math.floor(candles[yOff].timestamp / GRID_MS) * GRID_MS);
+          if (bT && bT > 0 && bY && bY > 0) {
+            symR.push((candles[tOff].close - candles[yOff].close) / candles[yOff].close);
+            btcR.push((bT - bY) / bY);
+          }
+        }
+        if (symR.length >= 10) {
+          const n = symR.length;
+          let sX = 0, sY = 0, sXY = 0, sX2 = 0, sY2 = 0;
+          for (let i = 0; i < n; i++) { sX += symR[i]; sY += btcR[i]; sXY += symR[i]*btcR[i]; sX2 += symR[i]*symR[i]; sY2 += btcR[i]*btcR[i]; }
+          const den = Math.sqrt((n*sX2 - sX*sX) * (n*sY2 - sY*sY));
+          btcCorr = den > 0 ? (n*sXY - sX*sY) / den : 0;
+        }
+      }
+    }
+    if (btcCorr !== null && btcCorr > dnaBtcCorrMax) {
+      return { valid: false, reason: `v5.149_dna_corr(${btcCorr.toFixed(3)}>${dnaBtcCorrMax})` };
     }
   }
 

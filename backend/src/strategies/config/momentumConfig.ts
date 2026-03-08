@@ -286,6 +286,14 @@ export const MomentumConfig = {
     // Combined: $4,257 → $5,473 (+28.6%)
     BULL_RUN_DETECTOR_ENABLED: true,
     BULL_RUN_BTC_DELTA_30D_PCT: 10, // Block all entries when BTC has risen >10% in last 30 days
+
+    // V5.149: DNA Correlation Filter — block trades when symbol is too correlated with BTC
+    // High correlation = herd behavior = breakouts don't mean-revert
+    // Sweep validated: corr<0.85 → 2025 $9,742→$11,506 (+18%), DD 30.9%→22.0%
+    // Combined: $7,874→$9,964 (+27%)
+    DNA_CORR_FILTER_ENABLED: false, // V5.149: Disabled — post-filter showed +27% but engine integration loses $864 due to slot replacement effect
+    DNA_BTC_CORR_MAX: 0.85,       // Block when 30-day rolling Pearson correlation > 0.85
+    DNA_ROLLING_DAYS: 30,          // Rolling window for correlation computation
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
