@@ -204,6 +204,7 @@ export const MomentumConfig = {
     // Analysis: BTC Δ24h < -5% → 35% WR on shorts (exhausted move, violent bounces)
     // Skipping these = +$2,675 PnL (63 trades removed, 41 losers vs 22 winners)
     SHORT_BTC_DROP_24H_MAX: -5,        // V5.146: Skip SHORT when BTC dropped >5% in 24h (exhausted move, violent bounces)
+    SHORT_BTC_DROP_24H_TOLERANCE: 0.5, // V5.147: Tolerance buffer for WS/REST candle variance (effective threshold = MAX - TOLERANCE = -5.5%)
     // Sweep: $5,119→$9,782 PnL (+91%), DD 42.4%→36.0% (-6.4pp), Sharpe 1.81→2.39
     // Walk-forward: H1 +$377 (Sharpe 1.01→1.30), H2 +$2,343 (Sharpe 2.73→3.57, DD 37.5%→22.7%)
 

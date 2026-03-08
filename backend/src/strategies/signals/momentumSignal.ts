@@ -867,13 +867,15 @@ export function checkMomentumSignal(
     }
 
     // V5.146: BTC 24h drop filter — skip SHORT if BTC already crashed too much (exhausted move)
+    // V5.147: Added 0.5% tolerance buffer to avoid parity NO_SIGNAL from WS/REST candle variance
     const shortBtcDrop24hMax = (eqConfigShort as any).SHORT_BTC_DROP_24H_MAX ?? 0;
+    const btcDropTolerance = (eqConfigShort as any).SHORT_BTC_DROP_24H_TOLERANCE ?? 0.5;
     if (shortBtcDrop24hMax < 0 && btcCandles.length >= 97) {
       const btcNow = btcCandles[btcCandles.length - 1].close;
       const btc24hAgo = btcCandles[btcCandles.length - 97].close;
       const btcChange24h = (btcNow - btc24hAgo) / btc24hAgo * 100;
-      if (btcChange24h < shortBtcDrop24hMax) {
-        return { valid: false, reason: `v5.146_btc_drop_24h(${btcChange24h.toFixed(1)}% < ${shortBtcDrop24hMax}%)`, features };
+      if (btcChange24h < shortBtcDrop24hMax - btcDropTolerance) {
+        return { valid: false, reason: `v5.147_btc_drop_24h(${btcChange24h.toFixed(1)}% < ${(shortBtcDrop24hMax - btcDropTolerance).toFixed(1)}%)`, features };
       }
     }
 

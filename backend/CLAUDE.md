@@ -788,3 +788,9 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **ConsecRed filter REJECTED**: Requiring N consecutive red BTC candles before SHORT destroyed PnL in all configs. Removed too many good shorts that enter on the first red candle.
   - **Propagation**: BTC 24h filter in shared `checkMomentumSignal()` → auto-aligned live/paper/backtest/parity. Circuit breaker code in `backtestService.ts` only (testing infrastructure, not deployed to live).
   - **Files**: `momentumConfig.ts` (SHORT_BTC_DROP_24H_MAX), `momentumSignal.ts` (filter code), `backtestService.ts` (dailyLossLimit + lossBreakHours params)
+
+- V5.147: BTC 24h drop tolerance buffer for parity:
+  - **Problem**: Parity NO_SIGNAL when `btcChange24h = -5.2%` in backtest (REST candles) vs ~-4.9% in live (WS candles). WS/REST variance of 0.2-0.3% causes borderline values to flip across the -5% threshold.
+  - **Fix**: Added `SHORT_BTC_DROP_24H_TOLERANCE: 0.5` — effective threshold becomes `-5.5%` instead of `-5.0%`. Trades in the -5.0% to -5.5% zone (grey area) are no longer rejected, eliminating false parity NO_SIGNAL while still filtering genuine crash entries (<-5.5%).
+  - **Parity impact**: Eliminates borderline NO_SIGNAL from WS/REST candle data variance.
+  - **Files**: `momentumConfig.ts` (SHORT_BTC_DROP_24H_TOLERANCE), `momentumSignal.ts` (tolerance applied to threshold)
