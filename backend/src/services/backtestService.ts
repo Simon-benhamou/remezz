@@ -1182,7 +1182,8 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
 
     // V5.111 PERF: Pre-compute BTC-only values once per BTC step (shared across all symbols)
     // Previously computed 10x per BTC step (once per symbol).
-    const btcWindowForSignal = btcCandles.slice(Math.max(0, btcIdx - 201), btcIdx);
+    // V5.148: Increased from 201 to 3000 to support bull run detector (needs 2880 candles = 30d of 15m)
+    const btcWindowForSignal = btcCandles.slice(Math.max(0, btcIdx - 3000), btcIdx);
     let cachedIsBullRegime: boolean | null = null;
 
     // ═══════════════════════════════════════════════════════════════════

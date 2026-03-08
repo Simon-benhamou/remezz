@@ -37,8 +37,9 @@ const SEED_SYMBOLS = [
   'XRP/USDT:USDT',
 ];
 
-// How many candles to fetch
-const CANDLES_TO_FETCH = 300; // ~3 days of 15m candles
+// V5.148: Increased from 300 to 1000 for REST refresh (local file seed handles the full 3100 buffer)
+// Binance REST API max is 1500 per call
+const CANDLES_TO_FETCH = 1000;
 
 // Background refresh interval — safety net for WS gaps (not the primary data source)
 // WS kline streams handle real-time updates; this just fills any missed candles

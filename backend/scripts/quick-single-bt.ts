@@ -13,13 +13,17 @@ import {
 import fs from 'node:fs';
 import path from 'node:path';
 
-const PERIOD = { start: '2025-01-01', end: '2025-12-31' };
 const INITIAL_CAPITAL = 2000;
 const LEVERAGE = 5;
 
 const name = process.argv[2] || 'test';
 const symsArg = process.argv[3] || '';
 const symbols = symsArg.split(',').filter(Boolean);
+// Optional 4th arg: period override (e.g. "2024-01-01,2024-12-31")
+const periodArg = process.argv[4] || '';
+const PERIOD = periodArg.includes(',')
+  ? { start: periodArg.split(',')[0], end: periodArg.split(',')[1] }
+  : { start: '2025-01-01', end: '2025-12-31' };
 
 function loadSymbolCandles(symbol: string, since: number, end: number): BacktestCandle[] | null {
   const base = symbol + '_USDT';
@@ -51,7 +55,8 @@ function loadSymbolCandles(symbol: string, since: number, end: number): Backtest
 async function main() {
   const startDate = new Date(PERIOD.start + 'T00:00:00.000Z');
   const endDate = new Date(PERIOD.end + 'T23:59:59.999Z');
-  const extraBarsMs = 250 * 15 * 60 * 1000;
+  // V5.148: Need 2880 candles (30d) lookback for bull run detector + 250 for indicators
+  const extraBarsMs = 3200 * 15 * 60 * 1000;
   const since = startDate.getTime() - extraBarsMs;
   const end = endDate.getTime();
 

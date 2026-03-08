@@ -443,6 +443,27 @@ export function checkMomentumSignal(
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // V5.148: BULL RUN DETECTOR — Stop trading when BTC Δ30d > threshold
+  // Sweep validated: Δ30d>10% optimal — saves $514 in 2024, gains $702 in 2025
+  // ═══════════════════════════════════════════════════════════════════════════
+  const bullRunEnabled = (MomentumConfig.ENTRY as any).BULL_RUN_DETECTOR_ENABLED ?? false;
+  const bullRunDelta30dPct = (MomentumConfig.ENTRY as any).BULL_RUN_BTC_DELTA_30D_PCT ?? 10;
+  if (bullRunEnabled && bullRunDelta30dPct > 0) {
+    // 30 days of 15m candles = 2880 candles
+    const CANDLES_30D = 30 * 24 * 4;
+    if (btcCandles.length >= CANDLES_30D + 1) {
+      const btcNowPrice = btcCandles[btcCandles.length - 1].close;
+      const btc30dAgoPrice = btcCandles[btcCandles.length - 1 - CANDLES_30D].close;
+      if (btc30dAgoPrice > 0) {
+        const btcDelta30d = ((btcNowPrice - btc30dAgoPrice) / btc30dAgoPrice) * 100;
+        if (btcDelta30d > bullRunDelta30dPct) {
+          return { valid: false, reason: `v5.148_bull_run(Δ30d=${btcDelta30d.toFixed(1)}%>${bullRunDelta30dPct}%)` };
+        }
+      }
+    }
+  }
+
   // Calcul legacy pour compatibilité features — timestamp-based to handle candle gaps
   const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
   const targetTs = btcCandles[btcCandles.length - 1].timestamp - SIX_HOURS_MS;

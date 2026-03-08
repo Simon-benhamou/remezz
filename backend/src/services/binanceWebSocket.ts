@@ -2003,8 +2003,8 @@ class BinanceWebSocketManager {
       cache[cache.length - 1] = klineData;
     } else {
       cache.push(klineData);
-      // Garde max 500 candles en cache
-      if (cache.length > 500) {
+      // V5.148: Increased from 500 to 3100 to support bull run detector (needs 2880 = 30d of 15m)
+      if (cache.length > 3100) {
         cache.shift();
       }
     }
@@ -2207,7 +2207,8 @@ class BinanceWebSocketManager {
 
     const cacheSymbol = this.normalizeCacheSymbol(symbol);
     const key = this.klineCacheKey(cacheSymbol, interval);
-    const limited = ohlcv.slice(-500);
+    // V5.148: Increased from 500 to 3100 to support bull run detector (needs 2880 = 30d of 15m)
+    const limited = ohlcv.slice(-3100);
 
     // Get existing cache (from WebSocket real-time updates)
     const existing = this.klinesCache.get(key) || [];
@@ -2237,10 +2238,10 @@ class BinanceWebSocketManager {
         } satisfies BinanceKlineData));
 
       if (toMerge.length > 0) {
-        // Merge all candles, sort by timestamp, keep last 500
+        // Merge all candles, sort by timestamp, keep last 3100 (V5.148: was 500)
         const merged = [...existing, ...toMerge]
           .sort((a, b) => a.timestamp - b.timestamp)
-          .slice(-500);
+          .slice(-3100);
         this.klinesCache.set(key, merged);
       }
     } else {

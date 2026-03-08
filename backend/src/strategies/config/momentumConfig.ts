@@ -278,6 +278,14 @@ export const MomentumConfig = {
     BTC_REGIME_TOLERANCE_PCT: 0.2, // V5.113: Dead zone ±0.2% around SMA200 — when price is in band, use SMA slope to determine regime (prevents whipsaw). Validated: +$4.4K PnL, -2.7pp DD, +0.09 Sharpe
     BTC_SMA200_SKIP_ZONE_PCT: 1.0,  // V5.129: Skip entries when BTC is within X% of SMA200. Data: -17.8pp DD, +0.19 Sharpe, -9% PnL. Sweet spot validated on 2025 full year.
     BTC_SMA200_SKIP_ZONE_QUALITY_BYPASS: 0, // V5.129: Quality score threshold to bypass skip zone (0 = no bypass). Composite from volRatio+ROC10+ROC5+BTC_ADX+SMA_slope.
+
+    // V5.148: Bull Run Detector — stop trading when BTC is in a strong uptrend
+    // Sweep validated on 2024 (bull) + 2025 (range): Δ30d>10% is optimal
+    // 2024: -$1,916 → -$1,402 (saves $514), DD 96.5% → 77.3%
+    // 2025: $6,173 → $6,875 (+$702), DD 39.6% → 28.8%
+    // Combined: $4,257 → $5,473 (+28.6%)
+    BULL_RUN_DETECTOR_ENABLED: true,
+    BULL_RUN_BTC_DELTA_30D_PCT: 10, // Block all entries when BTC has risen >10% in last 30 days
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
