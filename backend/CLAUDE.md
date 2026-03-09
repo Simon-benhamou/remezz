@@ -113,6 +113,7 @@ npm run migrate             # Run migrations
 - **BTC Data Service**: `getBtcDataService()` is the single source of truth for BTC candles, regime, and market conditions. Consumers: symbolEngine, orchestrator (checkEntry/checkExit/getMarketConditions), positionOpener, server.ts. Pure functions `filterClosed()` and `computeRegime()` eliminate 6 formerly-duplicated implementations. Param name: `btcCandlesRegime` (not `btcCandles1h`)
 - **Mutex Caches**: Leverage cache is mutex-protected via `globalCacheManager`. BTC candle caches in cacheManager still exist as fallback but primary source is `BtcDataService`
 - **Error Handling**: Use `errMsg(error: unknown): string` helper for safe error extraction in `catch (error: unknown)` blocks (no `catch (error: any)`)
+- **MANDATORY: Combined Backtest BEFORE Code Changes**: Any strategy filter, threshold, or exit logic change MUST be validated with a full combined multi-symbol engine-integrated backtest BEFORE modifying `momentumConfig.ts` or `momentumSignal.ts`. The workflow is: (1) implement change, (2) run combined backtest on 2024+2025, (3) compare against baseline, (4) only commit if results are positive. Post-filter simulations (MAE/MFE sweeps, trade removal scripts) are EXPLORATION ONLY — they overestimate improvements due to slot replacement effect and missed side-effects (e.g., BE clipping winners). Three confirmed failures: V5.149 DNA filter (+27% post-filter, -$864 engine), V5.150 sweep (+222% post-filter, bug), V5.151 combo (+$4,417 post-filter, -$6,922 engine).
 - **MomentumConfig Mutability**: `MomentumConfig` is a mutable `const` object (not `as const`) so tests can toggle fields like `CASH_MODE.ENABLED`
 - **Cash Mode**: Market regime detection (ADX + ATR + SMA200 slope) skips entries in CHOPPY/LOW_VOL regimes. Integrated at top of `checkMomentumSignal()`
 - **Single REST Gateway**: ALL Binance REST calls route through `binanceRestQueue` (single gateway). The queue handles weight tracking via `ipWeightTracker`, IP ban detection, priority ordering, rate limiting (100ms between calls), retry logic, and **post-ban candle re-seeding** via `onBanExpired()` callbacks. When an IP ban expires, `seedFreshCandles()` is triggered automatically to repopulate the WS kline cache (prevents agents being stuck at 2/61 candles). No direct `fetch()` or `exchange.*()` calls to Binance outside the queue. Key callers: `fetchBinanceOhlcv` (OHLCV via direct HTTP), `scheduleBinanceRestFallback` (ticker fallbacks), `candleCache` (startup seeding), `parityVerificationServiceV2` (parity checks), `loadHistoricalOhlcv` (backtest data). Exception: WS manager internal calls (exchangeInfo, time, bookTicker) use own limiters with manual `ipWeightTracker.record()`. Soft limit 1800w/min (75%), hard limit 2400w/min. Stats exposed at `/api/health`
@@ -820,3 +821,24 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **Lesson**: `trade.entryTime` in backtest is candle CLOSE time (V5.46 realisticTiming). Any script that maps trades back to candles must subtract one candle duration (15min) to find the signal candle. This applies to ALL post-hoc analysis scripts.
   - **Status**: Scripts fixed, sweep re-running for valid results. Post-filter results may still differ from engine-integrated results due to slot replacement effect (see V5.149 DNA filter lesson).
   - **Files**: `scripts/sl-predictor-analysis.ts`, `scripts/sweep-sl-predictors.ts`, `scripts/analyze-exits.ts`
+
+- V5.151: Deep SL analysis + ATR/BlockHours/BE combo — **REVERTED** (post-filter trap confirmed):
+  - **Goal**: Reduce SL losses using MAE/MFE behavioral analysis findings.
+  - **Deep analysis** (`scripts/sl-deep-analysis.ts`): 928 trades analyzed. Key findings:
+    - 88% of SL trades go positive first (MFE > 0.1%) → entry signal is RIGHT, problem is exit
+    - 83% of SL trades hit SL within 8 bars (2h) → too fast for stagnant to save
+    - ATR% is #1 SL predictor (Cohen's d = 0.76). MED volatility (ATR 2-3.5%) = 71-77% SL rate
+    - 20-24 UTC = worst SL window (33-46% SL rate), SHORT = 79% of all SL trades
+  - **Solutions sweep** (`scripts/sl-solutions-sweep.ts`): Fast MAE/MFE simulation of 4 approaches + combos:
+    - SL widening: CATASTROPHIC (-$13,584 when combined with BE). Wider SL = bigger losses when trades truly crash
+    - ATR<2% filter: +$774 (2025), +$272 (2024) — marginal
+    - Block 20-24 UTC: +$2,001 (2025), +$393 (2024) — moderate
+    - BE@0.3%: +$1,295 (2025), +$557 (2024) — best single
+    - Best combo: ATR<2% + Block20-24 + BE@0.4% = +$4,417 combined (post-filter simulation)
+  - **Engine-integrated backtest** (the real test):
+    - 2025: 488 trades, **53.3% WR** (was 65.8%), **$2,820** PnL (was $9,742), Sharpe 1.22 (was 2.51) → **-$6,922 degradation**
+    - 2024: 417 trades, 40.0% WR (was 51.2%), -$1,901 PnL (was -$1,868) → marginally worse
+  - **Root cause**: BE@0.4% is too aggressive — it moves SL to breakeven too early, converting future winners (+3-5% runs) into breakeven exits. Trades touch +0.4%, BE triggers, then a small dip exits at +0.1% before the real move. The post-filter simulation didn't capture this because it only measured "would the SL have been avoided" without modeling the clipped winners.
+  - **CRITICAL LESSON**: Post-filter MAE/MFE simulations are UNRELIABLE for breakeven changes. They model the upside (SL avoided) but not the downside (winners clipped). Engine-integrated backtest is the ONLY valid test. This is the 3rd confirmation of the slot-replacement/post-filter trap (after V5.149 DNA filter and V5.150 sweep).
+  - **Status**: All 3 changes REVERTED (ATR filter disabled, block hours disabled, BE back to 0.7%). Config flags remain in code (disabled) for future reference. Analysis scripts committed for institutional knowledge.
+  - **Files**: `momentumConfig.ts` (reverted), `momentumSignal.ts` (filter code remains, disabled), `scripts/sl-deep-analysis.ts`, `scripts/sl-solutions-sweep.ts`, `docs/plans/2026-03-09-sl-deep-analysis-results.md`

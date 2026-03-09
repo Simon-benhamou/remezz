@@ -436,7 +436,7 @@ export const MomentumConfig = {
     // V5.81: Breakeven move — eliminate losses on trades that prove direction
     // When trade reaches +BREAKEVEN_TRIGGER_PCT, move SL to entry + fees
     BREAKEVEN_ENABLED: true,
-    BREAKEVEN_TRIGGER_PCT: 0.7,       // V5.145: Move SL to breakeven when +0.7% profit reached (was 1.0%, sweep showed +$338/+0.09 Sharpe, walk-forward stable)
+    BREAKEVEN_TRIGGER_PCT: 0.7,       // V5.151 REVERTED to 0.7% (0.4% killed WR by -12pp in engine backtest)
     BREAKEVEN_OFFSET_PCT: 0.1,        // Offset above entry to cover fees (0.1%)
 
     PROFIT_TARGET_PCT: 3.0,      // Take Profit 3% → 15% avec 5x leverage
