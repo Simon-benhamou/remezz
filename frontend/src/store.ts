@@ -178,11 +178,11 @@ export const useDashboardStore = create<DashboardStore>()(
         const cachedData = cache[newMode];
         if (cachedData && get().isCacheValid(newMode)) {
           set({ currentOverview: cachedData.data });
-          console.log(`🎯 Using cached overview for ${newMode} mode`);
+          if (import.meta.env.DEV) console.log(`🎯 Using cached overview for ${newMode} mode`);
         } else {
           // Si pas de cache valide, on reset l'overview actuel
           set({ currentOverview: {} });
-          console.log(`📦 No valid cache for ${newMode} mode, will refresh`);
+          if (import.meta.env.DEV) console.log(`📦 No valid cache for ${newMode} mode, will refresh`);
         }
       },
 
@@ -206,10 +206,10 @@ export const useDashboardStore = create<DashboardStore>()(
           const newCache = { ...cache };
           delete newCache[mode];
           set({ overviewCache: newCache });
-          console.log(`🗑️ Invalidated cache for ${mode} mode`);
+          if (import.meta.env.DEV) console.log(`🗑️ Invalidated cache for ${mode} mode`);
         } else {
           set({ overviewCache: {} });
-          console.log('🗑️ Invalidated all cache');
+          if (import.meta.env.DEV) console.log('🗑️ Invalidated all cache');
         }
       },
 
@@ -274,8 +274,9 @@ export const useOpsJobsStore = create<OpsJobsStore>()((set, get) => ({
     set((state) => {
       const idx = state.jobs.findIndex((row) => row.id === job.id);
       if (idx === -1) {
+        const updated = [...state.jobs, job];
         return {
-          jobs: [...state.jobs, job],
+          jobs: updated.length > 200 ? updated.slice(-200) : updated,
           lastUpdated: Date.now(),
           loading: false,
           error: null,

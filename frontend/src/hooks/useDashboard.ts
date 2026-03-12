@@ -38,12 +38,12 @@ export function useDashboard() {
       if (!forceRefresh) {
         const cached = getCachedOverview(mode);
         if (cached) {
-          console.log(`🎯 Using cached overview for ${mode} mode`);
+          if (import.meta.env.DEV) console.log(`🎯 Using cached overview for ${mode} mode`);
           return cached;
         }
       }
 
-      console.log(`🔄 Fetching fresh overview for ${mode} mode`);
+      if (import.meta.env.DEV) console.log(`🔄 Fetching fresh overview for ${mode} mode`);
       const data = await api.overview(mode);
       setOverview(data, mode);
       updateLastFetched();
@@ -82,14 +82,14 @@ export function useDashboard() {
 
   // Gestion intelligente du changement de mode
   useEffect(() => {
-    console.log(`📋 Mode changed to: ${mode}`);
+    if (import.meta.env.DEV) console.log(`📋 Mode changed to: ${mode}`);
     
     // Switch vers les données cachées du nouveau mode
     switchMode(mode);
     
     // Si pas de cache valide pour ce mode, charger immédiatement
     if (!isCacheValid(mode)) {
-      console.log(`⚡ No valid cache for ${mode}, loading immediately`);
+      if (import.meta.env.DEV) console.log(`⚡ No valid cache for ${mode}, loading immediately`);
       loadOverview(true); // Force refresh pour le nouveau mode
     }
   }, [mode]); // Suppression des dépendances functions pour éviter boucles
@@ -101,7 +101,7 @@ export function useDashboard() {
       if (document.hidden) return;
       // Refresh seulement si nécessaire (cache expiré)
       if (!isCacheValid(mode)) {
-        console.log(`⏰ Auto-refresh triggered for ${mode} mode`);
+        if (import.meta.env.DEV) console.log(`⏰ Auto-refresh triggered for ${mode} mode`);
         loadOverview(true);
       }
     }, 30000);

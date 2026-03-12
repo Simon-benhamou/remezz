@@ -68,7 +68,15 @@ interface UseMultiDataCacheReturn<T extends Record<string, any>> {
 }
 
 // Global cache store
+const MAX_CACHE_SIZE = 50;
 const globalMultiCache: Map<string, Map<string, CacheEntry<any>>> = new Map();
+
+function evictOldest(map: Map<string, any>, maxSize: number): void {
+  while (map.size > maxSize) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+}
 
 /**
  * Hook for fetching multiple data sources with shared caching and stale-while-revalidate.
@@ -92,7 +100,7 @@ const globalMultiCache: Map<string, Map<string, CacheEntry<any>>> = new Map();
  */
 export function clearAllMultiCache(): void {
   globalMultiCache.clear();
-  console.log('All multi-cache cleared');
+  if (import.meta.env.DEV) console.log('All multi-cache cleared');
 }
 
 export function useMultiDataCache<T extends Record<string, any>>(
@@ -116,6 +124,7 @@ export function useMultiDataCache<T extends Record<string, any>>(
   // Initialize global cache for this key if needed
   if (!globalMultiCache.has(fullCacheKey)) {
     globalMultiCache.set(fullCacheKey, new Map());
+    evictOldest(globalMultiCache, MAX_CACHE_SIZE);
   }
 
   const cacheStore = globalMultiCache.get(fullCacheKey)!;
@@ -181,7 +190,7 @@ export function useMultiDataCache<T extends Record<string, any>>(
       : keysToFetch.filter(key => !isSourceCacheValid(key));
 
     if (staleSources.length === 0) {
-      console.log(`🎯 [${fullCacheKey}] All data cached and valid`);
+      if (import.meta.env.DEV) console.log(`🎯 [${fullCacheKey}] All data cached and valid`);
       return data;
     }
 
@@ -199,7 +208,7 @@ export function useMultiDataCache<T extends Record<string, any>>(
     const newErrors: Partial<Record<keyof T, Error>> = { ...errors };
     const updatedData: Partial<T> = { ...data };
 
-    console.log(`🔄 [${fullCacheKey}] Fetching: ${staleSources.join(', ')}`);
+    if (import.meta.env.DEV) console.log(`🔄 [${fullCacheKey}] Fetching: ${staleSources.join(', ')}`);
 
     // Fetch all stale sources in parallel
     const fetchPromises = staleSources.map(async (key) => {
@@ -218,7 +227,7 @@ export function useMultiDataCache<T extends Record<string, any>>(
         updatedData[key] = freshData;
         delete newErrors[key];
 
-        console.log(`✅ [${fullCacheKey}:${String(key)}] Cached`);
+        if (import.meta.env.DEV) console.log(`✅ [${fullCacheKey}:${String(key)}] Cached`);
       } catch (err) {
         if (!isMountedRef.current) return;
 
@@ -266,7 +275,7 @@ export function useMultiDataCache<T extends Record<string, any>>(
     for (const key of keysToInvalidate) {
       cacheStore.delete(String(key));
     }
-    console.log(`🗑️ [${fullCacheKey}] Invalidated: ${keysToInvalidate.join(', ')}`);
+    if (import.meta.env.DEV) console.log(`🗑️ [${fullCacheKey}] Invalidated: ${keysToInvalidate.join(', ')}`);
   }, [fullCacheKey, sources]);
 
   // Get specific data
@@ -286,7 +295,7 @@ export function useMultiDataCache<T extends Record<string, any>>(
     if (autoRefreshMs > 0) {
       autoRefreshRef.current = setInterval(() => {
         if (hasStaleCache()) {
-          console.log(`⏰ [${fullCacheKey}] Auto-refresh triggered`);
+          if (import.meta.env.DEV) console.log(`⏰ [${fullCacheKey}] Auto-refresh triggered`);
           refresh(undefined, false);
         }
       }, autoRefreshMs);

@@ -63,7 +63,15 @@ interface UseDataCacheReturn<T> {
 }
 
 // Global cache store (persists across component unmounts within session)
+const MAX_CACHE_SIZE = 50;
 const globalCache: Map<string, CacheStore<any>> = new Map();
+
+function evictOldest(map: Map<string, any>, maxSize: number): void {
+  while (map.size > maxSize) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+}
 
 /**
  * Generic hook for data fetching with caching and stale-while-revalidate pattern.
@@ -105,6 +113,7 @@ export function useDataCache<T>(options: UseDataCacheOptions<T>): UseDataCacheRe
   // Initialize global cache for this key if needed
   if (!globalCache.has(cacheKey)) {
     globalCache.set(cacheKey, {});
+    evictOldest(globalCache, MAX_CACHE_SIZE);
   }
 
   const cacheStore = globalCache.get(cacheKey)!;
@@ -138,7 +147,7 @@ export function useDataCache<T>(options: UseDataCacheOptions<T>): UseDataCacheRe
     if (!force && isCacheValid()) {
       const cached = cacheStore[fullCacheKey];
       if (cached?.data) {
-        console.log(`🎯 [${fullCacheKey}] Using cached data`);
+        if (import.meta.env.DEV) console.log(`🎯 [${fullCacheKey}] Using cached data`);
         return cached.data;
       }
     }
@@ -158,7 +167,7 @@ export function useDataCache<T>(options: UseDataCacheOptions<T>): UseDataCacheRe
     setError(null);
 
     try {
-      console.log(`🔄 [${fullCacheKey}] Fetching fresh data...`);
+      if (import.meta.env.DEV) console.log(`🔄 [${fullCacheKey}] Fetching fresh data...`);
       const freshData = await fetcher();
 
       if (!isMountedRef.current) return null;
@@ -177,7 +186,7 @@ export function useDataCache<T>(options: UseDataCacheOptions<T>): UseDataCacheRe
       // Callback
       onDataUpdate?.(freshData);
 
-      console.log(`✅ [${fullCacheKey}] Data cached`);
+      if (import.meta.env.DEV) console.log(`✅ [${fullCacheKey}] Data cached`);
       return freshData;
     } catch (err) {
       if (!isMountedRef.current) return null;
@@ -201,7 +210,7 @@ export function useDataCache<T>(options: UseDataCacheOptions<T>): UseDataCacheRe
   const invalidate = useCallback(() => {
     delete cacheStore[fullCacheKey];
     setLastUpdated(null);
-    console.log(`🗑️ [${fullCacheKey}] Cache invalidated`);
+    if (import.meta.env.DEV) console.log(`🗑️ [${fullCacheKey}] Cache invalidated`);
   }, [fullCacheKey]);
 
   // Initial fetch on mount
@@ -216,7 +225,7 @@ export function useDataCache<T>(options: UseDataCacheOptions<T>): UseDataCacheRe
     if (autoRefreshMs > 0) {
       autoRefreshRef.current = setInterval(() => {
         if (!isCacheValid()) {
-          console.log(`⏰ [${fullCacheKey}] Auto-refresh triggered`);
+          if (import.meta.env.DEV) console.log(`⏰ [${fullCacheKey}] Auto-refresh triggered`);
           refresh(true);
         }
       }, autoRefreshMs);
@@ -276,7 +285,7 @@ export function createCacheKey(base: string, mode?: AppMode, ...parts: string[])
  */
 export function clearAllCache(): void {
   globalCache.clear();
-  console.log('🗑️ All cache cleared');
+  if (import.meta.env.DEV) console.log('🗑️ All cache cleared');
 }
 
 /**
@@ -288,5 +297,5 @@ export function clearCacheByPrefix(prefix: string): void {
       globalCache.delete(key);
     }
   });
-  console.log(`🗑️ Cache cleared for prefix: ${prefix}`);
+  if (import.meta.env.DEV) console.log(`🗑️ Cache cleared for prefix: ${prefix}`);
 }

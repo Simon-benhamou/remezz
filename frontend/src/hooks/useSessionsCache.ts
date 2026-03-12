@@ -33,7 +33,7 @@ export function useSessionsCache() {
   const getCachedSessions = useCallback((mode: AppMode, includeStats = false) => {
     const key = generateCacheKey(mode, includeStats);
     if (isCacheValid(key)) {
-      console.log(`🎯 Using cached sessions for ${key}`);
+      if (import.meta.env.DEV) console.log(`🎯 Using cached sessions for ${key}`);
       return cacheRef.current[key].sessions;
     }
     return null;
@@ -58,7 +58,7 @@ export function useSessionsCache() {
     setError(null);
 
     try {
-      console.log(`🔄 Fetching fresh sessions for ${key}`);
+      if (import.meta.env.DEV) console.log(`🔄 Fetching fresh sessions for ${key}`);
       const response = await api.listSessions(mode, includeStats);
       
       // Handle both formats: direct array or { sessions: [...] }
@@ -70,7 +70,7 @@ export function useSessionsCache() {
         timestamp: Date.now()
       };
 
-      console.log(`✅ Cached ${sessions.length} sessions for ${key}`);
+      if (import.meta.env.DEV) console.log(`✅ Cached ${sessions.length} sessions for ${key}`);
       return sessions;
     } catch (err: any) {
       const errorMsg = err?.response?.data?.error || err?.message || 'Failed to load sessions';
@@ -86,16 +86,16 @@ export function useSessionsCache() {
     if (mode !== undefined && includeStats !== undefined) {
       const key = generateCacheKey(mode, includeStats);
       delete cacheRef.current[key];
-      console.log(`🗑️ Invalidated sessions cache for ${key}`);
+      if (import.meta.env.DEV) console.log(`🗑️ Invalidated sessions cache for ${key}`);
     } else if (mode !== undefined) {
       // Invalidate all variations of this mode
       const keysToDelete = Object.keys(cacheRef.current).filter(k => k.startsWith(`${mode}:`));
       keysToDelete.forEach(key => delete cacheRef.current[key]);
-      console.log(`🗑️ Invalidated all sessions cache for mode ${mode}`);
+      if (import.meta.env.DEV) console.log(`🗑️ Invalidated all sessions cache for mode ${mode}`);
     } else {
       // Invalidate all cache
       cacheRef.current = {};
-      console.log('🗑️ Invalidated all sessions cache');
+      if (import.meta.env.DEV) console.log('🗑️ Invalidated all sessions cache');
     }
   }, []);
 
@@ -118,7 +118,7 @@ export function useSessionsCache() {
       if (document.hidden) return;
       const key = generateCacheKey(mode, includeStats);
       if (!isCacheValid(key)) {
-        console.log(`⏰ Auto-refresh triggered for sessions ${key}`);
+        if (import.meta.env.DEV) console.log(`⏰ Auto-refresh triggered for sessions ${key}`);
         refreshCache(mode, includeStats);
       }
     }, AUTO_REFRESH_INTERVAL);

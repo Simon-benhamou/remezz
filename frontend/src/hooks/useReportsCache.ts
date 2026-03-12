@@ -106,7 +106,7 @@ export function useReportsCache() {
     if (!forceRefresh && isCacheValid(mode)) {
       const cached = getCachedData(mode);
       if (cached) {
-        console.log(`🎯 Using cached reports for ${mode}`);
+        if (import.meta.env.DEV) console.log(`🎯 Using cached reports for ${mode}`);
         setReports(cached.reports);
         setSessions(cached.sessions);
         return cached;
@@ -128,7 +128,7 @@ export function useReportsCache() {
     setError(null);
 
     try {
-      console.log(`🔄 Fetching fresh reports for ${mode}`);
+      if (import.meta.env.DEV) console.log(`🔄 Fetching fresh reports for ${mode}`);
 
       // Fetch sessions first
       const sessionsData = await api.listSessions(mode);
@@ -171,7 +171,7 @@ export function useReportsCache() {
         timestamp: Date.now()
       };
 
-      console.log(`✅ Cached ${transformedReports.length} daily reports for ${mode}`);
+      if (import.meta.env.DEV) console.log(`✅ Cached ${transformedReports.length} daily reports for ${mode}`);
 
       setReports(transformedReports);
       setSessions(sessionsArray);
@@ -191,10 +191,10 @@ export function useReportsCache() {
   const invalidateCache = useCallback((mode?: AppMode) => {
     if (mode !== undefined) {
       delete cacheRef.current[mode];
-      console.log(`🗑️ Invalidated reports cache for ${mode}`);
+      if (import.meta.env.DEV) console.log(`🗑️ Invalidated reports cache for ${mode}`);
     } else {
       cacheRef.current = {};
-      console.log('🗑️ Invalidated all reports cache');
+      if (import.meta.env.DEV) console.log('🗑️ Invalidated all reports cache');
     }
   }, []);
 
@@ -208,7 +208,7 @@ export function useReportsCache() {
       // Skip polling when tab is not visible
       if (document.hidden) return;
       if (!isCacheValid(mode)) {
-        console.log(`⏰ Auto-refresh triggered for reports ${mode}`);
+        if (import.meta.env.DEV) console.log(`⏰ Auto-refresh triggered for reports ${mode}`);
         loadReports(mode, true).catch(console.error);
       }
     }, AUTO_REFRESH_INTERVAL);
