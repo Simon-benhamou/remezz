@@ -842,3 +842,19 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **CRITICAL LESSON**: Post-filter MAE/MFE simulations are UNRELIABLE for breakeven changes. They model the upside (SL avoided) but not the downside (winners clipped). Engine-integrated backtest is the ONLY valid test. This is the 3rd confirmation of the slot-replacement/post-filter trap (after V5.149 DNA filter and V5.150 sweep).
   - **Status**: All 3 changes REVERTED (ATR filter disabled, block hours disabled, BE back to 0.7%). Config flags remain in code (disabled) for future reference. Analysis scripts committed for institutional knowledge.
   - **Files**: `momentumConfig.ts` (reverted), `momentumSignal.ts` (filter code remains, disabled), `scripts/sl-deep-analysis.ts`, `scripts/sl-solutions-sweep.ts`, `docs/plans/2026-03-09-sl-deep-analysis-results.md`
+
+- V5.152: ADA early exit investigation — two approaches tested, both **REJECTED**:
+  - **Context**: ADA trade 2026-03-16 entered LONG @0.2698, exited NFS HIGH @0.2704 (+0.22%), then price ran +8% to 0.294 without us. Investigation to find why and fix it.
+  - **Approach 1: Continuous ATR-proportional trailing distance** — replace discrete volatility buckets (LOW=0.3%, MED=0.4%, HIGH=0.8%) with `distance = clamp(MULT × currentATR%, 0.3%, 3.0%)`.
+    - **Hypothesis**: ADA (ATR 0.63%) classified as LOW vol → trailing distance 0.3% was below noise floor, causing premature NFS HIGH exit.
+    - **Sweep**: DIST_ATR_MULT ∈ [0.5, 0.75, 1.0, 1.25, 1.5], 9 symbols, 2024+2025.
+    - **Result**: CATASTROPHIC. Best (MULT=0.5): 2025 Sharpe 0.57 (was 2.40), PnL $338 (was $8,769). Formula gave distances 3-5× wider than fixed buckets for LOW/MED vol assets, doubling SL count and halving trail exits.
+    - **Root cause**: Fixed buckets (0.3-0.4%) are actually optimal. ATR-proportional gives too much room.
+  - **Approach 2: ADX Rising filter tolerance** — allow entries when ADX is declining but above a high threshold or declining by small amount.
+    - **Discovery**: Traced PM2 logs to find the actual blocker. After NFS HIGH exit at 00:30, the real breakout came at 03:30-03:45 UTC. At 03:30: `roc_low` (0.9% < 1.75%). At 03:45: `adx_not_rising` (ADX 39.1 declined from 40.8). The ADX Rising filter (V5.141) killed the re-entry signal despite ADX being very high (39.1 = strong trend).
+    - **Sweep**: 15 configs testing 3 tolerance mechanisms: (A) min decline threshold (2/3/5 pts), (B) high ADX bypass (25/30/35), (C) reduced lookback (2 vs 3), plus A+B and A+B+C combos, plus ADX_RISING=OFF.
+    - **Result**: ALL 14 alternatives worse than strict baseline. Best (minDecline=2): Sharpe 1.79 vs 2.40, PnL $4,249 vs $8,769 (-$4,520). Walk-forward: ❌ FAIL on all 3 top configs (H1 collapses: $232/$97/$-92 vs baseline $1,310).
+    - **Root cause**: Each tolerance admits ~50-200 extra trades that are overwhelmingly losers. The ADA case was exceptional (+8% raté); statistically ADX Rising strict blocks far more bad trades than good ones.
+  - **CRITICAL LESSON #4**: Salience bias — a single spectacular missed trade (+8%) makes the filter look broken, but the filter prevents ~150 losing trades worth -$5,000+. Always validate with full compounded backtest, not single-trade anecdotes. Joins V5.143 (BB depth), V5.144 (MQS), V5.149 (DNA), V5.151 (SL predictors) as confirmed post-hoc traps.
+  - **Status**: Both approaches REVERTED. ADX Rising strict is optimal (Sharpe 2.40). No code changes committed.
+  - **Scripts**: `scripts/sweep-adx-rising-tolerance.ts` (ADX tolerance sweep), `scripts/sweep-trailing-dist-atr.ts` (deleted — ATR trailing sweep)
