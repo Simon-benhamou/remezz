@@ -279,8 +279,8 @@ export class PositionCloser {
     });
 
     // V5.63: Record trade result for consecutive loser tracking
-    // Winner = positive net PnL after fees (use totalPnlUsd which includes multi-positions)
-    const isWinner = (totalPnlUsd - paperFeeUsd) > 0;
+    // Use GROSS PnL (before fees) — fees on flat trades (e.g. WIF +0.06%) should not count as loss
+    const isWinner = totalPnlUsd > 0;
     deps.capitalPool.recordTradeResult(isWinner, symbol);
 
     // V5.79: Record trade for daily Telegram report
@@ -487,7 +487,8 @@ export class PositionCloser {
       });
 
       // V5.63: Record trade result for consecutive loser tracking
-      const isWinnerLive = (actualPnlUsd - liveFeeUsd) > 0;
+      // Use GROSS PnL (before fees) — fees on flat trades should not count as loss
+      const isWinnerLive = actualPnlUsd > 0;
       deps.capitalPool.recordTradeResult(isWinnerLive, symbol);
 
       // V5.79: Record trade for daily Telegram report

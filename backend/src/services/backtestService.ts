@@ -228,6 +228,9 @@ export interface BacktestParams {
   // lossBreakHours: hours to pause (0 or undefined = rest of day)
   dailyLossLimit?: number;
   lossBreakHours?: number;
+  // V5.63: Skip rule threshold override. Default 2 (skip 1 trade after 2 consecutive losers).
+  // Set to 9999 to effectively disable the skip rule.
+  skipRuleThreshold?: number;
 }
 
 export interface BacktestTrade {
@@ -984,7 +987,7 @@ function calculatePnl(
   marginUsd: number,
   leverage: number,
   holdBars: number,
-): { grossPnlPct: number; netPnlPct: number; netPnlUsd: number; feesUsd: number } {
+): { grossPnlPct: number; netPnlPct: number; netPnlUsd: number; grossPnlUsd: number; feesUsd: number } {
   // Calculate price change percentage
   const pricePct =
     side === 'long'
@@ -1012,7 +1015,7 @@ function calculatePnl(
   const grossPnlPct = (grossPnlUsd / marginUsd) * 100;
   const netPnlPct = (netPnlUsd / marginUsd) * 100;
 
-  return { grossPnlPct, netPnlPct, netPnlUsd, feesUsd };
+  return { grossPnlPct, netPnlPct, netPnlUsd, grossPnlUsd, feesUsd };
 }
 
 /**
@@ -1090,7 +1093,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
   let consecutiveLosers = 0;
   let tradesToSkip = 0;
 
-  const CONSECUTIVE_LOSER_THRESHOLD = 2;  // Trigger after this many consecutive losers
+  const CONSECUTIVE_LOSER_THRESHOLD = params.skipRuleThreshold ?? 2;  // Trigger after this many consecutive losers
   const TRADES_TO_SKIP = 1;               // Skip this many trades, then resume
   let tradeId = 0;
 
@@ -1397,7 +1400,8 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
                       entryAtrPct: pos.entryAtrPct,
                     });
 
-                    if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
+                    // V5.63: Use GROSS PnL for skip rule (fees on flat trades should not count as loss)
+                    if (pnl.grossPnlUsd >= 0) consecutiveLosers = 0;
                     else {
                       consecutiveLosers++; dailyLossCount++;
                       if (lossBreakMs && dailyLossLimit > 0 && dailyLossCount >= dailyLossLimit) { circuitBreakerUntil = btcCandle.timestamp + lossBreakMs; dailyLossCount = 0; }
@@ -1514,7 +1518,8 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
                   entryAtrPct: pos.entryAtrPct,
                 });
 
-                if (pnl.netPnlUsd >= 0) consecutiveLosers = 0;
+                // V5.63: Use GROSS PnL for skip rule (fees on flat trades should not count as loss)
+                if (pnl.grossPnlUsd >= 0) consecutiveLosers = 0;
                 else {
                   consecutiveLosers++; dailyLossCount++;
                   if (lossBreakMs && dailyLossLimit > 0 && dailyLossCount >= dailyLossLimit) { circuitBreakerUntil = btcCandle.timestamp + lossBreakMs; dailyLossCount = 0; }
@@ -1689,8 +1694,8 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           cooldowns[symbol] = getCooldownBars(exitReason);
 
           // V5.63: Update consecutive loser count and trigger skip-N rule
-          // Winner = positive net PnL after fees
-          const isWinner = pnl.netPnlUsd > 0;
+          // Use GROSS PnL (before fees) — fees on flat trades should not count as loss
+          const isWinner = pnl.grossPnlUsd > 0;
           if (isWinner) {
             consecutiveLosers = 0;
           } else {

@@ -164,7 +164,7 @@ Trading:
 ## Version Tracking
 
 Strategy improvements tracked with version tags (V5.60+). Current features:
-- V5.63: Skip-N-trades after consecutive losers
+- V5.63: Skip-N-trades after consecutive losers (uses GROSS PnL since V5.153)
 - V5.64: Wick breakout early entry
 - V5.66: API optimization fixes (leverage cache, parallel klines, deduplication)
 - V5.67: Local 1h candle files for backtest (reduces API calls)
@@ -858,3 +858,10 @@ Zero behavioral changes — identical results (891 trades, $59,148, 64.6% WR).
   - **CRITICAL LESSON #4**: Salience bias — a single spectacular missed trade (+8%) makes the filter look broken, but the filter prevents ~150 losing trades worth -$5,000+. Always validate with full compounded backtest, not single-trade anecdotes. Joins V5.143 (BB depth), V5.144 (MQS), V5.149 (DNA), V5.151 (SL predictors) as confirmed post-hoc traps.
   - **Status**: Both approaches REVERTED. ADX Rising strict is optimal (Sharpe 2.40). No code changes committed.
   - **Scripts**: `scripts/sweep-adx-rising-tolerance.ts` (ADX tolerance sweep), `scripts/sweep-trailing-dist-atr.ts` (deleted — ATR trailing sweep)
+
+- V5.153: Fix skip rule using GROSS PnL instead of NET PnL for consecutive loser tracking:
+  - **Problem**: Paper skipped FET entry at 08:15 (live didn't) → paper entered 15min later at worse price → SL loss. Root cause: WIF trade closed +0.06% gross ($0.37) but -$0.79 net (fees $1.16 > profit). Skip rule counted this as LOSS, making 2 consecutive losses (WIF "loss" + FET SL), triggering skip on next signal.
+  - **Fix**: All 3 `recordTradeResult` call sites (positionCloser paper, positionCloser live, exchangeSync) and all 3 backtest skip rule checks now use GROSS PnL (before fees) instead of NET PnL. Flat trades (+0.06% gross) are correctly counted as WIN, not LOSS.
+  - **Backtest validation**: Skip rule with gross PnL: 519 trades, 66.1% WR, $9,708, Sharpe 2.69, DD 24.9%. Without skip rule: 567 trades, 63.5% WR, $5,105, Sharpe 1.91, DD 33.6%. Skip rule still adds ~$4,600 PnL. Gross vs net PnL change is marginal (-$297 vs old net-based skip, same DD).
+  - **Also added**: `grossPnlUsd` to `calculatePnl()` return type, `skipRuleThreshold` param to `BacktestParams` for testing.
+  - **Files**: `positionCloser.ts`, `exchangeSync.ts`, `backtestService.ts`, `scripts/compare-skip-rule.ts`

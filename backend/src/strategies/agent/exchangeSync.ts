@@ -284,7 +284,8 @@ export class ExchangeSync {
           });
 
           // Record trade for consecutive loser tracking + daily report
-          const isWinnerSync = (pnlUsd - syncFeeUsd) > 0;
+          // Use GROSS PnL (before fees) — fees on flat trades should not count as loss
+          const isWinnerSync = pnlUsd > 0;
           capitalPool.recordTradeResult(isWinnerSync, symbol);
           recordTrade(pnlUsd - syncFeeUsd);
         }
