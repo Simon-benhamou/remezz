@@ -1242,7 +1242,9 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
       if (idx < 50) continue;
       if (idx >= candles.length) continue;
 
-      const windowCandles = candles.slice(Math.max(0, idx - 200), idx + 1);
+      // V5.154: Use strategy's minCandlesRequired for window size when available
+      const windowSize = params.strategy ? Math.max(200, params.strategy.getConfig().minCandlesRequired) : 200;
+      const windowCandles = candles.slice(Math.max(0, idx - windowSize), idx + 1);
       const current = candles[idx];
 
       // Decrement cooldown

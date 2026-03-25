@@ -35,3 +35,9 @@ export function clearStrategies(): void {
 // ============================================================================
 import { PullbackTrendStrategy } from './pullbackTrend/strategy.js';
 registerStrategy(new PullbackTrendStrategy());
+
+import { MeanReversion4hStrategy } from './meanReversion4h/strategy.js';
+registerStrategy(new MeanReversion4hStrategy());
+
+import { FundingRateStrategy } from './fundingRate/strategy.js';
+registerStrategy(new FundingRateStrategy());
