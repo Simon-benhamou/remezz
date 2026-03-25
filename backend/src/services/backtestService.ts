@@ -85,6 +85,14 @@ import {
   type ExhaustionCandle,
 } from './momentumExhaustion.js';
 
+// Task 9: Strategy-agnostic adapter types
+import type {
+  IStrategy,
+  EntryContext,
+  ExitContext,
+  Candle as StrategyCandle,
+} from '../strategies/types.js';
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -231,6 +239,10 @@ export interface BacktestParams {
   // V5.63: Skip rule threshold override. Default 2 (skip 1 trade after 2 consecutive losers).
   // Set to 9999 to effectively disable the skip rule.
   skipRuleThreshold?: number;
+  // Task 9: Strategy adapter — when provided, uses IStrategy.checkEntry/checkExit
+  // instead of momentum's checkMomentumSignal/shouldExitPosition.
+  // When omitted, existing momentum logic is preserved exactly.
+  strategy?: IStrategy;
 }
 
 export interface BacktestTrade {
@@ -1310,7 +1322,7 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
         //    live behavior exactly (1m closed candle analysis + 1m stop check).
         // B) Without 1m data: Approximate on 15m candles (V5.110 behavior).
         // ═══════════════════════════════════════════════════════════════════
-        if (exhaustionCalc && pos.trailingActive && pos.appTrailingStop) {
+        if (exhaustionCalc && pos.trailingActive && pos.appTrailingStop && !params.strategy) {
           const candles1m = allData1m?.[symbol];
           let exhaustionExited = false;
 
@@ -1567,19 +1579,68 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           if (exhaustionExited) continue;
         }
 
-        const exitResult = checkBacktestExit(
-          pos,
-          current,
-          windowCandles,
-          btcWindowCandles as Candle[],
-          btcCandlesRegimeWindowForExit as Candle[],  // V5.86: 1h candles for regime
-          idx,
-          params
-        );
+        // ═══════════════════════════════════════════════════════════════════
+        // Task 9: STRATEGY ADAPTER — IStrategy exit path
+        // When params.strategy is provided, use strategy.checkExit() instead
+        // of momentum-specific checkBacktestExit / shouldExitPosition.
+        // ═══════════════════════════════════════════════════════════════════
+        let shouldExit: boolean;
+        let exitReason: string;
+        let exitPrice: number;
 
-        const shouldExit = exitResult.shouldExit;
-        const exitReason = exitResult.exitReason;
-        const exitPrice = exitResult.exitPrice;
+        if (params.strategy) {
+          const holdMinutes = (idx - pos.entryIdx) * 15;
+          const pnlPctForExit = pos.side === 'long'
+            ? ((current.close - pos.entryPrice) / pos.entryPrice) * 100
+            : ((pos.entryPrice - current.close) / pos.entryPrice) * 100;
+          const btcWindowForExit = btcCandles.slice(Math.max(0, btcIdx - 200), btcIdx);
+          const exitCtx: ExitContext = {
+            symbol: pos.symbol,
+            position: {
+              symbol: pos.symbol,
+              side: pos.side,
+              entryPrice: pos.entryPrice,
+              qty: pos.qty,
+              entryTime: pos.entryTime,
+              stopLossPct: pos.stopLossPct,
+              highWaterMark: pos.highWaterMark,
+              lowWaterMark: pos.lowWaterMark,
+              appTrailingStop: pos.appTrailingStop,
+              trailingActive: pos.trailingActive,
+              maxPnlPct: pos.maxPnlPct,
+            },
+            candles: windowCandles.map((c: BacktestCandle) => ({
+              timestamp: c.timestamp, open: c.open, high: c.high,
+              low: c.low, close: c.close, volume: c.volume,
+            })),
+            btcCandles: btcWindowForExit.map(c => ({
+              timestamp: c.timestamp, open: c.open, high: c.high,
+              low: c.low, close: c.close, volume: c.volume,
+            })),
+            currentPrice: current.close,
+            timestamp: current.timestamp,
+            entryPrice: pos.entryPrice,
+            unrealizedPnlPct: pnlPctForExit,
+            holdingMinutes: holdMinutes,
+          };
+          const exitSignal = params.strategy.checkExit(exitCtx);
+          shouldExit = exitSignal.shouldExit;
+          exitReason = exitSignal.reason;
+          exitPrice = exitSignal.exitPrice ?? current.close;
+        } else {
+          const exitResult = checkBacktestExit(
+            pos,
+            current,
+            windowCandles,
+            btcWindowCandles as Candle[],
+            btcCandlesRegimeWindowForExit as Candle[],  // V5.86: 1h candles for regime
+            idx,
+            params
+          );
+          shouldExit = exitResult.shouldExit;
+          exitReason = exitResult.exitReason;
+          exitPrice = exitResult.exitPrice;
+        }
 
         if (shouldExit) {
           const pnl = calculatePnl(
@@ -1731,6 +1792,46 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
             CONFIG.SIZING.MIN_AVAILABLE_CAPITAL_FLOOR
           );
           if (availableCapital < minAvailableCapital) continue;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // Task 9: STRATEGY ADAPTER — IStrategy entry path
+        // When params.strategy is provided, use strategy.checkEntry() instead
+        // of momentum-specific checkMomentumSignal + scoring + toxic hours.
+        // ═══════════════════════════════════════════════════════════════════
+        if (params.strategy) {
+          const btcWindowStart = Math.max(0, btcIdx - 200);
+          const btcWindow = btcCandles.slice(btcWindowStart, btcIdx);
+          const ctx: EntryContext = {
+            symbol,
+            candles: windowCandles.map((c: BacktestCandle) => ({
+              timestamp: c.timestamp, open: c.open, high: c.high,
+              low: c.low, close: c.close, volume: c.volume,
+            })),
+            btcCandles: btcWindow.map(c => ({
+              timestamp: c.timestamp, open: c.open, high: c.high,
+              low: c.low, close: c.close, volume: c.volume,
+            })),
+            currentPrice: current.close,
+            timestamp: current.timestamp,
+            capital: capital,
+            openPositions: Object.values(positions).filter(p => p != null).length,
+          };
+          const stratSignal = params.strategy.checkEntry(ctx);
+          if (stratSignal && stratSignal.valid) {
+            const sc: SignalCandidate & { stratStopLossPct?: number } = {
+              symbol,
+              signal: { valid: true, side: stratSignal.side, reason: stratSignal.reason },
+              score: stratSignal.confidence,
+              candles: windowCandles,
+              current,
+              idx,
+              isBullRegime: true, // Not used for IStrategy path
+            };
+            (sc as any).stratStopLossPct = stratSignal.stopLossPct;
+            signalCandidates.push(sc);
+          }
+          continue; // Skip momentum signal detection for this symbol
         }
 
         // V5.111 PERF: Use cached BTC regime (same for all 10 symbols in this BTC step)
@@ -2025,6 +2126,10 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
         // In parity mode, allow unlimited concurrent positions across symbols
         // But still respect per-symbol limit (handled below by checking positions[symbol])
         availableSlots = signalCandidates.length; // Allow all signals
+      } else if (params.strategy) {
+        // Task 9: Use strategy's maxPositions config
+        const maxPositions = params.strategy.getConfig().maxPositions || 3;
+        availableSlots = maxPositions - openPositionCount;
       } else {
         // V5.18: Dynamic max positions
         const maxPositions = Math.min(
@@ -2038,14 +2143,14 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
         // V5.63: Skip-N-trades-then-resume rule
         // After 2 consecutive losers, skip the next N trades, then resume
         // Testing showed: Skip 1 = +70% PnL, skips 2x more losers than winners
-        if (!parityMode && tradesToSkip > 0) {
+        if (!parityMode && !params.strategy && tradesToSkip > 0) {
           // We're in skip mode - clear all candidates and decrement counter
           signalCandidates.length = 0;
           tradesToSkip--;
         }
 
         // V5.146: Circuit breaker — pause entries after N losses
-        if (!parityMode && dailyLossLimit > 0) {
+        if (!parityMode && !params.strategy && dailyLossLimit > 0) {
           // Time-based: check if still in cooldown window
           if (lossBreakMs && btcCandle.timestamp < circuitBreakerUntil) {
             signalCandidates.length = 0;
@@ -2064,12 +2169,17 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           signalCandidates.sort((a, b) => a.idx - b.idx);
         } else {
           // NORMAL: V5.130 — RANK by tier first (A before B), then by score (highest first)
-          signalCandidates.sort((a, b) => {
-            const tierA = getSignalTier(a.symbol);
-            const tierB = getSignalTier(b.symbol);
-            if (tierA !== tierB) return tierA === 'A' ? -1 : 1;
-            return b.score - a.score;
-          });
+          // Task 9: When using IStrategy, sort by score only (no tier system)
+          if (params.strategy) {
+            signalCandidates.sort((a, b) => b.score - a.score);
+          } else {
+            signalCandidates.sort((a, b) => {
+              const tierA = getSignalTier(a.symbol);
+              const tierB = getSignalTier(b.symbol);
+              if (tierA !== tierB) return tierA === 'A' ? -1 : 1;
+              return b.score - a.score;
+            });
+          }
         }
         
         // Take top N signals that fit available slots
@@ -2080,6 +2190,50 @@ export async function runBacktestComputation(input: BacktestComputationInput): P
           // 🔧 FIX V5.43: availableCapital = capital (free capital)
           // `capital` is already the free capital (total - inUse), no need to subtract again
           const availableCapital = capital;
+
+          // ═══════════════════════════════════════════════════════════════════
+          // Task 9: STRATEGY ADAPTER — IStrategy position creation
+          // Simplified sizing using strategy config (no multi-position, no wick breakout)
+          // ═══════════════════════════════════════════════════════════════════
+          if (params.strategy) {
+            const stratConfig = params.strategy.getConfig();
+            const entryPrice = current.close;
+            const posLev = leverage || stratConfig.leverage || 2;
+            // positionSizePct = fraction of capital used as margin per trade
+            const sizePct = stratConfig.positionSizePct || 0.02;
+            const marginUsd = availableCapital * sizePct;
+            const notionalUsd = marginUsd * posLev;
+            const qty = notionalUsd / entryPrice;
+
+            if (!Number.isFinite(qty) || qty <= 0 || marginUsd < 5) continue;
+            if (marginUsd > availableCapital * 0.95) continue;
+
+            capitalInUse += marginUsd;
+            capital -= marginUsd;
+
+            positions[symbol] = {
+              symbol,
+              side: signal.side,
+              entryPrice,
+              entryTime: current.timestamp,
+              entryIdx: idx,
+              entryCandle: current,
+              qty,
+              notionalUsd,
+              marginUsd,
+              leverage: posLev,
+              capitalBefore: capital + marginUsd,
+              wasCapped: false,
+              stopLossPct: (candidate as any).stratStopLossPct ?? 3.0,
+              highWaterMark: signal.side === 'long' ? entryPrice : undefined,
+              lowWaterMark: signal.side === 'short' ? entryPrice : undefined,
+              entryReason: signal.reason,
+              positionIndex: 0,
+              totalPositions: 1,
+              stagnantState: { triggered: false, confirmed: false, cancelled: false, obsPeakPct: 0 },
+            };
+            continue; // Skip momentum position creation
+          }
 
           // ═══════════════════════════════════════════════════════════════════
           // V5.64: WICK BREAKOUT EARLY ENTRY
