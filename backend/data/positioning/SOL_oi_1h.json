@@ -1,0 +1,3002 @@
+[
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772647200000,
+    "sumOpenInterest": 9807468.67,
+    "sumOpenInterestValue": 897292533.8785439
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772650800000,
+    "sumOpenInterest": 9844891.03,
+    "sumOpenInterestValue": 908794503.1707497
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772654400000,
+    "sumOpenInterest": 9856131.32,
+    "sumOpenInterestValue": 918000071.1448
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772658000000,
+    "sumOpenInterest": 9900986.68,
+    "sumOpenInterestValue": 920039985.6580191
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772661600000,
+    "sumOpenInterest": 9950106.33,
+    "sumOpenInterestValue": 918593816.3856
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772665200000,
+    "sumOpenInterest": 9834935.26,
+    "sumOpenInterestValue": 897888369.4507357
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772668800000,
+    "sumOpenInterest": 9850334.66,
+    "sumOpenInterestValue": 894827530.3807251
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772672400000,
+    "sumOpenInterest": 9821796.86,
+    "sumOpenInterestValue": 891276081.318977
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772676000000,
+    "sumOpenInterest": 9748243.02,
+    "sumOpenInterestValue": 876762186.7773523
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772679600000,
+    "sumOpenInterest": 9738147.55,
+    "sumOpenInterestValue": 877887770.0945013
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772683200000,
+    "sumOpenInterest": 9718624.59,
+    "sumOpenInterestValue": 874579026.8541
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772686800000,
+    "sumOpenInterest": 9698731.13,
+    "sumOpenInterestValue": 876377344.9068
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772690400000,
+    "sumOpenInterest": 9688898.87,
+    "sumOpenInterestValue": 873066677.1757
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772694000000,
+    "sumOpenInterest": 9675897.55,
+    "sumOpenInterestValue": 878765015.491
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772697600000,
+    "sumOpenInterest": 9595318.97,
+    "sumOpenInterestValue": 864579108.1552762
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772701200000,
+    "sumOpenInterest": 9554496.9,
+    "sumOpenInterestValue": 865541874.171
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772704800000,
+    "sumOpenInterest": 9537900,
+    "sumOpenInterestValue": 869188827
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772708400000,
+    "sumOpenInterest": 9528543.02,
+    "sumOpenInterestValue": 882166004.92266
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772712000000,
+    "sumOpenInterest": 9527981.23,
+    "sumOpenInterestValue": 874382837.4771
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772715600000,
+    "sumOpenInterest": 9594087.82,
+    "sumOpenInterestValue": 881860747.1169027
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772719200000,
+    "sumOpenInterest": 9483829.03,
+    "sumOpenInterestValue": 860752322.7628
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772722800000,
+    "sumOpenInterest": 9425796.02,
+    "sumOpenInterestValue": 857087632.0986
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772726400000,
+    "sumOpenInterest": 9448409.48,
+    "sumOpenInterestValue": 846135857.4266474
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772730000000,
+    "sumOpenInterest": 9223278.93,
+    "sumOpenInterestValue": 820094716.8503561
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772733600000,
+    "sumOpenInterest": 9179352.91,
+    "sumOpenInterestValue": 808609197.8419
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772737200000,
+    "sumOpenInterest": 9186345.01,
+    "sumOpenInterestValue": 815456618.0579866
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772740800000,
+    "sumOpenInterest": 9215853.89,
+    "sumOpenInterestValue": 817572721.8316523
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772744400000,
+    "sumOpenInterest": 9243328.83,
+    "sumOpenInterestValue": 824689798.2126
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772748000000,
+    "sumOpenInterest": 9212989.28,
+    "sumOpenInterestValue": 820785214.9552
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772751600000,
+    "sumOpenInterest": 9197768.16,
+    "sumOpenInterestValue": 819115297.7904223
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772755200000,
+    "sumOpenInterest": 9228149.86,
+    "sumOpenInterestValue": 818813737.0778
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772758800000,
+    "sumOpenInterest": 9250039.52,
+    "sumOpenInterestValue": 821536877.2783029
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772762400000,
+    "sumOpenInterest": 9272017.27,
+    "sumOpenInterestValue": 825800172.4113137
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772766000000,
+    "sumOpenInterest": 9280081.79,
+    "sumOpenInterestValue": 819709624.5107
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772769600000,
+    "sumOpenInterest": 9275185.06,
+    "sumOpenInterestValue": 819648103.7522
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772773200000,
+    "sumOpenInterest": 9219219.25,
+    "sumOpenInterestValue": 812213215.925
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772776800000,
+    "sumOpenInterest": 9256115.27,
+    "sumOpenInterestValue": 813103821.2286242
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772780400000,
+    "sumOpenInterest": 9262939.04,
+    "sumOpenInterestValue": 815586320.8667839
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772784000000,
+    "sumOpenInterest": 9218435.61,
+    "sumOpenInterestValue": 817122132.4704
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772787600000,
+    "sumOpenInterest": 9275991.47,
+    "sumOpenInterestValue": 819162806.7157
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772791200000,
+    "sumOpenInterest": 9336817.37,
+    "sumOpenInterestValue": 816411458.1677781
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772794800000,
+    "sumOpenInterest": 9321839.44,
+    "sumOpenInterestValue": 817046076.5038836
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772798400000,
+    "sumOpenInterest": 9335128.92,
+    "sumOpenInterestValue": 814223803.8949023
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772802000000,
+    "sumOpenInterest": 9320868.29,
+    "sumOpenInterestValue": 805695854.9876
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772805600000,
+    "sumOpenInterest": 9269746.54,
+    "sumOpenInterestValue": 792934119.0316
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772809200000,
+    "sumOpenInterest": 9312678.64,
+    "sumOpenInterestValue": 785058809.352
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772812800000,
+    "sumOpenInterest": 9315244,
+    "sumOpenInterestValue": 788006780.0594574
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772816400000,
+    "sumOpenInterest": 9321280.33,
+    "sumOpenInterestValue": 785729862.6138922
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772820000000,
+    "sumOpenInterest": 9289657.51,
+    "sumOpenInterestValue": 781631782.8914
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772823600000,
+    "sumOpenInterest": 9328828.32,
+    "sumOpenInterestValue": 795673705.1637585
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772827200000,
+    "sumOpenInterest": 9325956.75,
+    "sumOpenInterestValue": 794031228.9452878
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772830800000,
+    "sumOpenInterest": 9289428.76,
+    "sumOpenInterestValue": 789508550.3124
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772834400000,
+    "sumOpenInterest": 9231293.29,
+    "sumOpenInterestValue": 781705915.7972
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772838000000,
+    "sumOpenInterest": 9240102.27,
+    "sumOpenInterestValue": 784520926.65455
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772841600000,
+    "sumOpenInterest": 9257393.46,
+    "sumOpenInterestValue": 783679493.9311879
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772845200000,
+    "sumOpenInterest": 9279961.52,
+    "sumOpenInterestValue": 785928854.53184
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772848800000,
+    "sumOpenInterest": 9258975.71,
+    "sumOpenInterestValue": 783864883.6086
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772852400000,
+    "sumOpenInterest": 9268111.99,
+    "sumOpenInterestValue": 784169220.9222873
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772856000000,
+    "sumOpenInterest": 9284999,
+    "sumOpenInterestValue": 784512651.1744137
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772859600000,
+    "sumOpenInterest": 9318376.14,
+    "sumOpenInterestValue": 784793638.5108
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772863200000,
+    "sumOpenInterest": 9324999,
+    "sumOpenInterestValue": 786161246.9966549
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772866800000,
+    "sumOpenInterest": 9355554.69,
+    "sumOpenInterestValue": 785866593.96
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772870400000,
+    "sumOpenInterest": 9342123.78,
+    "sumOpenInterestValue": 787354192.1784
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772874000000,
+    "sumOpenInterest": 9430853.59,
+    "sumOpenInterestValue": 795209574.7088
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772877600000,
+    "sumOpenInterest": 9417351.51,
+    "sumOpenInterestValue": 795870169.6848028
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772881200000,
+    "sumOpenInterest": 9408827.27,
+    "sumOpenInterestValue": 794350001.8581007
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772884800000,
+    "sumOpenInterest": 9388498.77,
+    "sumOpenInterestValue": 794330699.6288191
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772888400000,
+    "sumOpenInterest": 9435488.52,
+    "sumOpenInterestValue": 794943800.5151438
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772892000000,
+    "sumOpenInterest": 9419592.9,
+    "sumOpenInterestValue": 793570684.3141097
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772895600000,
+    "sumOpenInterest": 9464565.78,
+    "sumOpenInterestValue": 796529355.918273
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772899200000,
+    "sumOpenInterest": 9413684.59,
+    "sumOpenInterestValue": 787831263.3371
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772902800000,
+    "sumOpenInterest": 9414936.67,
+    "sumOpenInterestValue": 786436718.8938683
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772906400000,
+    "sumOpenInterest": 9409650.82,
+    "sumOpenInterestValue": 786364519.0274
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772910000000,
+    "sumOpenInterest": 9364685.36,
+    "sumOpenInterestValue": 780359231.0488
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772913600000,
+    "sumOpenInterest": 9392296.24,
+    "sumOpenInterestValue": 774770516.8376
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772917200000,
+    "sumOpenInterest": 9447952.85,
+    "sumOpenInterestValue": 783991127.493
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772920800000,
+    "sumOpenInterest": 9424043.44,
+    "sumOpenInterestValue": 784288398.5116608
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772924400000,
+    "sumOpenInterest": 9410509.47,
+    "sumOpenInterestValue": 780319445.2524
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772928000000,
+    "sumOpenInterest": 9424877.96,
+    "sumOpenInterestValue": 783809593.8518295
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772931600000,
+    "sumOpenInterest": 9435339.86,
+    "sumOpenInterestValue": 783227561.7786
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772935200000,
+    "sumOpenInterest": 9451500.34,
+    "sumOpenInterestValue": 783775927.1884191
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772938800000,
+    "sumOpenInterest": 9451979.77,
+    "sumOpenInterestValue": 778287940.7698737
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772942400000,
+    "sumOpenInterest": 9498043.27,
+    "sumOpenInterestValue": 781532091.4383527
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772946000000,
+    "sumOpenInterest": 9508961.98,
+    "sumOpenInterestValue": 778879075.7818
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772949600000,
+    "sumOpenInterest": 9533074.59,
+    "sumOpenInterestValue": 785906276.5322577
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772953200000,
+    "sumOpenInterest": 9532756.6,
+    "sumOpenInterestValue": 785499143.84
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772956800000,
+    "sumOpenInterest": 9530781.73,
+    "sumOpenInterestValue": 790178438.715886
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772960400000,
+    "sumOpenInterest": 9546816.49,
+    "sumOpenInterestValue": 792767641.3296
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772964000000,
+    "sumOpenInterest": 9533655.63,
+    "sumOpenInterestValue": 792342119.4093
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772967600000,
+    "sumOpenInterest": 9508588.33,
+    "sumOpenInterestValue": 795055729.8872414
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772971200000,
+    "sumOpenInterest": 9533459.05,
+    "sumOpenInterestValue": 788895537.7345876
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772974800000,
+    "sumOpenInterest": 9553228.75,
+    "sumOpenInterestValue": 785855204.5611973
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772978400000,
+    "sumOpenInterest": 9555071.96,
+    "sumOpenInterestValue": 783802552.8788
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772982000000,
+    "sumOpenInterest": 9630199.92,
+    "sumOpenInterestValue": 792200183.4962084
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772985600000,
+    "sumOpenInterest": 9644903.05,
+    "sumOpenInterestValue": 791006754.6455772
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772989200000,
+    "sumOpenInterest": 9654305.21,
+    "sumOpenInterestValue": 786668573.7377497
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772992800000,
+    "sumOpenInterest": 9691418.06,
+    "sumOpenInterestValue": 790812108.0649348
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1772996400000,
+    "sumOpenInterest": 9701319.77,
+    "sumOpenInterestValue": 791045614.0458
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773000000000,
+    "sumOpenInterest": 9731354.27,
+    "sumOpenInterestValue": 802161559.201113
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773003600000,
+    "sumOpenInterest": 9731860.38,
+    "sumOpenInterestValue": 800640153.4626
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773007200000,
+    "sumOpenInterest": 9667383.83,
+    "sumOpenInterestValue": 794658950.826
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773010800000,
+    "sumOpenInterest": 9521836.73,
+    "sumOpenInterestValue": 780219301.6562
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773014400000,
+    "sumOpenInterest": 9511114.69,
+    "sumOpenInterestValue": 775760066.0001361
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773018000000,
+    "sumOpenInterest": 9501598.8,
+    "sumOpenInterestValue": 782076597.228
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773021600000,
+    "sumOpenInterest": 9514804.04,
+    "sumOpenInterestValue": 780726365.7043724
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773025200000,
+    "sumOpenInterest": 9495250.32,
+    "sumOpenInterestValue": 784561867.8912616
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773028800000,
+    "sumOpenInterest": 9547358.91,
+    "sumOpenInterestValue": 793480999.0101
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773032400000,
+    "sumOpenInterest": 9595231.02,
+    "sumOpenInterestValue": 797747507.0028
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773036000000,
+    "sumOpenInterest": 9694392.32,
+    "sumOpenInterestValue": 816463350.817749
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773039600000,
+    "sumOpenInterest": 9666839,
+    "sumOpenInterestValue": 802927647.34
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773043200000,
+    "sumOpenInterest": 9666801.52,
+    "sumOpenInterestValue": 803324546.9814377
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773046800000,
+    "sumOpenInterest": 9670250.47,
+    "sumOpenInterestValue": 809081051.276205
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773050400000,
+    "sumOpenInterest": 9645733.45,
+    "sumOpenInterestValue": 809988470.1615156
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773054000000,
+    "sumOpenInterest": 9662287.55,
+    "sumOpenInterestValue": 808733467.935
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773057600000,
+    "sumOpenInterest": 9667067.67,
+    "sumOpenInterestValue": 807426440.7418344
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773061200000,
+    "sumOpenInterest": 9643176.93,
+    "sumOpenInterestValue": 809641135.0428
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773064800000,
+    "sumOpenInterest": 9594553.15,
+    "sumOpenInterestValue": 816930478.0713547
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773068400000,
+    "sumOpenInterest": 9636995.72,
+    "sumOpenInterestValue": 821650255.0872
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773072000000,
+    "sumOpenInterest": 9558853.21,
+    "sumOpenInterestValue": 812789288.4463
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773075600000,
+    "sumOpenInterest": 9557439.83,
+    "sumOpenInterestValue": 813277133.9520049
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773079200000,
+    "sumOpenInterest": 9591837.95,
+    "sumOpenInterestValue": 815989889.9468257
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773082800000,
+    "sumOpenInterest": 9545096.12,
+    "sumOpenInterestValue": 812752952.1815858
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773086400000,
+    "sumOpenInterest": 9530052.44,
+    "sumOpenInterestValue": 818923754.4230318
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773090000000,
+    "sumOpenInterest": 9517996.41,
+    "sumOpenInterestValue": 816548912.0139
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773093600000,
+    "sumOpenInterest": 9481100.74,
+    "sumOpenInterestValue": 815138743.6088774
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773097200000,
+    "sumOpenInterest": 9573478.77,
+    "sumOpenInterestValue": 820251951.8649853
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773100800000,
+    "sumOpenInterest": 9535648.04,
+    "sumOpenInterestValue": 809824262.0745282
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773104400000,
+    "sumOpenInterest": 9545826.89,
+    "sumOpenInterestValue": 816454573.9017
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773108000000,
+    "sumOpenInterest": 9532359.75,
+    "sumOpenInterestValue": 817018554.1725
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773111600000,
+    "sumOpenInterest": 9475268.46,
+    "sumOpenInterestValue": 820417865.2378083
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773115200000,
+    "sumOpenInterest": 9493199.77,
+    "sumOpenInterestValue": 811819541.5774705
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773118800000,
+    "sumOpenInterest": 9481848.7,
+    "sumOpenInterestValue": 820274731.037
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773122400000,
+    "sumOpenInterest": 9464667.77,
+    "sumOpenInterestValue": 817400424.3403106
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773126000000,
+    "sumOpenInterest": 9508706.14,
+    "sumOpenInterestValue": 820970024.2732134
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773129600000,
+    "sumOpenInterest": 9522563.2,
+    "sumOpenInterestValue": 825168488.2558693
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773133200000,
+    "sumOpenInterest": 9569881.94,
+    "sumOpenInterestValue": 829230270.101
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773136800000,
+    "sumOpenInterest": 9638433.25,
+    "sumOpenInterestValue": 840347115.9957087
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773140400000,
+    "sumOpenInterest": 9642288.55,
+    "sumOpenInterestValue": 839277717.8906919
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773144000000,
+    "sumOpenInterest": 9636044.86,
+    "sumOpenInterestValue": 835834819.3890836
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773147600000,
+    "sumOpenInterest": 9621058.23,
+    "sumOpenInterestValue": 833568485.0472
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773151200000,
+    "sumOpenInterest": 9625416.27,
+    "sumOpenInterestValue": 828074561.7081
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773154800000,
+    "sumOpenInterest": 9517128.99,
+    "sumOpenInterestValue": 837983207.5695
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773158400000,
+    "sumOpenInterest": 9508210.27,
+    "sumOpenInterestValue": 839670048.9437
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773162000000,
+    "sumOpenInterest": 9612003.76,
+    "sumOpenInterestValue": 849240071.7656034
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773165600000,
+    "sumOpenInterest": 9550871.2,
+    "sumOpenInterestValue": 839521578.48
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773169200000,
+    "sumOpenInterest": 9453628.37,
+    "sumOpenInterestValue": 814747768.4355234
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773172800000,
+    "sumOpenInterest": 9486102.26,
+    "sumOpenInterestValue": 815330489.247
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773176400000,
+    "sumOpenInterest": 9501771.79,
+    "sumOpenInterestValue": 818977225.4140201
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773180000000,
+    "sumOpenInterest": 9297057.94,
+    "sumOpenInterestValue": 796509838.0814238
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773183600000,
+    "sumOpenInterest": 9340354.91,
+    "sumOpenInterestValue": 798413537.7068
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773187200000,
+    "sumOpenInterest": 9321291.22,
+    "sumOpenInterestValue": 800046425.4126
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773190800000,
+    "sumOpenInterest": 9288460.13,
+    "sumOpenInterestValue": 798368135.6174033
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773194400000,
+    "sumOpenInterest": 9307119,
+    "sumOpenInterestValue": 800740040.038299
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773198000000,
+    "sumOpenInterest": 9313399.28,
+    "sumOpenInterestValue": 799850626.7419611
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773201600000,
+    "sumOpenInterest": 9285861.47,
+    "sumOpenInterestValue": 794562165.0353673
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773205200000,
+    "sumOpenInterest": 9230668.96,
+    "sumOpenInterestValue": 800021248.5568337
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773208800000,
+    "sumOpenInterest": 9285044.89,
+    "sumOpenInterestValue": 795449795.7263
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773212400000,
+    "sumOpenInterest": 9291871.35,
+    "sumOpenInterestValue": 798939637.6689669
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773216000000,
+    "sumOpenInterest": 9285839.64,
+    "sumOpenInterestValue": 792765936.5588853
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773219600000,
+    "sumOpenInterest": 9353337.45,
+    "sumOpenInterestValue": 799335185.6814787
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773223200000,
+    "sumOpenInterest": 9308850.31,
+    "sumOpenInterestValue": 789785530.1435599
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773226800000,
+    "sumOpenInterest": 9344638.24,
+    "sumOpenInterestValue": 796256624.4304
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773230400000,
+    "sumOpenInterest": 9302589.33,
+    "sumOpenInterestValue": 786215325.1440029
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773234000000,
+    "sumOpenInterest": 9245213.79,
+    "sumOpenInterestValue": 787171081.3442502
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773237600000,
+    "sumOpenInterest": 9230036.75,
+    "sumOpenInterestValue": 792954849.5257252
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773241200000,
+    "sumOpenInterest": 9229634.59,
+    "sumOpenInterestValue": 798178799.3432
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773244800000,
+    "sumOpenInterest": 9348435.41,
+    "sumOpenInterestValue": 797796250.631071
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773248400000,
+    "sumOpenInterest": 9296243.2,
+    "sumOpenInterestValue": 803118756.774122
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773252000000,
+    "sumOpenInterest": 9414221.89,
+    "sumOpenInterestValue": 821108433.2458
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773255600000,
+    "sumOpenInterest": 9529094.04,
+    "sumOpenInterestValue": 836247683.1290038
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773259200000,
+    "sumOpenInterest": 9529172.5,
+    "sumOpenInterestValue": 831181019.7683146
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773262800000,
+    "sumOpenInterest": 9520588.52,
+    "sumOpenInterestValue": 830671348.37
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773266400000,
+    "sumOpenInterest": 9491883.22,
+    "sumOpenInterestValue": 830255025.2534
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773270000000,
+    "sumOpenInterest": 9524429.96,
+    "sumOpenInterestValue": 828720650.8196
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773273600000,
+    "sumOpenInterest": 9514331.9,
+    "sumOpenInterestValue": 823212603.6965743
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773277200000,
+    "sumOpenInterest": 9511221.07,
+    "sumOpenInterestValue": 823827278.9019036
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773280800000,
+    "sumOpenInterest": 9493958.97,
+    "sumOpenInterestValue": 816320302.5408611
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773284400000,
+    "sumOpenInterest": 9446195.87,
+    "sumOpenInterestValue": 804343578.3305
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773288000000,
+    "sumOpenInterest": 9496867.33,
+    "sumOpenInterestValue": 806758879.6835
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773291600000,
+    "sumOpenInterest": 9494696.92,
+    "sumOpenInterestValue": 807386199.9615015
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773295200000,
+    "sumOpenInterest": 9527898.53,
+    "sumOpenInterestValue": 810633606.9324
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773298800000,
+    "sumOpenInterest": 9548345.55,
+    "sumOpenInterestValue": 814664842.326
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773302400000,
+    "sumOpenInterest": 9606349.86,
+    "sumOpenInterestValue": 824032690.9908
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773306000000,
+    "sumOpenInterest": 9557221.43,
+    "sumOpenInterestValue": 820994219.2941545
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773309600000,
+    "sumOpenInterest": 9520906.29,
+    "sumOpenInterestValue": 820226076.8835
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773313200000,
+    "sumOpenInterest": 9473096.42,
+    "sumOpenInterestValue": 821460654.9394847
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773316800000,
+    "sumOpenInterest": 9510572.81,
+    "sumOpenInterestValue": 825137296.9956
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773320400000,
+    "sumOpenInterest": 9662865.5,
+    "sumOpenInterestValue": 842601871.6
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773324000000,
+    "sumOpenInterest": 9581201.52,
+    "sumOpenInterestValue": 830841941.8485574
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773327600000,
+    "sumOpenInterest": 9525325.39,
+    "sumOpenInterestValue": 814206778.133574
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773331200000,
+    "sumOpenInterest": 9338483.78,
+    "sumOpenInterestValue": 808067440.5778072
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773334800000,
+    "sumOpenInterest": 9295195.77,
+    "sumOpenInterestValue": 806544136.9629
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773338400000,
+    "sumOpenInterest": 9287534.21,
+    "sumOpenInterestValue": 803836085.8755
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773342000000,
+    "sumOpenInterest": 9301963.41,
+    "sumOpenInterestValue": 798294499.8462
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773345600000,
+    "sumOpenInterest": 9306853.69,
+    "sumOpenInterestValue": 807689562.044995
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773349200000,
+    "sumOpenInterest": 9312147.56,
+    "sumOpenInterestValue": 804642135.4186792
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773352800000,
+    "sumOpenInterest": 9278581.29,
+    "sumOpenInterestValue": 802643562.406188
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773356400000,
+    "sumOpenInterest": 9305070.1,
+    "sumOpenInterestValue": 802655346.826
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773360000000,
+    "sumOpenInterest": 9361609.9,
+    "sumOpenInterestValue": 812587739.32
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773363600000,
+    "sumOpenInterest": 9985650.54,
+    "sumOpenInterestValue": 896311992.4704
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773367200000,
+    "sumOpenInterest": 10068136.88,
+    "sumOpenInterestValue": 910562299.4272
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773370800000,
+    "sumOpenInterest": 10136754.5,
+    "sumOpenInterestValue": 902681028.5417771
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773374400000,
+    "sumOpenInterest": 10090410.74,
+    "sumOpenInterestValue": 904698758.8336031
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773378000000,
+    "sumOpenInterest": 10096303.16,
+    "sumOpenInterestValue": 901732225.2319026
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773381600000,
+    "sumOpenInterest": 10106594.43,
+    "sumOpenInterestValue": 899891168.0472
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773385200000,
+    "sumOpenInterest": 10092294.59,
+    "sumOpenInterestValue": 891856072.9183
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773388800000,
+    "sumOpenInterest": 10068707.88,
+    "sumOpenInterestValue": 892389579.4044
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773392400000,
+    "sumOpenInterest": 10089904.98,
+    "sumOpenInterestValue": 899020934.0893562
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773396000000,
+    "sumOpenInterest": 10094782.4,
+    "sumOpenInterestValue": 903079233.504
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773399600000,
+    "sumOpenInterest": 9954803.81,
+    "sumOpenInterestValue": 897435520.4653668
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773403200000,
+    "sumOpenInterest": 9987314.91,
+    "sumOpenInterestValue": 901703058.3682674
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773406800000,
+    "sumOpenInterest": 10035253.73,
+    "sumOpenInterestValue": 912706326.7435
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773410400000,
+    "sumOpenInterest": 10080465.4,
+    "sumOpenInterestValue": 925789942.336
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773414000000,
+    "sumOpenInterest": 10143278.82,
+    "sumOpenInterestValue": 919452311.6385771
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773417600000,
+    "sumOpenInterest": 9993965.36,
+    "sumOpenInterestValue": 893766950.342506
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773421200000,
+    "sumOpenInterest": 9892670.04,
+    "sumOpenInterestValue": 885888602.082
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773424800000,
+    "sumOpenInterest": 9860709.4,
+    "sumOpenInterestValue": 875926816.002
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773428400000,
+    "sumOpenInterest": 9854289.17,
+    "sumOpenInterestValue": 874765249.6209
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773432000000,
+    "sumOpenInterest": 9788670.24,
+    "sumOpenInterestValue": 869625464.1216
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773435600000,
+    "sumOpenInterest": 9755681.06,
+    "sumOpenInterestValue": 866816476.4642886
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773439200000,
+    "sumOpenInterest": 9639433.14,
+    "sumOpenInterestValue": 853282621.5528
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773442800000,
+    "sumOpenInterest": 9640856.69,
+    "sumOpenInterestValue": 848090352.3999627
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773446400000,
+    "sumOpenInterest": 9600995.54,
+    "sumOpenInterestValue": 846002361.1582878
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773450000000,
+    "sumOpenInterest": 9591250.28,
+    "sumOpenInterestValue": 843125381.462353
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773453600000,
+    "sumOpenInterest": 9590145.42,
+    "sumOpenInterestValue": 845850826.044
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773457200000,
+    "sumOpenInterest": 9599897.39,
+    "sumOpenInterestValue": 846518951.8502
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773460800000,
+    "sumOpenInterest": 9570862.21,
+    "sumOpenInterestValue": 845681384.8756
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773464400000,
+    "sumOpenInterest": 9547416.7,
+    "sumOpenInterestValue": 842082152.94
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773468000000,
+    "sumOpenInterest": 9571377.56,
+    "sumOpenInterestValue": 842568366.6068
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773471600000,
+    "sumOpenInterest": 9522783.51,
+    "sumOpenInterestValue": 830345494.7044388
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773475200000,
+    "sumOpenInterest": 9526875.9,
+    "sumOpenInterestValue": 831531615.8366144
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773478800000,
+    "sumOpenInterest": 9530470.21,
+    "sumOpenInterestValue": 830010520.6577646
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773482400000,
+    "sumOpenInterest": 9505903.16,
+    "sumOpenInterestValue": 825101476.8532798
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773486000000,
+    "sumOpenInterest": 9481106.4,
+    "sumOpenInterestValue": 821063814.24
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773489600000,
+    "sumOpenInterest": 9480420.53,
+    "sumOpenInterestValue": 823943348.2623
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773493200000,
+    "sumOpenInterest": 9499394.06,
+    "sumOpenInterestValue": 826946378.4391003
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773496800000,
+    "sumOpenInterest": 9473948.23,
+    "sumOpenInterestValue": 824733300.7806374
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773500400000,
+    "sumOpenInterest": 9468454.58,
+    "sumOpenInterestValue": 820525653.9894586
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773504000000,
+    "sumOpenInterest": 9476943.91,
+    "sumOpenInterestValue": 821389420.3689675
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773507600000,
+    "sumOpenInterest": 9485969.64,
+    "sumOpenInterestValue": 825469078.0728
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773511200000,
+    "sumOpenInterest": 9473613.2,
+    "sumOpenInterestValue": 822593834.156
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773514800000,
+    "sumOpenInterest": 9481742.95,
+    "sumOpenInterestValue": 824640268.3134141
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773518400000,
+    "sumOpenInterest": 9479295.91,
+    "sumOpenInterestValue": 824294961.8063866
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773522000000,
+    "sumOpenInterest": 9471503.76,
+    "sumOpenInterestValue": 824399687.2704
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773525600000,
+    "sumOpenInterest": 9452615.48,
+    "sumOpenInterestValue": 824490959.8822861
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773529200000,
+    "sumOpenInterest": 9465547.33,
+    "sumOpenInterestValue": 825963660.0158
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773532800000,
+    "sumOpenInterest": 9429570.27,
+    "sumOpenInterestValue": 829802183.76
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773536400000,
+    "sumOpenInterest": 9396121.99,
+    "sumOpenInterestValue": 824027109.7432431
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773540000000,
+    "sumOpenInterest": 9377687.06,
+    "sumOpenInterestValue": 821735753.3517809
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773543600000,
+    "sumOpenInterest": 9376105.8,
+    "sumOpenInterestValue": 827347575.792
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773547200000,
+    "sumOpenInterest": 9375733.61,
+    "sumOpenInterestValue": 823194602.6767292
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773550800000,
+    "sumOpenInterest": 9372620.63,
+    "sumOpenInterestValue": 827414949.2164
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773554400000,
+    "sumOpenInterest": 9384015.45,
+    "sumOpenInterestValue": 828327043.7715
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773558000000,
+    "sumOpenInterest": 9391657.92,
+    "sumOpenInterestValue": 829377310.9152
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773561600000,
+    "sumOpenInterest": 9382710.57,
+    "sumOpenInterestValue": 827367418.0626
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773565200000,
+    "sumOpenInterest": 9396263.77,
+    "sumOpenInterestValue": 831005567.8188
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773568800000,
+    "sumOpenInterest": 9392198.22,
+    "sumOpenInterestValue": 831137111.4340011
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773572400000,
+    "sumOpenInterest": 9411701.32,
+    "sumOpenInterestValue": 832276747.7276
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773576000000,
+    "sumOpenInterest": 9380250.88,
+    "sumOpenInterestValue": 830298374.8604505
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773579600000,
+    "sumOpenInterest": 9380893.87,
+    "sumOpenInterestValue": 827488648.2727
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773583200000,
+    "sumOpenInterest": 9321562.08,
+    "sumOpenInterestValue": 818576693.35847
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773586800000,
+    "sumOpenInterest": 9330085.19,
+    "sumOpenInterestValue": 820367011.9949133
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773590400000,
+    "sumOpenInterest": 9337071.47,
+    "sumOpenInterestValue": 820288034.8112888
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773594000000,
+    "sumOpenInterest": 9327654.46,
+    "sumOpenInterestValue": 816263041.7946
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773597600000,
+    "sumOpenInterest": 9305815.65,
+    "sumOpenInterestValue": 822517045.0465897
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773601200000,
+    "sumOpenInterest": 9324370.94,
+    "sumOpenInterestValue": 819239230.7884
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773604800000,
+    "sumOpenInterest": 9304506.27,
+    "sumOpenInterestValue": 820081379.488548
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773608400000,
+    "sumOpenInterest": 9319251.06,
+    "sumOpenInterestValue": 826713746.3023295
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773612000000,
+    "sumOpenInterest": 9180943.85,
+    "sumOpenInterestValue": 825917708.746
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773615600000,
+    "sumOpenInterest": 9487232.37,
+    "sumOpenInterestValue": 878517717.462
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773619200000,
+    "sumOpenInterest": 9711196.42,
+    "sumOpenInterestValue": 896234364.6727984
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773622800000,
+    "sumOpenInterest": 9985785.28,
+    "sumOpenInterestValue": 918517048.0531402
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773626400000,
+    "sumOpenInterest": 10010452.94,
+    "sumOpenInterestValue": 921662402.1858
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773630000000,
+    "sumOpenInterest": 9968347.05,
+    "sumOpenInterestValue": 911646831.8642468
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773633600000,
+    "sumOpenInterest": 10024343.6,
+    "sumOpenInterestValue": 933767606.34
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773637200000,
+    "sumOpenInterest": 10152282.97,
+    "sumOpenInterestValue": 950355208.8217
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773640800000,
+    "sumOpenInterest": 10450515.18,
+    "sumOpenInterestValue": 982326952.2608618
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773644400000,
+    "sumOpenInterest": 10429178.39,
+    "sumOpenInterestValue": 973889899.3362286
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773648000000,
+    "sumOpenInterest": 10479109.76,
+    "sumOpenInterestValue": 980215926.9504
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773651600000,
+    "sumOpenInterest": 10496373.34,
+    "sumOpenInterestValue": 974483300.8856
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773655200000,
+    "sumOpenInterest": 10512500.96,
+    "sumOpenInterestValue": 980649984.6016835
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773658800000,
+    "sumOpenInterest": 10524457.76,
+    "sumOpenInterestValue": 987879521.519237
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773662400000,
+    "sumOpenInterest": 10536548.73,
+    "sumOpenInterestValue": 987379981.4883
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773666000000,
+    "sumOpenInterest": 10472278.29,
+    "sumOpenInterestValue": 981461921.3388
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773669600000,
+    "sumOpenInterest": 10325176.74,
+    "sumOpenInterestValue": 966436542.864
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773673200000,
+    "sumOpenInterest": 10331454.73,
+    "sumOpenInterestValue": 966610904.5388
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773676800000,
+    "sumOpenInterest": 10306075.57,
+    "sumOpenInterestValue": 959907878.5898
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773680400000,
+    "sumOpenInterest": 10279543.27,
+    "sumOpenInterestValue": 963745447.1623225
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773684000000,
+    "sumOpenInterest": 10302443.38,
+    "sumOpenInterestValue": 968777714.347141
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773687600000,
+    "sumOpenInterest": 10334869.97,
+    "sumOpenInterestValue": 974996127.3980526
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773691200000,
+    "sumOpenInterest": 10367559.61,
+    "sumOpenInterestValue": 986784323.6798
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773694800000,
+    "sumOpenInterest": 10361074.7,
+    "sumOpenInterestValue": 991915683.5775023
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773698400000,
+    "sumOpenInterest": 10258574.43,
+    "sumOpenInterestValue": 986054174.2116
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773702000000,
+    "sumOpenInterest": 10285269.69,
+    "sumOpenInterestValue": 990780029.2377
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773705600000,
+    "sumOpenInterest": 10240104.18,
+    "sumOpenInterestValue": 984678084.864474
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773709200000,
+    "sumOpenInterest": 10211441.13,
+    "sumOpenInterestValue": 974739432.6187221
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773712800000,
+    "sumOpenInterest": 10169824.8,
+    "sumOpenInterestValue": 972854323.0997733
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773716400000,
+    "sumOpenInterest": 10150271.99,
+    "sumOpenInterestValue": 965087860.8092
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773720000000,
+    "sumOpenInterest": 10189653.46,
+    "sumOpenInterestValue": 958133114.8438
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773723600000,
+    "sumOpenInterest": 10177591.19,
+    "sumOpenInterestValue": 954068356.8641375
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773727200000,
+    "sumOpenInterest": 10155926.64,
+    "sumOpenInterestValue": 952321241.0328
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773730800000,
+    "sumOpenInterest": 10149453.51,
+    "sumOpenInterestValue": 952432626.8475204
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773734400000,
+    "sumOpenInterest": 10121290.11,
+    "sumOpenInterestValue": 955247360.5818
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773738000000,
+    "sumOpenInterest": 10097620.84,
+    "sumOpenInterestValue": 952870589.1956263
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773741600000,
+    "sumOpenInterest": 10090676.91,
+    "sumOpenInterestValue": 947084511.2251368
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773745200000,
+    "sumOpenInterest": 10078144.38,
+    "sumOpenInterestValue": 942608843.8614
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773748800000,
+    "sumOpenInterest": 10023068.87,
+    "sumOpenInterestValue": 938159246.232
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773752400000,
+    "sumOpenInterest": 10031022.52,
+    "sumOpenInterestValue": 936660299.1766082
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773756000000,
+    "sumOpenInterest": 10016776,
+    "sumOpenInterestValue": 938872414.48
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773759600000,
+    "sumOpenInterest": 10000513.64,
+    "sumOpenInterestValue": 944548513.298
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773763200000,
+    "sumOpenInterest": 9984143.37,
+    "sumOpenInterestValue": 936200617.966439
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773766800000,
+    "sumOpenInterest": 9931808.74,
+    "sumOpenInterestValue": 937066154.619
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773770400000,
+    "sumOpenInterest": 9922038.94,
+    "sumOpenInterestValue": 937831120.6088
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773774000000,
+    "sumOpenInterest": 9920868.7,
+    "sumOpenInterestValue": 945234993.3443696
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773777600000,
+    "sumOpenInterest": 9918271.82,
+    "sumOpenInterestValue": 938386455.6152413
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773781200000,
+    "sumOpenInterest": 9915901.09,
+    "sumOpenInterestValue": 940523218.3865
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773784800000,
+    "sumOpenInterest": 9890091.05,
+    "sumOpenInterestValue": 941605393.609301
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773788400000,
+    "sumOpenInterest": 9965272.16,
+    "sumOpenInterestValue": 949408361.6479881
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773792000000,
+    "sumOpenInterest": 10020050.7,
+    "sumOpenInterestValue": 947596194.699
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773795600000,
+    "sumOpenInterest": 10020056.49,
+    "sumOpenInterestValue": 946694937.1752
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773799200000,
+    "sumOpenInterest": 9978970.42,
+    "sumOpenInterestValue": 941615648.8312
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773802800000,
+    "sumOpenInterest": 9967056.61,
+    "sumOpenInterestValue": 945695057.3520088
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773806400000,
+    "sumOpenInterest": 10021570.73,
+    "sumOpenInterestValue": 952049219.35
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773810000000,
+    "sumOpenInterest": 9991752.31,
+    "sumOpenInterestValue": 940083792.3165627
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773813600000,
+    "sumOpenInterest": 9922294.57,
+    "sumOpenInterestValue": 931405791.2859
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773817200000,
+    "sumOpenInterest": 9920989.56,
+    "sumOpenInterestValue": 934358796.7608
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773820800000,
+    "sumOpenInterest": 9922505.24,
+    "sumOpenInterestValue": 931653097.068157
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773824400000,
+    "sumOpenInterest": 9908851.72,
+    "sumOpenInterestValue": 931270470.7024517
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773828000000,
+    "sumOpenInterest": 9890175.89,
+    "sumOpenInterestValue": 931879358.887537
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773831600000,
+    "sumOpenInterest": 9898548.04,
+    "sumOpenInterestValue": 928483806.152
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773835200000,
+    "sumOpenInterest": 9709305.81,
+    "sumOpenInterestValue": 892931460.5767387
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773838800000,
+    "sumOpenInterest": 9751398.8,
+    "sumOpenInterestValue": 881362397.0095224
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773842400000,
+    "sumOpenInterest": 9756459.65,
+    "sumOpenInterestValue": 880630636.7688864
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773846000000,
+    "sumOpenInterest": 9682813.06,
+    "sumOpenInterestValue": 860906179.0206455
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773849600000,
+    "sumOpenInterest": 9622058.13,
+    "sumOpenInterestValue": 859390898.7801381
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773853200000,
+    "sumOpenInterest": 9592877.24,
+    "sumOpenInterestValue": 853094572.9532
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773856800000,
+    "sumOpenInterest": 9568447.57,
+    "sumOpenInterestValue": 860012067.5916
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773860400000,
+    "sumOpenInterest": 9523520.13,
+    "sumOpenInterestValue": 852549987.2352482
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773864000000,
+    "sumOpenInterest": 9543877.62,
+    "sumOpenInterestValue": 855513189.8568
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773867600000,
+    "sumOpenInterest": 9511431.62,
+    "sumOpenInterestValue": 855614000.4297495
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773871200000,
+    "sumOpenInterest": 9471391.33,
+    "sumOpenInterestValue": 856282739.6106937
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773874800000,
+    "sumOpenInterest": 9482325.56,
+    "sumOpenInterestValue": 853219653.8888
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773878400000,
+    "sumOpenInterest": 9472268.63,
+    "sumOpenInterestValue": 852812456.8923111
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773882000000,
+    "sumOpenInterest": 9464974.43,
+    "sumOpenInterestValue": 852675703.1816134
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773885600000,
+    "sumOpenInterest": 9486168.04,
+    "sumOpenInterestValue": 855012586.7942708
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773889200000,
+    "sumOpenInterest": 9470919.75,
+    "sumOpenInterestValue": 851814522.315
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773892800000,
+    "sumOpenInterest": 9436917.92,
+    "sumOpenInterestValue": 855854882.112082
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773896400000,
+    "sumOpenInterest": 9484241.77,
+    "sumOpenInterestValue": 852171113.2974728
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773900000000,
+    "sumOpenInterest": 9463411.89,
+    "sumOpenInterestValue": 848962680.6519
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773903600000,
+    "sumOpenInterest": 9312465.35,
+    "sumOpenInterestValue": 836538762.3905
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773907200000,
+    "sumOpenInterest": 9234203.99,
+    "sumOpenInterestValue": 825459371.1814619
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773910800000,
+    "sumOpenInterest": 9213936.92,
+    "sumOpenInterestValue": 822988845.6944
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773914400000,
+    "sumOpenInterest": 9133297.85,
+    "sumOpenInterestValue": 823496791.6611469
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773918000000,
+    "sumOpenInterest": 9067718.92,
+    "sumOpenInterestValue": 814099804.6376
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773921600000,
+    "sumOpenInterest": 9065140.04,
+    "sumOpenInterestValue": 812145896.1836
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773925200000,
+    "sumOpenInterest": 9030945.3,
+    "sumOpenInterestValue": 795355352.571
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773928800000,
+    "sumOpenInterest": 8938126.5,
+    "sumOpenInterestValue": 790487907.66
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773932400000,
+    "sumOpenInterest": 8859778.8,
+    "sumOpenInterestValue": 781299382.7924601
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773936000000,
+    "sumOpenInterest": 8787238.13,
+    "sumOpenInterestValue": 769498443.0441
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773939600000,
+    "sumOpenInterest": 8702887.66,
+    "sumOpenInterestValue": 762897584.488256
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773943200000,
+    "sumOpenInterest": 8700491.12,
+    "sumOpenInterestValue": 766485418.3569789
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773946800000,
+    "sumOpenInterest": 8700238.68,
+    "sumOpenInterestValue": 766498954.408459
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773950400000,
+    "sumOpenInterest": 8641953.56,
+    "sumOpenInterestValue": 766454861.2364
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773954000000,
+    "sumOpenInterest": 8629086.09,
+    "sumOpenInterestValue": 767474395.5743663
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773957600000,
+    "sumOpenInterest": 8577456.02,
+    "sumOpenInterestValue": 763994007.7014
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773961200000,
+    "sumOpenInterest": 8596508.16,
+    "sumOpenInterestValue": 762670600.2165555
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773964800000,
+    "sumOpenInterest": 8635379.59,
+    "sumOpenInterestValue": 767253476.5715
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773968400000,
+    "sumOpenInterest": 8595230.88,
+    "sumOpenInterestValue": 768069831.4368
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773972000000,
+    "sumOpenInterest": 8566339.84,
+    "sumOpenInterestValue": 766087771.8912
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773975600000,
+    "sumOpenInterest": 8539873.46,
+    "sumOpenInterestValue": 762382578.864396
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773979200000,
+    "sumOpenInterest": 8567269.9,
+    "sumOpenInterestValue": 767027674.147
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773982800000,
+    "sumOpenInterest": 8565245.6,
+    "sumOpenInterestValue": 764444765.5431362
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773986400000,
+    "sumOpenInterest": 8569449.75,
+    "sumOpenInterestValue": 765337557.1725
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773990000000,
+    "sumOpenInterest": 8558775.51,
+    "sumOpenInterestValue": 762073371.4104
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773993600000,
+    "sumOpenInterest": 8526375.28,
+    "sumOpenInterestValue": 761575840.0096
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1773997200000,
+    "sumOpenInterest": 8505140.11,
+    "sumOpenInterestValue": 763166222.0703
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774000800000,
+    "sumOpenInterest": 8472502.99,
+    "sumOpenInterestValue": 753290240.8409
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774004400000,
+    "sumOpenInterest": 8473099.92,
+    "sumOpenInterestValue": 756300365.0918846
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774008000000,
+    "sumOpenInterest": 8458440.59,
+    "sumOpenInterestValue": 753562472.1631
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774011600000,
+    "sumOpenInterest": 8463418.77,
+    "sumOpenInterestValue": 753966750.6118377
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774015200000,
+    "sumOpenInterest": 8511117.74,
+    "sumOpenInterestValue": 755736904.901229
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774018800000,
+    "sumOpenInterest": 8517815.35,
+    "sumOpenInterestValue": 757183617.0675768
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774022400000,
+    "sumOpenInterest": 8520896.58,
+    "sumOpenInterestValue": 757668165.0957221
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774026000000,
+    "sumOpenInterest": 8510633.18,
+    "sumOpenInterestValue": 756279115.2538338
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774029600000,
+    "sumOpenInterest": 8494656.99,
+    "sumOpenInterestValue": 754665326.9916
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774033200000,
+    "sumOpenInterest": 8514798.84,
+    "sumOpenInterestValue": 753687697.6713741
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774036800000,
+    "sumOpenInterest": 8499694.37,
+    "sumOpenInterestValue": 755877820.3241
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774040400000,
+    "sumOpenInterest": 8476227.6,
+    "sumOpenInterestValue": 754102689.5963299
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774044000000,
+    "sumOpenInterest": 8445322.86,
+    "sumOpenInterestValue": 756179737.7392261
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774047600000,
+    "sumOpenInterest": 8505847.89,
+    "sumOpenInterestValue": 766093930.8472434
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774051200000,
+    "sumOpenInterest": 8526040.49,
+    "sumOpenInterestValue": 765723696.4069
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774054800000,
+    "sumOpenInterest": 8546885.37,
+    "sumOpenInterestValue": 768972731.9017782
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774058400000,
+    "sumOpenInterest": 8560921.23,
+    "sumOpenInterestValue": 769027554.0909
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774062000000,
+    "sumOpenInterest": 8560059.43,
+    "sumOpenInterestValue": 774000573.6606
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774065600000,
+    "sumOpenInterest": 8566689.9,
+    "sumOpenInterestValue": 774428766.96
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774069200000,
+    "sumOpenInterest": 8613222.66,
+    "sumOpenInterestValue": 777084948.3852
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774072800000,
+    "sumOpenInterest": 8592374.32,
+    "sumOpenInterestValue": 772626298.8544
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774076400000,
+    "sumOpenInterest": 8576224.49,
+    "sumOpenInterestValue": 772889351.0388
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774080000000,
+    "sumOpenInterest": 8568375.64,
+    "sumOpenInterestValue": 772010645.164
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774083600000,
+    "sumOpenInterest": 8566767.96,
+    "sumOpenInterestValue": 770670861.2508097
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774087200000,
+    "sumOpenInterest": 8560790.73,
+    "sumOpenInterestValue": 771755284.3095
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774090800000,
+    "sumOpenInterest": 8559727.9,
+    "sumOpenInterestValue": 769752932.1163826
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774094400000,
+    "sumOpenInterest": 8561687.24,
+    "sumOpenInterestValue": 769781299.7484
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774098000000,
+    "sumOpenInterest": 8569591.73,
+    "sumOpenInterestValue": 772291606.7076
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774101600000,
+    "sumOpenInterest": 8579001.77,
+    "sumOpenInterestValue": 771894556.6317574
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774105200000,
+    "sumOpenInterest": 8564848.54,
+    "sumOpenInterestValue": 767518837.7266133
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774108800000,
+    "sumOpenInterest": 8534939.65,
+    "sumOpenInterestValue": 766181591.6983305
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774112400000,
+    "sumOpenInterest": 8525212.91,
+    "sumOpenInterestValue": 764056744.4538345
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774116000000,
+    "sumOpenInterest": 8500100.57,
+    "sumOpenInterestValue": 760826004.5027602
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774119600000,
+    "sumOpenInterest": 8486366.51,
+    "sumOpenInterestValue": 761481666.9423
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774123200000,
+    "sumOpenInterest": 8481508.89,
+    "sumOpenInterestValue": 761097889.6047211
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774126800000,
+    "sumOpenInterest": 8474677.86,
+    "sumOpenInterestValue": 763653221.9646
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774130400000,
+    "sumOpenInterest": 8443909.51,
+    "sumOpenInterestValue": 759529660.4245
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774134000000,
+    "sumOpenInterest": 8454090.53,
+    "sumOpenInterestValue": 759529106.6680987
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774137600000,
+    "sumOpenInterest": 8433883.18,
+    "sumOpenInterestValue": 738049117.0818
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774141200000,
+    "sumOpenInterest": 8454146.41,
+    "sumOpenInterestValue": 737793357.2007
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774144800000,
+    "sumOpenInterest": 8372371.37,
+    "sumOpenInterestValue": 731661534.0243
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774148400000,
+    "sumOpenInterest": 8356107.79,
+    "sumOpenInterestValue": 736256657.3769
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774152000000,
+    "sumOpenInterest": 8411403.23,
+    "sumOpenInterestValue": 745334440.2103
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774155600000,
+    "sumOpenInterest": 8436846.87,
+    "sumOpenInterestValue": 750626266.0239
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774159200000,
+    "sumOpenInterest": 8453652.09,
+    "sumOpenInterestValue": 747442719.2216272
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774162800000,
+    "sumOpenInterest": 8460887.19,
+    "sumOpenInterestValue": 745886137.5699558
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774166400000,
+    "sumOpenInterest": 8488878.49,
+    "sumOpenInterestValue": 743990002.6342415
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774170000000,
+    "sumOpenInterest": 8515294.32,
+    "sumOpenInterestValue": 743568906.5869304
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774173600000,
+    "sumOpenInterest": 8539563.39,
+    "sumOpenInterestValue": 745162301.4114
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774177200000,
+    "sumOpenInterest": 8559218.59,
+    "sumOpenInterestValue": 747062990.0909294
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774180800000,
+    "sumOpenInterest": 8605823.2,
+    "sumOpenInterestValue": 746813337.296
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774184400000,
+    "sumOpenInterest": 8639087.63,
+    "sumOpenInterestValue": 753414832.2123
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774188000000,
+    "sumOpenInterest": 8663841.75,
+    "sumOpenInterestValue": 756047322.3491644
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774191600000,
+    "sumOpenInterest": 8675294.73,
+    "sumOpenInterestValue": 756138688.6668
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774195200000,
+    "sumOpenInterest": 8680851.32,
+    "sumOpenInterestValue": 759863145.386816
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774198800000,
+    "sumOpenInterest": 8656985.6,
+    "sumOpenInterestValue": 756880416.4429948
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774202400000,
+    "sumOpenInterest": 8631325.5,
+    "sumOpenInterestValue": 752777412.6167775
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774206000000,
+    "sumOpenInterest": 8607067.61,
+    "sumOpenInterestValue": 748588326.6642282
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774209600000,
+    "sumOpenInterest": 8617796.05,
+    "sumOpenInterestValue": 748284224.5672066
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774213200000,
+    "sumOpenInterest": 8645369.27,
+    "sumOpenInterestValue": 748256710.3185
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774216800000,
+    "sumOpenInterest": 8568668.29,
+    "sumOpenInterestValue": 736368828.4699527
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774220400000,
+    "sumOpenInterest": 8636341.82,
+    "sumOpenInterestValue": 748770835.794
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774224000000,
+    "sumOpenInterest": 8658871.15,
+    "sumOpenInterestValue": 746139455.1521679
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774227600000,
+    "sumOpenInterest": 8699040.78,
+    "sumOpenInterestValue": 746725660.5552
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774231200000,
+    "sumOpenInterest": 8730790.2,
+    "sumOpenInterestValue": 751228753.4084258
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774234800000,
+    "sumOpenInterest": 8735025.49,
+    "sumOpenInterestValue": 757134184.9548856
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774238400000,
+    "sumOpenInterest": 8684620.05,
+    "sumOpenInterestValue": 750003787.518
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774242000000,
+    "sumOpenInterest": 8668586.11,
+    "sumOpenInterestValue": 753126761.2368
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774245600000,
+    "sumOpenInterest": 8631997.48,
+    "sumOpenInterestValue": 752192260.4072
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774249200000,
+    "sumOpenInterest": 8631763.68,
+    "sumOpenInterestValue": 739580425.7591264
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774252800000,
+    "sumOpenInterest": 8528165.38,
+    "sumOpenInterestValue": 732910532.7572
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774256400000,
+    "sumOpenInterest": 8541644.41,
+    "sumOpenInterestValue": 733747955.0671455
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774260000000,
+    "sumOpenInterest": 8604162.47,
+    "sumOpenInterestValue": 737548806.9284
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774263600000,
+    "sumOpenInterest": 8612359.42,
+    "sumOpenInterestValue": 740844129.6644437
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774267200000,
+    "sumOpenInterest": 8296488.27,
+    "sumOpenInterestValue": 736396298.8452
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774270800000,
+    "sumOpenInterest": 8312916.85,
+    "sumOpenInterestValue": 749699191.6000983
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774274400000,
+    "sumOpenInterest": 8384981.35,
+    "sumOpenInterestValue": 765464947.4415
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774278000000,
+    "sumOpenInterest": 8457423.04,
+    "sumOpenInterestValue": 773917778.8031514
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774281600000,
+    "sumOpenInterest": 8542719.15,
+    "sumOpenInterestValue": 768161305.968
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774285200000,
+    "sumOpenInterest": 8476374.59,
+    "sumOpenInterestValue": 765416625.477
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774288800000,
+    "sumOpenInterest": 8477271.7,
+    "sumOpenInterestValue": 773296724.474
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774292400000,
+    "sumOpenInterest": 8546024.5,
+    "sumOpenInterestValue": 782730383.955
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774296000000,
+    "sumOpenInterest": 8631333.54,
+    "sumOpenInterestValue": 789097479.4622353
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774299600000,
+    "sumOpenInterest": 8636970.09,
+    "sumOpenInterestValue": 792442005.7575
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774303200000,
+    "sumOpenInterest": 8637947.45,
+    "sumOpenInterestValue": 791149606.9455
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774306800000,
+    "sumOpenInterest": 8684207.46,
+    "sumOpenInterestValue": 794576619.5342252
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774310400000,
+    "sumOpenInterest": 8707904.28,
+    "sumOpenInterestValue": 795902451.192
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774314000000,
+    "sumOpenInterest": 8676863.15,
+    "sumOpenInterestValue": 789237452.6030462
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774317600000,
+    "sumOpenInterest": 8653286.39,
+    "sumOpenInterestValue": 781948305.1787292
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774321200000,
+    "sumOpenInterest": 8597252.2,
+    "sumOpenInterestValue": 774612423.22
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774324800000,
+    "sumOpenInterest": 8560693.89,
+    "sumOpenInterestValue": 773030658.267
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774328400000,
+    "sumOpenInterest": 8521835.2,
+    "sumOpenInterestValue": 769436500.208
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774332000000,
+    "sumOpenInterest": 8541362.03,
+    "sumOpenInterestValue": 769320478.0421
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774335600000,
+    "sumOpenInterest": 8533878.02,
+    "sumOpenInterestValue": 771719773.2534977
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774339200000,
+    "sumOpenInterest": 8532445.56,
+    "sumOpenInterestValue": 782339933.3964
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774342800000,
+    "sumOpenInterest": 8581139.88,
+    "sumOpenInterestValue": 785750166.7888826
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774346400000,
+    "sumOpenInterest": 8596975.83,
+    "sumOpenInterestValue": 791541421.5325663
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774350000000,
+    "sumOpenInterest": 8689662.79,
+    "sumOpenInterestValue": 797711044.122
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774353600000,
+    "sumOpenInterest": 8667479.4,
+    "sumOpenInterestValue": 794950155.1626594
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774357200000,
+    "sumOpenInterest": 8655348.22,
+    "sumOpenInterestValue": 792175516.7068729
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774360800000,
+    "sumOpenInterest": 8376631.44,
+    "sumOpenInterestValue": 752295998.0356569
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774364400000,
+    "sumOpenInterest": 8240283.36,
+    "sumOpenInterestValue": 737583406.6685791
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774368000000,
+    "sumOpenInterest": 8202826.9,
+    "sumOpenInterestValue": 735711544.661
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774371600000,
+    "sumOpenInterest": 8261784.18,
+    "sumOpenInterestValue": 737028958.0089359
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774375200000,
+    "sumOpenInterest": 8245756.86,
+    "sumOpenInterestValue": 734861851.3632
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774378800000,
+    "sumOpenInterest": 8265183.28,
+    "sumOpenInterestValue": 734278882.5952
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774382400000,
+    "sumOpenInterest": 8280060.21,
+    "sumOpenInterestValue": 732702527.9829
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774386000000,
+    "sumOpenInterest": 8256286.16,
+    "sumOpenInterestValue": 742900628.6768
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774389600000,
+    "sumOpenInterest": 8215789.85,
+    "sumOpenInterestValue": 742153880.6055412
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774393200000,
+    "sumOpenInterest": 8239031.93,
+    "sumOpenInterestValue": 743744553.8315866
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774396800000,
+    "sumOpenInterest": 8341449.8,
+    "sumOpenInterestValue": 757069983.848
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774400400000,
+    "sumOpenInterest": 8313564.59,
+    "sumOpenInterestValue": 758806110.1763685
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774404000000,
+    "sumOpenInterest": 8277259.26,
+    "sumOpenInterestValue": 752669800.5645113
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774407600000,
+    "sumOpenInterest": 8292675.63,
+    "sumOpenInterestValue": 755379823.1367
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774411200000,
+    "sumOpenInterest": 8419131.57,
+    "sumOpenInterestValue": 771529217.0748
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774414800000,
+    "sumOpenInterest": 8452434.54,
+    "sumOpenInterestValue": 777793026.3708
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774418400000,
+    "sumOpenInterest": 8507333.99,
+    "sumOpenInterestValue": 785885832.7152331
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774422000000,
+    "sumOpenInterest": 8574019.81,
+    "sumOpenInterestValue": 791724989.2554
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774425600000,
+    "sumOpenInterest": 8617408.83,
+    "sumOpenInterestValue": 790868431.7237859
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774429200000,
+    "sumOpenInterest": 8633349.87,
+    "sumOpenInterestValue": 797030859.9984
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774432800000,
+    "sumOpenInterest": 8656109.2,
+    "sumOpenInterestValue": 800776662.092
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774436400000,
+    "sumOpenInterest": 8667310.77,
+    "sumOpenInterestValue": 802603527.0659962
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774440000000,
+    "sumOpenInterest": 8704750.45,
+    "sumOpenInterestValue": 809106554.3275
+  },
+  {
+    "symbol": "SOLUSDT",
+    "timestamp": 1774443600000,
+    "sumOpenInterest": 8713273.3,
+    "sumOpenInterestValue": 810267777.1758724
+  }
+]

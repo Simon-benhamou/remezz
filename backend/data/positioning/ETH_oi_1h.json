@@ -1,0 +1,3002 @@
+[
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772647200000,
+    "sumOpenInterest": 2146162.997,
+    "sumOpenInterestValue": 4603634007.399075
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772650800000,
+    "sumOpenInterest": 2147234.188,
+    "sumOpenInterestValue": 4640623999.44748
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772654400000,
+    "sumOpenInterest": 2117500.723,
+    "sumOpenInterestValue": 4609015598.70349
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772658000000,
+    "sumOpenInterest": 2117538.061,
+    "sumOpenInterestValue": 4555417279.86808
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772661600000,
+    "sumOpenInterest": 2122452.29,
+    "sumOpenInterestValue": 4561460671.906848
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772665200000,
+    "sumOpenInterest": 2133165.454,
+    "sumOpenInterestValue": 4546884828.51008
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772668800000,
+    "sumOpenInterest": 2139075.149,
+    "sumOpenInterestValue": 4549793059.627678
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772672400000,
+    "sumOpenInterest": 2138167.589,
+    "sumOpenInterestValue": 4547583118.34054
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772676000000,
+    "sumOpenInterest": 2133918.687,
+    "sumOpenInterestValue": 4508180635.71681
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772679600000,
+    "sumOpenInterest": 2130655.032,
+    "sumOpenInterestValue": 4519564761.916913
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772683200000,
+    "sumOpenInterest": 2143696.769,
+    "sumOpenInterestValue": 4542729260.15559
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772686800000,
+    "sumOpenInterest": 2135324.48,
+    "sumOpenInterestValue": 4561650980.1344
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772690400000,
+    "sumOpenInterest": 2136712.076,
+    "sumOpenInterestValue": 4526054792.811867
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772694000000,
+    "sumOpenInterest": 2136347.212,
+    "sumOpenInterestValue": 4544074610.34036
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772697600000,
+    "sumOpenInterest": 2129642.306,
+    "sumOpenInterestValue": 4481802628.052633
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772701200000,
+    "sumOpenInterest": 2124470.393,
+    "sumOpenInterestValue": 4496611544.41594
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772704800000,
+    "sumOpenInterest": 2122283.37,
+    "sumOpenInterestValue": 4509024470.7357
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772708400000,
+    "sumOpenInterest": 2124366.527,
+    "sumOpenInterestValue": 4578297330.353559
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772712000000,
+    "sumOpenInterest": 2113773.044,
+    "sumOpenInterestValue": 4516604551.767
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772715600000,
+    "sumOpenInterest": 2112598.793,
+    "sumOpenInterestValue": 4514566842.499217
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772719200000,
+    "sumOpenInterest": 2100604.958,
+    "sumOpenInterestValue": 4445783351.25994
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772722800000,
+    "sumOpenInterest": 2098853.851,
+    "sumOpenInterestValue": 4444826754.41674
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772726400000,
+    "sumOpenInterest": 2052249.849,
+    "sumOpenInterestValue": 4281427019.8372445
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772730000000,
+    "sumOpenInterest": 2022752.419,
+    "sumOpenInterestValue": 4205535268.7056413
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772733600000,
+    "sumOpenInterest": 2006656.559,
+    "sumOpenInterestValue": 4132167385.98957
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772737200000,
+    "sumOpenInterest": 1997249.522,
+    "sumOpenInterestValue": 4145931145.293184
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772740800000,
+    "sumOpenInterest": 1991087.076,
+    "sumOpenInterestValue": 4128877447.75968
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772744400000,
+    "sumOpenInterest": 1987002.979,
+    "sumOpenInterestValue": 4158231924.7912025
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772748000000,
+    "sumOpenInterest": 1984299.724,
+    "sumOpenInterestValue": 4127164838.94484
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772751600000,
+    "sumOpenInterest": 1980058.532,
+    "sumOpenInterestValue": 4117708234.146169
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772755200000,
+    "sumOpenInterest": 1981496.573,
+    "sumOpenInterestValue": 4105861337.621102
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772758800000,
+    "sumOpenInterest": 1985894.575,
+    "sumOpenInterestValue": 4119460270.597
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772762400000,
+    "sumOpenInterest": 1984882.192,
+    "sumOpenInterestValue": 4141860424.7989874
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772766000000,
+    "sumOpenInterest": 1986707.06,
+    "sumOpenInterestValue": 4138012799.921
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772769600000,
+    "sumOpenInterest": 1987726.291,
+    "sumOpenInterestValue": 4140148586.908106
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772773200000,
+    "sumOpenInterest": 1974422.109,
+    "sumOpenInterestValue": 4087093254.07218
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772776800000,
+    "sumOpenInterest": 1977892.599,
+    "sumOpenInterestValue": 4089840134.714369
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772780400000,
+    "sumOpenInterest": 1973940.04,
+    "sumOpenInterestValue": 4092276915.514779
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772784000000,
+    "sumOpenInterest": 1977989.389,
+    "sumOpenInterestValue": 4117738750.23242
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772787600000,
+    "sumOpenInterest": 1980204.333,
+    "sumOpenInterestValue": 4108745772.58503
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772791200000,
+    "sumOpenInterest": 1982409.738,
+    "sumOpenInterestValue": 4081518328.1270027
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772794800000,
+    "sumOpenInterest": 1981262.932,
+    "sumOpenInterestValue": 4085542264.421414
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772798400000,
+    "sumOpenInterest": 1986775.454,
+    "sumOpenInterestValue": 4073346823.8642726
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772802000000,
+    "sumOpenInterest": 1980956.889,
+    "sumOpenInterestValue": 4056400307.9631867
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772805600000,
+    "sumOpenInterest": 1975916.7,
+    "sumOpenInterestValue": 3990652060.355315
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772809200000,
+    "sumOpenInterest": 1976686.915,
+    "sumOpenInterestValue": 3916069970.7617583
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772812800000,
+    "sumOpenInterest": 1975860.975,
+    "sumOpenInterestValue": 3905833497.8680816
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772816400000,
+    "sumOpenInterest": 1983118.39,
+    "sumOpenInterestValue": 3907263620.0823708
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772820000000,
+    "sumOpenInterest": 1979563.547,
+    "sumOpenInterestValue": 3891379984.338868
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772823600000,
+    "sumOpenInterest": 1976052.079,
+    "sumOpenInterestValue": 3900101827.956151
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772827200000,
+    "sumOpenInterest": 1974065.459,
+    "sumOpenInterestValue": 3914421791.5211234
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772830800000,
+    "sumOpenInterest": 1962908.708,
+    "sumOpenInterestValue": 3883595249.69092
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772834400000,
+    "sumOpenInterest": 1961818.805,
+    "sumOpenInterestValue": 3889894326.554
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772838000000,
+    "sumOpenInterest": 1960100.411,
+    "sumOpenInterestValue": 3893465052.39396
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772841600000,
+    "sumOpenInterest": 1964104.725,
+    "sumOpenInterestValue": 3884724171.3885
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772845200000,
+    "sumOpenInterest": 1962488.162,
+    "sumOpenInterestValue": 3886286569.6898236
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772848800000,
+    "sumOpenInterest": 1965639.989,
+    "sumOpenInterestValue": 3890787794.2266
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772852400000,
+    "sumOpenInterest": 1957594.365,
+    "sumOpenInterestValue": 3880977821.8593645
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772856000000,
+    "sumOpenInterest": 1974123.053,
+    "sumOpenInterestValue": 3908016676.5750656
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772859600000,
+    "sumOpenInterest": 1950911.056,
+    "sumOpenInterestValue": 3852268971.1776
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772863200000,
+    "sumOpenInterest": 1950475.762,
+    "sumOpenInterestValue": 3857925130.806609
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772866800000,
+    "sumOpenInterest": 1954498.341,
+    "sumOpenInterestValue": 3852238050.17736
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772870400000,
+    "sumOpenInterest": 1953249.352,
+    "sumOpenInterestValue": 3871594138.07976
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772874000000,
+    "sumOpenInterest": 1958863.802,
+    "sumOpenInterestValue": 3872200921.504086
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772877600000,
+    "sumOpenInterest": 1959579.945,
+    "sumOpenInterestValue": 3890334469.00905
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772881200000,
+    "sumOpenInterest": 1959106.667,
+    "sumOpenInterestValue": 3885190723.139099
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772884800000,
+    "sumOpenInterest": 1955858.689,
+    "sumOpenInterestValue": 3887316357.896999
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772888400000,
+    "sumOpenInterest": 1954699.054,
+    "sumOpenInterestValue": 3873183310.5673494
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772892000000,
+    "sumOpenInterest": 1954264.58,
+    "sumOpenInterestValue": 3871466506.854403
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772895600000,
+    "sumOpenInterest": 1951414.168,
+    "sumOpenInterestValue": 3875105280.544592
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772899200000,
+    "sumOpenInterest": 1953278.67,
+    "sumOpenInterestValue": 3867862889.5473
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772902800000,
+    "sumOpenInterest": 1954453.712,
+    "sumOpenInterestValue": 3862528237.41424
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772906400000,
+    "sumOpenInterest": 1954759.37,
+    "sumOpenInterestValue": 3863909476.1168876
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772910000000,
+    "sumOpenInterest": 1957549.72,
+    "sumOpenInterestValue": 3856940637.8188
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772913600000,
+    "sumOpenInterest": 1948735.317,
+    "sumOpenInterestValue": 3808251110.9428267
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772917200000,
+    "sumOpenInterest": 1949625.755,
+    "sumOpenInterestValue": 3831568438.314809
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772920800000,
+    "sumOpenInterest": 1948470.349,
+    "sumOpenInterestValue": 3837503591.7989945
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772924400000,
+    "sumOpenInterest": 1946541.59,
+    "sumOpenInterestValue": 3825635513.9065
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772928000000,
+    "sumOpenInterest": 1946234.027,
+    "sumOpenInterestValue": 3830947596.40653
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772931600000,
+    "sumOpenInterest": 1950547.728,
+    "sumOpenInterestValue": 3838655172.307338
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772935200000,
+    "sumOpenInterest": 1950710.678,
+    "sumOpenInterestValue": 3839115656.94468
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772938800000,
+    "sumOpenInterest": 1987547.303,
+    "sumOpenInterestValue": 3857948567.96118
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772942400000,
+    "sumOpenInterest": 1993036.733,
+    "sumOpenInterestValue": 3879394830.7223415
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772946000000,
+    "sumOpenInterest": 1989450.34,
+    "sumOpenInterestValue": 3853927788.9784446
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772949600000,
+    "sumOpenInterest": 1998599.634,
+    "sumOpenInterestValue": 3892987263.340441
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772953200000,
+    "sumOpenInterest": 2003616.165,
+    "sumOpenInterestValue": 3900468164.440077
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772956800000,
+    "sumOpenInterest": 2003607.091,
+    "sumOpenInterestValue": 3915501707.8230076
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772960400000,
+    "sumOpenInterest": 2007768.552,
+    "sumOpenInterestValue": 3932326708.344748
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772964000000,
+    "sumOpenInterest": 2007462.674,
+    "sumOpenInterestValue": 3940046990.2598
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772967600000,
+    "sumOpenInterest": 1998308.424,
+    "sumOpenInterestValue": 3943481827.00584
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772971200000,
+    "sumOpenInterest": 1997159.152,
+    "sumOpenInterestValue": 3895004858.681514
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772974800000,
+    "sumOpenInterest": 2006712.944,
+    "sumOpenInterestValue": 3903766709.695538
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772978400000,
+    "sumOpenInterest": 2008978.906,
+    "sumOpenInterestValue": 3903727271.40484
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772982000000,
+    "sumOpenInterest": 2018746.659,
+    "sumOpenInterestValue": 3925089504.02688
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772985600000,
+    "sumOpenInterest": 2019712.623,
+    "sumOpenInterestValue": 3922685856.3906
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772989200000,
+    "sumOpenInterest": 2014555.569,
+    "sumOpenInterestValue": 3899485606.2325664
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772992800000,
+    "sumOpenInterest": 2014250.915,
+    "sumOpenInterestValue": 3895883549.7564
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1772996400000,
+    "sumOpenInterest": 2015672.278,
+    "sumOpenInterestValue": 3888473704.93536
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773000000000,
+    "sumOpenInterest": 2014241.723,
+    "sumOpenInterestValue": 3954359350.5936
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773003600000,
+    "sumOpenInterest": 2009852.065,
+    "sumOpenInterestValue": 3933581969.01475
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773007200000,
+    "sumOpenInterest": 2010709.266,
+    "sumOpenInterestValue": 3925407164.5485
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773010800000,
+    "sumOpenInterest": 2005728.197,
+    "sumOpenInterestValue": 3894823299.34445
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773014400000,
+    "sumOpenInterest": 2000388.394,
+    "sumOpenInterestValue": 3873116596.6072593
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773018000000,
+    "sumOpenInterest": 1995011.138,
+    "sumOpenInterestValue": 3890351519.54552
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773021600000,
+    "sumOpenInterest": 1993271.051,
+    "sumOpenInterestValue": 3876931153.451727
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773025200000,
+    "sumOpenInterest": 1991712.893,
+    "sumOpenInterestValue": 3901527342.450273
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773028800000,
+    "sumOpenInterest": 1946383.584,
+    "sumOpenInterestValue": 3847241255.97024
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773032400000,
+    "sumOpenInterest": 1945591.701,
+    "sumOpenInterestValue": 3845267437.8564
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773036000000,
+    "sumOpenInterest": 2014436.63,
+    "sumOpenInterestValue": 4048210290.076869
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773039600000,
+    "sumOpenInterest": 2004359.422,
+    "sumOpenInterestValue": 3976448657.3058
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773043200000,
+    "sumOpenInterest": 1998994.171,
+    "sumOpenInterestValue": 3963245823.30802
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773046800000,
+    "sumOpenInterest": 2014956.059,
+    "sumOpenInterestValue": 4021086610.46158
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773050400000,
+    "sumOpenInterest": 2005983.597,
+    "sumOpenInterestValue": 4019420729.279134
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773054000000,
+    "sumOpenInterest": 1999316.61,
+    "sumOpenInterestValue": 3988028751.7123446
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773057600000,
+    "sumOpenInterest": 1995436.658,
+    "sumOpenInterestValue": 3973872195.67384
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773061200000,
+    "sumOpenInterest": 1997161.274,
+    "sumOpenInterestValue": 3997557159.68617
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773064800000,
+    "sumOpenInterest": 2014401.105,
+    "sumOpenInterestValue": 4064378048.223067
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773068400000,
+    "sumOpenInterest": 2010658.82,
+    "sumOpenInterestValue": 4064923121.7665825
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773072000000,
+    "sumOpenInterest": 2005748.695,
+    "sumOpenInterestValue": 4055804378.67255
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773075600000,
+    "sumOpenInterest": 1999573.018,
+    "sumOpenInterestValue": 4052163366.020235
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773079200000,
+    "sumOpenInterest": 2015197.89,
+    "sumOpenInterestValue": 4062934633.5663385
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773082800000,
+    "sumOpenInterest": 2006030.476,
+    "sumOpenInterestValue": 4034588674.24548
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773086400000,
+    "sumOpenInterest": 1998067.541,
+    "sumOpenInterestValue": 4062710692.46612
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773090000000,
+    "sumOpenInterest": 1987703.081,
+    "sumOpenInterestValue": 4024557036.0090427
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773093600000,
+    "sumOpenInterest": 1982694.116,
+    "sumOpenInterestValue": 4020027055.169297
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773097200000,
+    "sumOpenInterest": 1986123.606,
+    "sumOpenInterestValue": 3976316532.9297833
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773100800000,
+    "sumOpenInterest": 1977831.126,
+    "sumOpenInterestValue": 3941231091.52386
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773104400000,
+    "sumOpenInterest": 1982014.304,
+    "sumOpenInterestValue": 3992886736.26624
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773108000000,
+    "sumOpenInterest": 1992850.823,
+    "sumOpenInterestValue": 4023721624.7710896
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773111600000,
+    "sumOpenInterest": 2025974.783,
+    "sumOpenInterestValue": 4136291178.9005513
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773115200000,
+    "sumOpenInterest": 2032039.29,
+    "sumOpenInterestValue": 4116455841.9095306
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773118800000,
+    "sumOpenInterest": 2046165.561,
+    "sumOpenInterestValue": 4183815184.23231
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773122400000,
+    "sumOpenInterest": 2063155.669,
+    "sumOpenInterestValue": 4215604715.35432
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773126000000,
+    "sumOpenInterest": 2071901.819,
+    "sumOpenInterestValue": 4233395812.6207666
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773129600000,
+    "sumOpenInterest": 2080959.234,
+    "sumOpenInterestValue": 4265654285.8149
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773133200000,
+    "sumOpenInterest": 2095703.845,
+    "sumOpenInterestValue": 4308829976.43535
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773136800000,
+    "sumOpenInterest": 2107900.126,
+    "sumOpenInterestValue": 4356925745.939215
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773140400000,
+    "sumOpenInterest": 2099587.41,
+    "sumOpenInterestValue": 4328982999.758769
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773144000000,
+    "sumOpenInterest": 2110946.322,
+    "sumOpenInterestValue": 4350343727.6937
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773147600000,
+    "sumOpenInterest": 2108576.793,
+    "sumOpenInterestValue": 4320473848.857
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773151200000,
+    "sumOpenInterest": 2096990.295,
+    "sumOpenInterestValue": 4262237624.10225
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773154800000,
+    "sumOpenInterest": 2081610.548,
+    "sumOpenInterestValue": 4318779852.25204
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773158400000,
+    "sumOpenInterest": 2105135.944,
+    "sumOpenInterestValue": 4375337800.414857
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773162000000,
+    "sumOpenInterest": 2117513.053,
+    "sumOpenInterestValue": 4404394057.9365835
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773165600000,
+    "sumOpenInterest": 2119941.564,
+    "sumOpenInterestValue": 4389762996.5748
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773169200000,
+    "sumOpenInterest": 2138514.745,
+    "sumOpenInterestValue": 4360153558.13815
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773172800000,
+    "sumOpenInterest": 2131619.351,
+    "sumOpenInterestValue": 4340381047.915314
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773176400000,
+    "sumOpenInterest": 2120333.157,
+    "sumOpenInterestValue": 4328829766.66806
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773180000000,
+    "sumOpenInterest": 2085958.078,
+    "sumOpenInterestValue": 4231176640.314488
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773183600000,
+    "sumOpenInterest": 2079514.49,
+    "sumOpenInterestValue": 4213738975.086917
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773187200000,
+    "sumOpenInterest": 2074586.184,
+    "sumOpenInterestValue": 4223020125.81648
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773190800000,
+    "sumOpenInterest": 2080981.879,
+    "sumOpenInterestValue": 4238564700.96599
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773194400000,
+    "sumOpenInterest": 2079877.79,
+    "sumOpenInterestValue": 4232509705.0942
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773198000000,
+    "sumOpenInterest": 2080998.07,
+    "sumOpenInterestValue": 4216350649.7649355
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773201600000,
+    "sumOpenInterest": 2080839.314,
+    "sumOpenInterestValue": 4204205418.5398817
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773205200000,
+    "sumOpenInterest": 2081248.236,
+    "sumOpenInterestValue": 4242277317.7935977
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773208800000,
+    "sumOpenInterest": 2075474.702,
+    "sumOpenInterestValue": 4178702903.0343757
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773212400000,
+    "sumOpenInterest": 2079013.209,
+    "sumOpenInterestValue": 4206405055.37343
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773216000000,
+    "sumOpenInterest": 2076557.667,
+    "sumOpenInterestValue": 4176767325.82713
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773219600000,
+    "sumOpenInterest": 2084422.066,
+    "sumOpenInterestValue": 4217098502.8279
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773223200000,
+    "sumOpenInterest": 2084499.005,
+    "sumOpenInterestValue": 4204685747.9224277
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773226800000,
+    "sumOpenInterest": 2081444.35,
+    "sumOpenInterestValue": 4220577866.382228
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773230400000,
+    "sumOpenInterest": 2081762.643,
+    "sumOpenInterestValue": 4199750231.3964043
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773234000000,
+    "sumOpenInterest": 2073993.526,
+    "sumOpenInterestValue": 4193789044.640195
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773237600000,
+    "sumOpenInterest": 2070004.174,
+    "sumOpenInterestValue": 4243597903.8554616
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773241200000,
+    "sumOpenInterest": 2094317.276,
+    "sumOpenInterestValue": 4317853927.9292
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773244800000,
+    "sumOpenInterest": 2098251.554,
+    "sumOpenInterestValue": 4298327531.120444
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773248400000,
+    "sumOpenInterest": 2105888.448,
+    "sumOpenInterestValue": 4350407532.53184
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773252000000,
+    "sumOpenInterest": 2120380.161,
+    "sumOpenInterestValue": 4383440703.03369
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773255600000,
+    "sumOpenInterest": 2120955.513,
+    "sumOpenInterestValue": 4402255262.7828
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773259200000,
+    "sumOpenInterest": 2125253.367,
+    "sumOpenInterestValue": 4411194505.105866
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773262800000,
+    "sumOpenInterest": 2126151.937,
+    "sumOpenInterestValue": 4395797868.22813
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773266400000,
+    "sumOpenInterest": 2122570.394,
+    "sumOpenInterestValue": 4398984690.15712
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773270000000,
+    "sumOpenInterest": 2126486.806,
+    "sumOpenInterestValue": 4382264009.8048
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773273600000,
+    "sumOpenInterest": 2110792.579,
+    "sumOpenInterestValue": 4329742169.74796
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773277200000,
+    "sumOpenInterest": 2107618.658,
+    "sumOpenInterestValue": 4330537110.761044
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773280800000,
+    "sumOpenInterest": 2105534.433,
+    "sumOpenInterestValue": 4306171171.924548
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773284400000,
+    "sumOpenInterest": 2091575.724,
+    "sumOpenInterestValue": 4232261645.99952
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773288000000,
+    "sumOpenInterest": 2065352.565,
+    "sumOpenInterestValue": 4176409541.063599
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773291600000,
+    "sumOpenInterest": 2062196.987,
+    "sumOpenInterestValue": 4169514844.07556
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773295200000,
+    "sumOpenInterest": 2061759.87,
+    "sumOpenInterestValue": 4176715286.3196826
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773298800000,
+    "sumOpenInterest": 2063497.526,
+    "sumOpenInterestValue": 4187414259.56128
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773302400000,
+    "sumOpenInterest": 2056543.503,
+    "sumOpenInterestValue": 4195219630.2520785
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773306000000,
+    "sumOpenInterest": 2056037.235,
+    "sumOpenInterestValue": 4208334754.4305477
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773309600000,
+    "sumOpenInterest": 2039867.447,
+    "sumOpenInterestValue": 4191074069.274269
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773313200000,
+    "sumOpenInterest": 2062160.497,
+    "sumOpenInterestValue": 4266985350.076128
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773316800000,
+    "sumOpenInterest": 2060999.525,
+    "sumOpenInterestValue": 4249801630.54525
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773320400000,
+    "sumOpenInterest": 2066961.934,
+    "sumOpenInterestValue": 4266788181.11752
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773324000000,
+    "sumOpenInterest": 2117192.831,
+    "sumOpenInterestValue": 4371884797.341252
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773327600000,
+    "sumOpenInterest": 2100816.072,
+    "sumOpenInterestValue": 4295340380.296305
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773331200000,
+    "sumOpenInterest": 2105089.537,
+    "sumOpenInterestValue": 4360738194.5239105
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773334800000,
+    "sumOpenInterest": 2101497.843,
+    "sumOpenInterestValue": 4347633262.515045
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773338400000,
+    "sumOpenInterest": 2093557.906,
+    "sumOpenInterestValue": 4306992742.954803
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773342000000,
+    "sumOpenInterest": 2082168.731,
+    "sumOpenInterestValue": 4263802662.27987
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773345600000,
+    "sumOpenInterest": 2088600.169,
+    "sumOpenInterestValue": 4320774065.089321
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773349200000,
+    "sumOpenInterest": 2090483.831,
+    "sumOpenInterestValue": 4309974660.276237
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773352800000,
+    "sumOpenInterest": 2087109.993,
+    "sumOpenInterestValue": 4303966812.817614
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773356400000,
+    "sumOpenInterest": 2084566.56,
+    "sumOpenInterestValue": 4304398478.71404
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773360000000,
+    "sumOpenInterest": 2147792.422,
+    "sumOpenInterestValue": 4452008566.09426
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773363600000,
+    "sumOpenInterest": 2193237.168,
+    "sumOpenInterestValue": 4646598384.791765
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773367200000,
+    "sumOpenInterest": 2193063.273,
+    "sumOpenInterestValue": 4657978669.32108
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773370800000,
+    "sumOpenInterest": 2186433.31,
+    "sumOpenInterestValue": 4602055440.893892
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773374400000,
+    "sumOpenInterest": 2180224.521,
+    "sumOpenInterestValue": 4617253868.706042
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773378000000,
+    "sumOpenInterest": 2183708.272,
+    "sumOpenInterestValue": 4609206854.382396
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773381600000,
+    "sumOpenInterest": 2188643.149,
+    "sumOpenInterestValue": 4617008382.10997
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773385200000,
+    "sumOpenInterest": 2183954.177,
+    "sumOpenInterestValue": 4575973668.44279
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773388800000,
+    "sumOpenInterest": 2196288.101,
+    "sumOpenInterestValue": 4608778802.66244
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773392400000,
+    "sumOpenInterest": 2197026.191,
+    "sumOpenInterestValue": 4611754668.358415
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773396000000,
+    "sumOpenInterest": 2197560.428,
+    "sumOpenInterestValue": 4642390355.35856
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773399600000,
+    "sumOpenInterest": 2202763.378,
+    "sumOpenInterestValue": 4682708685.253492
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773403200000,
+    "sumOpenInterest": 2212734.288,
+    "sumOpenInterestValue": 4691572001.47488
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773406800000,
+    "sumOpenInterest": 2236785.355,
+    "sumOpenInterestValue": 4798508518.52085
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773410400000,
+    "sumOpenInterest": 2225719.771,
+    "sumOpenInterestValue": 4862552240.90141
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773414000000,
+    "sumOpenInterest": 2261912.28,
+    "sumOpenInterestValue": 4862153096.4029
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773417600000,
+    "sumOpenInterest": 2194557.077,
+    "sumOpenInterestValue": 4668415263.067725
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773421200000,
+    "sumOpenInterest": 2155867.273,
+    "sumOpenInterestValue": 4597703044.912241
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773424800000,
+    "sumOpenInterest": 2183017.274,
+    "sumOpenInterestValue": 4589073422.88458
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773428400000,
+    "sumOpenInterest": 2149593.716,
+    "sumOpenInterestValue": 4513972219.939688
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773432000000,
+    "sumOpenInterest": 2141030.054,
+    "sumOpenInterestValue": 4499160555.4756
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773435600000,
+    "sumOpenInterest": 2131147.663,
+    "sumOpenInterestValue": 4497808454.23813
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773439200000,
+    "sumOpenInterest": 2118794.468,
+    "sumOpenInterestValue": 4453705971.736
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773442800000,
+    "sumOpenInterest": 2097099.232,
+    "sumOpenInterestValue": 4378304057.335812
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773446400000,
+    "sumOpenInterest": 2095145.3,
+    "sumOpenInterestValue": 4382220185.695317
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773450000000,
+    "sumOpenInterest": 2099480.834,
+    "sumOpenInterestValue": 4376975096.944388
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773453600000,
+    "sumOpenInterest": 2109978.42,
+    "sumOpenInterestValue": 4413357461.9772
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773457200000,
+    "sumOpenInterest": 2112298.944,
+    "sumOpenInterestValue": 4417302920.66112
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773460800000,
+    "sumOpenInterest": 2110681.558,
+    "sumOpenInterestValue": 4432502609.565104
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773464400000,
+    "sumOpenInterest": 2095929.415,
+    "sumOpenInterestValue": 4379025326.7595
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773468000000,
+    "sumOpenInterest": 2084847.063,
+    "sumOpenInterestValue": 4360085414.344289
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773471600000,
+    "sumOpenInterest": 2073916.665,
+    "sumOpenInterestValue": 4307791017.618199
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773475200000,
+    "sumOpenInterest": 2075670.678,
+    "sumOpenInterestValue": 4310051965.35755
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773478800000,
+    "sumOpenInterest": 2079163.155,
+    "sumOpenInterestValue": 4310755933.907665
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773482400000,
+    "sumOpenInterest": 2077925.574,
+    "sumOpenInterestValue": 4293846797.4638762
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773486000000,
+    "sumOpenInterest": 2075910.243,
+    "sumOpenInterestValue": 4287055304.7545023
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773489600000,
+    "sumOpenInterest": 2077566.49,
+    "sumOpenInterestValue": 4306068185.4985
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773493200000,
+    "sumOpenInterest": 2084861.401,
+    "sumOpenInterestValue": 4324669701.32232
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773496800000,
+    "sumOpenInterest": 2086169.033,
+    "sumOpenInterestValue": 4334097866.257244
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773500400000,
+    "sumOpenInterest": 2086252.456,
+    "sumOpenInterestValue": 4318353317.156977
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773504000000,
+    "sumOpenInterest": 2088201.042,
+    "sumOpenInterestValue": 4330213906.026239
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773507600000,
+    "sumOpenInterest": 2078640.779,
+    "sumOpenInterestValue": 4315989600.376276
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773511200000,
+    "sumOpenInterest": 2079029.182,
+    "sumOpenInterestValue": 4311899029.295459
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773514800000,
+    "sumOpenInterest": 2078528.907,
+    "sumOpenInterestValue": 4314516191.294723
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773518400000,
+    "sumOpenInterest": 2079285.694,
+    "sumOpenInterestValue": 4317137715.02444
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773522000000,
+    "sumOpenInterest": 2073464.008,
+    "sumOpenInterestValue": 4322588238.10388
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773525600000,
+    "sumOpenInterest": 2073504.431,
+    "sumOpenInterestValue": 4324210550.67326
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773529200000,
+    "sumOpenInterest": 2076756.502,
+    "sumOpenInterestValue": 4326901404.35198
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773532800000,
+    "sumOpenInterest": 2062309.953,
+    "sumOpenInterestValue": 4321116798.32184
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773536400000,
+    "sumOpenInterest": 2058422.5,
+    "sumOpenInterestValue": 4295577825.675
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773540000000,
+    "sumOpenInterest": 2058029.71,
+    "sumOpenInterestValue": 4296019345.005413
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773543600000,
+    "sumOpenInterest": 2028773.645,
+    "sumOpenInterestValue": 4262025923.075766
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773547200000,
+    "sumOpenInterest": 2026835.91,
+    "sumOpenInterestValue": 4246525256.8365
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773550800000,
+    "sumOpenInterest": 2029147.355,
+    "sumOpenInterestValue": 4268067963.5599
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773554400000,
+    "sumOpenInterest": 2013941.203,
+    "sumOpenInterestValue": 4243250655.432773
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773558000000,
+    "sumOpenInterest": 2013662.516,
+    "sumOpenInterestValue": 4242424461.95912
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773561600000,
+    "sumOpenInterest": 2012937.363,
+    "sumOpenInterestValue": 4237172760.99411
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773565200000,
+    "sumOpenInterest": 2011587.493,
+    "sumOpenInterestValue": 4248258886.419283
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773568800000,
+    "sumOpenInterest": 2012514.779,
+    "sumOpenInterestValue": 4258903900.46759
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773572400000,
+    "sumOpenInterest": 2014670.86,
+    "sumOpenInterestValue": 4266904180.1345587
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773576000000,
+    "sumOpenInterest": 2017377.883,
+    "sumOpenInterestValue": 4273875566.47199
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773579600000,
+    "sumOpenInterest": 2016715.247,
+    "sumOpenInterestValue": 4252751778.4717603
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773583200000,
+    "sumOpenInterest": 2009795.669,
+    "sumOpenInterestValue": 4214356507.639939
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773586800000,
+    "sumOpenInterest": 2010268.589,
+    "sumOpenInterestValue": 4213603373.28756
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773590400000,
+    "sumOpenInterest": 2008278.881,
+    "sumOpenInterestValue": 4203167035.62252
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773594000000,
+    "sumOpenInterest": 2008078.791,
+    "sumOpenInterestValue": 4198069439.67669
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773597600000,
+    "sumOpenInterest": 1995463.457,
+    "sumOpenInterestValue": 4211465535.26764
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773601200000,
+    "sumOpenInterest": 1998535.265,
+    "sumOpenInterestValue": 4193390856.0976095
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773604800000,
+    "sumOpenInterest": 2000184.384,
+    "sumOpenInterestValue": 4225029478.01088
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773608400000,
+    "sumOpenInterest": 2007339.382,
+    "sumOpenInterestValue": 4271869480.2072883
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773612000000,
+    "sumOpenInterest": 2007906.037,
+    "sumOpenInterestValue": 4293425162.67562
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773615600000,
+    "sumOpenInterest": 2089646.592,
+    "sumOpenInterestValue": 4561411109.72625
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773619200000,
+    "sumOpenInterest": 2163456.259,
+    "sumOpenInterestValue": 4711423598.91207
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773622800000,
+    "sumOpenInterest": 2165196.744,
+    "sumOpenInterestValue": 4699058566.75608
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773626400000,
+    "sumOpenInterest": 2178467.175,
+    "sumOpenInterestValue": 4759928992.70325
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773630000000,
+    "sumOpenInterest": 2182475.4,
+    "sumOpenInterestValue": 4757164773.767751
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773633600000,
+    "sumOpenInterest": 2217811.407,
+    "sumOpenInterestValue": 4957074632.01384
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773637200000,
+    "sumOpenInterest": 2268088.677,
+    "sumOpenInterestValue": 5130983609.54325
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773640800000,
+    "sumOpenInterest": 2306909.335,
+    "sumOpenInterestValue": 5258415276.3857
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773644400000,
+    "sumOpenInterest": 2320288.625,
+    "sumOpenInterestValue": 5246195784.01125
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773648000000,
+    "sumOpenInterest": 2348782.975,
+    "sumOpenInterestValue": 5280651323.54375
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773651600000,
+    "sumOpenInterest": 2342417.481,
+    "sumOpenInterestValue": 5253280241.344526
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773655200000,
+    "sumOpenInterest": 2350507.083,
+    "sumOpenInterestValue": 5311205804.7468
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773658800000,
+    "sumOpenInterest": 2371320.007,
+    "sumOpenInterestValue": 5399780214.33984
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773662400000,
+    "sumOpenInterest": 2393395.76,
+    "sumOpenInterestValue": 5430591045.4824
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773666000000,
+    "sumOpenInterest": 2452544.771,
+    "sumOpenInterestValue": 5587716052.746753
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773669600000,
+    "sumOpenInterest": 2503882.388,
+    "sumOpenInterestValue": 5726379021.356
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773673200000,
+    "sumOpenInterest": 2474751.685,
+    "sumOpenInterestValue": 5659385890.84225
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773676800000,
+    "sumOpenInterest": 2493404.543,
+    "sumOpenInterestValue": 5666643508.151299
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773680400000,
+    "sumOpenInterest": 2519799.619,
+    "sumOpenInterestValue": 5785636311.19733
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773684000000,
+    "sumOpenInterest": 2510358.058,
+    "sumOpenInterestValue": 5807261502.73256
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773687600000,
+    "sumOpenInterest": 2471894.951,
+    "sumOpenInterestValue": 5736254704.34109
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773691200000,
+    "sumOpenInterest": 2470318.652,
+    "sumOpenInterestValue": 5754755518.95312
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773694800000,
+    "sumOpenInterest": 2475540.697,
+    "sumOpenInterestValue": 5803657610.0468
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773698400000,
+    "sumOpenInterest": 2485787.481,
+    "sumOpenInterestValue": 5865870132.849691
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773702000000,
+    "sumOpenInterest": 2483566.181,
+    "sumOpenInterestValue": 5853690981.63157
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773705600000,
+    "sumOpenInterest": 2476628.853,
+    "sumOpenInterestValue": 5824189008.44598
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773709200000,
+    "sumOpenInterest": 2531058.196,
+    "sumOpenInterestValue": 5965172645.75084
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773712800000,
+    "sumOpenInterest": 2505592.443,
+    "sumOpenInterestValue": 5912919656.251775
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773716400000,
+    "sumOpenInterest": 2509615.759,
+    "sumOpenInterestValue": 5897471552.86205
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773720000000,
+    "sumOpenInterest": 2513643.71,
+    "sumOpenInterestValue": 5829416264.2981
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773723600000,
+    "sumOpenInterest": 2501093.867,
+    "sumOpenInterestValue": 5778227139.05276
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773727200000,
+    "sumOpenInterest": 2500216.308,
+    "sumOpenInterestValue": 5766717690.775665
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773730800000,
+    "sumOpenInterest": 2495690.523,
+    "sumOpenInterestValue": 5776044912.476604
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773734400000,
+    "sumOpenInterest": 2483004.858,
+    "sumOpenInterestValue": 5777680925.617737
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773738000000,
+    "sumOpenInterest": 2476678.664,
+    "sumOpenInterestValue": 5745375549.913341
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773741600000,
+    "sumOpenInterest": 2457962.672,
+    "sumOpenInterestValue": 5689605907.279868
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773745200000,
+    "sumOpenInterest": 2440601.373,
+    "sumOpenInterestValue": 5642377502.21124
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773748800000,
+    "sumOpenInterest": 2434396.776,
+    "sumOpenInterestValue": 5661773957.81424
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773752400000,
+    "sumOpenInterest": 2426123.214,
+    "sumOpenInterestValue": 5616363356.632548
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773756000000,
+    "sumOpenInterest": 2416868.771,
+    "sumOpenInterestValue": 5624367823.05723
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773759600000,
+    "sumOpenInterest": 2414545.836,
+    "sumOpenInterestValue": 5655687293.49624
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773763200000,
+    "sumOpenInterest": 2395767.921,
+    "sumOpenInterestValue": 5546427623.585278
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773766800000,
+    "sumOpenInterest": 2388538.999,
+    "sumOpenInterestValue": 5555049035.36429
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773770400000,
+    "sumOpenInterest": 2391880.62,
+    "sumOpenInterestValue": 5594205970.068762
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773774000000,
+    "sumOpenInterest": 2392970.003,
+    "sumOpenInterestValue": 5580466112.409592
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773777600000,
+    "sumOpenInterest": 2384056.977,
+    "sumOpenInterestValue": 5529860982.814696
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773781200000,
+    "sumOpenInterest": 2380507.128,
+    "sumOpenInterestValue": 5539042210.013464
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773784800000,
+    "sumOpenInterest": 2379203.672,
+    "sumOpenInterestValue": 5561091717.709778
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773788400000,
+    "sumOpenInterest": 2379992.823,
+    "sumOpenInterestValue": 5541599089.00143
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773792000000,
+    "sumOpenInterest": 2380269.012,
+    "sumOpenInterestValue": 5513750350.15728
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773795600000,
+    "sumOpenInterest": 2376672.851,
+    "sumOpenInterestValue": 5521652734.54277
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773799200000,
+    "sumOpenInterest": 2381719.572,
+    "sumOpenInterestValue": 5534663758.60932
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773802800000,
+    "sumOpenInterest": 2392243.607,
+    "sumOpenInterestValue": 5574094338.11548
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773806400000,
+    "sumOpenInterest": 2416948.302,
+    "sumOpenInterestValue": 5654716416.84222
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773810000000,
+    "sumOpenInterest": 2415508.755,
+    "sumOpenInterestValue": 5619603747.322413
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773813600000,
+    "sumOpenInterest": 2418946.496,
+    "sumOpenInterestValue": 5605981072.87488
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773817200000,
+    "sumOpenInterest": 2405729.553,
+    "sumOpenInterestValue": 5584949271.88056
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773820800000,
+    "sumOpenInterest": 2409439.92,
+    "sumOpenInterestValue": 5581708518.672
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773824400000,
+    "sumOpenInterest": 2406378.883,
+    "sumOpenInterestValue": 5586697342.35046
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773828000000,
+    "sumOpenInterest": 2403606.843,
+    "sumOpenInterestValue": 5596342221.280535
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773831600000,
+    "sumOpenInterest": 2407113.131,
+    "sumOpenInterestValue": 5564518927.915807
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773835200000,
+    "sumOpenInterest": 2368865.845,
+    "sumOpenInterestValue": 5373502981.748752
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773838800000,
+    "sumOpenInterest": 2346111.756,
+    "sumOpenInterestValue": 5248001109.719959
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773842400000,
+    "sumOpenInterest": 2329056.064,
+    "sumOpenInterestValue": 5204515288.635555
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773846000000,
+    "sumOpenInterest": 2263842.891,
+    "sumOpenInterestValue": 4955382168.562349
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773849600000,
+    "sumOpenInterest": 2272928.656,
+    "sumOpenInterestValue": 4969190274.18
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773853200000,
+    "sumOpenInterest": 2263844.228,
+    "sumOpenInterestValue": 4935180417.04
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773856800000,
+    "sumOpenInterest": 2253058.059,
+    "sumOpenInterestValue": 4963171475.84874
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773860400000,
+    "sumOpenInterest": 2227675.219,
+    "sumOpenInterestValue": 4857487035.664432
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773864000000,
+    "sumOpenInterest": 2227627.882,
+    "sumOpenInterestValue": 4866520423.57484
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773867600000,
+    "sumOpenInterest": 2208753.463,
+    "sumOpenInterestValue": 4830487406.186446
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773871200000,
+    "sumOpenInterest": 2209245.38,
+    "sumOpenInterestValue": 4865153028.131514
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773874800000,
+    "sumOpenInterest": 2205525.742,
+    "sumOpenInterestValue": 4837666328.27506
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773878400000,
+    "sumOpenInterest": 2207530.494,
+    "sumOpenInterestValue": 4861267894.64115
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773882000000,
+    "sumOpenInterest": 2212506.826,
+    "sumOpenInterestValue": 4851312675.346601
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773885600000,
+    "sumOpenInterest": 2216963.671,
+    "sumOpenInterestValue": 4867908945.124156
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773889200000,
+    "sumOpenInterest": 2224954.202,
+    "sumOpenInterestValue": 4885155997.470992
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773892800000,
+    "sumOpenInterest": 2225747.804,
+    "sumOpenInterestValue": 4921379054.533401
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773896400000,
+    "sumOpenInterest": 2225577.181,
+    "sumOpenInterestValue": 4879377667.39621
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773900000000,
+    "sumOpenInterest": 2224619.092,
+    "sumOpenInterestValue": 4867580070.136376
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773903600000,
+    "sumOpenInterest": 2222459.367,
+    "sumOpenInterestValue": 4845036242.866097
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773907200000,
+    "sumOpenInterest": 2209677.115,
+    "sumOpenInterestValue": 4784494234.780493
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773910800000,
+    "sumOpenInterest": 2225025.335,
+    "sumOpenInterestValue": 4805302113.096986
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773914400000,
+    "sumOpenInterest": 2227108.01,
+    "sumOpenInterestValue": 4872738093.518981
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773918000000,
+    "sumOpenInterest": 2234790.163,
+    "sumOpenInterestValue": 4853159640.276477
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773921600000,
+    "sumOpenInterest": 2241618.924,
+    "sumOpenInterestValue": 4855346589.384
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773925200000,
+    "sumOpenInterest": 2240690.322,
+    "sumOpenInterestValue": 4774866262.37556
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773928800000,
+    "sumOpenInterest": 2214540.497,
+    "sumOpenInterestValue": 4730989299.95601
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773932400000,
+    "sumOpenInterest": 2215664.616,
+    "sumOpenInterestValue": 4700713342.915865
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773936000000,
+    "sumOpenInterest": 2226897.528,
+    "sumOpenInterestValue": 4715678205.2928
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773939600000,
+    "sumOpenInterest": 2256234.632,
+    "sumOpenInterestValue": 4771601327.014629
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773943200000,
+    "sumOpenInterest": 2251710.25,
+    "sumOpenInterestValue": 4787338645.4225
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773946800000,
+    "sumOpenInterest": 2247001.237,
+    "sumOpenInterestValue": 4772630627.388
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773950400000,
+    "sumOpenInterest": 2220802.085,
+    "sumOpenInterestValue": 4753871151.17185
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773954000000,
+    "sumOpenInterest": 2232921.768,
+    "sumOpenInterestValue": 4790129258.439541
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773957600000,
+    "sumOpenInterest": 2236684.203,
+    "sumOpenInterestValue": 4805918613.30204
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773961200000,
+    "sumOpenInterest": 2242738.307,
+    "sumOpenInterestValue": 4797306948.20528
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773964800000,
+    "sumOpenInterest": 2243229.118,
+    "sumOpenInterestValue": 4793085224.13942
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773968400000,
+    "sumOpenInterest": 2246870.546,
+    "sumOpenInterestValue": 4817938803.4095745
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773972000000,
+    "sumOpenInterest": 2248198.534,
+    "sumOpenInterestValue": 4832750050.67174
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773975600000,
+    "sumOpenInterest": 2249826.636,
+    "sumOpenInterestValue": 4822598200.903023
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773979200000,
+    "sumOpenInterest": 2250505.653,
+    "sumOpenInterestValue": 4839137411.31412
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773982800000,
+    "sumOpenInterest": 2249845.639,
+    "sumOpenInterestValue": 4831436179.898858
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773986400000,
+    "sumOpenInterest": 2246093.794,
+    "sumOpenInterestValue": 4805135836.31802
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773990000000,
+    "sumOpenInterest": 2246990.05,
+    "sumOpenInterestValue": 4798806770.183
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773993600000,
+    "sumOpenInterest": 2238534.081,
+    "sumOpenInterestValue": 4812040388.946223
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1773997200000,
+    "sumOpenInterest": 2232107.013,
+    "sumOpenInterestValue": 4828550869.807495
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774000800000,
+    "sumOpenInterest": 2223409.757,
+    "sumOpenInterestValue": 4758497093.73626
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774004400000,
+    "sumOpenInterest": 2227983.832,
+    "sumOpenInterestValue": 4784108856.164907
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774008000000,
+    "sumOpenInterest": 2225011.179,
+    "sumOpenInterestValue": 4762792179.43203
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774011600000,
+    "sumOpenInterest": 2230504.353,
+    "sumOpenInterestValue": 4773453035.396488
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774015200000,
+    "sumOpenInterest": 2238939.604,
+    "sumOpenInterestValue": 4761340573.119133
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774018800000,
+    "sumOpenInterest": 2231686.568,
+    "sumOpenInterestValue": 4749765473.27144
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774022400000,
+    "sumOpenInterest": 2225627.875,
+    "sumOpenInterestValue": 4747442307.605
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774026000000,
+    "sumOpenInterest": 2221944.424,
+    "sumOpenInterestValue": 4746806531.32392
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774029600000,
+    "sumOpenInterest": 2217533.488,
+    "sumOpenInterestValue": 4735875393.6472
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774033200000,
+    "sumOpenInterest": 2216368.379,
+    "sumOpenInterestValue": 4703998083.90581
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774036800000,
+    "sumOpenInterest": 2215224.072,
+    "sumOpenInterestValue": 4722237458.76384
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774040400000,
+    "sumOpenInterest": 2206831.61,
+    "sumOpenInterestValue": 4705163607.3649
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774044000000,
+    "sumOpenInterest": 2216361.247,
+    "sumOpenInterestValue": 4757862688.9349
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774047600000,
+    "sumOpenInterest": 2209630.493,
+    "sumOpenInterestValue": 4759168119.281714
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774051200000,
+    "sumOpenInterest": 2202029.253,
+    "sumOpenInterestValue": 4723813876.502596
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774054800000,
+    "sumOpenInterest": 2210190.409,
+    "sumOpenInterestValue": 4757368549.66023
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774058400000,
+    "sumOpenInterest": 2212618.186,
+    "sumOpenInterestValue": 4749642440.399467
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774062000000,
+    "sumOpenInterest": 2216943.088,
+    "sumOpenInterestValue": 4775627953.0152
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774065600000,
+    "sumOpenInterest": 2218500.307,
+    "sumOpenInterestValue": 4775241838.441549
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774069200000,
+    "sumOpenInterest": 2216290.543,
+    "sumOpenInterestValue": 4766819862.78983
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774072800000,
+    "sumOpenInterest": 2215062.649,
+    "sumOpenInterestValue": 4767506023.2170515
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774076400000,
+    "sumOpenInterest": 2214873.829,
+    "sumOpenInterestValue": 4772300044.39314
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774080000000,
+    "sumOpenInterest": 2215678.764,
+    "sumOpenInterestValue": 4773436172.37396
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774083600000,
+    "sumOpenInterest": 2212877.913,
+    "sumOpenInterestValue": 4764348275.46813
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774087200000,
+    "sumOpenInterest": 2212482.69,
+    "sumOpenInterestValue": 4773431403.675
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774090800000,
+    "sumOpenInterest": 2218917.861,
+    "sumOpenInterestValue": 4777818406.861431
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774094400000,
+    "sumOpenInterest": 2224520.679,
+    "sumOpenInterestValue": 4797267825.09066
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774098000000,
+    "sumOpenInterest": 2232862.126,
+    "sumOpenInterestValue": 4816216619.91822
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774101600000,
+    "sumOpenInterest": 2231398.501,
+    "sumOpenInterestValue": 4808440629.8049
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774105200000,
+    "sumOpenInterest": 2228841.379,
+    "sumOpenInterestValue": 4794376443.617478
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774108800000,
+    "sumOpenInterest": 2221343.051,
+    "sumOpenInterestValue": 4785328267.61675
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774112400000,
+    "sumOpenInterest": 2219232.882,
+    "sumOpenInterestValue": 4761586071.6192
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774116000000,
+    "sumOpenInterest": 2216761.92,
+    "sumOpenInterestValue": 4760277279.300072
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774119600000,
+    "sumOpenInterest": 2216009.127,
+    "sumOpenInterestValue": 4765575194.515332
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774123200000,
+    "sumOpenInterest": 2215321.025,
+    "sumOpenInterestValue": 4765598588.98
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774126800000,
+    "sumOpenInterest": 2213010.347,
+    "sumOpenInterestValue": 4768085703.33579
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774130400000,
+    "sumOpenInterest": 2212446.338,
+    "sumOpenInterestValue": 4762781615.934313
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774134000000,
+    "sumOpenInterest": 2212471.139,
+    "sumOpenInterestValue": 4754508085.602101
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774137600000,
+    "sumOpenInterest": 2147454.35,
+    "sumOpenInterestValue": 4475512757.1133175
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774141200000,
+    "sumOpenInterest": 2149497.286,
+    "sumOpenInterestValue": 4484410632.781488
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774144800000,
+    "sumOpenInterest": 2153727.75,
+    "sumOpenInterestValue": 4501269460.2225
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774148400000,
+    "sumOpenInterest": 2161821.94,
+    "sumOpenInterestValue": 4542370890.346374
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774152000000,
+    "sumOpenInterest": 2155451.304,
+    "sumOpenInterestValue": 4554209951.19552
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774155600000,
+    "sumOpenInterest": 2157774.043,
+    "sumOpenInterestValue": 4570985377.21034
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774159200000,
+    "sumOpenInterest": 2177493.104,
+    "sumOpenInterestValue": 4598887210.57904
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774162800000,
+    "sumOpenInterest": 2176287.708,
+    "sumOpenInterestValue": 4587211048.596897
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774166400000,
+    "sumOpenInterest": 2166739.579,
+    "sumOpenInterestValue": 4534920936.65963
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774170000000,
+    "sumOpenInterest": 2199880.1,
+    "sumOpenInterestValue": 4587365974.928
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774173600000,
+    "sumOpenInterest": 2202340.522,
+    "sumOpenInterestValue": 4589787764.8741
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774177200000,
+    "sumOpenInterest": 2204634.957,
+    "sumOpenInterestValue": 4585960861.144782
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774180800000,
+    "sumOpenInterest": 2205125.804,
+    "sumOpenInterestValue": 4562206827.15364
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774184400000,
+    "sumOpenInterest": 2204108.792,
+    "sumOpenInterestValue": 4587709832.740847
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774188000000,
+    "sumOpenInterest": 2205426.756,
+    "sumOpenInterestValue": 4581950519.73048
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774191600000,
+    "sumOpenInterest": 2205866.717,
+    "sumOpenInterestValue": 4581615078.658771
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774195200000,
+    "sumOpenInterest": 2202136.457,
+    "sumOpenInterestValue": 4584782039.38029
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774198800000,
+    "sumOpenInterest": 2202469.6,
+    "sumOpenInterestValue": 4583251138.816
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774202400000,
+    "sumOpenInterest": 2200309.328,
+    "sumOpenInterestValue": 4573606975.36736
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774206000000,
+    "sumOpenInterest": 2187879.022,
+    "sumOpenInterestValue": 4531574734.441497
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774209600000,
+    "sumOpenInterest": 2192072.529,
+    "sumOpenInterestValue": 4520177041.54316
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774213200000,
+    "sumOpenInterest": 2190429.459,
+    "sumOpenInterestValue": 4506918133.36545
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774216800000,
+    "sumOpenInterest": 2159315.599,
+    "sumOpenInterestValue": 4415778806.79901
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774220400000,
+    "sumOpenInterest": 2171077.526,
+    "sumOpenInterestValue": 4475784873.7253
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774224000000,
+    "sumOpenInterest": 2168008.689,
+    "sumOpenInterestValue": 4451008558.86456
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774227600000,
+    "sumOpenInterest": 2172536.487,
+    "sumOpenInterestValue": 4437231971.77854
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774231200000,
+    "sumOpenInterest": 2173008.586,
+    "sumOpenInterestValue": 4447322832.27932
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774234800000,
+    "sumOpenInterest": 2166622.23,
+    "sumOpenInterestValue": 4469306454.939247
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774238400000,
+    "sumOpenInterest": 2166616.164,
+    "sumOpenInterestValue": 4444899725.09256
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774242000000,
+    "sumOpenInterest": 2158403.633,
+    "sumOpenInterestValue": 4456477565.09143
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774245600000,
+    "sumOpenInterest": 2162421.159,
+    "sumOpenInterestValue": 4473166305.522839
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774249200000,
+    "sumOpenInterest": 2161952.972,
+    "sumOpenInterestValue": 4402548089.476499
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774252800000,
+    "sumOpenInterest": 2158093.852,
+    "sumOpenInterestValue": 4410025121.142295
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774256400000,
+    "sumOpenInterest": 2158717.237,
+    "sumOpenInterestValue": 4418760444.072245
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774260000000,
+    "sumOpenInterest": 2157246.444,
+    "sumOpenInterestValue": 4406463344.232497
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774263600000,
+    "sumOpenInterest": 2160857.04,
+    "sumOpenInterestValue": 4425192163.380409
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774267200000,
+    "sumOpenInterest": 2209291.868,
+    "sumOpenInterestValue": 4713726410.522011
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774270800000,
+    "sumOpenInterest": 2179660.824,
+    "sumOpenInterestValue": 4671431606.925466
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774274400000,
+    "sumOpenInterest": 2190577.002,
+    "sumOpenInterestValue": 4785541141.253027
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774278000000,
+    "sumOpenInterest": 2222282.576,
+    "sumOpenInterestValue": 4845924613.883632
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774281600000,
+    "sumOpenInterest": 2205591.641,
+    "sumOpenInterestValue": 4692506495.80955
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774285200000,
+    "sumOpenInterest": 2169770.688,
+    "sumOpenInterestValue": 4632069860.15616
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774288800000,
+    "sumOpenInterest": 2171702.122,
+    "sumOpenInterestValue": 4672330247.39812
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774292400000,
+    "sumOpenInterest": 2129927.069,
+    "sumOpenInterestValue": 4618576454.96098
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774296000000,
+    "sumOpenInterest": 2120929.188,
+    "sumOpenInterestValue": 4570309202.231563
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774299600000,
+    "sumOpenInterest": 2119876.997,
+    "sumOpenInterestValue": 4580015450.78847
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774303200000,
+    "sumOpenInterest": 2119053.48,
+    "sumOpenInterestValue": 4572553090.193067
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774306800000,
+    "sumOpenInterest": 2117305.364,
+    "sumOpenInterestValue": 4556551505.816312
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774310400000,
+    "sumOpenInterest": 2115861.455,
+    "sumOpenInterestValue": 4551345958.317633
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774314000000,
+    "sumOpenInterest": 2119331.387,
+    "sumOpenInterestValue": 4539897305.786815
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774317600000,
+    "sumOpenInterest": 2115834.904,
+    "sumOpenInterestValue": 4520650539.18832
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774321200000,
+    "sumOpenInterest": 2120552.872,
+    "sumOpenInterestValue": 4527419307.839644
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774324800000,
+    "sumOpenInterest": 2122233.605,
+    "sumOpenInterestValue": 4542895699.5351
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774328400000,
+    "sumOpenInterest": 2125256.182,
+    "sumOpenInterestValue": 4537506958.81728
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774332000000,
+    "sumOpenInterest": 2129585.615,
+    "sumOpenInterestValue": 4542104970.283035
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774335600000,
+    "sumOpenInterest": 2130262.707,
+    "sumOpenInterestValue": 4568021817.455843
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774339200000,
+    "sumOpenInterest": 2127213.785,
+    "sumOpenInterestValue": 4604609503.2867
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774342800000,
+    "sumOpenInterest": 2130827.016,
+    "sumOpenInterestValue": 4590531142.907643
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774346400000,
+    "sumOpenInterest": 2128171.751,
+    "sumOpenInterestValue": 4604852907.94376
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774350000000,
+    "sumOpenInterest": 2128099.999,
+    "sumOpenInterestValue": 4597270584.83973
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774353600000,
+    "sumOpenInterest": 2131730.394,
+    "sumOpenInterestValue": 4614752737.836308
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774357200000,
+    "sumOpenInterest": 2141841.982,
+    "sumOpenInterestValue": 4629377259.8948
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774360800000,
+    "sumOpenInterest": 2141542.636,
+    "sumOpenInterestValue": 4577063968.548427
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774364400000,
+    "sumOpenInterest": 2132242.386,
+    "sumOpenInterestValue": 4548219150.587156
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774368000000,
+    "sumOpenInterest": 2132584.136,
+    "sumOpenInterestValue": 4551666055.637702
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774371600000,
+    "sumOpenInterest": 2140334.989,
+    "sumOpenInterestValue": 4550908673.71114
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774375200000,
+    "sumOpenInterest": 2150898.673,
+    "sumOpenInterestValue": 4534911744.17974
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774378800000,
+    "sumOpenInterest": 2141600.954,
+    "sumOpenInterestValue": 4536017900.6197
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774382400000,
+    "sumOpenInterest": 2135127.205,
+    "sumOpenInterestValue": 4518135925.541528
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774386000000,
+    "sumOpenInterest": 2129806.982,
+    "sumOpenInterestValue": 4574016070.68284
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774389600000,
+    "sumOpenInterest": 2130212.281,
+    "sumOpenInterestValue": 4575504425.616766
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774393200000,
+    "sumOpenInterest": 2141737.53,
+    "sumOpenInterestValue": 4592985219.144282
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774396800000,
+    "sumOpenInterest": 2130158.942,
+    "sumOpenInterestValue": 4591131567.6926
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774400400000,
+    "sumOpenInterest": 2127505.783,
+    "sumOpenInterestValue": 4596774094.98112
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774404000000,
+    "sumOpenInterest": 2136948.05,
+    "sumOpenInterestValue": 4607944266.439227
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774407600000,
+    "sumOpenInterest": 2137303.922,
+    "sumOpenInterestValue": 4604992284.26276
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774411200000,
+    "sumOpenInterest": 2133530.872,
+    "sumOpenInterestValue": 4603071521.03128
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774414800000,
+    "sumOpenInterest": 2140392.294,
+    "sumOpenInterestValue": 4634826877.35054
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774418400000,
+    "sumOpenInterest": 2164053.66,
+    "sumOpenInterestValue": 4691277706.055065
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774422000000,
+    "sumOpenInterest": 2168769.738,
+    "sumOpenInterestValue": 4689921183.03024
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774425600000,
+    "sumOpenInterest": 2165055.096,
+    "sumOpenInterestValue": 4684529711.2152
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774429200000,
+    "sumOpenInterest": 2183257.041,
+    "sumOpenInterestValue": 4749829012.423353
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774432800000,
+    "sumOpenInterest": 2200001.323,
+    "sumOpenInterestValue": 4807632210.50545
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774436400000,
+    "sumOpenInterest": 2208502.734,
+    "sumOpenInterestValue": 4823423642.818248
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774440000000,
+    "sumOpenInterest": 2199399.923,
+    "sumOpenInterestValue": 4806298099.62437
+  },
+  {
+    "symbol": "ETHUSDT",
+    "timestamp": 1774443600000,
+    "sumOpenInterest": 2201841.243,
+    "sumOpenInterestValue": 4805487362.760901
+  }
+]
