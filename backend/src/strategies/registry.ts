@@ -41,3 +41,6 @@ registerStrategy(new MeanReversion4hStrategy());
 
 import { FundingRateStrategy } from './fundingRate/strategy.js';
 registerStrategy(new FundingRateStrategy());
+
+import { FundingHunterStrategy } from './fundingHunter/strategy.js';
+registerStrategy(new FundingHunterStrategy());
