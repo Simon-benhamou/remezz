@@ -42,7 +42,15 @@
 ### Key insight
 The ONLY profitable exit types across all strategies are TRAILING_STOP and MEAN_REVERSION_EXIT. Stop losses are 100% of the losses. The entry signals are partially correct — when the trade works, it works. The problem is risk management on the trades that don't work.
 
-### Next steps
-- Investigate if longer timeframes (daily) change the picture
-- Consider abandoning directional crypto trading altogether
-- Evaluate if the platform has value for other use cases
+### Daily SMA50 trend following (the only thing that works)
+- Long-only, SMA50 daily, 6 symbols, 5x leverage: +$161 sur $350 en 2 ans (46%)
+- Short detruit les gains (23% WR short vs 34% long)
+- Walk-forward passe sur les 4 demi-annees
+- MAIS: $80/an ne couvre pas $120/an de serveur Hetzner
+
+### Decision finale: PROJET MIS EN PAUSE
+- Capital trop faible ($350) pour generer des returns significatifs
+- Aucune strategie court-terme (15m/4h) n'a d'edge apres fees
+- Le seul edge trouve (daily trend) est essentiellement du "buy and hold intelligent"
+- Le serveur coute plus cher que les profits potentiels
+- Le projet reste une excellente experience d'apprentissage
