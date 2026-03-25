@@ -3,14 +3,14 @@ import {
   type Candle,
   type Position,
   type ExitSignal,
-} from '../config/momentumConfig.js';
+} from '../../config/momentumConfig.js';
 
 import {
   calcROC,
   calcSMA,
   calcATR,
   determineVolatilityRegime,
-} from '../indicators/technicalIndicators.js';
+} from '../../indicators/technicalIndicators.js';
 
 // ============================================================================
 // EXIT CHECK V5 WITH TRAILING STOP + SMART EXITS

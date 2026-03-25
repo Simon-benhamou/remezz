@@ -70,14 +70,14 @@ export {
   checkWickBreakoutShort,
   checkWickBreakout,
   checkMomentumSignal,
-} from './signals/momentumSignal.js';
+} from './_archive/momentum/momentumSignal.js';
 
 // ============================================================================
 // EXITS: Position exit logic
 // ============================================================================
 export {
   shouldExitPosition,
-} from './exits/exitLogic.js';
+} from './_archive/momentum/exitLogic.js';
 
 // ============================================================================
 // RISK: Position sizing, liquidity, dynamic stop loss

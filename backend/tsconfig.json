@@ -16,6 +16,8 @@
     "scripts"
   ],
   "exclude": [
+    "src/strategies/_archive/momentum/scripts/**",
+    "src/strategies/_archive/momentum/output/**",
     "scripts/analyze-*.ts",
     "scripts/compare-*.ts",
     "scripts/concrete-*.ts",

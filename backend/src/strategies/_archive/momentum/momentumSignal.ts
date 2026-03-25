@@ -3,7 +3,7 @@ import {
   type Candle,
   type SignalResult,
   type MarketConditions,
-} from '../config/momentumConfig.js';
+} from '../../config/momentumConfig.js';
 
 import {
   calcMA,
@@ -21,7 +21,7 @@ import {
   calcBBTouchCount,
   calcRocAcceleration,
   calcADX,
-} from '../indicators/technicalIndicators.js';
+} from '../../indicators/technicalIndicators.js';
 
 export function getMarketConditions(btcCandles: Candle[], btcCandlesRegime?: Candle[]): MarketConditions {
   const now = new Date();
