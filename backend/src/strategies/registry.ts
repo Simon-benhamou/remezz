@@ -29,3 +29,9 @@ export function listStrategies(): string[] {
 export function clearStrategies(): void {
   strategies.clear();
 }
+
+// ============================================================================
+// Auto-register known strategies
+// ============================================================================
+import { PullbackTrendStrategy } from './pullbackTrend/strategy.js';
+registerStrategy(new PullbackTrendStrategy());
